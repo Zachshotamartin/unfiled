@@ -1,0 +1,21 @@
+# Open Questions
+
+Deferred decisions with working defaults. Each proceeds on its default until its trigger fires; a decision moves to an ADR and the row is marked decided (never deleted). Owner for all: Zach (solo project).
+
+| ID | Question | Working default | Options considered | Decision trigger |
+| --- | --- | --- | --- | --- |
+| OQ-1 | Daily shopping note vs one living list? | one note per day, per-user switch later | daily notes; single open list; hybrid roll-over | Milestone D beta: correction patterns on `add X` captures |
+| OQ-2 | Medium-confidence routes: apply-with-Undo or wait in Review? | Review (balanced mode) | always apply; always wait; per-category | Gate 3 data: wrong-auto rate vs Review fatigue |
+| OQ-3 | How much expansion before intrusive? | `brief` default, per-user style | off-default; brief; detailed | expansion accept/reject rates in beta |
+| OQ-4 | Composer closes after save or stays for rapid entries? | closes; long-press or setting for burst mode | close; stay; smart | M0 prototype usability check |
+| OQ-5 | Which corrections deserve a permanent rule offer? | same pattern ×2 | ×1; ×2; ×3; ML-suggested | Gate 4: rule acceptance + repeat-mistake rates |
+| OQ-6 | Semantic search before library is large enough? | embed from first note (cost is trivial at small N) | defer until N notes; immediate | embedding cost telemetry at Milestone F |
+| OQ-7 | Android same release timing as iOS? | build both, iOS-first beta invitations | simultaneous; iOS-first; iOS-only | Gate 5 + device availability for testing |
+| OQ-8 | Starter spaces opt-in, opt-out, or lazy? | opt-in at onboarding | opt-in; pre-created; lazy on first match | onboarding completion + first-capture success rates |
+| OQ-9 | Default provider for app-key users? | decided by eval on corpus (quality/cost/latency) | OpenAI; Anthropic | Milestone D eval report |
+| OQ-10 | BYOK fallback-to-app-key default? | off (explicit user opt-in) | off; on; ask-per-incident | invalid-key incident UX feedback in beta |
+| OQ-11 | Web checklist drag-reorder in MVP? | ordinal field exists; manual reorder ships only if M0 design makes it cheap | ship; defer | M0 design sprint |
+| OQ-12 | Revision storage: snapshots forever? | full snapshots, no pruning | snapshots; patches; hybrid | storage metrics at 10k-revision scale |
+| OQ-13 | Name clearance for "Soft Index"? | provisional; no paid assets until cleared | keep; rename | trademark/store/domain screening before Milestone G |
+
+Resolved so far: none (planning stage). First scheduled review: Milestone 0 exit.

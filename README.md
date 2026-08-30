@@ -4,7 +4,7 @@ Soft Index is a planned mobile-first notes app that lets a person capture a thou
 
 Current status: product and implementation planning only. No application code has been bootstrapped yet.
 
-Start with the [full build plan](./docs/BUILD_PLAN.md).
+Start with the [documentation index](./docs/README.md) or jump straight to the [full build plan](./docs/BUILD_PLAN.md). The set covers product requirements with acceptance criteria, the complete AI routing specification, the database schema and RLS design, security and privacy (including encrypted bring-your-own-key support for OpenAI or Anthropic), the operations and test plan, the design system, open questions, and architecture decision records.
 
 ## Working product sentence
 

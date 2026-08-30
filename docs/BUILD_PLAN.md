@@ -4,15 +4,18 @@ Working title: **Soft Index**. The name describes an index that adapts to the pe
 
 Plan status: selected product direction and implementation blueprint. No production claims in this document are implemented yet.
 
-Recommended companion documents to add as the related milestones begin:
+This plan is the spine of a full documentation set; see [docs/README.md](./README.md) for reading order. Companion documents:
 
-- `PRODUCT_REQUIREMENTS.md`: detailed user stories, flows, and acceptance criteria
-- `AI_ROUTING_SPEC.md`: schemas, prompts, candidate selection, scoring, and evaluation corpus
-- `DATA_MODEL.md`: tables, migrations, retention, revision, undo, and sync behavior
-- `SECURITY_AND_PRIVACY.md`: threat model, provider disclosure, account deletion, and incident handling
-- `OPERATIONS_TEST_PLAN.md`: environments, CI, deployment, backups, monitoring, and release checklist
-- `DESIGN_SYSTEM.md`: tokens, components, responsive behavior, and accessibility rules
-- `OPEN_QUESTIONS.md`: deferred decisions with owners and decision triggers
+- [PRODUCT_REQUIREMENTS.md](./PRODUCT_REQUIREMENTS.md): user stories, acceptance criteria, and edge cases per epic
+- [AI_ROUTING_SPEC.md](./AI_ROUTING_SPEC.md): pipeline contracts, prompt, schemas, scoring, provider/effort settings, and evaluation corpus
+- [DATA_MODEL.md](./DATA_MODEL.md): full DDL, RLS policies, transactional functions, structured-data schemas, retention
+- [SECURITY_AND_PRIVACY.md](./SECURITY_AND_PRIVACY.md): threat model, BYOK key custody, disclosure, deletion pipeline, incident handling
+- [OPERATIONS_TEST_PLAN.md](./OPERATIONS_TEST_PLAN.md): environments, CI, enumerated test inventory, release checklists, backups, monitoring
+- [DESIGN_SYSTEM.md](./DESIGN_SYSTEM.md): tokens, components, states, accessibility rules (skeleton; completed during Milestone 0)
+- [OPEN_QUESTIONS.md](./OPEN_QUESTIONS.md): deferred decisions with defaults and decision triggers
+- [GLOSSARY.md](./GLOSSARY.md) and [decisions/](./decisions/): shared vocabulary and architecture decision records
+
+When this plan disagrees with a companion document on a detail, the companion document wins and this plan gets corrected.
 
 ## Plan Review Outcome
 
@@ -222,6 +225,7 @@ Do not make medical, therapeutic, or accessibility claims without appropriate ev
 - Full-text, date, type, and semantic search
 - Revision history for AI and manual edits
 - Data export and account deletion
+- Bring-your-own-key: user-supplied OpenAI or Anthropic API key, encrypted at rest, with model-effort settings
 - Dark-first visual system with accessible token architecture
 - Shared backend, contracts, auth, database, search, and AI workflow
 
@@ -675,11 +679,20 @@ Never train a global model on private note content without a separate explicit p
 
 ### 9.7 Model and provider boundary
 
-Create an `OrganizationModel` port owned by the domain-facing AI package. Its adapter uses the OpenAI Responses API with strict Structured Outputs. Keep model IDs in versioned server configuration so routing evaluation can select a current cost-appropriate structured-output model without changing domain code.
+Create an `OrganizationModel` port owned by the domain-facing AI package, with a provider registry behind it holding two adapters:
 
-Use `store: false` where supported by the selected API configuration. Send the minimum candidate context. Record token counts, latency, prompt version, schema version, and response status, but keep raw note text out of ordinary logs.
+- **OpenAI adapter:** Responses API with strict Structured Outputs and `store: false`.
+- **Anthropic adapter:** Messages API with a forced tool call whose input schema is the organization schema, which yields strictly validated JSON.
 
-The official OpenAI API supports JSON-schema structured output and a `store` control on Responses. Reconfirm the exact SDK and model behavior against current official documentation when implementation starts.
+Keep model IDs and per-effort model tiers in versioned server configuration so routing evaluation can select current cost-appropriate models per provider without changing domain code.
+
+The credential used per request resolves in this order: the user's own stored key for their selected provider (bring-your-own-key), otherwise the application's key for the default provider. BYOK requests bypass the application's per-user model budget, since the spend is the user's, but keep all rate limits, payload caps, and validation. An invalid or revoked user key sends captures to Inbox with `provider_key_invalid` and a settings banner; there is no silent fallback to the application key unless the user explicitly enables fallback.
+
+User-facing effort settings shape each call (full mapping in `AI_ROUTING_SPEC.md`): routing effort selects the model tier and candidate budget; expansion style controls whether and how long generated expansions may be.
+
+Send the minimum candidate context. Record token counts, latency, provider, prompt version, schema version, and response status, but keep raw note text and API keys out of all logs.
+
+Both provider APIs support schema-constrained output; reconfirm exact SDK and model behavior against current official documentation when implementation starts.
 
 ### 9.8 Prompt injection and untrusted note content
 
@@ -808,7 +821,9 @@ soft-index/
     seed.sql
     tests/
   docs/
+    README.md               # documentation index and maintenance rules
     BUILD_PLAN.md
+    GLOSSARY.md
     PRODUCT_REQUIREMENTS.md
     AI_ROUTING_SPEC.md
     DATA_MODEL.md
@@ -851,7 +866,21 @@ Every user-owned table includes `user_id`, timestamps, and database constraints.
 - timezone and locale
 - organization mode: cautious, balanced, or automatic
 - expansion preference
+- AI provider mode: app default, or bring-your-own-key per provider
+- routing effort and expansion style settings
 - created and updated timestamps
+
+#### `user_provider_keys`
+
+- `id`
+- `user_id`
+- provider: openai or anthropic
+- encrypted key reference (Supabase Vault secret ID or app-layer AES-256-GCM ciphertext; never plaintext)
+- key last-four for display
+- status: active, invalid, revoked
+- validated and created timestamps
+
+The ciphertext or vault reference is not readable by clients; decryption happens only inside the organization workflow. Full custody rules live in `SECURITY_AND_PRIVACY.md`.
 
 #### `spaces`
 
@@ -1105,7 +1134,10 @@ Deleting a capture removes the capture itself. Note content it produced stays in
 - `PATCH /api/v1/routing-rules/:id`
 - `DELETE /api/v1/routing-rules/:id`
 - `GET /api/v1/me`
-- `PATCH /api/v1/me/settings` for organization mode, expansion preference, timezone, and locale
+- `PATCH /api/v1/me/settings` for organization mode, AI provider mode, routing effort, expansion style, timezone, and locale
+- `GET /api/v1/me/provider-key` returning provider, key last-four, and validation status only — never the key
+- `PUT /api/v1/me/provider-key` validating the key with a minimal test call before encrypted storage
+- `DELETE /api/v1/me/provider-key`
 - `GET /api/v1/me/export`
 - `DELETE /api/v1/me`
 
@@ -1281,7 +1313,8 @@ The product must explain that AI-assisted cloud notes are not end-to-end encrypt
 
 ### 16.4 Secrets and logging
 
-- OpenAI and Supabase secrets exist only in server or build-secret stores.
+- OpenAI, Anthropic, and Supabase application secrets exist only in server or build-secret stores.
+- User-supplied provider keys are encrypted at rest, decrypted only inside the workflow, displayed only as last-four, and never logged or returned to clients.
 - Do not log request bodies, note text, capture text, generated text, auth tokens, magic links, or service keys.
 - Logs use user-independent trace IDs or a one-way pseudonymous identifier.
 - Sentry breadcrumbs and replay features are configured to redact text fields.
@@ -1622,6 +1655,7 @@ Deliver:
 - correction flow
 - mutation history and safe inverse operations
 - editable routing rules
+- bring-your-own-key management and model-effort settings
 - duplicate-note suggestion
 - generated expansion acceptance or rejection
 - feedback metrics
@@ -1742,7 +1776,8 @@ The plan proceeds with these defaults so implementation can start without waitin
 | Undo retention | full revision history kept; one-tap AI undo guaranteed 30 days | storage metrics justify pruning |
 | Organization | rules, retrieval, strict model plan, policy | evaluation shows a simpler path performs better |
 | Automation | balanced mode with Review for ambiguity | beta users choose cautious or automatic behavior |
-| AI provider | OpenAI adapter first, provider port retained | privacy, cost, quality, or availability evidence |
+| AI provider | OpenAI and Anthropic adapters behind one port; app key default, BYOK supported | privacy, cost, quality, or availability evidence |
+| BYOK custody | Supabase Vault encrypted storage; server-side decryption only; no silent fallback | Vault limits or key-rotation evidence |
 | Hosting | Vercel plus Supabase | operational limits or cost justify migration |
 | Privacy | cloud sync, private manual note option, no E2EE claim | local-first product becomes the primary thesis |
 | Collaboration | out of scope | solo workflow is stable and demand is validated |
