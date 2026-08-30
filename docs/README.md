@@ -1,6 +1,6 @@
 # Unfiled Product Documentation
 
-This directory is the complete planning set for the product currently branded **Unfiled**. Nothing described here is implemented yet; every document distinguishes selected decisions from open questions. The repository path remains `soft-index` temporarily until name clearance is complete.
+This directory is the planning and implementation-reference set for **Unfiled**. Milestone A is implemented; Milestones B through G remain roadmap work. Each document distinguishes shipped repository foundations, selected decisions, and open questions so the planning set does not imply that the whole product already exists.
 
 ## Reading order
 
@@ -14,22 +14,22 @@ This directory is the complete planning set for the product currently branded **
 8. [DESIGN_SYSTEM.md](./DESIGN_SYSTEM.md) — tokens, components, states, and accessibility rules. Initial skeleton; completed during Milestone 0.
 9. [OPEN_QUESTIONS.md](./OPEN_QUESTIONS.md) — deferred decisions with defaults, options, and decision triggers.
 10. [GLOSSARY.md](./GLOSSARY.md) — the product vocabulary used consistently across documents and code.
-11. [decisions/](./decisions/) — architecture decision records: [ADR-0001 foundational choices](./decisions/ADR-0001-foundational-technology-and-scope-choices.md), [ADR-0002 BYOK provider strategy](./decisions/ADR-0002-byok-provider-strategy.md).
+11. [decisions/](./decisions/) — architecture decision records: [ADR-0001 foundational choices](./decisions/ADR-0001-foundational-technology-and-scope-choices.md), [ADR-0002 BYOK provider strategy](./decisions/ADR-0002-byok-provider-strategy.md), [ADR-0003 immutable native identifiers](./decisions/ADR-0003-native-identifiers.md).
 
 ## Document status
 
-| Document | Status | Owned by milestone |
-| --- | --- | --- |
-| BUILD_PLAN.md | Complete for planning stage | — |
-| PRODUCT_REQUIREMENTS.md | Complete for MVP scope | revised at each milestone gate |
-| AI_ROUTING_SPEC.md | Complete; weights and thresholds are initial values pending evaluation | Milestone D |
-| DATA_MODEL.md | Complete; DDL is authoritative draft until first migration lands | Milestone A |
-| SECURITY_AND_PRIVACY.md | Complete for planning; checklist gates public beta | Milestone G / Gate 6 |
-| OPERATIONS_TEST_PLAN.md | Complete; CI commands finalized at bootstrap | Milestone A |
-| BRAND_SYSTEM_UNFILED.md | Selected v1 creative direction; name clearance and vector production pending | Milestone 0 |
-| DESIGN_SYSTEM.md | Initial skeleton with token draft | Milestone 0 |
-| OPEN_QUESTIONS.md | Live document | continuous |
-| GLOSSARY.md | Live document | continuous |
+| Document                | Status                                                                       | Owned by milestone                  |
+| ----------------------- | ---------------------------------------------------------------------------- | ----------------------------------- |
+| BUILD_PLAN.md           | Current; Milestone A implemented, Milestones B–G planned                     | revised at each milestone gate      |
+| PRODUCT_REQUIREMENTS.md | Complete for MVP scope                                                       | revised at each milestone gate      |
+| AI_ROUTING_SPEC.md      | Complete; weights and thresholds are initial values pending evaluation       | Milestone D                         |
+| DATA_MODEL.md           | Initial migrations landed; checked-in migrations are authoritative           | Milestone A and every schema change |
+| SECURITY_AND_PRIVACY.md | Complete for planning; checklist gates public beta                           | Milestone G / Gate 6                |
+| OPERATIONS_TEST_PLAN.md | Complete; CI commands finalized at bootstrap                                 | Milestone A                         |
+| BRAND_SYSTEM_UNFILED.md | Selected v1 creative direction; name clearance and vector production pending | Milestone 0                         |
+| DESIGN_SYSTEM.md        | Initial skeleton with token draft                                            | Milestone 0                         |
+| OPEN_QUESTIONS.md       | Live document                                                                | continuous                          |
+| GLOSSARY.md             | Live document                                                                | continuous                          |
 
 ## Rules for maintaining this set
 

@@ -1,0 +1,221 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Unfiled API",
+    "version": "1.0.0",
+    "description": "Versioned API for durable capture and self-organizing notes."
+  },
+  "servers": [{ "url": "/api/v1" }],
+  "paths": {
+    "/captures": {
+      "post": {
+        "operationId": "createCapture",
+        "summary": "Persist a capture and enqueue one organization job",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Stable per-capture key. The client capture ULID is the canonical value.",
+            "schema": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CaptureCreateRequest" }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Capture durably accepted or idempotently replayed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CaptureCreateResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid capture or idempotency key",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "JWT" }
+    },
+    "schemas": {
+      "CaptureCreateRequest": {
+        "type": "object",
+        "properties": {
+          "clientCaptureId": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" },
+          "rawContent": { "type": "string", "minLength": 1, "maxLength": 10000 },
+          "source": {
+            "type": "string",
+            "enum": ["mobile", "web", "ios_lock_screen_widget", "share_sheet", "import"]
+          },
+          "deviceId": { "type": "string", "maxLength": 120 },
+          "clientCreatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "clientTimezone": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "privacy": { "type": "string", "enum": ["ai_assisted", "private_manual"] },
+          "explicitDestinationNoteId": {
+            "type": "string",
+            "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "expansionDisabled": { "type": "boolean" }
+        },
+        "required": [
+          "clientCaptureId",
+          "rawContent",
+          "source",
+          "clientCreatedAt",
+          "clientTimezone",
+          "privacy",
+          "expansionDisabled"
+        ],
+        "additionalProperties": false
+      },
+      "CaptureCreateResponse": {
+        "type": "object",
+        "properties": {
+          "capture": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" },
+              "rawContent": { "type": "string", "minLength": 1, "maxLength": 10000 },
+              "source": {
+                "type": "string",
+                "enum": ["mobile", "web", "ios_lock_screen_widget", "share_sheet", "import"]
+              },
+              "privacy": { "type": "string", "enum": ["ai_assisted", "private_manual"] },
+              "clientCreatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              "receivedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "queued",
+                  "processing",
+                  "organized",
+                  "inbox",
+                  "needs_review",
+                  "failed",
+                  "deleted"
+                ]
+              },
+              "lastErrorCode": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "account_deletion_failed",
+                      "budget_exhausted",
+                      "capture_too_long",
+                      "conflict_requires_review",
+                      "forbidden",
+                      "invalid_capture",
+                      "invalid_idempotency_key",
+                      "invalid_plan",
+                      "not_found",
+                      "offline",
+                      "provider_key_invalid",
+                      "provider_unavailable",
+                      "rate_limited",
+                      "stale_revision",
+                      "structure_conflict",
+                      "unauthorized",
+                      "validation_failed"
+                    ]
+                  },
+                  { "type": "null" }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "rawContent",
+              "source",
+              "privacy",
+              "clientCreatedAt",
+              "receivedAt",
+              "status",
+              "lastErrorCode"
+            ],
+            "additionalProperties": false
+          },
+          "jobId": { "type": "string", "pattern": "^job_[0-9A-HJKMNP-TV-Z]{26}$" },
+          "replayed": { "type": "boolean" }
+        },
+        "required": ["capture", "jobId", "replayed"],
+        "additionalProperties": false
+      },
+      "ApiError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "account_deletion_failed",
+              "budget_exhausted",
+              "capture_too_long",
+              "conflict_requires_review",
+              "forbidden",
+              "invalid_capture",
+              "invalid_idempotency_key",
+              "invalid_plan",
+              "not_found",
+              "offline",
+              "provider_key_invalid",
+              "provider_unavailable",
+              "rate_limited",
+              "stale_revision",
+              "structure_conflict",
+              "unauthorized",
+              "validation_failed"
+            ]
+          },
+          "message": { "type": "string", "minLength": 1, "maxLength": 240 },
+          "requestId": { "type": "string", "minLength": 1 },
+          "retryAfterSeconds": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "details": {
+            "type": "object",
+            "propertyNames": { "type": "string" },
+            "additionalProperties": {}
+          }
+        },
+        "required": ["code", "message", "requestId"],
+        "additionalProperties": false
+      }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "@unfiled/quick-capture-widget",
+  "version": "0.1.0",
+  "private": true,
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "peerDependencies": {
+    "expo": ">=55",
+    "react-native": ">=0.83"
+  }
+}

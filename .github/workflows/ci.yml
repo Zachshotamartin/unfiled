@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  quality:
+    name: Quality and database
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.14.0
+          run_install: false
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Audit production dependency graph
+        run: pnpm audit --prod --audit-level high
+
+      - name: Scan committed content for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check formatting
+        run: pnpm format:check
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Check package boundaries and OpenAPI
+        run: pnpm check:boundaries && pnpm check:openapi
+
+      - name: Check Expo dependency compatibility
+        run: pnpm check:expo
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit and contract coverage
+        run: pnpm test:coverage
+
+      - name: Deterministic routing evaluation
+        run: pnpm eval:routing
+
+      - name: Build web, mobile, and packages
+        run: pnpm build
+
+      - name: Install Supabase CLI
+        id: supabase-cli
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.116.0
+
+      - name: Start local Supabase
+        run: supabase start
+
+      - name: Rebuild database from zero
+        run: supabase db reset --local
+
+      - name: Lint database schema
+        run: supabase db lint --local --level warning
+
+      - name: Run database tests
+        run: supabase test db
+
+      - name: Stop local Supabase
+        if: ${{ always() && steps.supabase-cli.outcome == 'success' }}
+        run: supabase stop --no-backup
+
+  native-widget:
+    name: Native widget prebuild
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.14.0
+          run_install: false
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify Expo dependency compatibility
+        run: pnpm check:expo
+
+      - name: Regenerate and inspect WidgetKit target twice
+        run: pnpm --filter @unfiled/mobile verify:widget-prebuild
+
+      - name: Compile WidgetKit target for the iOS simulator
+        run: >-
+          xcodebuild
+          -project apps/mobile/ios/UnfiledDev.xcodeproj
+          -target QuickCaptureWidget
+          -configuration Debug
+          -sdk iphonesimulator
+          CODE_SIGNING_ALLOWED=NO
+          CODE_SIGNING_REQUIRED=NO
+          build
+
+  ci:
+    name: CI
+    if: always()
+    needs: [quality, native-widget]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every CI lane
+        env:
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          NATIVE_RESULT: ${{ needs.native-widget.result }}
+        run: test "$QUALITY_RESULT" = success && test "$NATIVE_RESULT" = success

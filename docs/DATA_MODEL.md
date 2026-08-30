@@ -1,12 +1,17 @@
 # Data Model
 
-Authoritative draft DDL for the Supabase PostgreSQL schema. When the first migration lands, migrations become the source of truth and this document is regenerated from them. Types shown are final intent; verify pgvector and extension versions at bootstrap.
+The Milestone A Supabase schema now has checked-in, forward-only migrations. They are the source of truth:
+
+- [`20260830000000_initial_unfiled_schema.sql`](../supabase/migrations/20260830000000_initial_unfiled_schema.sql) creates extensions, enums, tables, indexes, and shared helpers.
+- [`20260830000001_security_policies_and_capture_rpc.sql`](../supabase/migrations/20260830000001_security_policies_and_capture_rpc.sql) adds grants, RLS policies, and the atomic capture RPC.
+
+This document remains the readable schema reference and must change in the same change set as future migrations. If prose or an illustrative DDL excerpt differs from a migration, the migration wins. Verify pgvector and extension versions in each target Supabase environment before promotion.
 
 Related: [BUILD_PLAN.md](./BUILD_PLAN.md) §12, [SECURITY_AND_PRIVACY.md](./SECURITY_AND_PRIVACY.md) for RLS strategy and retention.
 
 ## 1. Conventions
 
-- IDs: `text` primary keys with typed prefixes over ULIDs — `note_`, `cap_`, `spc_`, `rev_`, `mut_`, `dec_`, `job_`, `rule_`, `rvw_`, `blk_`, `tag_`, `lnk_`, `chk_`, `fbk_`. Client-generated only for `captures.id`; all others server-generated.
+- IDs: `text` primary keys with typed prefixes over ULIDs — `note_`, `cap_`, `spc_`, `rev_`, `mut_`, `dec_`, `job_`, `rule_`, `rvw_`, `blk_`, `tag_`, `lnk_`, `chk_`, `fbk_`, `key_`. Client-generated only for `captures.id`; all others server-generated.
 - Every user-owned table: `user_id uuid not null references auth.users(id) on delete cascade`, `created_at timestamptz not null default now()`; mutable tables add `updated_at` maintained by trigger.
 - Soft delete via `deleted_at timestamptz`; hard delete per retention schedule (§7).
 - All enums are PostgreSQL enum types; adding a value is a migration.
@@ -15,7 +20,7 @@ Related: [BUILD_PLAN.md](./BUILD_PLAN.md) §12, [SECURITY_AND_PRIVACY.md](./SECU
 ```sql
 create type note_type as enum ('generic','list','log','principle','project');
 create type capture_status as enum ('pending','queued','processing','organized','inbox','needs_review','failed','deleted');
-create type capture_source as enum ('mobile','web','share_sheet','import');
+create type capture_source as enum ('mobile','web','ios_lock_screen_widget','share_sheet','import');
 create type privacy_mode as enum ('ai_assisted','private_manual');
 create type org_mode as enum ('cautious','balanced','automatic');
 create type job_state as enum ('created','running','awaiting_retry','succeeded','failed','dead_letter');
@@ -35,6 +40,13 @@ create type provider_mode as enum ('app_default','byok');
 create type routing_effort as enum ('economical','standard','thorough');
 create type expansion_style as enum ('off','brief','detailed');
 create type key_status as enum ('active','invalid','revoked');
+create type safe_error_code as enum (
+  'account_deletion_failed','budget_exhausted','capture_too_long',
+  'conflict_requires_review','forbidden','invalid_capture',
+  'invalid_idempotency_key','invalid_plan','not_found','offline',
+  'provider_key_invalid','provider_unavailable','rate_limited',
+  'stale_revision','structure_conflict','unauthorized','validation_failed'
+);
 ```
 
 ## 2. Tables
@@ -142,7 +154,7 @@ create table captures (
   client_timezone text not null,
   received_at timestamptz not null default now(),
   status capture_status not null default 'pending',
-  last_error_code text,
+  last_error_code safe_error_code,
   deleted_at timestamptz
 );
 create index captures_user_day on captures (user_id, received_at desc);
@@ -160,7 +172,7 @@ create table organization_jobs (
   model_id text,
   started_at timestamptz,
   completed_at timestamptz,
-  error_code text,
+  error_code safe_error_code,
   created_at timestamptz not null default now(),
   unique (capture_id)                  -- one job per capture; retries reuse the row
 );
@@ -375,8 +387,13 @@ Versioned per note type; validated by Zod at the application boundary and by `ch
       "kind": "workout",
       "raw": "bench 135 x 8, 145 x 6",
       "exercises": [
-        { "name": "bench", "sets": [ { "weight": 135, "unit": "lb", "reps": 8 },
-                                      { "weight": 145, "unit": "lb", "reps": 6 } ] }
+        {
+          "name": "bench",
+          "sets": [
+            { "weight": 135, "unit": "lb", "reps": 8 },
+            { "weight": 145, "unit": "lb", "reps": 6 }
+          ]
+        }
       ],
       "unparsed": [],
       "sourceCaptureId": "cap_01H..."
@@ -395,16 +412,29 @@ Versioned per note type; validated by Zod at the application boundary and by `ch
 
 `GET /sync/pull?cursor=` uses a per-user monotonic sequence: a `user_events (seq bigserial, user_id, entity, entity_id, occurred_at)` append-only table written by the transactional functions. Clients store the last seq. Realtime is an optimization; the cursor is the correctness mechanism.
 
+```sql
+create table user_events (
+  seq bigserial primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  entity text not null,
+  entity_id text not null,
+  occurred_at timestamptz not null default now()
+);
+create index user_events_user_cursor on user_events (user_id, seq);
+```
+
+`user_events` has user-scoped `select` only. Transactional functions and the service role append events; clients cannot forge cursor entries.
+
 ## 7. Retention schedule
 
-| Data | Active retention | After deletion trigger |
-| --- | --- | --- |
-| captures, notes, revisions | indefinite while account active | soft-delete window 30 days, then hard delete |
-| rejected generated_blocks | 7 days (undo window) | hard delete |
-| organization telemetry (decisions, jobs) | 180 days | deleted with account |
-| feedback_events | 365 days | deleted with account |
-| note_chunks/embeddings | tied to live note revision | deleted with note (cascade) |
-| backups | provider schedule, target ≤ 30 days | age out; documented in privacy policy |
+| Data                                     | Active retention                    | After deletion trigger                       |
+| ---------------------------------------- | ----------------------------------- | -------------------------------------------- |
+| captures, notes, revisions               | indefinite while account active     | soft-delete window 30 days, then hard delete |
+| rejected generated_blocks                | 7 days (undo window)                | hard delete                                  |
+| organization telemetry (decisions, jobs) | 180 days                            | deleted with account                         |
+| feedback_events                          | 365 days                            | deleted with account                         |
+| note_chunks/embeddings                   | tied to live note revision          | deleted with note (cascade)                  |
+| backups                                  | provider schedule, target ≤ 30 days | age out; documented in privacy policy        |
 
 ## 8. Migration conventions
 

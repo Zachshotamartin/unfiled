@@ -4,36 +4,36 @@ Threat model, enforcement design, data-path disclosure, deletion, and incident h
 
 ## 1. Data classification
 
-| Class | Examples | Handling |
-| --- | --- | --- |
+| Class                    | Examples                                                     | Handling                                                                                               |
+| ------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
 | Content (most sensitive) | capture text, note bodies, structured data, generated blocks | never in logs/traces/analytics; provider-bound only when AI-assisted; encrypted at rest and in transit |
-| Behavioral | decisions, bands, reason codes, feedback events | no content; retained per DATA_MODEL §7 |
-| Identity | email, auth identifiers, device IDs | Supabase Auth custody; pseudonymized in telemetry |
-| Operational | latencies, tokens, queue depths | freely retained |
+| Behavioral               | decisions, bands, reason codes, feedback events              | no content; retained per DATA_MODEL §7                                                                 |
+| Identity                 | email, auth identifiers, device IDs                          | Supabase Auth custody; pseudonymized in telemetry                                                      |
+| Operational              | latencies, tokens, queue depths                              | freely retained                                                                                        |
 
 ## 2. Trust boundaries and threat model
 
 Boundaries: (B1) client ↔ API, (B2) API ↔ database, (B3) workflow ↔ model provider, (B4) model output ↔ domain, (B5) content ↔ logs/telemetry, (B6) import/share-sheet ↔ capture pipeline.
 
-| # | Threat | Boundary | Mitigation | Verified by |
-| --- | --- | --- | --- | --- |
-| T1 | Cross-user data access (IDOR) | B1/B2 | RLS on every table + server-derived user ID; no client-supplied user IDs trusted | RLS deny suite in CI |
-| T2 | Forged decisions/mutations from client | B2 | telemetry and mutation tables writable only via `security definer` functions / service role | DB grant tests |
-| T3 | Prompt injection via capture or note snippet | B4 | model has no tools; output is data; schema + candidate-ID + allowlist validation; injection eval cases | AI spec §12 injection set = 0 obeyed |
-| T4 | Model exfiltrates other-user content | B3 | candidate retrieval is user-scoped SQL; manifest recorded and auditable | unit test on retrieval predicate |
-| T5 | Private note leaks into model/embeddings | B3 | `privacy` predicate at query level; no embedding row created | REQ-R7 automated assertion |
-| T6 | Content leaks into logs/Sentry | B5 | structured logger with denylist serializer; Sentry `beforeSend` scrubbing; replay text masking | log-audit test fixture |
-| T7 | Magic-link/code interception or brute force | B1 | provider TTLs, rate limits per email+IP, non-enumerating errors | REQ-A1 tests |
-| T8 | Stolen device with open session | B1 | session revocation on sign-out everywhere; deletion signs out all sessions | manual test G |
-| T9 | Malicious import file (Markdown bombs, huge payloads) | B6 | size caps, parse limits, no HTML execution, imports are plain content | fuzz cases (v1.1 import) |
-| T10 | Cost/DoS via capture flooding | B1 | rate limits (§6), per-user model budget, circuit breaker to Inbox | load test + budget unit tests |
-| T11 | Secrets in repo or client bundle | build | server-only env vars, secret scanning in CI, no `NEXT_PUBLIC_`/Expo-public secrets | gitleaks CI step |
-| T12 | Stale-revision overwrite of user edits | B4 | expected-revision precondition in `apply_mutation` | REQ-N5 test |
-| T13 | Workflow replay duplicates content | B4 | idempotency keys on mutations; unique constraints | REQ-Y2 tests |
-| T14 | Deep-link/share payload abuse | B6 | payloads treated as capture text only; no parameter executes navigation with side effects | unit tests |
-| T15 | Theft of stored user API keys (DB compromise) | B2 | keys in Supabase Vault (or AES-256-GCM with server-held KEK), never plaintext at rest; table has zero client access | grant tests + custody review |
-| T16 | User API key leaks via logs, errors, or API responses | B5/B1 | key plaintext exists only transiently in workflow memory; logger denylist; status endpoints return last-four only | log-audit fixture includes a canary key |
-| T17 | Key misuse blast radius (our bug spends user's money) | B3 | per-user rate limits and payload caps apply to BYOK identically; spend estimate shown in settings; anomaly alert on per-user call volume | budget/limit tests |
+| #   | Threat                                                | Boundary | Mitigation                                                                                                                               | Verified by                             |
+| --- | ----------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| T1  | Cross-user data access (IDOR)                         | B1/B2    | RLS on every table + server-derived user ID; no client-supplied user IDs trusted                                                         | RLS deny suite in CI                    |
+| T2  | Forged decisions/mutations from client                | B2       | telemetry and mutation tables writable only via `security definer` functions / service role                                              | DB grant tests                          |
+| T3  | Prompt injection via capture or note snippet          | B4       | model has no tools; output is data; schema + candidate-ID + allowlist validation; injection eval cases                                   | AI spec §12 injection set = 0 obeyed    |
+| T4  | Model exfiltrates other-user content                  | B3       | candidate retrieval is user-scoped SQL; manifest recorded and auditable                                                                  | unit test on retrieval predicate        |
+| T5  | Private note leaks into model/embeddings              | B3       | `privacy` predicate at query level; no embedding row created                                                                             | REQ-R7 automated assertion              |
+| T6  | Content leaks into logs/Sentry                        | B5       | structured logger with denylist serializer; Sentry `beforeSend` scrubbing; replay text masking                                           | log-audit test fixture                  |
+| T7  | Magic-link/code interception or brute force           | B1       | provider TTLs, rate limits per email+IP, non-enumerating errors                                                                          | REQ-A1 tests                            |
+| T8  | Stolen device with open session                       | B1       | session revocation on sign-out everywhere; deletion signs out all sessions                                                               | manual test G                           |
+| T9  | Malicious import file (Markdown bombs, huge payloads) | B6       | size caps, parse limits, no HTML execution, imports are plain content                                                                    | fuzz cases (v1.1 import)                |
+| T10 | Cost/DoS via capture flooding                         | B1       | rate limits (§6), per-user model budget, circuit breaker to Inbox                                                                        | load test + budget unit tests           |
+| T11 | Secrets in repo or client bundle                      | build    | server-only env vars, secret scanning in CI, no `NEXT_PUBLIC_`/Expo-public secrets                                                       | gitleaks CI step                        |
+| T12 | Stale-revision overwrite of user edits                | B4       | expected-revision precondition in `apply_mutation`                                                                                       | REQ-N5 test                             |
+| T13 | Workflow replay duplicates content                    | B4       | idempotency keys on mutations; unique constraints                                                                                        | REQ-Y2 tests                            |
+| T14 | Deep-link/share payload abuse                         | B6       | payloads treated as capture text only; no parameter executes navigation with side effects                                                | unit tests                              |
+| T15 | Theft of stored user API keys (DB compromise)         | B2       | keys in Supabase Vault (or AES-256-GCM with server-held KEK), never plaintext at rest; table has zero client access                      | grant tests + custody review            |
+| T16 | User API key leaks via logs, errors, or API responses | B5/B1    | key plaintext exists only transiently in workflow memory; logger denylist; status endpoints return last-four only                        | log-audit fixture includes a canary key |
+| T17 | Key misuse blast radius (our bug spends user's money) | B3       | per-user rate limits and payload caps apply to BYOK identically; spend estimate shown in settings; anomaly alert on per-user call volume | budget/limit tests                      |
 
 ## 3. Authentication and authorization
 
@@ -55,14 +55,14 @@ Capture/note text is delimited data (AI spec §5.1); the model has zero tools; e
 
 ## 6. Rate limits and abuse controls (initial values, tuned in beta)
 
-| Surface | Limit |
-| --- | --- |
-| capture create | 30/min, 500/day per user; 60/min per IP |
-| typed note operations | 120/min per user (rapid toggling stays unblocked) |
-| other mutations | 60/min per user |
-| auth code requests | 5/hour per email, 20/hour per IP |
-| model spend | per-user daily token budget; excess → Inbox `budget_exhausted` |
-| payload caps | capture 10k chars; note body 200k; ≤8 candidates; ≤5 ops/plan |
+| Surface               | Limit                                                          |
+| --------------------- | -------------------------------------------------------------- |
+| capture create        | 30/min, 500/day per user; 60/min per IP                        |
+| typed note operations | 120/min per user (rapid toggling stays unblocked)              |
+| other mutations       | 60/min per user                                                |
+| auth code requests    | 5/hour per email, 20/hour per IP                               |
+| model spend           | per-user daily token budget; excess → Inbox `budget_exhausted` |
+| payload caps          | capture 10k chars; note body 200k; ≤8 candidates; ≤5 ops/plan  |
 
 Circuit breaker: 5 consecutive provider failures opens for 60 s (exponential up to 15 min), captures flow to Inbox, banner shown.
 
