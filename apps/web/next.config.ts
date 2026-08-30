@@ -15,6 +15,16 @@ const nextConfig: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
   reactStrictMode: true,
+  transpilePackages: ["@unfiled/api-client", "@unfiled/contracts"],
+  webpack(config) {
+    config.resolve.extensionAlias = {
+      ...config.resolve.extensionAlias,
+      ".js": [".ts", ".tsx", ".js"],
+      ".mjs": [".mts", ".mjs"]
+    };
+
+    return config;
+  },
   async headers() {
     return [{ source: "/(.*)", headers: [...securityHeaders] }];
   }

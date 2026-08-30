@@ -1,0 +1,125 @@
+import {
+  ApiErrorCode,
+  AuthOtpRequestSchema,
+  AuthOtpVerifyRequestSchema,
+  AuthRefreshRequestSchema
+} from "@unfiled/contracts";
+
+import { authenticateRequest, clearedSessionCookies, sessionCookies } from "@/server/auth/session";
+import {
+  consumeOtpQuota,
+  supabaseAuthProvider,
+  type AuthProvider
+} from "@/server/auth/supabase-auth";
+
+import { errorResponse, HttpError, jsonResponse, readJsonObject } from "./errors";
+
+export type AuthHandlerDependencies = Readonly<{
+  consumeQuota?: (email: string, ipAddress: string) => Promise<void>;
+  provider?: AuthProvider;
+}>;
+
+function clientIp(request: Request): string {
+  const forwarded =
+    request.headers.get("x-vercel-forwarded-for") ?? request.headers.get("x-forwarded-for");
+  return forwarded?.split(",")[0]?.trim() ?? "unknown";
+}
+
+function invalidAuthBody(): HttpError {
+  return new HttpError(
+    400,
+    ApiErrorCode.VALIDATION_FAILED,
+    "Check your email and code, then try again."
+  );
+}
+
+export function createAuthHandlers(dependencies: AuthHandlerDependencies = {}) {
+  const provider = dependencies.provider ?? supabaseAuthProvider;
+  const quota = dependencies.consumeQuota ?? consumeOtpQuota;
+
+  return Object.freeze({
+    async requestCode(request: Request): Promise<Response> {
+      try {
+        const parsed = AuthOtpRequestSchema.safeParse(await readJsonObject(request));
+        if (!parsed.success) throw invalidAuthBody();
+        await quota(parsed.data.email, clientIp(request));
+        await provider.requestCode(parsed.data.email);
+        return jsonResponse({ accepted: true, retryAfterSeconds: 60 }, 202);
+      } catch (error) {
+        return errorResponse(error, request);
+      }
+    },
+
+    async verifyCode(request: Request): Promise<Response> {
+      try {
+        const parsed = AuthOtpVerifyRequestSchema.safeParse(await readJsonObject(request));
+        if (!parsed.success) throw invalidAuthBody();
+        const session = await provider.verifyCode(parsed.data.email, parsed.data.code);
+        const expiresAt = new Date(Date.now() + session.expiresIn * 1_000).toISOString();
+        return jsonResponse(
+          {
+            accessToken: session.accessToken,
+            refreshToken: session.refreshToken,
+            expiresAt,
+            user: session.user
+          },
+          200,
+          sessionCookies(session)
+        );
+      } catch (error) {
+        return errorResponse(error, request);
+      }
+    },
+
+    async refresh(request: Request): Promise<Response> {
+      try {
+        const parsed = AuthRefreshRequestSchema.safeParse(await readJsonObject(request));
+        if (!parsed.success) throw invalidAuthBody();
+        const session = await provider.refresh(parsed.data.refreshToken);
+        if (session === null) {
+          throw new HttpError(
+            401,
+            ApiErrorCode.UNAUTHORIZED,
+            "Your session has ended. Sign in again."
+          );
+        }
+        const expiresAt = new Date(Date.now() + session.expiresIn * 1_000).toISOString();
+        return jsonResponse(
+          {
+            accessToken: session.accessToken,
+            refreshToken: session.refreshToken,
+            expiresAt,
+            user: session.user
+          },
+          200,
+          sessionCookies(session)
+        );
+      } catch (error) {
+        return errorResponse(error, request);
+      }
+    },
+
+    async session(request: Request): Promise<Response> {
+      try {
+        const session = await authenticateRequest(request, provider);
+        return jsonResponse({ user: session.user }, 200, session.cookies);
+      } catch (error) {
+        return errorResponse(error, request);
+      }
+    },
+
+    async signOut(request: Request): Promise<Response> {
+      try {
+        const session = await authenticateRequest(request, provider);
+        await provider.signOut(session.accessToken);
+        return jsonResponse({ signedOut: true }, 200, clearedSessionCookies());
+      } catch (error) {
+        const response = errorResponse(error, request);
+        for (const cookie of clearedSessionCookies()) response.headers.append("set-cookie", cookie);
+        return response;
+      }
+    }
+  });
+}
+
+export const authHandlers = createAuthHandlers();

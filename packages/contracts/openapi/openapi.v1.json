@@ -3,49 +3,1891 @@
   "info": {
     "title": "Unfiled API",
     "version": "1.0.0",
-    "description": "Versioned API for durable capture and self-organizing notes."
+    "description": "Versioned API for authentication and manual note management."
   },
   "servers": [{ "url": "/api/v1" }],
   "paths": {
-    "/captures": {
+    "/auth/otp": {
       "post": {
-        "operationId": "createCapture",
-        "summary": "Persist a capture and enqueue one organization job",
+        "operationId": "requestOtp",
+        "summary": "Request a non-enumerating email OTP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/AuthOtpRequest" } }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "OTP request accepted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AuthOtpAcceptedResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "429": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "verifyOtp",
+        "summary": "Verify a six-digit email OTP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AuthOtpVerifyRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authenticated session",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/AuthSession" } }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "429": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "operationId": "refreshAuth",
+        "summary": "Exchange a durable refresh token for a current session",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/AuthRefreshRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Refreshed authenticated session",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/AuthSession" } }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "429": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/auth/session": {
+      "get": {
+        "operationId": "getAuthSession",
+        "summary": "Read the authenticated user session",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Authenticated user",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AuthSessionResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/auth/sign-out": {
+      "post": {
+        "operationId": "signOut",
+        "summary": "Revoke the current session and clear browser cookies",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Signed out",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AuthSignOutResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/auth/verify": {
+      "put": {
+        "operationId": "verifyAuth",
+        "summary": "Verify a six-digit email OTP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/AuthVerifyRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authenticated session",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AuthVerifyResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "429": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/notes": {
+      "get": {
+        "operationId": "listNotes",
+        "summary": "List notes with archive and deletion filters",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "archive",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["exclude", "include", "only"],
+              "default": "exclude"
+            }
+          },
+          {
+            "name": "deleted",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "enum": ["exclude", "only"], "default": "exclude" }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 30 }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          },
+          {
+            "name": "spaceId",
+            "in": "query",
+            "required": false,
+            "description": "A space identifier, or root for notes without a space.",
+            "schema": {
+              "oneOf": [
+                { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+                { "type": "string", "const": "root" }
+              ]
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["generic", "list", "log", "principle", "project"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated note summaries",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/NoteListResponse" } }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createNote",
+        "summary": "Create a manual note and initial revision",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
             "name": "Idempotency-Key",
             "in": "header",
             "required": true,
-            "description": "Stable per-capture key. The client capture ULID is the canonical value.",
-            "schema": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" }
+            "description": "Caller-generated key that remains stable across retries.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/NoteCreateRequest" } }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created note mutation",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MutationResult" } }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/notes/{noteId}": {
+      "get": {
+        "operationId": "getNote",
+        "summary": "Get one note detail",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "noteId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Note detail",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/NoteDetailResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateNote",
+        "summary": "Update editable note content",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "noteId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Caller-generated key that remains stable across retries.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/NoteUpdateRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated note mutation",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MutationResult" } }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "softDeleteNote",
+        "summary": "Soft-delete a note",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "noteId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Caller-generated key that remains stable across retries.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
           }
         ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/CaptureCreateRequest" }
+              "schema": { "$ref": "#/components/schemas/NoteSoftDeleteRequest" }
             }
           }
         },
         "responses": {
-          "202": {
-            "description": "Capture durably accepted or idempotently replayed",
+          "200": {
+            "description": "Deleted note mutation",
             "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/CaptureCreateResponse" }
-              }
+              "application/json": { "schema": { "$ref": "#/components/schemas/MutationResult" } }
             }
           },
           "400": {
-            "description": "Invalid capture or idempotency key",
+            "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
             }
           },
           "401": {
-            "description": "Authentication required",
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/notes/{noteId}/operations": {
+      "post": {
+        "operationId": "applyNoteOperations",
+        "summary": "Apply B-safe interactive checklist operations",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "noteId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Caller-generated key that remains stable across retries.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/InteractiveOperationsRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Interactive note mutation",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MutationResult" } }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/notes/{noteId}/links": {
+      "get": {
+        "operationId": "listNoteLinks",
+        "summary": "List outgoing note links",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "noteId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Outgoing note links",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/NoteLinkListResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createNoteLink",
+        "summary": "Create a manual note link",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "noteId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Caller-generated key that remains stable across retries.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/NoteLinkCreateRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created note relation",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/NoteRelationMutationResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/notes/{noteId}/links/{linkId}": {
+      "delete": {
+        "operationId": "deleteNoteLink",
+        "summary": "Delete a manual note link",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "noteId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          {
+            "name": "linkId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^lnk_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Caller-generated key that remains stable across retries.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/NoteLinkDeleteRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Deleted note relation",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/NoteRelationMutationResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/notes/{noteId}/tags": {
+      "post": {
+        "operationId": "linkNoteTag",
+        "summary": "Associate an existing tag with a note",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "noteId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Caller-generated key that remains stable across retries.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/NoteTagLinkRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Associated note tag",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/NoteRelationMutationResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/notes/{noteId}/tags/{tagId}": {
+      "delete": {
+        "operationId": "unlinkNoteTag",
+        "summary": "Remove a tag association from a note",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "noteId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          {
+            "name": "tagId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^tag_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Caller-generated key that remains stable across retries.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/NoteTagUnlinkRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Removed note tag",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/NoteRelationMutationResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/notes/{noteId}/move": {
+      "post": {
+        "operationId": "moveNote",
+        "summary": "Move a note to a space or root",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "noteId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Caller-generated key that remains stable across retries.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/NoteMoveRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Moved note mutation",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MutationResult" } }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/notes/{noteId}/archive": {
+      "post": {
+        "operationId": "archiveNote",
+        "summary": "Archive or unarchive a note",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "noteId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Caller-generated key that remains stable across retries.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/NoteArchiveRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Archived note mutation",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MutationResult" } }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/notes/{noteId}/restore-deleted": {
+      "post": {
+        "operationId": "restoreDeletedNote",
+        "summary": "Restore a soft-deleted note",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "noteId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Caller-generated key that remains stable across retries.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/NoteRestoreDeletedRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Restored note mutation",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MutationResult" } }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/notes/{noteId}/revisions": {
+      "get": {
+        "operationId": "listNoteRevisions",
+        "summary": "List immutable note revisions",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "noteId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 30 }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated revisions",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/NoteRevisionListResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/notes/{noteId}/restore": {
+      "post": {
+        "operationId": "restoreNoteRevision",
+        "summary": "Restore a complete historical snapshot as a new revision",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "noteId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Caller-generated key that remains stable across retries.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/NoteRestoreRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Revision restore mutation",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MutationResult" } }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/spaces": {
+      "get": {
+        "operationId": "listSpaces",
+        "summary": "List spaces",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 30 }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          },
+          {
+            "name": "includeArchived",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "boolean", "default": false }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated spaces",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SpaceListResponse" } }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createSpace",
+        "summary": "Create a root or one-level child space",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Caller-generated key that remains stable across retries.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/SpaceCreateRequest" } }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created space",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SpaceMutationResult" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/spaces/{spaceId}": {
+      "get": {
+        "operationId": "getSpace",
+        "summary": "Get one space",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "spaceId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Space detail",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SpaceDetailResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateSpace",
+        "summary": "Rename, reorder, or reparent a space",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "spaceId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Caller-generated key that remains stable across retries.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/SpaceUpdateRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated space",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SpaceMutationResult" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/spaces/{spaceId}/archive": {
+      "post": {
+        "operationId": "archiveSpace",
+        "summary": "Archive or unarchive a space",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "spaceId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Caller-generated key that remains stable across retries.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/SpaceArchiveRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Archived space",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SpaceMutationResult" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/tags": {
+      "get": {
+        "operationId": "listTags",
+        "summary": "List user tags",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 30 }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated tags",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/TagListResponse" } }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createTag",
+        "summary": "Create a normalized tag",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Caller-generated key that remains stable across retries.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/TagCreateRequest" } }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created tag",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/TagMutationResult" } }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/tags/{tagId}": {
+      "patch": {
+        "operationId": "updateTag",
+        "summary": "Rename a normalized tag",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "tagId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^tag_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Caller-generated key that remains stable across retries.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/TagUpdateRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated tag",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/TagMutationResult" } }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteTag",
+        "summary": "Delete a tag",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "tagId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^tag_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Caller-generated key that remains stable across retries.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/TagDeleteRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Deleted tag",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DeleteMutationResult" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/review-items": {
+      "get": {
+        "operationId": "listReviewItems",
+        "summary": "List owner-scoped Review items",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["open", "resolved", "dismissed"],
+              "default": "open"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 30 }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated Review items",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ListReviewItemsResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/mutations/{mutationId}/undo": {
+      "post": {
+        "operationId": "undoMutation",
+        "summary": "Undo the latest compatible mutation",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "mutationId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^mut_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Caller-generated key that remains stable across retries.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/MutationUndoRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Undo mutation",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MutationResult" } }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/search": {
+      "get": {
+        "operationId": "searchNotes",
+        "summary": "Search title and body text",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string", "minLength": 1, "maxLength": 200 }
+          },
+          {
+            "name": "archive",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["exclude", "include", "only"],
+              "default": "exclude"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 30 }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated search results",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SearchNotesResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
             }
@@ -59,122 +1901,6 @@
       "bearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "JWT" }
     },
     "schemas": {
-      "CaptureCreateRequest": {
-        "type": "object",
-        "properties": {
-          "clientCaptureId": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" },
-          "rawContent": { "type": "string", "minLength": 1, "maxLength": 10000 },
-          "source": {
-            "type": "string",
-            "enum": ["mobile", "web", "ios_lock_screen_widget", "share_sheet", "import"]
-          },
-          "deviceId": { "type": "string", "maxLength": 120 },
-          "clientCreatedAt": {
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
-          },
-          "clientTimezone": { "type": "string", "minLength": 1, "maxLength": 100 },
-          "privacy": { "type": "string", "enum": ["ai_assisted", "private_manual"] },
-          "explicitDestinationNoteId": {
-            "type": "string",
-            "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$"
-          },
-          "expansionDisabled": { "type": "boolean" }
-        },
-        "required": [
-          "clientCaptureId",
-          "rawContent",
-          "source",
-          "clientCreatedAt",
-          "clientTimezone",
-          "privacy",
-          "expansionDisabled"
-        ],
-        "additionalProperties": false
-      },
-      "CaptureCreateResponse": {
-        "type": "object",
-        "properties": {
-          "capture": {
-            "type": "object",
-            "properties": {
-              "id": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" },
-              "rawContent": { "type": "string", "minLength": 1, "maxLength": 10000 },
-              "source": {
-                "type": "string",
-                "enum": ["mobile", "web", "ios_lock_screen_widget", "share_sheet", "import"]
-              },
-              "privacy": { "type": "string", "enum": ["ai_assisted", "private_manual"] },
-              "clientCreatedAt": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
-              },
-              "receivedAt": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
-              },
-              "status": {
-                "type": "string",
-                "enum": [
-                  "pending",
-                  "queued",
-                  "processing",
-                  "organized",
-                  "inbox",
-                  "needs_review",
-                  "failed",
-                  "deleted"
-                ]
-              },
-              "lastErrorCode": {
-                "anyOf": [
-                  {
-                    "type": "string",
-                    "enum": [
-                      "account_deletion_failed",
-                      "budget_exhausted",
-                      "capture_too_long",
-                      "conflict_requires_review",
-                      "forbidden",
-                      "invalid_capture",
-                      "invalid_idempotency_key",
-                      "invalid_plan",
-                      "not_found",
-                      "offline",
-                      "provider_key_invalid",
-                      "provider_unavailable",
-                      "rate_limited",
-                      "stale_revision",
-                      "structure_conflict",
-                      "unauthorized",
-                      "validation_failed"
-                    ]
-                  },
-                  { "type": "null" }
-                ]
-              }
-            },
-            "required": [
-              "id",
-              "rawContent",
-              "source",
-              "privacy",
-              "clientCreatedAt",
-              "receivedAt",
-              "status",
-              "lastErrorCode"
-            ],
-            "additionalProperties": false
-          },
-          "jobId": { "type": "string", "pattern": "^job_[0-9A-HJKMNP-TV-Z]{26}$" },
-          "replayed": { "type": "boolean" }
-        },
-        "required": ["capture", "jobId", "replayed"],
-        "additionalProperties": false
-      },
       "ApiError": {
         "type": "object",
         "properties": {
@@ -214,6 +1940,2752 @@
           }
         },
         "required": ["code", "message", "requestId"],
+        "additionalProperties": false
+      },
+      "AuthOtpRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+          }
+        },
+        "required": ["email"],
+        "additionalProperties": false
+      },
+      "AuthOtpAcceptedResponse": {
+        "type": "object",
+        "properties": {
+          "accepted": { "type": "boolean", "const": true },
+          "retryAfterSeconds": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": ["accepted", "retryAfterSeconds"],
+        "additionalProperties": false
+      },
+      "AuthOtpVerifyRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+          },
+          "code": { "type": "string", "pattern": "^\\d{6}$" }
+        },
+        "required": ["email", "code"],
+        "additionalProperties": false
+      },
+      "AuthRefreshRequest": {
+        "type": "object",
+        "properties": { "refreshToken": { "type": "string", "minLength": 1, "maxLength": 8192 } },
+        "required": ["refreshToken"],
+        "additionalProperties": false
+      },
+      "AuthSession": {
+        "type": "object",
+        "properties": {
+          "accessToken": { "type": "string", "minLength": 1 },
+          "refreshToken": { "type": "string", "minLength": 1 },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "user": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "email": {
+                "type": "string",
+                "format": "email",
+                "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+              }
+            },
+            "required": ["id", "email"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["accessToken", "refreshToken", "expiresAt", "user"],
+        "additionalProperties": false
+      },
+      "AuthSessionResponse": {
+        "type": "object",
+        "properties": {
+          "user": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "email": {
+                "type": "string",
+                "format": "email",
+                "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+              }
+            },
+            "required": ["id", "email"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["user"],
+        "additionalProperties": false
+      },
+      "AuthSignOutResponse": {
+        "type": "object",
+        "properties": { "signedOut": { "type": "boolean", "const": true } },
+        "required": ["signedOut"],
+        "additionalProperties": false
+      },
+      "AuthVerifyRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+          },
+          "code": { "type": "string", "pattern": "^\\d{6}$" }
+        },
+        "required": ["email", "code"],
+        "additionalProperties": false
+      },
+      "AuthVerifyResponse": {
+        "type": "object",
+        "properties": {
+          "accessToken": { "type": "string", "minLength": 1 },
+          "refreshToken": { "type": "string", "minLength": 1 },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "user": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "email": {
+                "type": "string",
+                "format": "email",
+                "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+              }
+            },
+            "required": ["id", "email"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["accessToken", "refreshToken", "expiresAt", "user"],
+        "additionalProperties": false
+      },
+      "NoteCreateRequest": {
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "type": { "type": "string", "enum": ["generic", "list", "log", "principle", "project"] },
+          "spaceId": {
+            "anyOf": [
+              { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+              { "type": "null" }
+            ]
+          },
+          "privacy": {
+            "default": "ai_assisted",
+            "type": "string",
+            "enum": ["ai_assisted", "private_manual"]
+          },
+          "bodyMarkdown": { "default": "", "type": "string", "maxLength": 200000 },
+          "tagIds": {
+            "default": [],
+            "maxItems": 100,
+            "type": "array",
+            "items": { "type": "string", "pattern": "^tag_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          "links": {
+            "default": [],
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "toNoteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "linkType": { "type": "string", "enum": ["reference", "related"] }
+              },
+              "required": ["toNoteId", "linkType"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "idempotencyKey",
+          "title",
+          "type",
+          "privacy",
+          "bodyMarkdown",
+          "tagIds",
+          "links"
+        ],
+        "additionalProperties": false
+      },
+      "NoteListQuery": {
+        "type": "object",
+        "properties": {
+          "cursor": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "limit": { "default": 30, "type": "integer", "minimum": 1, "maximum": 100 },
+          "spaceId": {
+            "anyOf": [
+              { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+              {},
+              { "type": "null" }
+            ]
+          },
+          "type": { "type": "string", "enum": ["generic", "list", "log", "principle", "project"] },
+          "archive": {
+            "default": "exclude",
+            "type": "string",
+            "enum": ["exclude", "include", "only"]
+          },
+          "deleted": { "default": "exclude", "type": "string", "enum": ["exclude", "only"] }
+        },
+        "required": ["limit", "archive", "deleted"],
+        "additionalProperties": false
+      },
+      "NoteUpdateRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "bodyMarkdown": { "type": "string", "maxLength": 200000 },
+          "privacy": { "type": "string", "enum": ["ai_assisted", "private_manual"] },
+          "spaceId": {
+            "anyOf": [
+              { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+              { "type": "null" }
+            ]
+          },
+          "tagIds": {
+            "maxItems": 100,
+            "type": "array",
+            "items": { "type": "string", "pattern": "^tag_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          "links": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "toNoteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "linkType": { "type": "string", "enum": ["reference", "related"] }
+              },
+              "required": ["toNoteId", "linkType"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["expectedRevision", "idempotencyKey"],
+        "additionalProperties": false
+      },
+      "NoteMoveRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "spaceId": {
+            "anyOf": [
+              { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+              { "type": "null" }
+            ]
+          }
+        },
+        "required": ["expectedRevision", "idempotencyKey", "spaceId"],
+        "additionalProperties": false
+      },
+      "NoteArchiveRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "archived": { "default": true, "type": "boolean" }
+        },
+        "required": ["expectedRevision", "idempotencyKey", "archived"],
+        "additionalProperties": false
+      },
+      "NoteSoftDeleteRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          }
+        },
+        "required": ["expectedRevision", "idempotencyKey"],
+        "additionalProperties": false
+      },
+      "NoteRestoreDeletedRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          }
+        },
+        "required": ["expectedRevision", "idempotencyKey"],
+        "additionalProperties": false
+      },
+      "NoteDetailResponse": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "object",
+            "properties": {
+              "spaceId": {
+                "anyOf": [
+                  { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+                  { "type": "null" }
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": ["generic", "list", "log", "principle", "project"]
+              },
+              "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+              "bodyMarkdown": { "type": "string", "maxLength": 200000 },
+              "structuredData": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "schemaVersion": { "type": "number", "const": 1 },
+                      "items": {
+                        "maxItems": 2000,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": { "type": "string", "pattern": "^itm_[0-9A-HJKMNP-TV-Z]{26}$" },
+                            "text": { "type": "string", "minLength": 1, "maxLength": 500 },
+                            "checked": { "type": "boolean" },
+                            "ordinal": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "section": {
+                              "anyOf": [
+                                { "type": "string", "minLength": 1, "maxLength": 100 },
+                                { "type": "null" }
+                              ]
+                            }
+                          },
+                          "required": ["id", "text", "checked", "ordinal", "section"],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": ["schemaVersion", "items"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "schemaVersion": { "type": "number", "const": 1 },
+                      "entries": {
+                        "maxItems": 2000,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": { "type": "string", "pattern": "^ent_[0-9A-HJKMNP-TV-Z]{26}$" },
+                            "occurredAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                            },
+                            "fields": {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80
+                              },
+                              "additionalProperties": {
+                                "anyOf": [
+                                  { "type": "string", "maxLength": 500 },
+                                  { "type": "number" },
+                                  { "type": "null" }
+                                ]
+                              }
+                            }
+                          },
+                          "required": ["id", "occurredAt", "fields"],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": ["schemaVersion", "entries"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "schemaVersion": { "type": "number", "const": 1 },
+                      "checklistItems": {
+                        "maxItems": 2000,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": { "type": "string", "pattern": "^itm_[0-9A-HJKMNP-TV-Z]{26}$" },
+                            "text": { "type": "string", "minLength": 1, "maxLength": 500 },
+                            "checked": { "type": "boolean" },
+                            "ordinal": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "lineIndex": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["id", "text", "checked", "ordinal", "lineIndex"],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": ["schemaVersion", "checklistItems"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": { "schemaVersion": { "type": "number", "const": 1 } },
+                    "required": ["schemaVersion"],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "isOpen": { "type": "boolean" },
+              "pinnedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "privacy": { "type": "string", "enum": ["ai_assisted", "private_manual"] },
+              "archivedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "deletedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "tagIds": {
+                "maxItems": 100,
+                "type": "array",
+                "items": { "type": "string", "pattern": "^tag_[0-9A-HJKMNP-TV-Z]{26}$" }
+              },
+              "links": {
+                "maxItems": 100,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "toNoteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                    "linkType": { "type": "string", "enum": ["reference", "related"] }
+                  },
+                  "required": ["toNoteId", "linkType"],
+                  "additionalProperties": false
+                }
+              },
+              "id": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+              "currentRevision": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              "updatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              }
+            },
+            "required": [
+              "spaceId",
+              "type",
+              "title",
+              "bodyMarkdown",
+              "structuredData",
+              "isOpen",
+              "pinnedAt",
+              "privacy",
+              "archivedAt",
+              "deletedAt",
+              "tagIds",
+              "links",
+              "id",
+              "currentRevision",
+              "createdAt",
+              "updatedAt"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": ["note"],
+        "additionalProperties": false
+      },
+      "NoteListResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "spaceId": {
+                  "anyOf": [
+                    { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+                    { "type": "null" }
+                  ]
+                },
+                "type": {
+                  "type": "string",
+                  "enum": ["generic", "list", "log", "principle", "project"]
+                },
+                "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+                "currentRevision": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "isOpen": { "type": "boolean" },
+                "pinnedAt": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                    },
+                    { "type": "null" }
+                  ]
+                },
+                "privacy": { "type": "string", "enum": ["ai_assisted", "private_manual"] },
+                "archivedAt": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                    },
+                    { "type": "null" }
+                  ]
+                },
+                "deletedAt": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                    },
+                    { "type": "null" }
+                  ]
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                }
+              },
+              "required": [
+                "id",
+                "spaceId",
+                "type",
+                "title",
+                "currentRevision",
+                "isOpen",
+                "pinnedAt",
+                "privacy",
+                "archivedAt",
+                "deletedAt",
+                "updatedAt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "pageInfo": {
+            "type": "object",
+            "properties": {
+              "hasMore": { "type": "boolean" },
+              "nextCursor": {
+                "anyOf": [
+                  { "type": "string", "minLength": 1, "maxLength": 512 },
+                  { "type": "null" }
+                ]
+              }
+            },
+            "required": ["hasMore", "nextCursor"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["items", "pageInfo"],
+        "additionalProperties": false
+      },
+      "InteractiveOperationsRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "operations": {
+            "minItems": 1,
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": { "type": "string", "const": "toggle_item_checked" },
+                "itemId": { "type": "string", "pattern": "^itm_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "checked": { "type": "boolean" }
+              },
+              "required": ["type", "itemId", "checked"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["expectedRevision", "idempotencyKey", "operations"],
+        "additionalProperties": false
+      },
+      "NoteLinkCreateRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "toNoteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+          "linkType": { "type": "string", "enum": ["reference", "related"] }
+        },
+        "required": ["expectedRevision", "idempotencyKey", "toNoteId", "linkType"],
+        "additionalProperties": false
+      },
+      "NoteLinkDeleteRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "toNoteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+          "linkType": { "type": "string", "enum": ["reference", "related"] }
+        },
+        "required": ["expectedRevision", "idempotencyKey", "toNoteId", "linkType"],
+        "additionalProperties": false
+      },
+      "NoteLinkListResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "pattern": "^lnk_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "fromNoteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "toNoteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "linkType": { "type": "string", "enum": ["reference", "related"] },
+                "targetTitle": { "type": "string", "minLength": 1, "maxLength": 200 }
+              },
+              "required": ["id", "fromNoteId", "toNoteId", "linkType", "targetTitle"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["items"],
+        "additionalProperties": false
+      },
+      "NoteTagLinkRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "tagId": { "type": "string", "pattern": "^tag_[0-9A-HJKMNP-TV-Z]{26}$" }
+        },
+        "required": ["expectedRevision", "idempotencyKey", "tagId"],
+        "additionalProperties": false
+      },
+      "NoteTagUnlinkRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          }
+        },
+        "required": ["expectedRevision", "idempotencyKey"],
+        "additionalProperties": false
+      },
+      "NoteRelationMutationResponse": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "object",
+            "properties": {
+              "spaceId": {
+                "anyOf": [
+                  { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+                  { "type": "null" }
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": ["generic", "list", "log", "principle", "project"]
+              },
+              "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+              "bodyMarkdown": { "type": "string", "maxLength": 200000 },
+              "structuredData": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "schemaVersion": { "type": "number", "const": 1 },
+                      "items": {
+                        "maxItems": 2000,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": { "type": "string", "pattern": "^itm_[0-9A-HJKMNP-TV-Z]{26}$" },
+                            "text": { "type": "string", "minLength": 1, "maxLength": 500 },
+                            "checked": { "type": "boolean" },
+                            "ordinal": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "section": {
+                              "anyOf": [
+                                { "type": "string", "minLength": 1, "maxLength": 100 },
+                                { "type": "null" }
+                              ]
+                            }
+                          },
+                          "required": ["id", "text", "checked", "ordinal", "section"],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": ["schemaVersion", "items"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "schemaVersion": { "type": "number", "const": 1 },
+                      "entries": {
+                        "maxItems": 2000,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": { "type": "string", "pattern": "^ent_[0-9A-HJKMNP-TV-Z]{26}$" },
+                            "occurredAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                            },
+                            "fields": {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80
+                              },
+                              "additionalProperties": {
+                                "anyOf": [
+                                  { "type": "string", "maxLength": 500 },
+                                  { "type": "number" },
+                                  { "type": "null" }
+                                ]
+                              }
+                            }
+                          },
+                          "required": ["id", "occurredAt", "fields"],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": ["schemaVersion", "entries"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "schemaVersion": { "type": "number", "const": 1 },
+                      "checklistItems": {
+                        "maxItems": 2000,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": { "type": "string", "pattern": "^itm_[0-9A-HJKMNP-TV-Z]{26}$" },
+                            "text": { "type": "string", "minLength": 1, "maxLength": 500 },
+                            "checked": { "type": "boolean" },
+                            "ordinal": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "lineIndex": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["id", "text", "checked", "ordinal", "lineIndex"],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": ["schemaVersion", "checklistItems"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": { "schemaVersion": { "type": "number", "const": 1 } },
+                    "required": ["schemaVersion"],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "isOpen": { "type": "boolean" },
+              "pinnedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "privacy": { "type": "string", "enum": ["ai_assisted", "private_manual"] },
+              "archivedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "deletedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "tagIds": {
+                "maxItems": 100,
+                "type": "array",
+                "items": { "type": "string", "pattern": "^tag_[0-9A-HJKMNP-TV-Z]{26}$" }
+              },
+              "links": {
+                "maxItems": 100,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "toNoteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                    "linkType": { "type": "string", "enum": ["reference", "related"] }
+                  },
+                  "required": ["toNoteId", "linkType"],
+                  "additionalProperties": false
+                }
+              },
+              "id": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+              "currentRevision": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              "updatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              }
+            },
+            "required": [
+              "spaceId",
+              "type",
+              "title",
+              "bodyMarkdown",
+              "structuredData",
+              "isOpen",
+              "pinnedAt",
+              "privacy",
+              "archivedAt",
+              "deletedAt",
+              "tagIds",
+              "links",
+              "id",
+              "currentRevision",
+              "createdAt",
+              "updatedAt"
+            ],
+            "additionalProperties": false
+          },
+          "revision": {
+            "type": "object",
+            "properties": {
+              "spaceId": {
+                "anyOf": [
+                  { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+                  { "type": "null" }
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": ["generic", "list", "log", "principle", "project"]
+              },
+              "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+              "bodyMarkdown": { "type": "string", "maxLength": 200000 },
+              "structuredData": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "schemaVersion": { "type": "number", "const": 1 },
+                      "items": {
+                        "maxItems": 2000,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": { "type": "string", "pattern": "^itm_[0-9A-HJKMNP-TV-Z]{26}$" },
+                            "text": { "type": "string", "minLength": 1, "maxLength": 500 },
+                            "checked": { "type": "boolean" },
+                            "ordinal": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "section": {
+                              "anyOf": [
+                                { "type": "string", "minLength": 1, "maxLength": 100 },
+                                { "type": "null" }
+                              ]
+                            }
+                          },
+                          "required": ["id", "text", "checked", "ordinal", "section"],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": ["schemaVersion", "items"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "schemaVersion": { "type": "number", "const": 1 },
+                      "entries": {
+                        "maxItems": 2000,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": { "type": "string", "pattern": "^ent_[0-9A-HJKMNP-TV-Z]{26}$" },
+                            "occurredAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                            },
+                            "fields": {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80
+                              },
+                              "additionalProperties": {
+                                "anyOf": [
+                                  { "type": "string", "maxLength": 500 },
+                                  { "type": "number" },
+                                  { "type": "null" }
+                                ]
+                              }
+                            }
+                          },
+                          "required": ["id", "occurredAt", "fields"],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": ["schemaVersion", "entries"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "schemaVersion": { "type": "number", "const": 1 },
+                      "checklistItems": {
+                        "maxItems": 2000,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": { "type": "string", "pattern": "^itm_[0-9A-HJKMNP-TV-Z]{26}$" },
+                            "text": { "type": "string", "minLength": 1, "maxLength": 500 },
+                            "checked": { "type": "boolean" },
+                            "ordinal": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "lineIndex": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["id", "text", "checked", "ordinal", "lineIndex"],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": ["schemaVersion", "checklistItems"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": { "schemaVersion": { "type": "number", "const": 1 } },
+                    "required": ["schemaVersion"],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "isOpen": { "type": "boolean" },
+              "pinnedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "privacy": { "type": "string", "enum": ["ai_assisted", "private_manual"] },
+              "archivedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "deletedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "tagIds": {
+                "maxItems": 100,
+                "type": "array",
+                "items": { "type": "string", "pattern": "^tag_[0-9A-HJKMNP-TV-Z]{26}$" }
+              },
+              "links": {
+                "maxItems": 100,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "toNoteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                    "linkType": { "type": "string", "enum": ["reference", "related"] }
+                  },
+                  "required": ["toNoteId", "linkType"],
+                  "additionalProperties": false
+                }
+              },
+              "id": { "type": "string", "pattern": "^rev_[0-9A-HJKMNP-TV-Z]{26}$" },
+              "noteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+              "revision": { "type": "integer", "exclusiveMinimum": 0, "maximum": 9007199254740991 },
+              "source": {
+                "type": "string",
+                "enum": ["manual", "organization", "undo", "import", "interactive"]
+              },
+              "contentHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "actor": { "type": "string", "minLength": 1, "maxLength": 200 },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              }
+            },
+            "required": [
+              "spaceId",
+              "type",
+              "title",
+              "bodyMarkdown",
+              "structuredData",
+              "isOpen",
+              "pinnedAt",
+              "privacy",
+              "archivedAt",
+              "deletedAt",
+              "tagIds",
+              "links",
+              "id",
+              "noteId",
+              "revision",
+              "source",
+              "contentHash",
+              "actor",
+              "createdAt"
+            ],
+            "additionalProperties": false
+          },
+          "mutationId": { "type": "string", "pattern": "^mut_[0-9A-HJKMNP-TV-Z]{26}$" },
+          "replayed": { "type": "boolean" },
+          "undo": {
+            "type": "object",
+            "properties": {
+              "eligible": { "type": "boolean" },
+              "expiresAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  { "type": "null" }
+                ]
+              }
+            },
+            "required": ["eligible", "expiresAt"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["note", "revision", "mutationId", "replayed", "undo"],
+        "additionalProperties": false
+      },
+      "NoteRevisionListResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "spaceId": {
+                  "anyOf": [
+                    { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+                    { "type": "null" }
+                  ]
+                },
+                "type": {
+                  "type": "string",
+                  "enum": ["generic", "list", "log", "principle", "project"]
+                },
+                "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+                "bodyMarkdown": { "type": "string", "maxLength": 200000 },
+                "structuredData": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "schemaVersion": { "type": "number", "const": 1 },
+                        "items": {
+                          "maxItems": 2000,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": { "type": "string", "pattern": "^itm_[0-9A-HJKMNP-TV-Z]{26}$" },
+                              "text": { "type": "string", "minLength": 1, "maxLength": 500 },
+                              "checked": { "type": "boolean" },
+                              "ordinal": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "section": {
+                                "anyOf": [
+                                  { "type": "string", "minLength": 1, "maxLength": 100 },
+                                  { "type": "null" }
+                                ]
+                              }
+                            },
+                            "required": ["id", "text", "checked", "ordinal", "section"],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": ["schemaVersion", "items"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "schemaVersion": { "type": "number", "const": 1 },
+                        "entries": {
+                          "maxItems": 2000,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": { "type": "string", "pattern": "^ent_[0-9A-HJKMNP-TV-Z]{26}$" },
+                              "occurredAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              "fields": {
+                                "type": "object",
+                                "propertyNames": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80
+                                },
+                                "additionalProperties": {
+                                  "anyOf": [
+                                    { "type": "string", "maxLength": 500 },
+                                    { "type": "number" },
+                                    { "type": "null" }
+                                  ]
+                                }
+                              }
+                            },
+                            "required": ["id", "occurredAt", "fields"],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": ["schemaVersion", "entries"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "schemaVersion": { "type": "number", "const": 1 },
+                        "checklistItems": {
+                          "maxItems": 2000,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": { "type": "string", "pattern": "^itm_[0-9A-HJKMNP-TV-Z]{26}$" },
+                              "text": { "type": "string", "minLength": 1, "maxLength": 500 },
+                              "checked": { "type": "boolean" },
+                              "ordinal": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "lineIndex": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": ["id", "text", "checked", "ordinal", "lineIndex"],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": ["schemaVersion", "checklistItems"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": { "schemaVersion": { "type": "number", "const": 1 } },
+                      "required": ["schemaVersion"],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "isOpen": { "type": "boolean" },
+                "pinnedAt": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                    },
+                    { "type": "null" }
+                  ]
+                },
+                "privacy": { "type": "string", "enum": ["ai_assisted", "private_manual"] },
+                "archivedAt": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                    },
+                    { "type": "null" }
+                  ]
+                },
+                "deletedAt": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                    },
+                    { "type": "null" }
+                  ]
+                },
+                "tagIds": {
+                  "maxItems": 100,
+                  "type": "array",
+                  "items": { "type": "string", "pattern": "^tag_[0-9A-HJKMNP-TV-Z]{26}$" }
+                },
+                "links": {
+                  "maxItems": 100,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "toNoteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                      "linkType": { "type": "string", "enum": ["reference", "related"] }
+                    },
+                    "required": ["toNoteId", "linkType"],
+                    "additionalProperties": false
+                  }
+                },
+                "id": { "type": "string", "pattern": "^rev_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "noteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "revision": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "source": {
+                  "type": "string",
+                  "enum": ["manual", "organization", "undo", "import", "interactive"]
+                },
+                "contentHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "actor": { "type": "string", "minLength": 1, "maxLength": 200 },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                }
+              },
+              "required": [
+                "spaceId",
+                "type",
+                "title",
+                "bodyMarkdown",
+                "structuredData",
+                "isOpen",
+                "pinnedAt",
+                "privacy",
+                "archivedAt",
+                "deletedAt",
+                "tagIds",
+                "links",
+                "id",
+                "noteId",
+                "revision",
+                "source",
+                "contentHash",
+                "actor",
+                "createdAt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "pageInfo": {
+            "type": "object",
+            "properties": {
+              "hasMore": { "type": "boolean" },
+              "nextCursor": {
+                "anyOf": [
+                  { "type": "string", "minLength": 1, "maxLength": 512 },
+                  { "type": "null" }
+                ]
+              }
+            },
+            "required": ["hasMore", "nextCursor"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["items", "pageInfo"],
+        "additionalProperties": false
+      },
+      "NoteRevisionListQuery": {
+        "type": "object",
+        "properties": {
+          "cursor": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "limit": { "default": 30, "type": "integer", "minimum": 1, "maximum": 100 }
+        },
+        "required": ["limit"],
+        "additionalProperties": false
+      },
+      "NoteRestoreRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "revisionId": { "type": "string", "pattern": "^rev_[0-9A-HJKMNP-TV-Z]{26}$" }
+        },
+        "required": ["expectedRevision", "idempotencyKey", "revisionId"],
+        "additionalProperties": false
+      },
+      "MutationResult": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "object",
+            "properties": {
+              "spaceId": {
+                "anyOf": [
+                  { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+                  { "type": "null" }
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": ["generic", "list", "log", "principle", "project"]
+              },
+              "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+              "bodyMarkdown": { "type": "string", "maxLength": 200000 },
+              "structuredData": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "schemaVersion": { "type": "number", "const": 1 },
+                      "items": {
+                        "maxItems": 2000,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": { "type": "string", "pattern": "^itm_[0-9A-HJKMNP-TV-Z]{26}$" },
+                            "text": { "type": "string", "minLength": 1, "maxLength": 500 },
+                            "checked": { "type": "boolean" },
+                            "ordinal": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "section": {
+                              "anyOf": [
+                                { "type": "string", "minLength": 1, "maxLength": 100 },
+                                { "type": "null" }
+                              ]
+                            }
+                          },
+                          "required": ["id", "text", "checked", "ordinal", "section"],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": ["schemaVersion", "items"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "schemaVersion": { "type": "number", "const": 1 },
+                      "entries": {
+                        "maxItems": 2000,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": { "type": "string", "pattern": "^ent_[0-9A-HJKMNP-TV-Z]{26}$" },
+                            "occurredAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                            },
+                            "fields": {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80
+                              },
+                              "additionalProperties": {
+                                "anyOf": [
+                                  { "type": "string", "maxLength": 500 },
+                                  { "type": "number" },
+                                  { "type": "null" }
+                                ]
+                              }
+                            }
+                          },
+                          "required": ["id", "occurredAt", "fields"],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": ["schemaVersion", "entries"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "schemaVersion": { "type": "number", "const": 1 },
+                      "checklistItems": {
+                        "maxItems": 2000,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": { "type": "string", "pattern": "^itm_[0-9A-HJKMNP-TV-Z]{26}$" },
+                            "text": { "type": "string", "minLength": 1, "maxLength": 500 },
+                            "checked": { "type": "boolean" },
+                            "ordinal": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "lineIndex": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["id", "text", "checked", "ordinal", "lineIndex"],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": ["schemaVersion", "checklistItems"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": { "schemaVersion": { "type": "number", "const": 1 } },
+                    "required": ["schemaVersion"],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "isOpen": { "type": "boolean" },
+              "pinnedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "privacy": { "type": "string", "enum": ["ai_assisted", "private_manual"] },
+              "archivedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "deletedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "tagIds": {
+                "maxItems": 100,
+                "type": "array",
+                "items": { "type": "string", "pattern": "^tag_[0-9A-HJKMNP-TV-Z]{26}$" }
+              },
+              "links": {
+                "maxItems": 100,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "toNoteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                    "linkType": { "type": "string", "enum": ["reference", "related"] }
+                  },
+                  "required": ["toNoteId", "linkType"],
+                  "additionalProperties": false
+                }
+              },
+              "id": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+              "currentRevision": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              "updatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              }
+            },
+            "required": [
+              "spaceId",
+              "type",
+              "title",
+              "bodyMarkdown",
+              "structuredData",
+              "isOpen",
+              "pinnedAt",
+              "privacy",
+              "archivedAt",
+              "deletedAt",
+              "tagIds",
+              "links",
+              "id",
+              "currentRevision",
+              "createdAt",
+              "updatedAt"
+            ],
+            "additionalProperties": false
+          },
+          "revision": {
+            "type": "object",
+            "properties": {
+              "spaceId": {
+                "anyOf": [
+                  { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+                  { "type": "null" }
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": ["generic", "list", "log", "principle", "project"]
+              },
+              "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+              "bodyMarkdown": { "type": "string", "maxLength": 200000 },
+              "structuredData": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "schemaVersion": { "type": "number", "const": 1 },
+                      "items": {
+                        "maxItems": 2000,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": { "type": "string", "pattern": "^itm_[0-9A-HJKMNP-TV-Z]{26}$" },
+                            "text": { "type": "string", "minLength": 1, "maxLength": 500 },
+                            "checked": { "type": "boolean" },
+                            "ordinal": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "section": {
+                              "anyOf": [
+                                { "type": "string", "minLength": 1, "maxLength": 100 },
+                                { "type": "null" }
+                              ]
+                            }
+                          },
+                          "required": ["id", "text", "checked", "ordinal", "section"],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": ["schemaVersion", "items"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "schemaVersion": { "type": "number", "const": 1 },
+                      "entries": {
+                        "maxItems": 2000,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": { "type": "string", "pattern": "^ent_[0-9A-HJKMNP-TV-Z]{26}$" },
+                            "occurredAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                            },
+                            "fields": {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80
+                              },
+                              "additionalProperties": {
+                                "anyOf": [
+                                  { "type": "string", "maxLength": 500 },
+                                  { "type": "number" },
+                                  { "type": "null" }
+                                ]
+                              }
+                            }
+                          },
+                          "required": ["id", "occurredAt", "fields"],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": ["schemaVersion", "entries"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "schemaVersion": { "type": "number", "const": 1 },
+                      "checklistItems": {
+                        "maxItems": 2000,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": { "type": "string", "pattern": "^itm_[0-9A-HJKMNP-TV-Z]{26}$" },
+                            "text": { "type": "string", "minLength": 1, "maxLength": 500 },
+                            "checked": { "type": "boolean" },
+                            "ordinal": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "lineIndex": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["id", "text", "checked", "ordinal", "lineIndex"],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": ["schemaVersion", "checklistItems"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": { "schemaVersion": { "type": "number", "const": 1 } },
+                    "required": ["schemaVersion"],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "isOpen": { "type": "boolean" },
+              "pinnedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "privacy": { "type": "string", "enum": ["ai_assisted", "private_manual"] },
+              "archivedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "deletedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "tagIds": {
+                "maxItems": 100,
+                "type": "array",
+                "items": { "type": "string", "pattern": "^tag_[0-9A-HJKMNP-TV-Z]{26}$" }
+              },
+              "links": {
+                "maxItems": 100,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "toNoteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                    "linkType": { "type": "string", "enum": ["reference", "related"] }
+                  },
+                  "required": ["toNoteId", "linkType"],
+                  "additionalProperties": false
+                }
+              },
+              "id": { "type": "string", "pattern": "^rev_[0-9A-HJKMNP-TV-Z]{26}$" },
+              "noteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+              "revision": { "type": "integer", "exclusiveMinimum": 0, "maximum": 9007199254740991 },
+              "source": {
+                "type": "string",
+                "enum": ["manual", "organization", "undo", "import", "interactive"]
+              },
+              "contentHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "actor": { "type": "string", "minLength": 1, "maxLength": 200 },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              }
+            },
+            "required": [
+              "spaceId",
+              "type",
+              "title",
+              "bodyMarkdown",
+              "structuredData",
+              "isOpen",
+              "pinnedAt",
+              "privacy",
+              "archivedAt",
+              "deletedAt",
+              "tagIds",
+              "links",
+              "id",
+              "noteId",
+              "revision",
+              "source",
+              "contentHash",
+              "actor",
+              "createdAt"
+            ],
+            "additionalProperties": false
+          },
+          "mutationId": { "type": "string", "pattern": "^mut_[0-9A-HJKMNP-TV-Z]{26}$" },
+          "replayed": { "type": "boolean" },
+          "undo": {
+            "type": "object",
+            "properties": {
+              "eligible": { "type": "boolean" },
+              "expiresAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  { "type": "null" }
+                ]
+              }
+            },
+            "required": ["eligible", "expiresAt"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["note", "revision", "mutationId", "replayed", "undo"],
+        "additionalProperties": false
+      },
+      "MutationUndoRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          }
+        },
+        "required": ["expectedRevision", "idempotencyKey"],
+        "additionalProperties": false
+      },
+      "SpaceCreateRequest": {
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "name": { "type": "string", "minLength": 1, "maxLength": 60 },
+          "parentId": {
+            "default": null,
+            "anyOf": [
+              { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+              { "type": "null" }
+            ]
+          },
+          "sortKey": { "type": "string", "minLength": 1, "maxLength": 100 }
+        },
+        "required": ["idempotencyKey", "name", "parentId"],
+        "additionalProperties": false
+      },
+      "SpaceListQuery": {
+        "type": "object",
+        "properties": {
+          "cursor": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "limit": { "default": 30, "type": "integer", "minimum": 1, "maximum": 100 },
+          "includeArchived": { "default": false, "type": "boolean" }
+        },
+        "required": ["limit", "includeArchived"],
+        "additionalProperties": false
+      },
+      "SpaceUpdateRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "name": { "type": "string", "minLength": 1, "maxLength": 60 },
+          "parentId": {
+            "anyOf": [
+              { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+              { "type": "null" }
+            ]
+          },
+          "sortKey": { "type": "string", "minLength": 1, "maxLength": 100 }
+        },
+        "required": ["expectedRevision", "idempotencyKey"],
+        "additionalProperties": false
+      },
+      "SpaceArchiveRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "archived": { "default": true, "type": "boolean" }
+        },
+        "required": ["expectedRevision", "idempotencyKey", "archived"],
+        "additionalProperties": false
+      },
+      "SpaceDetailResponse": {
+        "type": "object",
+        "properties": {
+          "space": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+              "parentId": {
+                "anyOf": [
+                  { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+                  { "type": "null" }
+                ]
+              },
+              "name": { "type": "string", "minLength": 1, "maxLength": 60 },
+              "slug": { "type": "string", "minLength": 1, "maxLength": 80 },
+              "sortKey": { "type": "string", "minLength": 1, "maxLength": 100 },
+              "currentRevision": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "archivedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              "updatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              }
+            },
+            "required": [
+              "id",
+              "parentId",
+              "name",
+              "slug",
+              "sortKey",
+              "currentRevision",
+              "archivedAt",
+              "createdAt",
+              "updatedAt"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": ["space"],
+        "additionalProperties": false
+      },
+      "SpaceListResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "parentId": {
+                  "anyOf": [
+                    { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+                    { "type": "null" }
+                  ]
+                },
+                "name": { "type": "string", "minLength": 1, "maxLength": 60 },
+                "slug": { "type": "string", "minLength": 1, "maxLength": 80 },
+                "sortKey": { "type": "string", "minLength": 1, "maxLength": 100 },
+                "currentRevision": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "archivedAt": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                    },
+                    { "type": "null" }
+                  ]
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                }
+              },
+              "required": [
+                "id",
+                "parentId",
+                "name",
+                "slug",
+                "sortKey",
+                "currentRevision",
+                "archivedAt",
+                "createdAt",
+                "updatedAt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "pageInfo": {
+            "type": "object",
+            "properties": {
+              "hasMore": { "type": "boolean" },
+              "nextCursor": {
+                "anyOf": [
+                  { "type": "string", "minLength": 1, "maxLength": 512 },
+                  { "type": "null" }
+                ]
+              }
+            },
+            "required": ["hasMore", "nextCursor"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["items", "pageInfo"],
+        "additionalProperties": false
+      },
+      "SpaceMutationResult": {
+        "type": "object",
+        "properties": {
+          "space": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+              "parentId": {
+                "anyOf": [
+                  { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+                  { "type": "null" }
+                ]
+              },
+              "name": { "type": "string", "minLength": 1, "maxLength": 60 },
+              "slug": { "type": "string", "minLength": 1, "maxLength": 80 },
+              "sortKey": { "type": "string", "minLength": 1, "maxLength": 100 },
+              "currentRevision": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "archivedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              "updatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              }
+            },
+            "required": [
+              "id",
+              "parentId",
+              "name",
+              "slug",
+              "sortKey",
+              "currentRevision",
+              "archivedAt",
+              "createdAt",
+              "updatedAt"
+            ],
+            "additionalProperties": false
+          },
+          "replayed": { "type": "boolean" }
+        },
+        "required": ["space", "replayed"],
+        "additionalProperties": false
+      },
+      "TagCreateRequest": {
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "name": { "type": "string", "minLength": 1, "maxLength": 40 }
+        },
+        "required": ["idempotencyKey", "name"],
+        "additionalProperties": false
+      },
+      "TagUpdateRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "name": { "type": "string", "minLength": 1, "maxLength": 40 }
+        },
+        "required": ["expectedRevision", "idempotencyKey", "name"],
+        "additionalProperties": false
+      },
+      "TagListQuery": {
+        "type": "object",
+        "properties": {
+          "cursor": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "limit": { "default": 30, "type": "integer", "minimum": 1, "maximum": 100 }
+        },
+        "required": ["limit"],
+        "additionalProperties": false
+      },
+      "TagDeleteRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          }
+        },
+        "required": ["expectedRevision", "idempotencyKey"],
+        "additionalProperties": false
+      },
+      "TagListResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "pattern": "^tag_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "name": { "type": "string", "minLength": 1, "maxLength": 40 },
+                "currentRevision": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                }
+              },
+              "required": ["id", "name", "currentRevision", "createdAt"],
+              "additionalProperties": false
+            }
+          },
+          "pageInfo": {
+            "type": "object",
+            "properties": {
+              "hasMore": { "type": "boolean" },
+              "nextCursor": {
+                "anyOf": [
+                  { "type": "string", "minLength": 1, "maxLength": 512 },
+                  { "type": "null" }
+                ]
+              }
+            },
+            "required": ["hasMore", "nextCursor"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["items", "pageInfo"],
+        "additionalProperties": false
+      },
+      "TagMutationResult": {
+        "type": "object",
+        "properties": {
+          "tag": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "pattern": "^tag_[0-9A-HJKMNP-TV-Z]{26}$" },
+              "name": { "type": "string", "minLength": 1, "maxLength": 40 },
+              "currentRevision": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              }
+            },
+            "required": ["id", "name", "currentRevision", "createdAt"],
+            "additionalProperties": false
+          },
+          "replayed": { "type": "boolean" }
+        },
+        "required": ["tag", "replayed"],
+        "additionalProperties": false
+      },
+      "DeleteMutationResult": {
+        "type": "object",
+        "properties": {
+          "deletedId": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "replayed": { "type": "boolean" }
+        },
+        "required": ["deletedId", "replayed"],
+        "additionalProperties": false
+      },
+      "ReviewItemDto": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^rvw_[0-9A-HJKMNP-TV-Z]{26}$" },
+          "captureId": {
+            "anyOf": [
+              { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" },
+              { "type": "null" }
+            ]
+          },
+          "noteId": {
+            "anyOf": [
+              { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+              { "type": "null" }
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "low_confidence",
+              "revision_conflict",
+              "failed_job",
+              "duplicate_suggestion",
+              "pending_expansion",
+              "structure_conflict"
+            ]
+          },
+          "choices": { "type": "array", "items": { "$ref": "#/$defs/__schema0" } },
+          "state": { "type": "string", "enum": ["open", "resolved", "dismissed"] },
+          "resolution": {
+            "anyOf": [
+              {
+                "type": "object",
+                "propertyNames": { "type": "string" },
+                "additionalProperties": { "$ref": "#/$defs/__schema1" }
+              },
+              { "type": "null" }
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "resolvedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              { "type": "null" }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "captureId",
+          "noteId",
+          "type",
+          "choices",
+          "state",
+          "resolution",
+          "createdAt",
+          "resolvedAt"
+        ],
+        "additionalProperties": false,
+        "$defs": {
+          "__schema0": {
+            "anyOf": [
+              { "type": "string" },
+              { "type": "number" },
+              { "type": "boolean" },
+              { "type": "null" },
+              { "type": "array", "items": { "$ref": "#/$defs/__schema0" } },
+              {
+                "type": "object",
+                "propertyNames": { "type": "string" },
+                "additionalProperties": { "$ref": "#/$defs/__schema0" }
+              }
+            ]
+          },
+          "__schema1": {
+            "anyOf": [
+              { "type": "string" },
+              { "type": "number" },
+              { "type": "boolean" },
+              { "type": "null" },
+              { "type": "array", "items": { "$ref": "#/$defs/__schema1" } },
+              {
+                "type": "object",
+                "propertyNames": { "type": "string" },
+                "additionalProperties": { "$ref": "#/$defs/__schema1" }
+              }
+            ]
+          }
+        }
+      },
+      "ReviewItemListQuery": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "default": "open",
+            "type": "string",
+            "enum": ["open", "resolved", "dismissed"]
+          },
+          "cursor": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "limit": { "default": 30, "type": "integer", "minimum": 1, "maximum": 100 }
+        },
+        "required": ["state", "limit"],
+        "additionalProperties": false
+      },
+      "ListReviewItemsResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "pattern": "^rvw_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "captureId": {
+                  "anyOf": [
+                    { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" },
+                    { "type": "null" }
+                  ]
+                },
+                "noteId": {
+                  "anyOf": [
+                    { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                    { "type": "null" }
+                  ]
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "low_confidence",
+                    "revision_conflict",
+                    "failed_job",
+                    "duplicate_suggestion",
+                    "pending_expansion",
+                    "structure_conflict"
+                  ]
+                },
+                "choices": { "type": "array", "items": { "$ref": "#/$defs/__schema0" } },
+                "state": { "type": "string", "enum": ["open", "resolved", "dismissed"] },
+                "resolution": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "propertyNames": { "type": "string" },
+                      "additionalProperties": { "$ref": "#/$defs/__schema1" }
+                    },
+                    { "type": "null" }
+                  ]
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                },
+                "resolvedAt": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                    },
+                    { "type": "null" }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "captureId",
+                "noteId",
+                "type",
+                "choices",
+                "state",
+                "resolution",
+                "createdAt",
+                "resolvedAt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "pageInfo": {
+            "type": "object",
+            "properties": {
+              "hasMore": { "type": "boolean" },
+              "nextCursor": {
+                "anyOf": [
+                  { "type": "string", "minLength": 1, "maxLength": 512 },
+                  { "type": "null" }
+                ]
+              }
+            },
+            "required": ["hasMore", "nextCursor"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["items", "pageInfo"],
+        "additionalProperties": false,
+        "$defs": {
+          "__schema0": {
+            "anyOf": [
+              { "type": "string" },
+              { "type": "number" },
+              { "type": "boolean" },
+              { "type": "null" },
+              { "type": "array", "items": { "$ref": "#/$defs/__schema0" } },
+              {
+                "type": "object",
+                "propertyNames": { "type": "string" },
+                "additionalProperties": { "$ref": "#/$defs/__schema0" }
+              }
+            ]
+          },
+          "__schema1": {
+            "anyOf": [
+              { "type": "string" },
+              { "type": "number" },
+              { "type": "boolean" },
+              { "type": "null" },
+              { "type": "array", "items": { "$ref": "#/$defs/__schema1" } },
+              {
+                "type": "object",
+                "propertyNames": { "type": "string" },
+                "additionalProperties": { "$ref": "#/$defs/__schema1" }
+              }
+            ]
+          }
+        }
+      },
+      "SearchNotesQuery": {
+        "type": "object",
+        "properties": {
+          "q": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "archive": {
+            "default": "exclude",
+            "type": "string",
+            "enum": ["exclude", "include", "only"]
+          },
+          "cursor": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "limit": { "default": 30, "type": "integer", "minimum": 1, "maximum": 100 }
+        },
+        "required": ["q", "archive", "limit"],
+        "additionalProperties": false
+      },
+      "SearchNotesResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "noteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+                "type": {
+                  "type": "string",
+                  "enum": ["generic", "list", "log", "principle", "project"]
+                },
+                "snippet": { "type": "string", "maxLength": 500 },
+                "spacePath": {
+                  "maxItems": 2,
+                  "type": "array",
+                  "items": { "type": "string", "minLength": 1, "maxLength": 60 }
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                },
+                "archivedAt": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                    },
+                    { "type": "null" }
+                  ]
+                }
+              },
+              "required": [
+                "noteId",
+                "title",
+                "type",
+                "snippet",
+                "spacePath",
+                "updatedAt",
+                "archivedAt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "pageInfo": {
+            "type": "object",
+            "properties": {
+              "hasMore": { "type": "boolean" },
+              "nextCursor": {
+                "anyOf": [
+                  { "type": "string", "minLength": 1, "maxLength": 512 },
+                  { "type": "null" }
+                ]
+              }
+            },
+            "required": ["hasMore", "nextCursor"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["items", "pageInfo"],
         "additionalProperties": false
       }
     }

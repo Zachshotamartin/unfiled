@@ -57,10 +57,15 @@ describe("fixed app identity", () => {
       expect(config.name).toBe(identifiers.displayName);
       expect(config.scheme).toBe(identifiers.scheme);
       expect(config.ios?.bundleIdentifier).toBe(identifiers.bundleIdentifier);
+      expect(config.ios?.config?.usesNonExemptEncryption).toBe(false);
       expect(config.ios?.entitlements?.["com.apple.security.application-groups"]).toEqual([
         identifiers.appGroupIdentifier
       ]);
       expect(config.android?.package).toBe(identifiers.packageName);
+      expect(config.plugins).toContainEqual([
+        "expo-secure-store",
+        { configureAndroidBackup: true, faceIDPermission: false }
+      ]);
     }
   });
 

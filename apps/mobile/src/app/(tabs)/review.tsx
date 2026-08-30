@@ -1,131 +1,124 @@
+import { router } from "expo-router";
+import type { ReviewType } from "@unfiled/contracts";
 import type { ReactElement } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 
+import { Rule } from "../../components/Rule";
 import { Screen } from "../../components/Screen";
+import { useReviewItems } from "../../features/notes/useNotesApi";
 import { nativeTheme } from "../../theme/nativeTheme";
 
+const reviewLabels: Record<ReviewType, { title: string; detail: string }> = {
+  duplicate_suggestion: {
+    title: "Possible duplicate",
+    detail: "Unfiled found notes that may cover the same idea. Nothing was merged."
+  },
+  failed_job: {
+    title: "Organization needs another try",
+    detail: "The original capture is safe while this waits."
+  },
+  low_confidence: {
+    title: "Choose a destination",
+    detail: "These suggestions were too close to decide automatically."
+  },
+  pending_expansion: {
+    title: "Expansion waiting",
+    detail: "Generated words stay separate until you accept them."
+  },
+  revision_conflict: {
+    title: "A manual edit won",
+    detail: "Unfiled stopped after a second revision conflict instead of overwriting your note."
+  },
+  structure_conflict: {
+    title: "Structured note needs review",
+    detail: "The edit was ambiguous, so the note was left unchanged."
+  }
+};
+
 export default function ReviewScreen(): ReactElement {
+  const items = useReviewItems();
   return (
-    <Screen eyebrow="1 needs your input" title="Review">
-      <View style={styles.card}>
-        <View style={styles.cardHeader}>
+    <Screen eyebrow={`${items.value.length} waiting`} title="Review">
+      {items.loading ? (
+        <ActivityIndicator accessibilityLabel="Loading Review" color={nativeTheme.color.accent} />
+      ) : null}
+      <Text accessibilityLiveRegion="polite" style={styles.error}>
+        {items.error}
+      </Text>
+      {!items.loading && items.value.length === 0 ? (
+        <View style={styles.empty}>
           <View style={styles.slip} />
-          <Text style={styles.meta}>CAPTURE · 11:08</Text>
+          <Text style={styles.title}>You’re all caught up.</Text>
+          <Text style={styles.body}>
+            If Unfiled is unsure later, the original capture stays safe in Inbox while its decision
+            waits here.
+          </Text>
         </View>
-        <Text style={styles.capture}>
-          Roosevelt method: tell people you can do it, then figure out how to do it later
-        </Text>
-
-        <View style={styles.proposal}>
-          <Text style={styles.proposalLabel}>PROPOSED DESTINATION</Text>
-          <Text style={styles.destination}>Mindset / Principles</Text>
-          <Text style={styles.reason}>Similar to principles you've saved before.</Text>
-        </View>
-
-        <Pressable
-          accessibilityRole="button"
-          style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
-        >
-          <Text style={styles.primaryText}>Accept</Text>
-        </Pressable>
-        <View style={styles.secondaryActions}>
-          <Pressable
-            accessibilityRole="button"
-            style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
-          >
-            <Text style={styles.secondaryText}>Move</Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
-          >
-            <Text style={styles.secondaryText}>Keep in Inbox</Text>
-          </Pressable>
-        </View>
-        <Text style={styles.trust}>Original preserved · Undo available</Text>
-      </View>
+      ) : null}
+      {items.value.map((item) => {
+        const copy = reviewLabels[item.type];
+        return (
+          <View key={item.id}>
+            <Pressable
+              accessibilityRole={item.noteId === null ? "summary" : "button"}
+              disabled={item.noteId === null}
+              onPress={() =>
+                item.noteId === null
+                  ? undefined
+                  : router.push({ pathname: "/notes/[noteId]", params: { noteId: item.noteId } })
+              }
+              style={styles.row}
+            >
+              <View style={styles.rowAccent} />
+              <View style={styles.rowBody}>
+                <Text style={styles.rowTitle}>{copy.title}</Text>
+                <Text style={styles.rowDetail}>{copy.detail}</Text>
+                <Text style={styles.rowDate}>{new Date(item.createdAt).toLocaleString()}</Text>
+              </View>
+              {item.noteId === null ? null : <Text style={styles.open}>Open note</Text>}
+            </Pressable>
+            <Rule />
+          </View>
+        );
+      })}
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  capture: {
-    color: nativeTheme.color.textPrimary,
-    fontSize: 21,
-    fontWeight: "500",
-    letterSpacing: -0.35,
-    lineHeight: 30,
-    marginBottom: 28
+  body: {
+    color: nativeTheme.color.textSecondary,
+    fontSize: 15,
+    lineHeight: 24,
+    marginTop: 9,
+    maxWidth: 320
   },
-  card: {
-    backgroundColor: nativeTheme.color.surface,
-    borderColor: nativeTheme.color.border,
-    borderRadius: nativeTheme.radius.container,
-    borderWidth: StyleSheet.hairlineWidth,
-    padding: 20
+  empty: { paddingTop: 72 },
+  error: { color: nativeTheme.color.danger, fontSize: 13, minHeight: 24 },
+  open: { color: nativeTheme.color.accent, fontSize: 12, fontWeight: "700", marginLeft: 10 },
+  row: { alignItems: "center", flexDirection: "row", minHeight: 112, paddingVertical: 16 },
+  rowAccent: {
+    backgroundColor: nativeTheme.color.accent,
+    height: 28,
+    marginRight: 14,
+    transform: [{ rotate: "13deg" }],
+    width: 8
   },
-  cardHeader: { alignItems: "center", flexDirection: "row", gap: 10, marginBottom: 19 },
-  destination: {
-    color: nativeTheme.color.textPrimary,
-    fontSize: 17,
-    fontWeight: "600",
-    marginBottom: 5
-  },
-  meta: {
+  rowBody: { flex: 1 },
+  rowDate: {
     color: nativeTheme.color.textSecondary,
     fontFamily: nativeTheme.fontFamily.mono,
     fontSize: 10,
-    letterSpacing: 0.6
+    marginTop: 8
   },
-  pressed: { opacity: 0.7 },
-  primaryButton: {
-    alignItems: "center",
-    backgroundColor: nativeTheme.color.accent,
-    borderRadius: nativeTheme.radius.button,
-    justifyContent: "center",
-    minHeight: 48
-  },
-  primaryText: { color: nativeTheme.color.accentContrast, fontSize: 16, fontWeight: "700" },
-  proposal: {
-    borderBottomColor: nativeTheme.color.border,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderTopColor: nativeTheme.color.border,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    marginBottom: 20,
-    paddingVertical: 18
-  },
-  proposalLabel: {
-    color: nativeTheme.color.accent,
-    fontFamily: nativeTheme.fontFamily.mono,
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 0.6,
-    marginBottom: 10
-  },
-  reason: { color: nativeTheme.color.textSecondary, fontSize: 13, lineHeight: 19 },
-  secondaryActions: { flexDirection: "row", gap: 10, marginTop: 10 },
-  secondaryButton: {
-    alignItems: "center",
-    borderColor: nativeTheme.color.border,
-    borderRadius: nativeTheme.radius.button,
-    borderWidth: StyleSheet.hairlineWidth,
-    flex: 1,
-    justifyContent: "center",
-    minHeight: 46,
-    paddingHorizontal: 8
-  },
-  secondaryText: { color: nativeTheme.color.textPrimary, fontSize: 13, fontWeight: "600" },
+  rowDetail: { color: nativeTheme.color.textSecondary, fontSize: 13, lineHeight: 19, marginTop: 5 },
+  rowTitle: { color: nativeTheme.color.textPrimary, fontSize: 16, fontWeight: "700" },
   slip: {
     backgroundColor: nativeTheme.color.accent,
-    height: 19,
+    height: 28,
+    marginBottom: 24,
     transform: [{ rotate: "13deg" }],
-    width: 7
+    width: 9
   },
-  trust: {
-    color: nativeTheme.color.textSecondary,
-    fontFamily: nativeTheme.fontFamily.mono,
-    fontSize: 10,
-    marginTop: 18,
-    textAlign: "center"
-  }
+  title: { color: nativeTheme.color.textPrimary, fontSize: 22, fontWeight: "600" }
 });

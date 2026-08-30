@@ -1,9 +1,18 @@
 # Data Model
 
-The Milestone A Supabase schema now has checked-in, forward-only migrations. They are the source of truth:
+The Milestone B Supabase schema has checked-in, forward-only migrations. They are the source of truth:
 
 - [`20260830000000_initial_unfiled_schema.sql`](../supabase/migrations/20260830000000_initial_unfiled_schema.sql) creates extensions, enums, tables, indexes, and shared helpers.
 - [`20260830000001_security_policies_and_capture_rpc.sql`](../supabase/migrations/20260830000001_security_policies_and_capture_rpc.sql) adds grants, RLS policies, and the atomic capture RPC.
+- [`20260830000002_manual_notes_foundation.sql`](../supabase/migrations/20260830000002_manual_notes_foundation.sql) adds entity revisions, the server-only idempotency ledger, deterministic projection helpers, and immutable revision enforcement.
+- [`20260830000003_manual_note_rpcs.sql`](../supabase/migrations/20260830000003_manual_note_rpcs.sql) adds atomic manual note creation and typed expected-revision mutations.
+- [`20260830000004_note_history_undo.sql`](../supabase/migrations/20260830000004_note_history_undo.sql) adds inverse undo, soft-delete restore, and append-only revision restore.
+- [`20260830000010_note_retention.sql`](../supabase/migrations/20260830000010_note_retention.sql) adds the bounded, service-only 30-day note-retention sweep and deletion-safe foreign-key actions.
+- [`20260830000005_spaces_tags_security.sql`](../supabase/migrations/20260830000005_spaces_tags_security.sql) adds revisioned space/tag RPCs and removes direct client writes from entities and workflow tables.
+- [`20260830000006_text_search_realtime.sql`](../supabase/migrations/20260830000006_text_search_realtime.sql) adds owner-scoped text search and publishes only the sync cursor to Realtime.
+- [`20260830000007_structured_contract_validation.sql`](../supabase/migrations/20260830000007_structured_contract_validation.sql) enforces the frozen structured-data and typed-operation contracts, including strict ISO-offset timestamps and safe JSON-number round trips.
+- [`20260830000008_conflict_reviews_and_delayed_organization.sql`](../supabase/migrations/20260830000008_conflict_reviews_and_delayed_organization.sql) commits durable structure/revision review outcomes, implements the one-replan delayed organization path, and adds contextual offset-based search.
+- [`20260830000009_auth_otp_quota.sql`](../supabase/migrations/20260830000009_auth_otp_quota.sql) adds a privacy-safe, service-only rolling OTP request quota over email/IP HMAC digests.
 
 This document remains the readable schema reference and must change in the same change set as future migrations. If prose or an illustrative DDL excerpt differs from a migration, the migration wins. Verify pgvector and extension versions in each target Supabase environment before promotion.
 
@@ -14,6 +23,8 @@ Related: [BUILD_PLAN.md](./BUILD_PLAN.md) §12, [SECURITY_AND_PRIVACY.md](./SECU
 - IDs: `text` primary keys with typed prefixes over ULIDs — `note_`, `cap_`, `spc_`, `rev_`, `mut_`, `dec_`, `job_`, `rule_`, `rvw_`, `blk_`, `tag_`, `lnk_`, `chk_`, `fbk_`, `key_`. Client-generated only for `captures.id`; all others server-generated.
 - Every user-owned table: `user_id uuid not null references auth.users(id) on delete cascade`, `created_at timestamptz not null default now()`; mutable tables add `updated_at` maintained by trigger.
 - Soft delete via `deleted_at timestamptz`; hard delete per retention schedule (§7).
+- User write RPCs use one global `(user_id, idempotency_key)` namespace. A replay with equivalent canonical input returns the stored response; reusing a key for a different request raises `invalid_idempotency_key`.
+- Notes, spaces, and tags expose `current_revision`. Mutable write RPCs lock the owned row and require an exact expected revision, returning `stale_revision` before any entity, history, receipt, or event state commits. Creation returns revision 1.
 - All enums are PostgreSQL enum types; adding a value is a migration.
 - Extensions: `pg_trgm`, `vector`, `pgcrypto`.
 
@@ -90,12 +101,13 @@ create table spaces (
   name text not null check (char_length(name) between 1 and 60),
   slug text not null,
   sort_key text not null default 'a0',
+  current_revision integer not null default 1,
   archived_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (user_id, slug)
 );
--- App-level: MVP allows exactly one nesting level (parent must have null parent).
+-- Reviewed RPCs allow one nesting level: a parent must itself be a root.
 
 create table notes (
   id text primary key,
@@ -117,6 +129,7 @@ create table notes (
 );
 create unique index notes_daily_singleton
   on notes (user_id, space_id, type, daily_date)
+  nulls not distinct
   where daily_date is not null and deleted_at is null;
 create index notes_fts on notes
   using gin (to_tsvector('simple', title || ' ' || body_markdown));
@@ -130,16 +143,26 @@ create table note_revisions (
   user_id uuid not null references auth.users(id) on delete cascade,
   revision integer not null,
   source revision_source not null,
+  space_id text,
+  type note_type not null,
   title text not null,
   body_markdown text not null,
   structured_data jsonb not null,
+  is_open boolean not null,
+  pinned_at timestamptz,
+  privacy privacy_mode not null,
+  archived_at timestamptz,
+  deleted_at timestamptz,
+  tag_ids jsonb not null default '[]'::jsonb,
+  links jsonb not null default '[]'::jsonb,
   content_hash text not null,          -- sha256 of canonical serialization
   actor text not null,                 -- 'user:<device>' | 'organization:<jobId>' | 'undo:<mutId>'
   mutation_id text,
   created_at timestamptz not null default now(),
   unique (note_id, revision)
 );
--- Full snapshots in MVP (BUILD_PLAN §12.1); patches only after size evidence.
+-- Full immutable canonical snapshots in MVP, including relations and lifecycle
+-- fields; restoring history always appends a new revision.
 
 create table captures (
   id text primary key,                 -- client ULID; doubles as idempotency key
@@ -281,7 +304,9 @@ create table tags (
   id text primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
   name text not null check (char_length(name) between 1 and 40),
+  current_revision integer not null default 1,
   created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
   unique (user_id, name)               -- name stored normalized lowercase
 );
 
@@ -317,40 +342,82 @@ create table feedback_events (
   reason_code text,
   created_at timestamptz not null default now()
 );
+
+create table api_idempotency_records (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  idempotency_key text not null,
+  scope text not null,
+  request_hash text not null,             -- sha256 of canonical JSON input
+  response_json jsonb,                    -- set only after the transaction succeeds
+  created_at timestamptz not null default now(),
+  completed_at timestamptz,
+  primary key (user_id, idempotency_key)
+);
+-- Server-only: authenticated and anon have no grants and no policies.
+
+create table organization_mutation_attempts (
+  job_id text not null references organization_jobs(id) on delete cascade,
+  note_id text not null references notes(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  planned_revision integer not null,
+  replan_count integer not null default 0 check (replan_count between 0 and 1),
+  operations jsonb not null,
+  state text not null check (state in ('replanned','applied','needs_review')),
+  review_item_id text references review_items(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (job_id, note_id)
+);
+
+create table auth_otp_quota_events (
+  id bigint generated always as identity primary key,
+  email_hash text not null check (email_hash ~ '^[0-9a-f]{64}$'),
+  ip_hash text not null check (ip_hash ~ '^[0-9a-f]{64}$'),
+  attempted_at timestamptz not null default now()
+);
+-- Hash-only, force-RLS service state. No table role, including service_role,
+-- receives direct grants; the reviewed quota function is the only write path.
 ```
 
 ## 3. Row Level Security
 
-Every table above enables RLS. The standard policy set, applied per table (template shown for `notes`):
+Every table above enables RLS. Entity and workflow reads are owner-filtered; client writes do not have table grants or write policies. `notes` is representative:
 
 ```sql
 alter table notes enable row level security;
 create policy notes_select on notes for select using (user_id = auth.uid());
-create policy notes_insert on notes for insert with check (user_id = auth.uid());
-create policy notes_update on notes for update using (user_id = auth.uid())
-  with check (user_id = auth.uid());
-create policy notes_delete on notes for delete using (user_id = auth.uid());
+revoke insert, update, delete on notes from authenticated;
 ```
 
 Deviations from the template:
 
 - `profiles`: `id = auth.uid()` instead of `user_id`.
-- `organization_jobs`, `organization_decisions`, `note_mutations`, `note_chunks`, `feedback_events`: user gets `select` only; `insert/update` happen exclusively through `security definer` functions or the service role inside the workflow, so clients cannot forge decisions or mutations.
-- `user_provider_keys`: **no client access at all** — not even `select`. All reads and writes go through `security definer` functions (`set_provider_key`, `get_provider_key_status`, `delete_provider_key`) that expose only provider, last-four, and status. The `vault_secret_id` / `key_ciphertext` columns are decrypted exclusively inside the workflow via the service role.
-- Join tables verify ownership of **both** referenced rows in `with check`.
+- `spaces`, `notes`, `note_revisions`, `tags`, `note_tags`, and `note_links`: owner-scoped `select`; all writes happen through the reviewed Milestone B functions below. Revision snapshots cannot be updated even through a privileged accidental path because an immutable-history trigger rejects updates.
+- `captures`, `organization_jobs`, `organization_decisions`, `note_mutations`, `generated_blocks`, `capture_note_links`, `routing_rules`, `review_items`, `note_chunks`, `feedback_events`, `user_events`, and `organization_mutation_attempts`: owner-scoped `select` only; writes happen exclusively through reviewed functions or the service role inside the workflow, so clients cannot forge decisions, mutations, retries, or cursor events.
+- `user_provider_keys`: **no client access at all** — not even `select`. Until later reviewed key-custody functions exist, only the service role can reach this table; plaintext is never stored or returned.
+- `api_idempotency_records`: **no client access at all**. Reviewed functions claim and complete receipts in the same transaction as the requested write.
+- `auth_otp_quota_events`: **no direct table access for any API role**. The service-only quota function uses advisory locks and stores only HMAC-SHA256 digests.
+- Join ownership is checked inside the reviewed relation operations; a forged tag, note, link target, space, or parent fails the entire transaction.
 
 Every policy has an allow test and a cross-user deny test in `supabase/tests` (see OPERATIONS_TEST_PLAN §5.2).
 
 ## 4. Transactional functions
 
-Reviewed SQL (`security definer`, `search_path` pinned) — the only write paths for organization and interactive edits:
+Reviewed SQL (`security definer`, empty `search_path`, owner derived only from `auth.uid()`) — the only write paths for captures and Milestone B manual entities:
 
 - `create_capture_with_job(capture jsonb) returns capture_row` — inserts capture + job atomically; on conflict (same `id`) returns the existing row unchanged (idempotency).
-- `apply_mutation(p_note_id text, p_expected_revision int, p_operations jsonb, p_decision_id text, p_idempotency_key text) returns mutation_result` — locks the note row, verifies `current_revision = p_expected_revision` (else raises `stale_revision`), applies operations to `structured_data`/`body_markdown`, regenerates the projection for list/log types, writes `note_revisions`, `note_mutations`, `capture_note_links`, bumps `current_revision`, and emits the receipt event — one transaction. Replay with the same idempotency key returns the original result.
-- `undo_mutation(p_mutation_id text) returns mutation_result` — verifies compatibility (no incompatible later ops on the affected items), applies `inverse` via `apply_mutation` semantics with source `undo`, sets `undone_at`.
-- `resolve_review(p_review_id text, p_resolution jsonb)` — applies the chosen destination via `apply_mutation`, updates capture status and review state atomically.
-- `set_provider_key(p_provider ai_provider, p_key text)` / `get_provider_key_status()` / `delete_provider_key(p_provider ai_provider)` — key custody functions; `set` stores via Supabase Vault (or AES-256-GCM fallback with the KEK in server env), records last-four, and never persists or returns plaintext; `delete` also destroys the Vault secret.
-- `delete_account(p_user_id uuid)` — see SECURITY_AND_PRIVACY §8; cascades cover most rows, function handles queued work, Vault secret destruction, and verification counts.
+- `create_note(idempotency_key, type, title, body_markdown, space_id, privacy, structured_data, tag_ids, links)` — validates owned tags/link targets and canonical body/structure agreement, creates revision 1 plus a real `mut_` receipt (`0 → 1`), relations, and cursor events atomically. Its inverse is a soft-delete intent, so creation is undoable without erasing history.
+- `apply_user_note_mutation(note_id, expected_revision, operations, idempotency_key)` — locks the note, strictly validates and applies up to 20 typed operations, saves a full inverse snapshot (including tag/link sets), appends a revision and mutation receipt, increments `current_revision`, and emits all cursor events atomically. Archive/delete timestamps use the contract's ISO-or-null shape; `is_open` is derived from list/project checklist state. Ambiguous structural Markdown commits one deduplicated open review while leaving the note and revision unchanged, returning `{errorCode:"structure_conflict",reviewItemId,replayed}` for the API adapter to map to HTTP 409.
+- `undo_user_mutation(mutation_id, expected_revision, idempotency_key)` — permits an inverse only while the target mutation remains the current compatible revision, restores its full snapshot and relations, appends an undo snapshot/receipt, and marks the original mutation undone. Undoing creation stamps `deleted_at` at undo time; undoing that undo restores the active revision-1 snapshot.
+- `restore_note_revision(note_id, revision_id, expected_revision, idempotency_key)` — verifies the typed revision belongs to the owned note, copies its immutable content snapshot into a new current revision, and never rewrites history.
+- `restore_note(note_id, expected_revision, idempotency_key)` — idempotently clears the note soft-delete marker through the typed mutation pipeline.
+- `create_space(idempotency_key, name, parent_id, slug, sort_key)`, `update_space(space_id, expected_revision, patch, idempotency_key)`, `archive_space(space_id, expected_revision, archived, idempotency_key)` — honor caller sort order, enforce owner-only parents and one child level, and provide idempotent stale-revision protection.
+- `create_tag(idempotency_key, name)`, `update_tag(tag_id, expected_revision, name, idempotency_key)`, and `delete_tag(tag_id, expected_revision, idempotency_key)` — expose the reviewed authenticated tag CRUD surface, normalize names, and provide idempotent stale-revision protection without granting direct table writes.
+- `apply_delayed_organization_mutation(job_id, note_id, expected_revision, operations, idempotency_key)` — service-only. It applies at revision N, replans exactly once if the note reached N+1, then creates a durable `revision_conflict` review on another conflict without overwriting manual content.
+- `search_notes(query, archive_filter, limit, offset)` — owner-scoped search over exactly title, body, updated date, and root/child space path, with contextual plain-text snippets around late body matches, deleted-row exclusion, explicit archive filtering, deterministic ordering, and bounded offset pagination. `private_manual` notes remain searchable by their owner and are never sent to an AI path.
+- `consume_auth_otp_quota(email_hash, ip_hash, now)` — service-only, accepts lowercase 64-byte-hex HMAC digests, permits 5 requests per email and 20 per IP in a rolling hour, and raises the PostgREST `PGRST` signal with HTTP 429 metadata when limited. `Retry-After` is the exact positive whole-second wait until both dimensions permit another request (the later limiting deadline, ceiled and clamped to 1–3600 seconds).
+
+Provider-key, general organization-decision orchestration, review-resolution, and account-deletion functions remain later-milestone work; the tables stay non-writable to clients until those reviewed paths exist.
 
 ## 5. `structured_data` schemas
 
@@ -383,34 +450,35 @@ Versioned per note type; validated by Zod at the application boundary and by `ch
   "entries": [
     {
       "id": "ent_01H...",
-      "occurredOn": "2026-08-30",
-      "kind": "workout",
-      "raw": "bench 135 x 8, 145 x 6",
-      "exercises": [
-        {
-          "name": "bench",
-          "sets": [
-            { "weight": 135, "unit": "lb", "reps": 8 },
-            { "weight": 145, "unit": "lb", "reps": 6 }
-          ]
-        }
-      ],
-      "unparsed": [],
-      "sourceCaptureId": "cap_01H..."
+      "occurredAt": "2026-08-30T17:04:00Z",
+      "fields": {
+        "exercise": "bench",
+        "weight": 135,
+        "reps": 8,
+        "note": null
+      }
     }
   ]
 }
 ```
 
-`unit` comes from user preference, never invented; a capture without units stores `"unit": null` and renders without one. Non-workout log entries use `kind: "generic"` with `raw` only.
+Each field value is a string of at most 500 characters, a finite JSON number that round-trips through the shared JavaScript-number subset, or `null`. Entry timestamps must be strict ISO datetimes with an explicit `Z` or numeric offset.
 
 ### 5.3 Projection rules
 
-`body_markdown` for list/log is regenerated inside `apply_mutation`: stable templates, items in ordinal order, checked items under `## Completed`, log entries as dated `###` sections. Byte-deterministic for identical `structured_data` (property-tested). Prose types never regenerate; their `structured_data` holds metadata only.
+`body_markdown` for lists and logs is a deterministic projection. Lists accept blank lines, `##`–`######` section headings, and `-`, `*`, or `+` bullets with an optional `[ ]`/`[x]`; checked items render after `## Completed`. Duplicate normalized item text or any other nonblank line is a structure conflict. Reconciliation preserves IDs by normalized text, then by ordinal when unambiguous.
+
+Logs render each entry as `## <strict ISO-offset occurredAt>`, a blank line, then sorted `- key: value` rows; entries sort by timestamp then ID. Reconciliation preserves same-timestamp identities by deterministic occurrence position (the prior IDs are sorted), rejects duplicate field keys and all non-log lines, decodes quoted JSON strings, and emits finite numbers as plain decimal rather than exponent notation.
+
+Project Markdown remains byte-authoritative. Only checklist lines matching `- [ ] text` / `- [x] text` (also `*`/`+`) enter `checklistItems`; all other prose stays untouched. Checklist IDs reconcile by normalized text, then stable line index, and duplicate normalized checklist text conflicts. A direct structured create or restored snapshot must exactly agree with the body projection. Plain note types use only `{ "schemaVersion": 1 }`.
 
 ## 6. Sync cursors
 
-`GET /sync/pull?cursor=` uses a per-user monotonic sequence: a `user_events (seq bigserial, user_id, entity, entity_id, occurred_at)` append-only table written by the transactional functions. Clients store the last seq. Realtime is an optimization; the cursor is the correctness mechanism.
+Milestone B establishes the durable substrate for Milestone C sync: a per-user monotonic
+`user_events (seq bigserial, user_id, entity, entity_id, occurred_at)` append-only table written by
+the transactional functions. The current web and mobile manual-note clients poll every four seconds
+and refresh on focus/activation; reload is the Milestone B correctness fallback.
+Milestone C will add `GET /sync/pull?cursor=`, persisted client cursors, and Realtime invalidation.
 
 ```sql
 create table user_events (
@@ -423,18 +491,34 @@ create table user_events (
 create index user_events_user_cursor on user_events (user_id, seq);
 ```
 
-`user_events` has user-scoped `select` only. Transactional functions and the service role append events; clients cannot forge cursor entries.
+`user_events` has user-scoped `select` only. Transactional functions and the service role append
+events; clients cannot forge cursor entries. It is the only Milestone B table added to
+`supabase_realtime`, ready for Milestone C clients to treat each event as an invalidation hint while
+advancing through the future durable cursor endpoint.
 
 ## 7. Retention schedule
 
-| Data                                     | Active retention                    | After deletion trigger                       |
-| ---------------------------------------- | ----------------------------------- | -------------------------------------------- |
-| captures, notes, revisions               | indefinite while account active     | soft-delete window 30 days, then hard delete |
-| rejected generated_blocks                | 7 days (undo window)                | hard delete                                  |
-| organization telemetry (decisions, jobs) | 180 days                            | deleted with account                         |
-| feedback_events                          | 365 days                            | deleted with account                         |
-| note_chunks/embeddings                   | tied to live note revision          | deleted with note (cascade)                  |
-| backups                                  | provider schedule, target ≤ 30 days | age out; documented in privacy policy        |
+| Data                                     | Active retention                     | After deletion trigger                       |
+| ---------------------------------------- | ------------------------------------ | -------------------------------------------- |
+| captures, notes, revisions               | indefinite while account active      | soft-delete window 30 days, then hard delete |
+| rejected generated_blocks                | 7 days (undo window)                 | hard delete                                  |
+| organization telemetry (decisions, jobs) | 180 days                             | deleted with account                         |
+| feedback_events                          | 365 days                             | deleted with account                         |
+| note_chunks/embeddings                   | tied to live note revision           | deleted with note (cascade)                  |
+| OTP quota HMAC events                    | rolling hour; cleanup after 24 hours | no plaintext email/IP is stored              |
+| backups                                  | provider schedule, target ≤ 30 days  | age out; documented in privacy policy        |
+
+`purge_expired_deleted_notes(owner_id, now, batch_size, execute)` selects at most 500 notes
+whose `deleted_at` is at least 30 days old. It is executable only by `service_role`, defaults to a
+non-destructive dry run, locks candidates with `SKIP LOCKED`, and fails the transaction if any
+dependent row belongs to another owner. An executing batch cascades note revisions, chunks and
+embeddings, generated blocks, note relations, review items, and mutation history; removes
+note-bearing idempotency snapshots; clears the destination from retained capture/decision/feedback
+telemetry; removes note-target routing rules; and emits a content-free `note_purged` cursor event.
+
+The daily Vercel Cron route is protected by `CRON_SECRET`. Missing or false
+`NOTE_RETENTION_EXECUTION_ENABLED` keeps every scheduled invocation in dry-run mode. Production hard
+deletion begins only after a human reviews the dry-run count and explicitly enables the gate.
 
 ## 8. Migration conventions
 

@@ -1,45 +1,134 @@
 import { z } from "zod";
 
-import { NoteTypeSchema, PrivacyModeSchema } from "./enums.js";
+import {
+  ArchiveFilterSchema,
+  DeletedFilterSchema,
+  NoteTypeSchema,
+  PrivacyModeSchema
+} from "./enums.js";
 import { entityIdSchema } from "./ids.js";
+import { ExpectedRevisionSchema, IdempotencyKeySchema } from "./idempotency.js";
+import { CursorSchema, PageInfoSchema } from "./pagination.js";
+import { NoteLinkValueSchema, NoteStructuredDataSchema } from "./structured.js";
 
-export const NoteSchema = z.strictObject({
-  id: entityIdSchema("note"),
+export const NoteSnapshotSchema = z.strictObject({
   spaceId: entityIdSchema("spc").nullable(),
   type: NoteTypeSchema,
   title: z.string().min(1).max(200),
   bodyMarkdown: z.string().max(200_000),
-  structuredData: z.record(z.string(), z.unknown()),
+  structuredData: NoteStructuredDataSchema,
+  isOpen: z.boolean(),
+  pinnedAt: z.iso.datetime({ offset: true }).nullable(),
+  privacy: PrivacyModeSchema,
+  archivedAt: z.iso.datetime({ offset: true }).nullable(),
+  deletedAt: z.iso.datetime({ offset: true }).nullable(),
+  tagIds: z.array(entityIdSchema("tag")).max(100),
+  links: z.array(NoteLinkValueSchema).max(100)
+});
+export type NoteSnapshot = z.infer<typeof NoteSnapshotSchema>;
+
+export const NoteSchema = NoteSnapshotSchema.extend({
+  id: entityIdSchema("note"),
+  currentRevision: z.number().int().positive(),
+  createdAt: z.iso.datetime({ offset: true }),
+  updatedAt: z.iso.datetime({ offset: true })
+});
+export type NoteDto = z.infer<typeof NoteSchema>;
+export type NoteDetail = NoteDto;
+
+export const NoteSummarySchema = z.strictObject({
+  id: entityIdSchema("note"),
+  spaceId: entityIdSchema("spc").nullable(),
+  type: NoteTypeSchema,
+  title: z.string().min(1).max(200),
   currentRevision: z.number().int().positive(),
   isOpen: z.boolean(),
   pinnedAt: z.iso.datetime({ offset: true }).nullable(),
   privacy: PrivacyModeSchema,
   archivedAt: z.iso.datetime({ offset: true }).nullable(),
   deletedAt: z.iso.datetime({ offset: true }).nullable(),
-  createdAt: z.iso.datetime({ offset: true }),
   updatedAt: z.iso.datetime({ offset: true })
 });
+export type NoteSummary = z.infer<typeof NoteSummarySchema>;
 
-export type NoteDto = z.infer<typeof NoteSchema>;
+export const NoteDetailResponseSchema = z.strictObject({ note: NoteSchema });
+export type NoteDetailResponse = z.infer<typeof NoteDetailResponseSchema>;
+
+export const NoteListQuerySchema = z.strictObject({
+  cursor: CursorSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(30),
+  spaceId: z
+    .union([entityIdSchema("spc"), z.literal("root").transform(() => null), z.null()])
+    .optional(),
+  type: NoteTypeSchema.optional(),
+  archive: ArchiveFilterSchema.default("exclude"),
+  deleted: DeletedFilterSchema.default("exclude")
+});
+export type NoteListQuery = z.infer<typeof NoteListQuerySchema>;
+
+export const NoteListResponseSchema = z.strictObject({
+  items: z.array(NoteSummarySchema),
+  pageInfo: PageInfoSchema
+});
+export type NoteListResponse = z.infer<typeof NoteListResponseSchema>;
 
 export const NoteCreateRequestSchema = z.strictObject({
+  idempotencyKey: IdempotencyKeySchema,
   title: z.string().trim().min(1).max(200),
   type: NoteTypeSchema,
   spaceId: entityIdSchema("spc").nullable().optional(),
   privacy: PrivacyModeSchema.default("ai_assisted"),
-  bodyMarkdown: z.string().max(200_000).default("")
+  bodyMarkdown: z.string().max(200_000).default(""),
+  tagIds: z.array(entityIdSchema("tag")).max(100).default([]),
+  links: z.array(NoteLinkValueSchema).max(100).default([])
 });
+export type NoteCreateRequest = z.input<typeof NoteCreateRequestSchema>;
 
 export const NoteUpdateRequestSchema = z
   .strictObject({
-    expectedRevision: z.number().int().positive(),
-    idempotencyKey: z.string().min(1).max(80),
+    expectedRevision: ExpectedRevisionSchema,
+    idempotencyKey: IdempotencyKeySchema,
     title: z.string().trim().min(1).max(200).optional(),
     bodyMarkdown: z.string().max(200_000).optional(),
-    privacy: PrivacyModeSchema.optional()
+    privacy: PrivacyModeSchema.optional(),
+    spaceId: entityIdSchema("spc").nullable().optional(),
+    tagIds: z.array(entityIdSchema("tag")).max(100).optional(),
+    links: z.array(NoteLinkValueSchema).max(100).optional()
   })
   .refine(
-    ({ title, bodyMarkdown, privacy }) =>
-      title !== undefined || bodyMarkdown !== undefined || privacy !== undefined,
+    ({ title, bodyMarkdown, privacy, spaceId, tagIds, links }) =>
+      title !== undefined ||
+      bodyMarkdown !== undefined ||
+      privacy !== undefined ||
+      spaceId !== undefined ||
+      tagIds !== undefined ||
+      links !== undefined,
     "At least one editable field is required"
   );
+export type NoteUpdateRequest = z.infer<typeof NoteUpdateRequestSchema>;
+
+export const NoteMoveRequestSchema = z.strictObject({
+  expectedRevision: ExpectedRevisionSchema,
+  idempotencyKey: IdempotencyKeySchema,
+  spaceId: entityIdSchema("spc").nullable()
+});
+export type NoteMoveRequest = z.infer<typeof NoteMoveRequestSchema>;
+
+export const NoteArchiveRequestSchema = z.strictObject({
+  expectedRevision: ExpectedRevisionSchema,
+  idempotencyKey: IdempotencyKeySchema,
+  archived: z.boolean().default(true)
+});
+export type NoteArchiveRequest = z.input<typeof NoteArchiveRequestSchema>;
+
+export const NoteSoftDeleteRequestSchema = z.strictObject({
+  expectedRevision: ExpectedRevisionSchema,
+  idempotencyKey: IdempotencyKeySchema
+});
+export type NoteSoftDeleteRequest = z.infer<typeof NoteSoftDeleteRequestSchema>;
+
+export const NoteRestoreDeletedRequestSchema = z.strictObject({
+  expectedRevision: ExpectedRevisionSchema,
+  idempotencyKey: IdempotencyKeySchema
+});
+export type NoteRestoreDeletedRequest = z.infer<typeof NoteRestoreDeletedRequestSchema>;

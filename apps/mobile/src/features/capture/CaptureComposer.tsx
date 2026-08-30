@@ -23,6 +23,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { BrandMark } from "../../components/BrandMark";
+import { useSession } from "../../auth/AuthProvider";
 import { nativeTheme } from "../../theme/nativeTheme";
 import {
   commitCaptureToOutbox,
@@ -35,7 +36,6 @@ import { captureSourceLabel, type NativeCaptureSource } from "./captureSource";
 import { submitCapture } from "./captureSubmission";
 import { scheduleWidgetPendingCount } from "./lockScreenCapture";
 
-const LOCAL_PROFILE_ID = "local-device-profile";
 const DRAFT_DEBOUNCE_MS = 250;
 
 interface CaptureComposerProps {
@@ -43,6 +43,8 @@ interface CaptureComposerProps {
 }
 
 export function CaptureComposer({ source }: CaptureComposerProps): ReactElement {
+  const { lastProfileId, session } = useSession();
+  const profileId = session?.user.id ?? lastProfileId;
   const insets = useSafeAreaInsets();
   const inputRef = useRef<ComponentRef<typeof TextInput>>(null);
   const bodyRef = useRef("");
@@ -54,19 +56,21 @@ export function CaptureComposer({ source }: CaptureComposerProps): ReactElement 
   const [restored, setRestored] = useState(false);
 
   const flushDraft = useCallback(async (): Promise<void> => {
+    if (profileId === null) return;
     if (draftTimer.current !== undefined) clearTimeout(draftTimer.current);
     draftTimer.current = undefined;
     const currentBody = bodyRef.current;
     if (currentBody.length === 0) {
-      await discardCaptureDraft(LOCAL_PROFILE_ID, source);
+      await discardCaptureDraft(profileId, source);
     } else {
-      await saveCaptureDraft(LOCAL_PROFILE_ID, source, currentBody);
+      await saveCaptureDraft(profileId, source, currentBody);
     }
-  }, [source]);
+  }, [profileId, source]);
 
   useEffect(() => {
     mounted.current = true;
-    void loadCaptureDraft(LOCAL_PROFILE_ID, source).then((draft) => {
+    if (profileId === null) return undefined;
+    void loadCaptureDraft(profileId, source).then((draft) => {
       if (!mounted.current || draft === null) return;
       bodyRef.current = draft.body;
       setBody(draft.body);
@@ -77,7 +81,7 @@ export function CaptureComposer({ source }: CaptureComposerProps): ReactElement 
       if (draftTimer.current !== undefined) clearTimeout(draftTimer.current);
       void flushDraft();
     };
-  }, [flushDraft, source]);
+  }, [flushDraft, profileId, source]);
 
   useEffect(() => {
     const focusInput = (): (() => void) => {
@@ -122,10 +126,10 @@ export function CaptureComposer({ source }: CaptureComposerProps): ReactElement 
       setRestored(false);
       if (draftTimer.current !== undefined) clearTimeout(draftTimer.current);
       draftTimer.current = setTimeout(() => {
-        void saveCaptureDraft(LOCAL_PROFILE_ID, source, bodyRef.current);
+        if (profileId !== null) void saveCaptureDraft(profileId, source, bodyRef.current);
       }, DRAFT_DEBOUNCE_MS);
     },
-    [source]
+    [profileId, source]
   );
 
   const close = useCallback((): void => {
@@ -140,23 +144,27 @@ export function CaptureComposer({ source }: CaptureComposerProps): ReactElement 
         style: "destructive",
         onPress: () => {
           bodyRef.current = "";
-          void discardCaptureDraft(LOCAL_PROFILE_ID, source).then(() => router.back());
+          if (profileId === null) {
+            router.back();
+          } else {
+            void discardCaptureDraft(profileId, source).then(() => router.back());
+          }
         }
       },
       { text: "Continue writing", style: "cancel" }
     ]);
-  }, [source]);
+  }, [profileId, source]);
 
   const submit = useCallback(async (): Promise<void> => {
     const rawContent = bodyRef.current;
-    if (rawContent.trim().length === 0 || committing) return;
+    if (rawContent.trim().length === 0 || committing || profileId === null) return;
     setCommitting(true);
     setMessage(null);
     const result = await submitCapture({
-      persist: () => commitCaptureToOutbox(LOCAL_PROFILE_ID, source, rawContent, true),
+      persist: () => commitCaptureToOutbox(profileId, source, rawContent, session !== null),
       sideEffects: [
         async () => {
-          const count = await pendingCaptureCount(LOCAL_PROFILE_ID);
+          const count = await pendingCaptureCount(profileId);
           scheduleWidgetPendingCount(count);
         },
         () => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
@@ -172,10 +180,15 @@ export function CaptureComposer({ source }: CaptureComposerProps): ReactElement 
     bodyRef.current = "";
     setBody("");
     setRestored(false);
-    setMessage("Saved");
+    setMessage(
+      session === null
+        ? "Saved on this device. Waiting for the same account to sign in."
+        : "Saved on this device"
+    );
     if (mounted.current) setCommitting(false);
     void result.effects;
-  }, [committing, source]);
+    router.replace("/(tabs)");
+  }, [committing, profileId, session, source]);
 
   const canSubmit = body.trim().length > 0 && !committing;
 
@@ -209,6 +222,7 @@ export function CaptureComposer({ source }: CaptureComposerProps): ReactElement 
           autoCapitalize="sentences"
           keyboardAppearance="dark"
           multiline
+          maxLength={10_000}
           onChangeText={updateBody}
           placeholder="Write something"
           placeholderTextColor={nativeTheme.color.textDisabled}
@@ -221,7 +235,10 @@ export function CaptureComposer({ source }: CaptureComposerProps): ReactElement 
         />
         <View style={styles.composerFooter}>
           <Text accessibilityLiveRegion="polite" style={styles.message}>
-            {message ?? "Saved here first. Organized after."}
+            {message ??
+              (session === null
+                ? "This stays on this device for your signed-out account."
+                : "Saved here first. Organized after.")}
           </Text>
           <Pressable
             accessibilityLabel={committing ? "Saving capture" : "Save capture"}

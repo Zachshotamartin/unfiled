@@ -16,6 +16,10 @@ This file contains only steps that require a human account, physical device, pai
 4. Install full Xcode from the Mac App Store. This machine currently exposes only Command Line Tools, so `xcodebuild` cannot build or archive the widget extension.
 5. After Xcode opens once, select it: `sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`.
 6. Install an Android SDK through Android Studio for Android device builds.
+7. Copy `apps/mobile/.env.example` to `apps/mobile/.env.local`. Keep
+   `EXPO_PUBLIC_API_BASE_URL=http://localhost:3000` for the iOS Simulator; use
+   `http://10.0.2.2:3000` for the Android emulator, or an HTTPS LAN/tunnel URL reachable by
+   a physical phone. This value is a public origin, never a Supabase service key.
 
 ## Design-sprint evidence
 
@@ -40,10 +44,65 @@ Complete these human validation items before treating Milestone 0 as approved:
 
 1. Import `Zachshotamartin/unfiled` into Vercel and set the root directory to `apps/web`.
 2. Set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and provider application keys in the appropriate environment scopes.
-3. Set `NEXT_PUBLIC_SITE_URL` to the canonical origin for each scope, including `https://` and excluding a trailing slash. Use the stable preview alias for Preview and the cleared custom domain for Production; local development falls back to `http://localhost:3000`.
-4. Keep preview and production values separate.
-5. Run the recorded smoke checks against the preview URL before promoting.
-6. Add a custom domain only after name clearance.
+3. Generate a separate OTP rate-limit pepper for each deployed environment with
+   `openssl rand -hex 32`. Add it with `vercel env add AUTH_RATE_LIMIT_PEPPER preview` and
+   `vercel env add AUTH_RATE_LIMIT_PEPPER production`; never reuse a provider, Supabase, or cron
+   secret. Production OTP requests intentionally fail closed when either this pepper or the service
+   role key is absent.
+4. Set `NEXT_PUBLIC_SITE_URL` to the canonical origin for each scope, including `https://` and excluding a trailing slash. Use the stable preview alias for Preview and the cleared custom domain for Production; local development falls back to `http://localhost:3000`.
+5. Generate a dedicated cron secret with `openssl rand -base64 48`, then run
+   `vercel env add CRON_SECRET production` and paste that value. Do not reuse a Supabase or provider
+   key. Set `NOTE_RETENTION_EXECUTION_ENABLED=false` in Production before the first deployment.
+6. Keep preview and production values separate.
+7. Deploy with `apps/web/vercel.json`. It schedules
+   `/api/internal/retention/notes` daily at 03:17 UTC, but the route remains a dry run while the
+   execution gate is false or absent. Confirm the first Vercel Cron response has `dryRun: true`,
+   `executionEnabled: false`, `purgedCount: 0`, and a plausible `eligibleCount`.
+8. Independently inspect the protected dry run before activation. In a trusted shell, set a
+   temporary `UNFILED_RETENTION_CRON_SECRET` variable to the value from step 5, then run:
+
+   ```bash
+   curl --fail-with-body \
+     -H "Authorization: Bearer $UNFILED_RETENTION_CRON_SECRET" \
+     "https://YOUR_PRODUCTION_DOMAIN/api/internal/retention/notes?dryRun=true"
+   ```
+
+   Never paste the secret into shell history or issue trackers. Verify the response still reports
+   zero purges and compare `eligibleCount` with the number of notes deleted at least 30 days ago.
+
+9. Only after reviewing that dry run and approving permanent deletion under the published 30-day
+   policy, explicitly change `NOTE_RETENTION_EXECUTION_ENABLED` to `true` in Vercel Production and
+   redeploy. The `dryRun=true` URL remains non-destructive after activation. Alert on any cron
+   failure or `batchLimitReached: true`; disable execution by setting the gate back to `false` while
+   investigating.
+10. Run the recorded smoke checks against the preview URL before promoting.
+11. Add a custom domain only after name clearance.
+
+### Preview release evidence
+
+These checks are intentionally human-owned until preview project credentials and a stable Vercel preview alias exist. The credential-free CI still runs the built-app/local-Supabase HTTP E2E; it does not claim browser, cloud-log, or performance coverage.
+
+1. On the stable synthetic-data preview, request an OTP and verify that the returned 60-second resend cooldown is shown, survives a validation error, and reaches zero without enabling early resend.
+2. Verify sign-in, refresh after a full browser restart, sign-out, and direct navigation to an authenticated route after sign-out.
+3. On a physical iPhone build, sign in and relaunch the app to verify the session survives in Keychain. Sign out once online and once with airplane mode enabled. Both attempts must immediately return the app to signed-out state; the offline attempt must also show the explicit remote-revocation warning. Re-enable networking, sign in again, and sign out online to complete global provider revocation.
+4. Create and edit all five note types. Exercise checklist toggles, log fields, project prose/checklists, spaces, tag rename/association, note links, archive/delete/restore, revision restore, search, and Review empty/non-empty states.
+5. Open one note in two tabs, save the first, then verify the second receives `stale_revision` and preserves its local draft instead of silently overwriting.
+6. Undo a newly created note and verify it becomes soft-deleted with a new revision; undo that undo and verify the note returns with another revision and identical content.
+7. Record browser screenshots at 390 px, 768 px, 1280 px, and 1536 px widths; include keyboard-only focus traversal, 200% zoom, reduced motion, and a screen-reader smoke.
+
+### Cloud canary-log audit
+
+1. Generate a unique synthetic marker that is not a real credential, put it only in a private test note, and record its hash separately.
+2. Exercise the preview flows that may emit application, Vercel function, Supabase API/database, and error-monitoring logs.
+3. Search every configured log sink for both the marker and common authorization/refresh-token prefixes. The marker, note content, bearer token, refresh token, and provider key material must have zero hits.
+4. Record the query window, sinks inspected, result, reviewer, and preview deployment identifier. Any hit blocks promotion and starts the incident-response path.
+
+### Preview performance smoke
+
+1. Use a production-mode preview with synthetic data and a cold browser profile. Record at least three runs each at desktop and mobile viewport sizes.
+2. Capture LCP, INP, CLS, route-transition timing, and the manual note create/update/search API p95. Keep cold-start samples visible rather than discarding them.
+3. When Milestone C adds `/captures`, add a 10 rps sustained smoke that asserts zero lost captures and records p95 acceptance latency. Do not report this capture target before the route exists.
+4. Attach traces or HAR files to the release evidence without authorization headers, cookies, note bodies, or provider keys.
 
 ## Apple and EAS
 
