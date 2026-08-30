@@ -1,6 +1,6 @@
 # Design System
 
-Status: **initial skeleton.** Token values below are the working draft from [BUILD_PLAN.md](./BUILD_PLAN.md) §15; Milestone 0 (design sprint) completes this document with final values, contrast evidence, component specs from the high-fidelity screens, and prototype learnings. Sections marked `M0` are filled then.
+Status: **working v1 skeleton.** The visual tokens now follow the selected [Unfiled brand direction](./BRAND_SYSTEM_UNFILED.md); Milestone 0 completes this document with measured contrast evidence, component specs from the high-fidelity screens, and prototype learnings. Sections marked `M0` are filled then.
 
 Design dials: `DESIGN_VARIANCE: 5`, `MOTION_INTENSITY: 3`, `VISUAL_DENSITY: 5`. Read: calm personal utility, dark-first, mobile-first; editor hierarchy, not dashboard density. No AI-purple gradients, glowing avatars, chat-bubble primary UI, or decorative graphs.
 
@@ -10,14 +10,14 @@ Semantic names only in components; raw hex lives here. All pairs require recorde
 
 | Token | Draft value | Role | Contrast vs canvas (approx, verify M0) |
 | --- | --- | --- | --- |
-| `color.canvas` | `#0B0D0C` | app background | — |
-| `color.surface` | `#121512` | cards, composer | — |
-| `color.surface.raised` | `#191D1A` | sheets, menus | — |
-| `color.border` | `#2A302C` | hairlines, dividers | non-text |
-| `color.text.primary` | `#E8EBE7` | body text | ~16:1 ✓ AAA |
-| `color.text.secondary` | `#A5AEA7` | metadata, timestamps | ~8:1 ✓ |
-| `color.accent` | `#8FB49A` (muted sage) | actions, selection, checked state | ~8:1 ✓ |
-| `color.accent.contrast` | `#0B0D0C` | text on accent fills | verify ≥4.5:1 |
+| `color.canvas` | `#0B0C0E` (Ink) | app background | — |
+| `color.surface` | `#181B1F` (Graphite) | panes, composer | — |
+| `color.surface.raised` | `#22262A` | sheets, menus | — |
+| `color.border` | `rgba(242, 239, 232, 0.14)` | hairlines, dividers | non-text |
+| `color.text.primary` | `#F2EFE8` (Warm Paper) | body text | verify M0; target AAA |
+| `color.text.secondary` | `#9DA3A6` (Fog) | metadata, timestamps | verify M0; target AA |
+| `color.accent` | `#EE6F55` (Persimmon) | capture actions, selection, provenance | verify M0; target AA |
+| `color.accent.contrast` | `#0B0C0E` | text on accent fills | verify ≥4.5:1 |
 | `color.danger` | M0: muted coral, chosen by contrast test | destructive, failed states | ≥4.5:1 required |
 | `color.warning` | M0 | pending/attention | ≥4.5:1 |
 | `color.state.generated` | M0: accent-tinted surface | generated-block background + badge | non-color indicator also required |
@@ -75,7 +75,7 @@ Mobile (design smallest supported viewport first, keyboard open): Today, Capture
 
 ## 9. Content style
 
-Functional labels (`Capture`, `Moved to Shopping`, `Needs your input`); receipts in plain past-tense sentences; errors say what happened and the next step, never codes alone (codes in details); AI provenance always visible ("AI-generated" not "magic"); no anthropomorphizing ("Soft Index moved…" not "I moved…").
+Functional labels (`Write something`, `Added to Shopping`, `Needs your input`); receipts in plain past-tense sentences; errors say what happened and the next step, never codes alone (codes in details); AI provenance always visible (`AI-generated`, never `magic`); avoid anthropomorphizing the product or AI.
 
 ## 10. M0 deliverables checklist (design sprint exit)
 

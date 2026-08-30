@@ -45,7 +45,7 @@ Boundaries: (B1) client ↔ API, (B2) API ↔ database, (B3) workflow ↔ model 
 
 Two modes per note/capture (DATA_MODEL `privacy_mode`). Plain-language disclosure, to appear in the privacy policy and in-app:
 
-> Notes with AI assistance are stored encrypted on our servers (Supabase) and, when we organize a capture, we send that capture plus short summaries of a few of your candidate notes to our AI provider (OpenAI) to decide where it belongs. We request that the provider not store these requests (`store: false`). Private manual notes are never sent to the AI provider, never embedded, and never used in AI search. Soft Index is not end-to-end encrypted: our servers can read AI-assisted notes in order to organize them.
+> Notes with AI assistance are stored encrypted on our servers (Supabase) and, when we organize a capture, we send that capture plus short summaries of a few of your candidate notes to our AI provider (OpenAI) to decide where it belongs. We request that the provider not store these requests (`store: false`). Private manual notes are never sent to the AI provider, never embedded, and never used in AI search. Unfiled is not end-to-end encrypted: our servers can read AI-assisted notes in order to organize them.
 
 No E2EE claims anywhere in marketing or app copy. `store: false` behavior re-verified against provider docs at implementation and on SDK upgrades.
 

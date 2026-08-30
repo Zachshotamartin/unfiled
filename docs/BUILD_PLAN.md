@@ -1,6 +1,6 @@
-# Soft Index: Full Build Plan
+# Self-Organizing Notes Product: Full Build Plan
 
-Working title: **Soft Index**. The name describes an index that adapts to the person instead of making the person maintain a rigid filing system. It is provisional until a proper trademark, App Store, package-name, social-handle, and domain review is complete.
+Working title and selected brand direction: **Unfiled**. Keep the repository folder as `soft-index` only as a temporary technical path until the name passes trademark, App Store, package-name, social-handle, and domain review; then rename it once in a dedicated migration.
 
 Plan status: selected product direction and implementation blueprint. No production claims in this document are implemented yet.
 
@@ -12,6 +12,7 @@ This plan is the spine of a full documentation set; see [docs/README.md](./READM
 - [SECURITY_AND_PRIVACY.md](./SECURITY_AND_PRIVACY.md): threat model, BYOK key custody, disclosure, deletion pipeline, incident handling
 - [OPERATIONS_TEST_PLAN.md](./OPERATIONS_TEST_PLAN.md): environments, CI, enumerated test inventory, release checklists, backups, monitoring
 - [DESIGN_SYSTEM.md](./DESIGN_SYSTEM.md): tokens, components, states, accessibility rules (skeleton; completed during Milestone 0)
+- [BRAND_SYSTEM_UNFILED.md](./BRAND_SYSTEM_UNFILED.md): identity, voice, in-app, Lock Screen, signed-in web, and marketing-site application
 - [OPEN_QUESTIONS.md](./OPEN_QUESTIONS.md): deferred decisions with defaults and decision triggers
 - [GLOSSARY.md](./GLOSSARY.md) and [decisions/](./decisions/): shared vocabulary and architecture decision records
 
@@ -34,6 +35,366 @@ The plan makes the following decisions:
 9. **Do not claim end-to-end encryption while server-side AI reads note content.** Provide a manual-only private-note mode and disclose the actual data path precisely.
 10. **Design the complete core loop before bootstrapping application code.** Start with information architecture, mobile wireframes, dark-mode tokens, high-fidelity core screens, responsive web adaptations, and a clickable prototype. The first coded vertical slice follows the approved design rather than inventing the product while implementing it.
 11. **Prove a vertical slice before building a broad knowledge platform.** The first convincing coded demo is capture, route, append, receipt, correction, undo, and cross-device sync.
+12. **Treat Lock Screen capture as a core input surface.** The iPhone widget is part of the durable capture path, not a decorative status widget or a post-MVP extra. One tap must open a focused composer, save locally before any network call, and reuse the same idempotent sync path as an in-app capture.
+
+## 0. Priority Feature: iPhone Lock Screen Quick Capture
+
+### 0.1 Product outcome and non-negotiable platform constraint
+
+The desired experience is: take out the phone, tap the Lock Screen widget, type a thought immediately, press Send, and put the phone away. The user must not choose a title, folder, note type, or destination before writing.
+
+The implementation must describe this honestly. WidgetKit widgets do not generally support free-form text input. Apple documents widgets as snapshot-based surfaces and limits direct interactive controls to actions such as buttons and toggles; unsupported views such as a live text editor are ignored. A Lock Screen widget therefore cannot host a normal keyboard-backed `TextField` inside the widget itself. See [Creating a widget extension](https://developer.apple.com/documentation/WidgetKit/Creating-a-Widget-Extension) and [Adding interactivity to widgets and Live Activities](https://developer.apple.com/documentation/widgetkit/adding-interactivity-to-widgets-and-live-activities).
+
+The production contract is consequently **one tap from the Lock Screen into an app-owned composer that is already focused with the keyboard open**. If the phone is locked, iOS may require Face ID, Touch ID, or the passcode before the app appears. The application must not claim it can bypass that system protection.
+
+Initial platform target: iPhone on iOS 17 or later. Build both supported Lock Screen shapes:
+
+- `accessoryCircular`: a single recognizable capture glyph and an accessibility label such as `New capture`.
+- `accessoryRectangular`: the glyph plus `Write something` or `Capture a thought`; optionally show a non-sensitive pending count.
+- Do not show note text, recent captures, destination names, or AI receipts on the Lock Screen by default.
+- Keep `accessoryInline` as an evaluated follow-up, not an MVP requirement; its tiny surface adds little to the primary action.
+
+Apple supports circular, rectangular, and inline accessory families on the iPhone Lock Screen. The widget must adapt to monochrome, accented, tinted, and clear appearances rather than assuming the app's dark palette will render literally. See [Apple's widget design guidance](https://developer.apple.com/design/human-interface-guidelines/widgets) and [supporting additional widget sizes](https://developer.apple.com/documentation/widgetkit/supporting-additional-widget-sizes).
+
+### 0.2 Exact user flow
+
+#### Setup
+
+1. After the user's first successful in-app capture, show an optional `Add Lock Screen capture` education card.
+2. Explain the native steps with current screenshots: touch and hold the Lock Screen, choose Customize, select the Lock Screen, add the application's circular or rectangular widget, then tap Done.
+3. Provide `Not now` and never block normal app use. iOS does not provide an API that silently installs a widget for the user.
+
+#### Capture from the Lock Screen
+
+1. The user taps the widget.
+2. WidgetKit opens a deep link such as `<app-scheme>://capture?source=ios_lock_screen_widget` using `widgetURL(_:)`.
+3. iOS authenticates the user if the device is locked.
+4. Expo Router opens the dedicated `/capture` route, not the home screen and not the last open note.
+5. The composer appears with no intermediate animation, onboarding, loading skeleton, folder picker, or AI greeting.
+6. The multiline input receives focus after the native scene and React tree are active; the keyboard opens automatically.
+7. The user types and presses Send from the keyboard or taps the 44-point send control.
+8. The app writes the raw capture and its client ULID to SQLite in one transaction before displaying `Saved` or triggering haptics.
+9. Sync begins immediately when possible. The app may close or remain available for another capture; either way, organization continues independently.
+10. A short local acknowledgement says `Saved` and, only when already known, `Queued offline`. It must not invent the future destination.
+
+#### Interrupted flow
+
+- Persist the composer draft locally as the user types. Backgrounding, locking the phone, an incoming call, a crash, or memory pressure must not erase entered text.
+- Reopening the widget within 30 minutes restores the unfinished widget-originated draft. The composer visibly labels it `Unsaved draft` so restoration is not mistaken for a submitted capture.
+- Canceling a non-empty draft requires `Keep draft` or `Discard`; an empty draft dismisses immediately.
+- An expired cloud session does not destroy capture ability for a previously signed-in local profile. Save to the local outbox, mark it `Waiting for sign-in`, and sync after reauthentication. A never-authenticated installation routes to sign-in because it has no local user boundary.
+
+### 0.3 Performance and interaction budget
+
+Measure from the app-active callback because device authentication time belongs to iOS and varies by user:
+
+- warm launch to focused input: p50 under 300 ms, p95 under 700 ms
+- cold launch to focused input: p50 under 900 ms, p95 under 1.8 s on the oldest supported test phone
+- Send tap to local durable acknowledgement: p95 under 150 ms
+- no network or model call may block focus, typing, local persistence, acknowledgement, or dismissal
+- dropped characters, double submission, and blank-screen launches are release blockers
+
+Record only timings, route source, outcome codes, app version, and device class. Never put capture text in analytics, crash breadcrumbs, widget snapshots, or logs.
+
+### 0.4 Architecture
+
+```text
+iPhone Lock Screen
+  -> WidgetKit accessory widget
+  -> <app-scheme>://capture?source=ios_lock_screen_widget
+  -> Expo Router /capture
+  -> focused React Native CaptureComposer
+  -> SQLite transaction: draft + capture outbox row
+  -> existing idempotent POST /api/v1/captures
+  -> durable organization workflow
+  -> receipt visible in Today on mobile and web
+
+Main Expo app
+  -> App Group snapshot writer
+  -> WidgetCenter timeline reload
+  -> WidgetKit reads generic pending count only
+```
+
+The widget is a native iOS app extension and runs in a separate process. It must not import the database client, call the AI provider, contain authentication tokens, or reproduce the capture service. Its only MVP responsibilities are rendering a safe launch surface, carrying a constant allowlisted deep link, and optionally reading a small non-sensitive snapshot from an App Group container.
+
+### 0.5 Native project strategy for the Expo application
+
+Use a small Swift WidgetKit extension generated by a checked-in Expo config plugin. Do not make the first production version depend on the current alpha `expo-widgets` API. As of this planning update, Expo's widget package is explicitly alpha, requires development builds, and does not yet document normal-widget deep linking clearly. Re-evaluate it at implementation time; adopt it only if it is stable, supports `widgetURL` or `Link` for this flow, and passes the same physical-device tests. See [Expo's current widget package documentation](https://github.com/expo/expo/blob/main/docs/pages/versions/v55.0.0/sdk/widgets.mdx) and [EAS iOS app-extension guidance](https://docs.expo.dev/build-reference/app-extensions/).
+
+Keep generated native code reproducible. Store owned sources here:
+
+```text
+apps/mobile/
+  app.config.ts
+  plugins/
+    withQuickCaptureWidget.ts
+  native-targets/
+    quick-capture-widget/
+      QuickCaptureWidget.swift
+      QuickCaptureWidgetBundle.swift
+      QuickCaptureProvider.swift
+      Assets.xcassets/
+      Info.plist
+      QuickCaptureWidget.entitlements
+  modules/
+    quick-capture-widget/
+      ios/QuickCaptureWidgetModule.swift
+      src/index.ts
+  src/app/
+    capture.tsx
+    +native-intent.tsx
+  src/features/capture/
+    CaptureComposer.tsx
+    captureDraftRepository.ts
+    lockScreenCapture.ts
+```
+
+`withQuickCaptureWidget.ts` must be deterministic and idempotent. During `expo prebuild`, it:
+
+1. Creates the `QuickCaptureWidget` extension target if it does not exist.
+2. Copies the checked-in Swift, plist, asset, and entitlement sources into the generated iOS project.
+3. Sets target membership, Swift version, deployment target, application-extension-only build settings, and the extension product type.
+4. Adds WidgetKit and SwiftUI frameworks.
+5. Gives both the main target and extension the same App Group entitlement.
+6. Sets the extension bundle identifier to `<main-bundle-id>.quickcapture`.
+7. Adds the extension to the containing application's Embed App Extensions phase once, without duplicating entries on repeated prebuilds.
+
+Declare the extension before EAS generates credentials so provisioning includes the second bundle identifier and shared App Group:
+
+```ts
+// apps/mobile/app.config.ts, representative shape
+export default {
+  expo: {
+    scheme: process.env.APP_SCHEME,
+    ios: {
+      bundleIdentifier: process.env.IOS_BUNDLE_ID,
+    },
+    plugins: ['./plugins/withQuickCaptureWidget'],
+    extra: {
+      eas: {
+        build: {
+          experimental: {
+            ios: {
+              appExtensions: [
+                {
+                  targetName: 'QuickCaptureWidget',
+                  bundleIdentifier: `${process.env.IOS_BUNDLE_ID}.quickcapture`,
+                  entitlements: {
+                    'com.apple.security.application-groups': [
+                      `group.${process.env.IOS_BUNDLE_ID}`,
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    },
+  },
+};
+```
+
+Resolve `APP_SCHEME`, bundle identifiers, and App Group identifiers when the launch name is selected. Use fixed per-environment values in checked build profiles; never let an unset environment variable silently produce an invalid production entitlement.
+
+### 0.6 WidgetKit implementation
+
+Use `StaticConfiguration` because the user has no widget-side destination to configure. The full widget opens the same capture route with one `widgetURL`. Do not put multiple competing tap targets in the Lock Screen version.
+
+Representative Swift structure:
+
+```swift
+import SwiftUI
+import WidgetKit
+
+private let appGroup = "group.<resolved-bundle-id>"
+private let captureURL = URL(
+  string: "<resolved-app-scheme>://capture?source=ios_lock_screen_widget"
+)!
+
+struct QuickCaptureEntry: TimelineEntry {
+  let date: Date
+  let pendingCount: Int
+}
+
+struct QuickCaptureProvider: TimelineProvider {
+  func placeholder(in context: Context) -> QuickCaptureEntry {
+    .init(date: .now, pendingCount: 0)
+  }
+
+  func getSnapshot(
+    in context: Context,
+    completion: @escaping (QuickCaptureEntry) -> Void
+  ) {
+    completion(entry())
+  }
+
+  func getTimeline(
+    in context: Context,
+    completion: @escaping (Timeline<QuickCaptureEntry>) -> Void
+  ) {
+    completion(Timeline(entries: [entry()], policy: .never))
+  }
+
+  private func entry() -> QuickCaptureEntry {
+    let defaults = UserDefaults(suiteName: appGroup)
+    return .init(
+      date: .now,
+      pendingCount: defaults?.integer(forKey: "pendingCaptureCount") ?? 0
+    )
+  }
+}
+
+struct QuickCaptureWidgetView: View {
+  @Environment(\.widgetFamily) private var family
+  let entry: QuickCaptureEntry
+
+  var body: some View {
+    Group {
+      if family == .accessoryRectangular {
+        HStack(spacing: 8) {
+          Image(systemName: "square.and.pencil")
+          VStack(alignment: .leading, spacing: 1) {
+            Text("Write something").font(.headline)
+            if entry.pendingCount > 0 {
+              Text("\(entry.pendingCount) waiting to sync").font(.caption)
+            }
+          }
+        }
+      } else {
+        ZStack {
+          AccessoryWidgetBackground()
+          Image(systemName: "square.and.pencil")
+        }
+      }
+    }
+    .widgetURL(captureURL)
+    .accessibilityLabel("New capture")
+  }
+}
+
+struct QuickCaptureWidget: Widget {
+  let kind = "QuickCaptureWidget"
+
+  var body: some WidgetConfiguration {
+    StaticConfiguration(kind: kind, provider: QuickCaptureProvider()) {
+      QuickCaptureWidgetView(entry: $0)
+        .containerBackground(for: .widget) { Color.clear }
+    }
+    .configurationDisplayName("Quick Capture")
+    .description("Open a blank capture without choosing where it belongs.")
+    .supportedFamilies([.accessoryCircular, .accessoryRectangular])
+  }
+}
+```
+
+Replace placeholder identifiers at build generation, not with runtime string interpolation inside the extension. Verify the final Swift code against the selected Xcode and iOS SDK because WidgetKit appearance APIs evolve.
+
+### 0.7 Deep-link and composer implementation
+
+Expo Router supports deep links for file routes when a custom scheme is defined. See [Expo Router navigation and deep links](https://docs.expo.dev/router/basics/navigation/) and [linking into an Expo app](https://docs.expo.dev/linking/into-your-app/).
+
+Implementation rules:
+
+- `/capture` accepts only an allowlisted `source` enum. Ignore every other query parameter. Never accept note content, destination IDs, or commands from this unauthenticated URL.
+- `+native-intent.tsx` rewrites legacy or malformed capture URLs to `/capture?source=ios_lock_screen_widget` and sends unknown native paths to a safe route.
+- The source enum adds `ios_lock_screen_widget`; analytics and the API may receive that enum, but server behavior and authorization stay identical.
+- On a warm launch, dismiss any open modal and present the dedicated composer. On a cold launch, make `/capture` the initial resolved route without rendering the normal home screen first.
+- Keep one draft row per local profile and capture source. Update it in SQLite with a short debounce and flush immediately when the app backgrounds.
+- Do not rely on JSX `autoFocus` alone. Hold a `TextInput` ref, wait for the app state to be `active` and navigation interactions to finish, call `focus()` on the next animation frame, and retry once if `isFocused()` is false. Cancel pending focus work when the route unmounts.
+- The keyboard Return key inserts a newline in multiline mode. Provide a separate accessible Send button and an optional keyboard accessory Send action; never make an accidental Return submit a multi-line capture.
+- Submission runs one SQLite transaction that inserts the capture, inserts or updates the outbox record, and deletes the draft. Only after commit may the UI show `Saved` and emit success haptics.
+- Disable Send only while the local transaction is committing. Trim for the empty check, but preserve the user's original whitespace and exact raw body in the stored source capture according to the capture contract.
+- Generate the ULID before the transaction and reuse it as the API idempotency key. A rapid double tap, app restart, or sync retry must still produce one server capture.
+
+### 0.8 App Group bridge and widget refresh
+
+Create a tiny Expo native module named `QuickCaptureWidgetModule`. Its public JavaScript API is deliberately narrow:
+
+```ts
+type WidgetSnapshot = {
+  pendingCaptureCount: number;
+};
+
+export function setWidgetSnapshot(snapshot: WidgetSnapshot): Promise<void>;
+export function reloadQuickCaptureWidget(): Promise<void>;
+```
+
+The Swift module writes only `pendingCaptureCount` and a schema version to `UserDefaults(suiteName:)`, then calls `WidgetCenter.shared.reloadTimelines(ofKind: "QuickCaptureWidget")`. Call it after the local outbox count changes, with a debounce to avoid unnecessary reload requests. WidgetKit controls the actual reload schedule, so the count is helpful but never authoritative.
+
+Do not share the SQLite file, Supabase session, raw captures, user email, note titles, or API keys with the extension. If App Group provisioning fails, the widget must still render the generic capture action and open the composer; it may omit the pending count.
+
+### 0.9 Backend and data-contract changes
+
+The widget does not get a special backend endpoint. Reuse the normal capture pipeline:
+
+- add `ios_lock_screen_widget` to the versioned `CaptureSource` schema and database constraint
+- send `client_capture_id`, `raw_content`, `client_created_at`, timezone, and source through `POST /api/v1/captures`
+- keep the existing auth, ownership, size limit, rate limit, idempotency, privacy mode, and workflow behavior
+- preserve the raw capture before routing
+- do not auto-increase AI priority because the source was the Lock Screen
+- expose the resulting processing state and receipt through the normal Today and Review surfaces
+
+### 0.10 Signing, builds, and developer workflow
+
+The widget cannot run in Expo Go. Use an EAS development build and a physical iPhone for the primary workflow.
+
+Before the first shared build:
+
+1. Register the main App ID and the explicit widget-extension App ID in the Apple Developer portal.
+2. Register one App Group and enable it on both identifiers.
+3. Declare the EAS app extension before credential generation.
+4. Generate or refresh provisioning profiles for both targets after capabilities exist.
+5. Run `expo prebuild --clean` in CI or a clean verification job and confirm the config plugin reproduces the target without a hand-edited Xcode project.
+6. Build the Debug extension with Xcode previews, then install the EAS development build on a real phone.
+7. Test the release provisioning profile before TestFlight; Debug success alone is insufficient evidence.
+
+Keep an automated native-project inspection script that fails CI if the generated extension is missing its bundle identifier, App Group entitlement, embedded appex product, supported families, or shared scheme URL.
+
+### 0.11 Test matrix and release gate
+
+Automated coverage:
+
+- unit tests for source allowlisting, native-path rewriting, draft persistence, outbox transaction, and duplicate submission
+- contract test proving `ios_lock_screen_widget` is accepted by client, API, and database schemas
+- config-plugin test that runs prebuild twice and compares target, build phase, plist, and entitlement counts
+- Swift tests for App Group snapshot defaults and schema migration
+- Xcode snapshot or preview coverage for circular and rectangular families in accented, tinted, clear, dark, and light contexts
+- API restart test proving the same ULID syncs exactly once
+- mobile integration test that opens the production-scheme URL and asserts `/capture`, focused input, local save, and queued state
+
+Physical-device matrix:
+
+- app terminated, backgrounded, foregrounded, and suspended
+- device unlocked and locked with Face ID required
+- online, airplane mode, connection loss during send, and later reconnection
+- valid session, expired session for a known local profile, and first-run signed-out state
+- device reboot before first unlock
+- Dynamic Type through the largest accessibility sizes
+- VoiceOver, Switch Control, Reduce Motion, Reduce Transparency, and Bold Text
+- dark, light, tinted, clear, and always-on-display presentation where supported
+- rapid double tap, repeated deep link, empty send, very long capture, emoji, right-to-left text, and dictation through the system keyboard
+- storage pressure and simulated SQLite failure, which must show an honest error rather than `Saved`
+
+Release gate:
+
+- 100 consecutive cold and warm widget launches on physical devices produce no blank or wrong route
+- at least 99 of 100 launches focus the composer without an extra tap; any reproducible miss must be fixed before release
+- every locally acknowledged capture survives termination and syncs exactly once
+- no sensitive note or capture content appears in the Lock Screen snapshot, analytics, logs, or crash reports
+- App Store archive contains a correctly signed embedded widget extension
+- the widget remains useful offline and when the AI provider is unavailable
+
+### 0.12 Delivery order
+
+1. Add the `/capture` deep-link route and prove reliable cold- and warm-start autofocus using a temporary URL before creating the widget target.
+2. Add draft persistence and the SQLite outbox transaction; pass termination and duplicate tests.
+3. Prototype both widget families in a minimal native test host and approve the Lock Screen design states.
+4. Implement the deterministic config plugin and EAS extension declaration.
+5. Add App Group snapshot storage and the narrow native refresh module.
+6. Run the physical-device matrix and tune launch performance.
+7. Add onboarding instructions, telemetry without content, CI project inspection, and TestFlight validation.
+8. Only after the Lock Screen path passes its gate, reuse the same deep link for an optional Home Screen widget, Action Button shortcut, App Shortcut, or Control Center control.
 
 ## 1. Product Definition
 
@@ -69,7 +430,7 @@ A user opens the mobile app and submits three messages over a day:
 2. `bench 135 x 8, 145 x 6, 155 x 4; incline dumbbell 45 x 10 for 3 sets`
 3. `Roosevelt method: tell people you can do it, then figure out how to do it later`
 
-Soft Index:
+The product:
 
 1. Adds three unchecked items to `Shopping / August 30`.
 2. Creates or updates `Workouts / August 30`, preserves the raw line, extracts exercises and sets into a readable workout entry, and offers an optional summary.
@@ -83,10 +444,10 @@ The same notes are visible and manually editable in the hosted web application.
 
 This category exists. The opportunity is a focused behavior and trust model, not the absence of competitors.
 
-| Product | Relevant strength | Gap Soft Index should target |
+| Product | Relevant strength | Gap this product should target |
 | --- | --- | --- |
 | Obsidian | Local files, links, plugins, deep research workflows | Organization still depends heavily on user-created structure and desktop-oriented habits |
-| Mem | Capture without organizing and an agent with broad workspace context | Broader chief-of-staff direction; Soft Index should make routing receipts, correction, and small personal notes the center |
+| Mem | Capture without organizing and an agent with broad workspace context | Broader chief-of-staff direction; this product should make routing receipts, correction, and small personal notes the center |
 | Tana | Structured nodes, supertags, capture, and AI | Powerful schema and outliner concepts introduce setup and vocabulary before value |
 | Capacities | Daily notes, object types, mobile capture, and review | The user still selects destinations and performs substantial review or conversion work |
 | Reflect | Fast networked notes, sync, encryption, and AI assistance | AI-assisted writing and graph features are broader than message-to-note routing |
@@ -94,7 +455,7 @@ This category exists. The opportunity is a focused behavior and trust model, not
 
 ### Selected differentiation
 
-Soft Index is not marketed as a second brain, research tool, or autonomous chief of staff. Its promise is smaller and testable:
+The product is not marketed as a second brain, research tool, or autonomous chief of staff. Its promise is smaller and testable:
 
 - Capture has no filing question.
 - One message can update an existing note.
@@ -212,6 +573,7 @@ Do not make medical, therapeutic, or accessibility claims without appropriate ev
 
 - Email magic-link or one-time-code authentication
 - iOS and Android application through Expo development builds
+- iPhone Lock Screen quick-capture widget that opens a focused, offline-capable composer through a deep link
 - Responsive web application and marketing page hosted on Vercel
 - Text capture from mobile and web
 - Offline mobile capture outbox
@@ -252,7 +614,7 @@ Do not make medical, therapeutic, or accessibility claims without appropriate ev
 
 - Voice recording and transcription
 - Share-sheet text and URL capture
-- Home-screen quick-capture widget
+- Home-screen capture and status widget that reuses the proven Lock Screen route and App Group bridge
 - User-defined note templates, including templates with checkbox, number, and single-select input fields
 - `table` note type: typed columns (text, number, checkbox, date, single-select), tap-to-edit cells, row operations, sort, and CSV export — no formulas, relations, or views
 - Interactive workout plans on the `log` type: a planned session the user ticks through set by set, with per-set numeric quick-entry and optional rest timers
@@ -784,6 +1146,15 @@ Expo mobile app                       Next.js web app
                 both clients refresh
 ```
 
+The iOS input edge sits in front of the mobile application:
+
+```text
+Lock Screen WidgetKit extension
+  -> allowlisted deep link
+  -> Expo Router /capture
+  -> the same local outbox and API path shown above
+```
+
 ### 10.4 Request path
 
 1. Client creates a ULID and stores the capture locally.
@@ -806,6 +1177,9 @@ soft-index/
   apps/
     web/                    # marketing, authenticated web app, API routes, workflows
     mobile/                 # Expo iOS and Android application
+      plugins/              # deterministic native-target config plugins
+      native-targets/       # checked-in WidgetKit extension sources and assets
+      modules/              # narrow Expo native bridges, including widget refresh
   packages/
     contracts/              # versioned API schemas and DTOs
     domain/                 # notes, captures, routing, revisions, undo
@@ -936,7 +1310,7 @@ Start with full snapshots for correctness and simplicity. Revisit patch storage 
 
 - `id`, generated by the client
 - `user_id`
-- source: mobile, web, share sheet, import
+- source: mobile, web, ios_lock_screen_widget, share sheet, import
 - device ID
 - raw text
 - privacy mode
@@ -1192,14 +1566,16 @@ Complete this sequence before framework and database bootstrap:
 
 1. **Journey map:** diagram the paths from idea to durable capture, pending organization, receipt, correction, Review, manual edit, search, and undo.
 2. **Information architecture:** finalize the mobile bottom navigation, web rail, note hierarchy, breadcrumbs, and the relationship between Today, Inbox, Notes, Spaces, and Review.
-3. **Low-fidelity mobile wireframes:** design the smallest phone viewport first for Today, Capture, processing, receipt, Notes, note editor, Review, Search, offline, and error states.
+3. **Low-fidelity mobile wireframes:** design the smallest phone viewport first for Today, Capture, Lock Screen widget entry, processing, receipt, Notes, note editor, Review, Search, offline, and error states.
 4. **Low-fidelity desktop wireframes:** adapt the same tasks to a left-rail and editor layout. Do not merely stretch the mobile screen.
-5. **Dark visual system:** define semantic color, type, spacing, radius, icon, motion, focus, and elevation tokens with contrast evidence.
-6. **High-fidelity mobile screens:** create the complete flagship flow, including keyboard-open capture, optimistic Saved state, background processing, receipt, Move, and Undo. Include the interactive surfaces: checking items off a list one-handed and tap-to-edit numeric fields on a workout entry.
-7. **High-fidelity web screens:** create Today, the manual Notes library, the editor, Search, and Review at laptop and wide-desktop sizes.
-8. **Clickable prototype:** connect the flagship shopping, workout, mindset, ambiguous-routing, manual-edit, and undo flows using realistic copy.
-9. **Usability check:** test whether a person can capture without a filing decision, understand where content went, correct a wrong route, and find the manual editor without explanation.
-10. **Design handoff:** record component anatomy, responsive rules, platform differences, empty/loading/offline/error states, and accessibility annotations in `DESIGN_SYSTEM.md`.
+5. **Brand foundation:** use [BRAND_SYSTEM_UNFILED.md](./BRAND_SYSTEM_UNFILED.md) to produce the vector mark/wordmark, app and WidgetKit variants, public-site narrative, voice rules, and a documented name-clearance outcome.
+6. **Dark visual system:** convert the brand palette into semantic color, type, spacing, radius, icon, motion, focus, and elevation tokens with contrast evidence.
+7. **High-fidelity mobile screens:** create the complete flagship flow, including both Lock Screen widget families, locked and unlocked entry, keyboard-open capture, restored draft, optimistic Saved state, background processing, receipt, Move, and Undo. Include the interactive surfaces: checking items off a list one-handed and tap-to-edit numeric fields on a workout entry.
+8. **High-fidelity web screens:** create Today, the manual Notes library, the editor, Search, and Review at laptop and wide-desktop sizes.
+9. **Public website system:** implement the six-section narrative defined by the brand system as separate responsive sections with real product crops and one global CTA contract.
+10. **Clickable prototype:** connect the flagship shopping, workout, mindset, ambiguous-routing, manual-edit, and undo flows using realistic copy.
+11. **Usability check:** test whether a person can capture without a filing decision, understand where content went, correct a wrong route, and find the manual editor without explanation.
+12. **Design handoff:** record component anatomy, responsive rules, platform differences, empty/loading/offline/error states, and accessibility annotations in `DESIGN_SYSTEM.md`.
 
 Apply the taste-skill preflight to the marketing surface and the relevant product-design rules to the application. The product UI is a daily utility, so prioritize clarity over landing-page spectacle. Do not use fake dashboard screenshots, generic three-card layouts, decorative glows, unexplained motion, or a chat-first shell.
 
@@ -1209,16 +1585,16 @@ Design approval means the core loop is coherent across mobile and web. It does n
 
 Dark is the default product expression. Build semantic tokens that can support a future light theme without rewriting components.
 
-Suggested starting palette, subject to contrast testing:
+Selected Unfiled starting palette, subject to contrast testing:
 
-- canvas: `#0B0D0C`
-- primary surface: `#121512`
-- raised surface: `#191D1A`
-- border: `#2A302C`
-- primary text: `#E8EBE7`
-- secondary text: `#A5AEA7`
-- accent: muted sage `#8FB49A`
-- danger: muted coral chosen to pass contrast requirements
+- canvas / Ink: `#0B0C0E`
+- primary surface / Graphite: `#181B1F`
+- raised surface: `#22262A`
+- border: `rgba(242, 239, 232, 0.14)`
+- primary text / Warm Paper: `#F2EFE8`
+- secondary text / Fog: `#9DA3A6`
+- accent / Persimmon: `#EE6F55`
+- danger: a separate muted red selected during M0; never overload Persimmon with both primary-action and destructive meaning
 
 Use one accent across the product. Avoid pure black and pure white.
 
@@ -1284,6 +1660,7 @@ Untrusted inputs include:
 - model output
 - imported Markdown
 - deep links and share-sheet payloads
+- widget-originated URLs and any query parameters supplied with them
 
 Trusted enforcement points include:
 
@@ -1424,24 +1801,27 @@ Separate deterministic tests from stochastic model evaluations. Pin prompt, sche
 Critical flows:
 
 1. sign in on web and mobile
-2. save a capture online
-3. save a capture offline, restart the app, reconnect, and sync once
-4. route a shopping list and append a second message
-5. check off a shopping item on mobile and observe the change on web
-6. route a workout log and correct a numeric field through tap-to-edit
-7. send an ambiguous capture to Review
-8. correct a destination and create a routing rule
-9. undo an AI mutation
-10. manually edit during an active organization job
-11. search and open the updated note on the other client
-12. export data
-13. delete the account
+2. open the app from the Lock Screen widget while terminated and reach a focused blank composer
+3. type from the system keyboard, save locally, terminate immediately, and recover the capture
+4. save a capture online
+5. save a capture offline, restart the app, reconnect, and sync once
+6. route a shopping list and append a second message
+7. check off a shopping item on mobile and observe the change on web
+8. route a workout log and correct a numeric field through tap-to-edit
+9. send an ambiguous capture to Review
+10. correct a destination and create a routing rule
+11. undo an AI mutation
+12. manually edit during an active organization job
+13. search and open the updated note on the other client
+14. export data
+15. delete the account
 
 ### 18.6 Performance targets
 
 Targets for the portfolio MVP:
 
 - local capture acknowledgement feels immediate and does not wait for network or AI
+- Lock Screen warm and cold launch focus meets the budgets in Section 0.3 on the oldest supported iPhone
 - authenticated API acknowledgement p95 under 500 ms in the primary region, excluding cold-start outliers tracked separately
 - typical organization receipt p95 under 8 seconds
 - web LCP under 2.5 seconds for the authenticated shell on a representative connection
@@ -1456,6 +1836,7 @@ Tune or revise targets from measured baselines. Do not hide failures by excludin
 
 - capture acceptance count and error rate
 - offline outbox age
+- Lock Screen widget open-to-active, active-to-focused, focus-miss, draft-restore, and local-save timings without content
 - workflow queue depth and oldest age
 - workflow attempts, failures, and dead letters
 - organization latency by stage
@@ -1543,6 +1924,8 @@ Never point preview deployments at production user data.
 - deterministic mock-model scenarios
 - web build
 - Expo type and bundle checks
+- clean Expo prebuild plus idempotent native-target inspection for the WidgetKit extension
+- iOS archive check for the signed, embedded widget appex and shared App Group entitlement
 - Playwright critical path
 - secret scanning and dependency audit
 
@@ -1556,8 +1939,11 @@ Deliver:
 
 - journey map and finalized information architecture
 - low-fidelity mobile and desktop wireframes
+- Unfiled vector mark/wordmark, app icon, WidgetKit template variants, and recorded name-clearance status
+- six-section public-site responsive design based on `design/brand/web/01-hero.png` through `06-final-cta.png`
 - dark-first semantic token sheet with contrast checks
 - high-fidelity flagship mobile flow
+- circular and rectangular Lock Screen widget designs plus locked, cold-launch, restored-draft, offline, and focus-failure states
 - high-fidelity manual Notes, editor, Search, and Review web screens
 - realistic loading, offline, processing, receipt, ambiguity, failure, and undo states
 - clickable prototype for the shopping, workout, mindset, and ambiguous examples
@@ -1570,6 +1956,7 @@ Gate:
 - a tester understands the routing receipt without an explanation
 - Move, Review, manual edit, and Undo are discoverable
 - the smallest supported phone layout works with the keyboard open
+- the widget-to-composer prototype requires one tap after device authentication and no filing choice
 - desktop navigation fits on one line or one rail without ambiguous duplicate destinations
 - contrast, focus, touch target, reduced-motion, and text-scaling requirements are annotated
 
@@ -1583,11 +1970,13 @@ Deliver:
 - shared IDs, schemas, errors, and time abstractions
 - product requirements and initial design system documents
 - deterministic fake organization model
+- Lock Screen deep-link and native-extension feasibility spike, including fixed bundle and App Group identifiers for each build environment
 - CI baseline
 
 Gate:
 
 - web and mobile shells compile
+- a clean prebuild creates one valid QuickCaptureWidget target on both the first and second run
 - packages test independently
 - local database migrates from zero
 - no production credentials are required for tests
@@ -1612,11 +2001,15 @@ Gate:
 - cross-user RLS suite passes
 - manual edits survive refresh and cross-device access
 
-### Milestone C: Durable capture and receipt, 1-2 weeks
+### Milestone C: Durable capture, Lock Screen entry, and receipt, 2-3 weeks
 
 Deliver:
 
 - mobile SQLite outbox
+- iOS `/capture` deep-link route with reliable cold- and warm-start focus
+- circular and rectangular WidgetKit Lock Screen extension generated by the checked-in config plugin
+- App Group snapshot bridge, EAS app-extension credentials, and physical-device launch matrix
+- locally persisted widget-originated drafts and expired-session recovery
 - web IndexedDB draft and submission queue
 - idempotent capture API
 - durable workflow adapter with fake decisions
@@ -1626,6 +2019,8 @@ Deliver:
 Gate:
 
 - offline capture survives app termination and syncs exactly once
+- a widget-originated capture reaches a focused composer in one tap after system authentication and is locally durable before acknowledgement
+- the extension archive is signed correctly and never exposes capture content on the Lock Screen
 - provider and workflow failures never lose the source capture
 - a receipt can be observed on both clients
 
@@ -1705,13 +2100,13 @@ Gate:
 
 ### Credible schedule
 
-- Portfolio MVP through Milestone D: approximately 7-11 part-time weeks
-- Strong personal beta through Milestone F: approximately 11-16 part-time weeks
-- Release-quality web plus iOS and Android beta: approximately 12-18 part-time weeks
+- Portfolio MVP through Milestone D: approximately 8-13 part-time weeks
+- Strong personal beta through Milestone F: approximately 12-18 part-time weeks
+- Release-quality web plus iOS and Android beta: approximately 13-20 part-time weeks
 
 These ranges intentionally exceed the sum of the individual milestone estimates: they include integration work between milestones, rework from gate failures, and review overhead that per-milestone numbers do not capture.
 
-Voice, imports, widgets, share extensions, and store review add separate platform work.
+The ranges now include the iPhone Lock Screen widget. Voice, imports, Home Screen widget variants, share extensions, and store review add separate platform work.
 
 ## 22. Go or No-Go Gates
 
@@ -1743,23 +2138,28 @@ Require tested RLS, deletion, export, logging redaction, provider disclosure, ba
 
 Create these issues after repository bootstrap:
 
-1. Define versioned IDs, errors, note types, capture states, and organization operations.
-2. Create the initial Supabase schema, grants, RLS policies, and cross-user tests.
-3. Build the fake-model shopping-list vertical slice through a transactional note revision.
-4. Implement the idempotent capture API and status endpoint.
-5. Build the mobile SQLite outbox and restart recovery test.
-6. Build Today, Notes, Capture, Review, and Search navigation shells.
-7. Implement the Markdown editor and expected-revision save contract on both clients.
-8. Implement mutation receipts and safe undo.
-9. Build candidate retrieval with deterministic rules, full text, and recency before embeddings.
-10. Define the strict organization JSON schema and hostile-output fixtures.
-11. Add the OpenAI Responses adapter behind `OrganizationModel`.
-12. Build the routing evaluation runner and baseline report.
-13. Add private manual notes and assert they never enter model or embedding requests.
-14. Add export and deletion reconciliation.
-15. Deploy preview web and generate internal Expo builds.
-16. Implement typed user operations — toggle, field edit, item edit and remove — through `POST /api/v1/notes/:id/operations` with the shared mutation and undo pipeline.
-17. Implement the list and log Markdown projection with determinism tests and the re-parse versus structure-conflict rule.
+1. Lock the iOS app scheme, main bundle identifier, widget bundle identifier, and App Group identifier for development, preview, and production.
+2. Build `/capture`, source allowlisting, native-path rewriting, and the cold- and warm-start focus harness.
+3. Add widget-originated draft persistence plus the SQLite outbox transaction and restart recovery test.
+4. Prototype circular and rectangular Lock Screen widget views in SwiftUI.
+5. Implement and idempotency-test `withQuickCaptureWidget.ts` plus the EAS app-extension declaration.
+6. Implement the narrow App Group snapshot and WidgetCenter refresh module.
+7. Define versioned IDs, errors, note types, capture states, capture sources, and organization operations.
+8. Create the initial Supabase schema, grants, RLS policies, and cross-user tests.
+9. Build the fake-model shopping-list vertical slice through a transactional note revision.
+10. Implement the idempotent capture API and status endpoint.
+11. Build Today, Notes, Capture, Review, and Search navigation shells.
+12. Implement the Markdown editor and expected-revision save contract on both clients.
+13. Implement mutation receipts and safe undo.
+14. Build candidate retrieval with deterministic rules, full text, and recency before embeddings.
+15. Define the strict organization JSON schema and hostile-output fixtures.
+16. Add the OpenAI Responses adapter behind `OrganizationModel`.
+17. Build the routing evaluation runner and baseline report.
+18. Add private manual notes and assert they never enter model or embedding requests.
+19. Add export and deletion reconciliation.
+20. Deploy preview web and generate internal Expo builds with the signed extension.
+21. Implement typed user operations — toggle, field edit, item edit and remove — through `POST /api/v1/notes/:id/operations` with the shared mutation and undo pipeline.
+22. Implement the list and log Markdown projection with determinism tests and the re-parse versus structure-conflict rule.
 
 ## 24. Selected Defaults and Open Decisions
 
@@ -1767,9 +2167,10 @@ The plan proceeds with these defaults so implementation can start without waitin
 
 | Decision | Selected default | Revisit trigger |
 | --- | --- | --- |
-| Name | Soft Index, provisional | trademark, store, package, or domain conflict |
+| Name | `Unfiled` selected creative direction; clearance pending | candidate passes meaning, collision, trademark, store, package, handle, and domain review |
 | Audience | single-user personal notes | repeated household or collaboration demand |
 | Platforms | responsive web plus Expo iOS and Android | native maintenance outweighs capture benefit |
+| iPhone quick capture | Lock Screen WidgetKit extension opens a focused Expo composer; no inline widget text field | Apple adds supported secure text input to widgets or physical-device evidence favors another surface |
 | Input | text first | routing and sync gates pass |
 | Note storage | Markdown canonical for prose types; `structured_data` canonical for list and log with deterministic Markdown projection | editor requirements exceed safe patching model |
 | Interactive surfaces | checklist toggling and log field editing in MVP; `table` type, input templates, and workout plans in v1.1 | early usage shows tables or plans are the retention driver |
@@ -1798,6 +2199,7 @@ Questions to answer through prototypes and beta evidence:
 The project is ready to present when all of the following are true:
 
 - A user can capture offline on mobile and close the app without losing the thought.
+- A user can tap the iPhone Lock Screen widget, authenticate if required, type into an already-focused composer, and receive a local durable acknowledgement without choosing a destination.
 - The capture syncs once and produces a visible organization receipt.
 - Shopping, workout, principle, project, and generic examples route through the same system.
 - A second message can update the intended living note.
@@ -1841,7 +2243,7 @@ Personal notes are sensitive. A dark theme and reassuring copy do not create pri
 
 ### Naming risk
 
-The notes category is crowded. Soft Index is a working title, not a cleared mark. Do not invest in final logo, domain, store assets, or legal copy before formal screening.
+The notes category is crowded and the launch name is unresolved. Do not invest in final logo, domain, store assets, bundle identifiers, URL schemes, or legal copy before formal screening. Once selected, record the name and immutable native identifiers in an ADR before generating Apple credentials.
 
 ## 27. Research and Documentation Anchors
 
@@ -1858,6 +2260,12 @@ Current implementation guidance to recheck at bootstrap and major upgrades:
 
 - [Expo Router introduction](https://docs.expo.dev/router/introduction/)
 - [Expo monorepo guidance](https://docs.expo.dev/guides/monorepos/)
+- [Expo linking into an app](https://docs.expo.dev/linking/into-your-app/)
+- [Expo EAS iOS app extensions](https://docs.expo.dev/build-reference/app-extensions/)
+- [Apple: Creating a widget extension](https://developer.apple.com/documentation/WidgetKit/Creating-a-Widget-Extension)
+- [Apple: Linking to app scenes from a widget](https://developer.apple.com/documentation/widgetkit/linking-to-specific-app-scenes-from-your-widget-or-live-activity)
+- [Apple: Widget interactivity](https://developer.apple.com/documentation/widgetkit/adding-interactivity-to-widgets-and-live-activities)
+- [Apple: Widget design guidance](https://developer.apple.com/design/human-interface-guidelines/widgets)
 - [Supabase React Native Auth](https://supabase.com/docs/guides/auth/quickstarts/react-native)
 - [Supabase Row Level Security](https://supabase.com/docs/guides/database/postgres/row-level-security)
 - [Supabase vector columns](https://supabase.com/docs/guides/ai/vector-columns)
@@ -1868,7 +2276,7 @@ Current implementation guidance to recheck at bootstrap and major upgrades:
 
 ## Final Recommendation
 
-Build Soft Index as a **capture router with a trustworthy notes product underneath it**.
+Build the product as a **capture router with a trustworthy notes product underneath it**.
 
 The portfolio story is strongest when the demo shows more than a model classification call: offline capture, idempotent sync, hybrid retrieval, strict structured output, transactional revisions, conflict handling, reversible mutations, personal routing rules, search, privacy boundaries, native and web clients, and a durable hosted workflow.
 

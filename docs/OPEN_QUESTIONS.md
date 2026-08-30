@@ -16,6 +16,6 @@ Deferred decisions with working defaults. Each proceeds on its default until its
 | OQ-10 | BYOK fallback-to-app-key default? | off (explicit user opt-in) | off; on; ask-per-incident | invalid-key incident UX feedback in beta |
 | OQ-11 | Web checklist drag-reorder in MVP? | ordinal field exists; manual reorder ships only if M0 design makes it cheap | ship; defer | M0 design sprint |
 | OQ-12 | Revision storage: snapshots forever? | full snapshots, no pruning | snapshots; patches; hybrid | storage metrics at 10k-revision scale |
-| OQ-13 | Name clearance for "Soft Index"? | provisional; no paid assets until cleared | keep; rename | trademark/store/domain screening before Milestone G |
+| OQ-13 | Name clearance for `Unfiled`? | selected creative direction; no paid assets until cleared | keep; rename | trademark/store/domain/handle/package screening before Milestone G |
 
 Resolved so far: none (planning stage). First scheduled review: Milestone 0 exit.

@@ -6,7 +6,7 @@
 
 ## Context
 
-Soft Index needs a stack and scope posture before design and bootstrap. The product's risk is trust and reliability, not rendering; choices should spend complexity on durability and validation, not platform breadth.
+Unfiled needs a stack and scope posture before design and bootstrap. The product's risk is trust and reliability, not rendering; choices should spend complexity on durability and validation, not platform breadth.
 
 ## Decisions
 
