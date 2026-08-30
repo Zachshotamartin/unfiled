@@ -1,6 +1,6 @@
 # Unfiled Product Documentation
 
-This directory is the planning and implementation-reference set for **Unfiled**. Milestone A is implemented; Milestones B through G remain roadmap work. Each document distinguishes shipped repository foundations, selected decisions, and open questions so the planning set does not imply that the whole product already exists.
+This directory is the planning and implementation-reference set for **Unfiled**. Milestones A and B are implemented, and the credential-free Gate 2 code gate is recorded green. Cloud-preview, physical-device, and usability evidence remains human-owned in `HUMAN_SETUP.md`; no document should imply that evidence has already been collected. Milestones C through G remain sequenced roadmap work.
 
 ## Reading order
 
@@ -14,22 +14,39 @@ This directory is the planning and implementation-reference set for **Unfiled**.
 8. [DESIGN_SYSTEM.md](./DESIGN_SYSTEM.md) — tokens, components, states, and accessibility rules. Initial skeleton; completed during Milestone 0.
 9. [OPEN_QUESTIONS.md](./OPEN_QUESTIONS.md) — deferred decisions with defaults, options, and decision triggers.
 10. [GLOSSARY.md](./GLOSSARY.md) — the product vocabulary used consistently across documents and code.
-11. [decisions/](./decisions/) — architecture decision records: [ADR-0001 foundational choices](./decisions/ADR-0001-foundational-technology-and-scope-choices.md), [ADR-0002 BYOK provider strategy](./decisions/ADR-0002-byok-provider-strategy.md), [ADR-0003 immutable native identifiers](./decisions/ADR-0003-native-identifiers.md).
+11. [decisions/](./decisions/) — architecture decision records: [ADR-0001 foundational choices](./decisions/ADR-0001-foundational-technology-and-scope-choices.md), [ADR-0002 BYOK provider strategy](./decisions/ADR-0002-byok-provider-strategy.md), [ADR-0003 immutable native identifiers](./decisions/ADR-0003-native-identifiers.md), and [ADR-0004 structured note canonical data](./decisions/ADR-0004-structured-note-canonical-data-and-stable-items.md).
+12. [HUMAN_SETUP.md](../HUMAN_SETUP.md) — account, cloud-preview, browser, canary-log, performance, and physical-device gates that cannot run credential-free in CI.
 
 ## Document status
 
 | Document                | Status                                                                       | Owned by milestone                  |
 | ----------------------- | ---------------------------------------------------------------------------- | ----------------------------------- |
-| BUILD_PLAN.md           | Current; Milestone A implemented, Milestones B–G planned                     | revised at each milestone gate      |
+| BUILD_PLAN.md           | Current; Milestones A and B complete; Gate 2 code gate green                 | revised at each milestone gate      |
 | PRODUCT_REQUIREMENTS.md | Complete for MVP scope                                                       | revised at each milestone gate      |
 | AI_ROUTING_SPEC.md      | Complete; weights and thresholds are initial values pending evaluation       | Milestone D                         |
 | DATA_MODEL.md           | Initial migrations landed; checked-in migrations are authoritative           | Milestone A and every schema change |
 | SECURITY_AND_PRIVACY.md | Complete for planning; checklist gates public beta                           | Milestone G / Gate 6                |
-| OPERATIONS_TEST_PLAN.md | Complete; CI commands finalized at bootstrap                                 | Milestone A                         |
+| OPERATIONS_TEST_PLAN.md | Current; Milestone B local HTTP gate recorded, cloud gates remain human      | every milestone                     |
 | BRAND_SYSTEM_UNFILED.md | Selected v1 creative direction; name clearance and vector production pending | Milestone 0                         |
 | DESIGN_SYSTEM.md        | Initial skeleton with token draft                                            | Milestone 0                         |
 | OPEN_QUESTIONS.md       | Live document                                                                | continuous                          |
 | GLOSSARY.md             | Live document                                                                | continuous                          |
+
+## Milestone B Gate 2 evidence
+
+The milestone owner recorded the credential-free aggregate Gate 2 code decision as green on 2026-08-30. Preview/browser/device evidence that requires cloud accounts or hardware remains listed in `HUMAN_SETUP.md` and is not claimed here.
+
+| Evidence                                                                 | Recorded result                   |
+| ------------------------------------------------------------------------ | --------------------------------- |
+| contracts lint, typecheck, 24 tests, coverage, and build                 | pass                              |
+| API client lint, typecheck, 9 tests, coverage, and build                 | pass                              |
+| web lint/typecheck and 60 tests; mobile lint/typecheck and 61 tests      | pass                              |
+| generated OpenAPI freshness and absence of the unimplemented `/captures` | pass                              |
+| fresh database reset and warning-level lint                              | pass; zero lint findings          |
+| complete pgTAP suite                                                     | pass; 15 files / 636 assertions   |
+| built-app/local-Supabase HTTP E2E                                        | pass twice consecutively          |
+| web responsive/auth smoke                                                | pass at desktop and 390 px mobile |
+| aggregate credential-free Gate 2 decision                                | **green — 2026-08-30**            |
 
 ## Rules for maintaining this set
 

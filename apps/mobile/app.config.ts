@@ -21,6 +21,9 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     userInterfaceStyle: "dark",
     ios: {
       bundleIdentifier: identifiers.bundleIdentifier,
+      config: {
+        usesNonExemptEncryption: false
+      },
       entitlements: {
         "com.apple.security.application-groups": [identifiers.appGroupIdentifier]
       },
@@ -44,6 +47,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     plugins: [
       "expo-router",
       "expo-sqlite",
+      ["expo-secure-store", { configureAndroidBackup: true, faceIDPermission: false }],
       ["expo-build-properties", { ios: { deploymentTarget: "17.0" } }],
       [
         "./plugins/withQuickCaptureWidget",

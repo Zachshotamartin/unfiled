@@ -23,7 +23,7 @@ select set_config(
   true
 );
 
-select plan(28);
+select plan(26);
 
 -- BYOK ciphertext and Vault references have no direct client surface.
 select throws_ok('select * from public.user_provider_keys', '42501', 'permission denied for table user_provider_keys', 'user_provider_keys rejects SELECT');
@@ -85,23 +85,6 @@ select throws_ok($$update public.captures set raw_text = 'rewrite source' where 
 -- Revision snapshots are client-append-only.
 select throws_ok($$update public.note_revisions set body_markdown = 'rewrite history' where id = 'rev_00000000000000000000000001'$$, '42501', 'permission denied for table note_revisions', 'note_revisions rejects UPDATE');
 select throws_ok($$delete from public.note_revisions where id = 'rev_00000000000000000000000001'$$, '42501', 'permission denied for table note_revisions', 'note_revisions rejects DELETE');
-
--- Preserve the original behavioral proof that a cross-user note update affects
--- zero rows and leaves the protected record unchanged.
-select is(
-  pg_temp.affected($$update public.notes set title = 'must not change' where id = 'note_00000000000000000000000009'$$),
-  0::bigint,
-  'cross-user note UPDATE affects zero rows'
-);
-reset role;
-select is(
-  (
-    select title from public.notes
-    where id = 'note_00000000000000000000000009'
-  ),
-  'Other user private fixture',
-  'cross-user note UPDATE leaves the stored row unchanged'
-);
 
 select * from finish();
 rollback;

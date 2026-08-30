@@ -9,6 +9,7 @@ export default defineConfig({
       include: [
         "config/**/*.ts",
         "plugins/quickCaptureWidgetConfig.ts",
+        "src/auth/{authApi,session,sessionLifecycle,sessionRepository}.ts",
         "src/features/capture/{captureSource,captureSubmission,nativeIntent}.ts"
       ],
       provider: "v8",

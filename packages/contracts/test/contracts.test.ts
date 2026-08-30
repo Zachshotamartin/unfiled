@@ -192,14 +192,9 @@ describe("versioned contracts", () => {
     }
   });
 
-  it("derives a complete capture OpenAPI contract and required idempotency header", () => {
-    const post = openApiDocument.paths["/captures"].post;
-    const responseSchema = openApiDocument.components.schemas.CaptureCreateResponse;
-
-    expect(post.parameters).toContainEqual(
-      expect.objectContaining({ name: "Idempotency-Key", in: "header", required: true })
-    );
-    expect(responseSchema).toHaveProperty("properties.capture.properties.rawContent");
-    expect(responseSchema).toHaveProperty("properties.capture.properties.source.enum");
+  it("keeps future capture schemas shared without advertising an absent HTTP route", () => {
+    expect(openApiDocument.paths).not.toHaveProperty("/captures");
+    expect(openApiDocument.components.schemas).not.toHaveProperty("CaptureCreateRequest");
+    expect(openApiDocument.components.schemas).not.toHaveProperty("CaptureCreateResponse");
   });
 });

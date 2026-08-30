@@ -17,20 +17,22 @@ Rules: preview never points at production; the mock model adapter is determinist
 1. `pnpm install` (pinned via `packageManager`), `supabase start`, `supabase db reset` (applies all migrations + seed).
 2. `pnpm dev` runs web; `pnpm dev:mobile` runs Expo dev client against local API.
 3. `pnpm test` runs all package unit tests; `pnpm test:db` runs SQL/RLS tests; `pnpm eval:routing` runs the deterministic routing cases against the mock adapter.
+4. After `pnpm build` and a clean `supabase db reset`, `bash .github/workflows/scripts/milestone-b-http-e2e.sh` starts the built Next.js app and exercises the real HTTP, auth, repository, RPC, and database boundary with synthetic seed data.
 
 ## 3. CI pipeline (GitHub Actions, per PR)
 
-| Stage                     | Contents                                                                                                   | Blocking       |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------- |
-| 1 static                  | format check, ESLint, strict `tsc` per package, package-boundary check (`domain` imports nothing platform) | yes            |
-| 2 unit                    | Vitest across packages, coverage gate ≥ 80% lines/branches on `domain`, `ai-routing`, `sync`, `contracts`  | yes            |
-| 3 database                | migrations apply from zero; SQL tests: RLS allow/deny, grants, functions, constraints                      | yes            |
-| 4 contract                | shared API fixtures validated by web + mobile clients; error-code stability; OpenAPI generated and diffed  | yes            |
-| 5 routing (deterministic) | full corpus against mock adapter: preservation, validation, banding, injection cases                       | yes            |
-| 6 build                   | `next build`; Expo `npx expo export` type/bundle check                                                     | yes            |
-| 7 e2e (web)               | Playwright critical path against preview deploy + branch DB                                                | yes            |
-| 8 security                | gitleaks secret scan, `pnpm audit` (fail on high), canary-key log audit on E2E output                      | yes            |
-| nightly                   | full stochastic eval (n=3) on main; Maestro device suite on EAS build; Lighthouse budgets                  | report + alert |
+| Stage                     | Contents                                                                                                                                        | Blocking |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| 1 static                  | format check, ESLint, strict `tsc` per package, package-boundary check (`domain` imports nothing platform)                                      | yes      |
+| 2 unit                    | Vitest across packages; ≥80% lines/branches on core packages; scoped mobile auth/capture gate ≥90% statements/lines/functions and ≥85% branches | yes      |
+| 3 database                | migrations apply from zero; SQL tests: RLS allow/deny, grants, functions, constraints                                                           | yes      |
+| 4 contract                | shared API fixtures validated by web + mobile clients; error-code stability; OpenAPI generated and diffed                                       | yes      |
+| 5 routing (deterministic) | full corpus against mock adapter: preservation, validation, banding, injection cases                                                            | yes      |
+| 6 build                   | `next build`; Expo `npx expo export` type/bundle check                                                                                          | yes      |
+| 7 local HTTP E2E          | built Next.js server + local Supabase: auth, create/replay/edit/stale/undo, create undo/redo, relations, Review, search                         | yes      |
+| 8 automated security      | gitleaks committed-content scan and `pnpm audit --prod --audit-level high`                                                                      | yes      |
+
+Preview Playwright, cloud canary-log inspection, performance smoke, stochastic real-provider evaluation, Maestro device coverage, and Lighthouse budgets are not represented as automated CI. They require cloud accounts, preview credentials, provider decisions, or physical devices and remain explicit gates in [HUMAN_SETUP.md](../HUMAN_SETUP.md). A release may not substitute the local HTTP gate for those later milestone gates.
 
 Production deploy: merge to main → staging checks → migration approval gate (manual) → promote. Mobile: EAS preview channel per release branch; store builds only from tagged releases.
 
@@ -52,8 +54,11 @@ Production deploy: merge to main → staging checks → migration approval gate 
 4. `create_capture_with_job` atomicity + idempotent replay.
 5. `apply_mutation`: stale revision rejected; success writes revision+mutation+links+event in one transaction; replay returns original.
 6. `undo_mutation`: inverse restores content hash; incompatible-later-edit path.
-7. Cascade tests: note delete removes chunks/embeddings/links/blocks; account delete leaves zero rows.
-8. Export scope excludes other users; deletion reconciliation finds seeded orphans.
+7. `purge_expired_deleted_notes`: service-only grants, dry-run default, exact 30-day cutoff,
+   owner scope, bounded batches, cross-owner fail-closed behavior, cascades, telemetry nulling,
+   idempotency-snapshot removal, and purge tombstones.
+8. Cascade tests: note delete removes chunks/embeddings/links/blocks; account delete leaves zero rows.
+9. Export scope excludes other users; deletion reconciliation finds seeded orphans.
 
 ## 6. Test inventory — routing evaluation
 
@@ -61,7 +66,18 @@ Per [AI_ROUTING_SPEC.md](./AI_ROUTING_SPEC.md) §12: deterministic corpus in CI 
 
 ## 7. Test inventory — end-to-end
 
-Playwright (web) and Maestro (device) implement PRODUCT_REQUIREMENTS flows. The 13 critical flows from BUILD_PLAN §18.5 plus:
+Milestone B has one deterministic process-boundary suite at `.github/workflows/scripts/milestone-b-http-e2e.sh`. It runs the built web server against a freshly reset local Supabase project and verifies:
+
+- bearer-authenticated session reads;
+- manual note creation and same-key replay;
+- update, stale-revision rejection, and update undo;
+- creation undo as a soft-delete revision and undo-of-undo restore;
+- tag create/update/association, note link create/list/delete, search, and read-only Review pagination;
+- sign-out.
+
+This is HTTP E2E, not browser E2E: it crosses the built application, route handler, authentication provider, production repository adapter, PostgREST/RPC, and PostgreSQL boundaries, but it does not claim keyboard, focus, navigation, or rendering coverage. The current production repository has no truthful in-memory server mode, and `@playwright/test` is not an installed project dependency, so a synthetic Playwright lane was deliberately not advertised.
+
+Preview Playwright (web) and Maestro (device) remain required for the full PRODUCT_REQUIREMENTS flows. The 13 critical flows from BUILD_PLAN §18.5 plus:
 
 - E2E-14: set BYOK key (test key against provider sandbox/mock), route a capture, verify decision telemetry shows BYOK provider; delete key; verify next capture uses app default.
 - E2E-15: set expansion style `off`; verify no generated block over 20 captures.
@@ -72,11 +88,15 @@ Device matrix (Maestro, nightly): smallest supported iPhone + mid Android, keybo
 
 ## 8. Performance verification
 
-NFR targets from PRODUCT_REQUIREMENTS §3 measured by: Playwright trace for INP/LCP budgets in CI (soft-fail preview, hard-fail release); k6 (or equivalent) smoke on capture endpoint at 10 rps sustained verifying p95 and zero loss; receipt latency histogram from telemetry in beta. Cold starts tracked separately; slow successes are never excluded from p95.
+NFR targets from PRODUCT_REQUIREMENTS §3 will be measured by Playwright traces for INP/LCP, a k6 (or equivalent) capture-endpoint smoke, and beta receipt telemetry. Those checks are not implemented by the Milestone B CI because the capture endpoint begins in Milestone C and cloud preview is HUMAN_SETUP. Until their later milestone owners automate them, record the preview measurements manually; cold starts remain separate and slow successes are never excluded from p95.
 
 ## 9. Release checklists
 
-**Web/API release:** CI green including E2E; migration gate approved; eval report current for active `(provider, tier)` pairs; error budget not exhausted; changelog updated; rollback = previous Vercel deployment + no destructive migration in window.
+**Milestone B Gate 2:** recorded green for the credential-free code gate on 2026-08-30. Scoped package checks, production builds, OpenAPI freshness, a fresh database reset, warning-level database lint with zero findings, 636 pgTAP assertions, and repeated built-app HTTP E2E runs passed. Create-note undo/redo and stale-write behavior passed through the production repository path. Mobile auth, refresh recovery, and the Keychain/Keystore migration are included in the scoped coverage gate (97.25% statements, 92.35% branches, 98.52% functions, 97.82% lines). The cloud-preview browser matrix in HUMAN_SETUP remains required before a preview or public release and is not claimed as completed by this local gate.
+
+The production dependency audit has zero high or critical advisories. One reviewed moderate advisory remains in the Expo config-plugin build chain (`xcode` → `uuid@7.0.3`) for caller-supplied buffers in UUID v3/v5/v6. Unfiled does not call those APIs, and this package is used for native project generation rather than the shipped application runtime. Track the Expo dependency for an upstream upgrade; do not force an incompatible major override into the release.
+
+**Web/API release:** CI green including the applicable local and preview E2E lanes; migration gate approved; eval report current for active `(provider, tier)` pairs; cloud canary-log and performance checks recorded; error budget not exhausted; changelog updated; rollback = previous Vercel deployment + no destructive migration in window.
 
 **Mobile release:** EAS build from tag; runtime env pinned; store metadata/privacy manifests current; deep links verified; upgrade test from previous build (SQLite migrations); staged rollout with crash-rate gate.
 
@@ -99,6 +119,8 @@ Supabase scheduled backups (verify plan tier ≥ daily + PITR if available). Qua
 | provider error rate                              | > 5%                 | circuit breaker stuck open > 15 min   |
 | search index lag                                 | > 1 min              | > 10 min                              |
 | deletion reconciliation findings                 | any                  | —                                     |
+| note-retention cron failure                      | any                  | two consecutive daily failures        |
+| note-retention batch limit reached               | any                  | three consecutive daily runs          |
 | per-user model call anomaly (BYOK protection)    | 3× personal baseline | 10×                                   |
 
 Dashboards: capture funnel (received→organized/inbox/review/failed), band distribution over time, correction/undo trend, model cost per active user, sync outbox age distribution. All content-free.

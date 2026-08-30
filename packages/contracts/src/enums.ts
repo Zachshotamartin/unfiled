@@ -50,3 +50,31 @@ export const CaptureKindSchema = z.enum([
   "freeform"
 ]);
 export type CaptureKind = z.infer<typeof CaptureKindSchema>;
+
+export const RevisionSourceSchema = z.enum([
+  "manual",
+  "organization",
+  "undo",
+  "import",
+  "interactive"
+]);
+export type RevisionSource = z.infer<typeof RevisionSourceSchema>;
+
+export const ArchiveFilterSchema = z.enum(["exclude", "include", "only"]);
+export type ArchiveFilter = z.infer<typeof ArchiveFilterSchema>;
+
+export const DeletedFilterSchema = z.enum(["exclude", "only"]);
+export type DeletedFilter = z.infer<typeof DeletedFilterSchema>;
+
+export const ReviewTypeSchema = z.enum([
+  "low_confidence",
+  "revision_conflict",
+  "failed_job",
+  "duplicate_suggestion",
+  "pending_expansion",
+  "structure_conflict"
+]);
+export type ReviewType = z.infer<typeof ReviewTypeSchema>;
+
+export const ReviewStateSchema = z.enum(["open", "resolved", "dismissed"]);
+export type ReviewState = z.infer<typeof ReviewStateSchema>;

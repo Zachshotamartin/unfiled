@@ -1,27 +1,51 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import type { ReactElement } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 
+import { useSession } from "../../auth/AuthProvider";
 import { BrandMark } from "../../components/BrandMark";
 import { Rule } from "../../components/Rule";
 import { Screen } from "../../components/Screen";
+import { noteTypeLabel, relativeUpdatedAt } from "../../features/notes/mobileNotesApi";
+import { useNoteList } from "../../features/notes/useNotesApi";
 import { nativeTheme } from "../../theme/nativeTheme";
 
-const receipts = [
-  { destination: "Shopping", outcome: "Added bananas", time: "10:42", type: "LIST" },
-  { destination: "Push Workout", outcome: "Updated today's workout", time: "08:16", type: "LOG" },
-  {
-    destination: "Mindset / Principles",
-    outcome: "Added a principle",
-    time: "Yesterday",
-    type: "NOTE"
-  }
-] as const;
+const todayLabel = new Intl.DateTimeFormat("en", {
+  day: "numeric",
+  month: "long",
+  weekday: "long"
+}).format(new Date());
 
 export default function TodayScreen(): ReactElement {
+  const notes = useNoteList();
+  const { signOut } = useSession();
+  const recent = notes.value.slice(0, 5);
   return (
-    <Screen eyebrow="Sunday · August 30" rightAccessory={<BrandMark size={30} />} title="Today">
+    <Screen
+      eyebrow={todayLabel}
+      rightAccessory={
+        <View style={styles.headerActions}>
+          <BrandMark size={27} />
+          <Pressable
+            accessibilityLabel="Sign out"
+            accessibilityRole="button"
+            onPress={() => {
+              void signOut().catch(() => {
+                Alert.alert(
+                  "Signed out on this device",
+                  "Unfiled could not revoke other server sessions. Sign in and try again when you are online."
+                );
+              });
+            }}
+            style={styles.signOut}
+          >
+            <Ionicons color={nativeTheme.color.textSecondary} name="log-out-outline" size={21} />
+          </Pressable>
+        </View>
+      }
+      title="Today"
+    >
       <Pressable
         accessibilityHint="Opens a blank capture"
         accessibilityRole="button"
@@ -33,24 +57,38 @@ export default function TodayScreen(): ReactElement {
       </Pressable>
 
       <View style={styles.sectionHeader}>
-        <Text style={styles.sectionTitle}>Latest changes</Text>
-        <Text style={styles.sectionCount}>{receipts.length} RECEIPTS</Text>
+        <Text style={styles.sectionTitle}>Recent notes</Text>
+        <Text style={styles.sectionCount}>{recent.length} UPDATED</Text>
       </View>
       <Rule />
-      {receipts.map((receipt) => (
-        <View key={`${receipt.destination}-${receipt.time}`}>
+      {notes.error === null ? null : <Text style={styles.message}>{notes.error}</Text>}
+      {!notes.loading && recent.length === 0 ? (
+        <View style={styles.empty}>
+          <Text style={styles.emptyTitle}>A quiet start.</Text>
+          <Text style={styles.emptyBody}>
+            Capture a thought or make a note. Both begin right here.
+          </Text>
+        </View>
+      ) : null}
+      {recent.map((note) => (
+        <View key={note.id}>
           <Pressable
             accessibilityRole="button"
-            style={({ pressed }) => [styles.receipt, pressed && styles.rowPressed]}
+            onPress={() =>
+              router.push({ pathname: "/notes/[noteId]", params: { noteId: note.id } })
+            }
+            style={({ pressed }) => [styles.noteRow, pressed && styles.rowPressed]}
           >
             <View style={styles.slip} />
-            <View style={styles.receiptBody}>
-              <Text style={styles.outcome}>{receipt.outcome}</Text>
-              <Text style={styles.destination}>{receipt.destination}</Text>
+            <View style={styles.noteBody}>
+              <Text style={styles.noteTitle}>{note.title}</Text>
+              <Text style={styles.noteDetail}>
+                {noteTypeLabel(note.type)} · {note.spaceId === null ? "Unfiled" : "Filed"}
+              </Text>
             </View>
-            <View style={styles.receiptMeta}>
-              <Text style={styles.type}>{receipt.type}</Text>
-              <Text style={styles.time}>{receipt.time}</Text>
+            <View style={styles.noteMeta}>
+              <Text style={styles.revision}>R{note.currentRevision}</Text>
+              <Text style={styles.time}>{relativeUpdatedAt(note.updatedAt)}</Text>
             </View>
           </Pressable>
           <Rule />
@@ -73,21 +111,38 @@ const styles = StyleSheet.create({
   },
   capturePromptPressed: { opacity: 0.78, transform: [{ scale: 0.99 }] },
   captureText: { color: nativeTheme.color.accentContrast, fontSize: 17, fontWeight: "600" },
-  destination: {
+  empty: { paddingTop: 54 },
+  emptyBody: {
+    color: nativeTheme.color.textSecondary,
+    fontSize: 15,
+    lineHeight: 23,
+    marginTop: 8,
+    maxWidth: 290
+  },
+  emptyTitle: { color: nativeTheme.color.textPrimary, fontSize: 20, fontWeight: "600" },
+  headerActions: { alignItems: "center", flexDirection: "row", gap: 10 },
+  message: { color: nativeTheme.color.danger, fontSize: 13, paddingTop: 16 },
+  noteBody: { flex: 1, paddingRight: 12 },
+  noteDetail: {
     color: nativeTheme.color.textSecondary,
     fontSize: 14,
     lineHeight: 20,
     marginTop: 3
   },
-  outcome: {
+  noteMeta: { alignItems: "flex-end", gap: 5 },
+  noteRow: { alignItems: "flex-start", flexDirection: "row", minHeight: 88, paddingVertical: 18 },
+  noteTitle: {
     color: nativeTheme.color.textPrimary,
     fontSize: 16,
     fontWeight: "600",
     lineHeight: 22
   },
-  receipt: { alignItems: "flex-start", flexDirection: "row", minHeight: 88, paddingVertical: 18 },
-  receiptBody: { flex: 1, paddingRight: 12 },
-  receiptMeta: { alignItems: "flex-end", gap: 5 },
+  revision: {
+    color: nativeTheme.color.accent,
+    fontFamily: nativeTheme.fontFamily.mono,
+    fontSize: 10,
+    fontWeight: "700"
+  },
   rowPressed: { opacity: 0.62 },
   sectionCount: {
     color: nativeTheme.color.textSecondary,
@@ -102,6 +157,7 @@ const styles = StyleSheet.create({
     marginBottom: 13
   },
   sectionTitle: { color: nativeTheme.color.textPrimary, fontSize: 17, fontWeight: "600" },
+  signOut: { alignItems: "center", height: 44, justifyContent: "center", width: 40 },
   slip: {
     backgroundColor: nativeTheme.color.accent,
     height: 21,
@@ -114,12 +170,5 @@ const styles = StyleSheet.create({
     color: nativeTheme.color.textSecondary,
     fontFamily: nativeTheme.fontFamily.mono,
     fontSize: 11
-  },
-  type: {
-    color: nativeTheme.color.accent,
-    fontFamily: nativeTheme.fontFamily.mono,
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 0.6
   }
 });

@@ -3,11 +3,14 @@ create extension if not exists pgtap with schema extensions;
 begin;
 set local search_path = public, extensions;
 
-select plan(20);
+select plan(24);
 
 select has_table('public', 'profiles', 'profiles exists after applying migrations from zero');
 select has_table('public', 'captures', 'captures exists after applying migrations from zero');
 select has_table('public', 'user_events', 'sync cursor event table exists');
+select has_table('public', 'api_idempotency_records', 'server idempotency ledger exists');
+select has_table('public', 'organization_mutation_attempts', 'delayed organization attempt state exists');
+select has_table('public', 'auth_otp_quota_events', 'durable hashed OTP quota state exists');
 select has_type('public', 'capture_source', 'capture source enum exists');
 select ok(
   exists (
@@ -49,17 +52,19 @@ select is(
           'captures', 'organization_jobs', 'organization_decisions',
           'note_mutations', 'generated_blocks', 'capture_note_links',
           'routing_rules', 'review_items', 'note_chunks', 'tags', 'note_tags',
-          'note_links', 'feedback_events', 'user_events'
+          'note_links', 'feedback_events', 'user_events',
+          'api_idempotency_records', 'organization_mutation_attempts',
+          'auth_otp_quota_events'
         ]
       )
       and relation.relrowsecurity
   ),
-  19::bigint,
-  'RLS is enabled on every user-owned table'
+  22::bigint,
+  'RLS is enabled on every exposed or service-owned table'
 );
 select is(
   (select count(*) from pg_policies where schemaname = 'public'),
-  50::bigint,
+  22::bigint,
   'the complete baseline policy set is installed'
 );
 select ok(
@@ -97,6 +102,10 @@ select ok(
     'EXECUTE'
   ),
   'authenticated users may execute the reviewed capture function'
+);
+select ok(
+  to_regprocedure('public.apply_user_note_mutation(text,integer,jsonb,text)') is not null,
+  'reviewed expected-revision note mutation function exists'
 );
 
 insert into public.notes (

@@ -1,8 +1,16 @@
 import { z } from "zod";
 
+import { NoteTypeSchema, PrivacyModeSchema } from "./enums.js";
 import { entityIdSchema } from "./ids.js";
+import { ExpectedRevisionSchema, IdempotencyKeySchema } from "./idempotency.js";
+import { NoteLinkValueSchema, NoteStructuredDataSchema } from "./structured.js";
 
-const boundedText = z.string().min(1).max(500);
+const boundedText = z
+  .string()
+  .trim()
+  .min(1)
+  .max(500)
+  .refine((value) => !/[\r\n]/u.test(value), "Item text must be one line");
 
 export const ModelOperationSchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("append_raw"), content: z.string().min(1).max(10_000) }),
@@ -33,22 +41,59 @@ export const ModelOperationSchema = z.discriminatedUnion("type", [
     linkType: z.enum(["reference", "related"])
   })
 ]);
-
 export type ModelOperation = z.infer<typeof ModelOperationSchema>;
 
+export const ToggleItemCheckedOperationSchema = z.strictObject({
+  type: z.literal("toggle_item_checked"),
+  itemId: entityIdSchema("itm"),
+  checked: z.boolean()
+});
+
+export const RestoreSnapshotOperationSchema = z.strictObject({
+  type: z.literal("restore_snapshot"),
+  spaceId: entityIdSchema("spc").nullable(),
+  noteType: NoteTypeSchema,
+  title: z.string().min(1).max(200),
+  bodyMarkdown: z.string().max(200_000),
+  structuredData: NoteStructuredDataSchema,
+  privacy: PrivacyModeSchema,
+  isOpen: z.boolean(),
+  pinnedAt: z.iso.datetime({ offset: true }).nullable(),
+  archivedAt: z.iso.datetime({ offset: true }).nullable(),
+  deletedAt: z.iso.datetime({ offset: true }).nullable(),
+  tagIds: z.array(entityIdSchema("tag")).max(100),
+  links: z.array(NoteLinkValueSchema).max(100)
+});
+
 export const UserOperationSchema = z.discriminatedUnion("type", [
+  z.strictObject({ type: z.literal("set_title"), title: z.string().trim().min(1).max(200) }),
   z.strictObject({
-    type: z.literal("toggle_item_checked"),
-    itemId: entityIdSchema("itm"),
-    checked: z.boolean()
+    type: z.literal("replace_body_markdown"),
+    bodyMarkdown: z.string().max(200_000)
   }),
+  z.strictObject({ type: z.literal("set_privacy"), privacy: PrivacyModeSchema }),
+  z.strictObject({
+    type: z.literal("move_to_space"),
+    spaceId: entityIdSchema("spc").nullable()
+  }),
+  z.strictObject({
+    type: z.literal("set_archived"),
+    archivedAt: z.iso.datetime({ offset: true }).nullable()
+  }),
+  z.strictObject({
+    type: z.literal("set_deleted"),
+    deletedAt: z.iso.datetime({ offset: true }).nullable()
+  }),
+  z.strictObject({ type: z.literal("set_tags"), tagIds: z.array(entityIdSchema("tag")).max(100) }),
+  z.strictObject({
+    type: z.literal("set_note_links"),
+    links: z.array(NoteLinkValueSchema).max(100)
+  }),
+  ToggleItemCheckedOperationSchema,
   z.strictObject({
     type: z.literal("update_log_field"),
     entryId: entityIdSchema("ent"),
-    fieldPath: z
-      .array(z.union([z.string(), z.number().int().nonnegative()]))
-      .min(1)
-      .max(8),
+    fieldPath: z.array(z.string().trim().min(1).max(80)).min(1).max(8),
     value: z.union([z.string().max(500), z.number(), z.null()])
   }),
   z.strictObject({
@@ -56,16 +101,30 @@ export const UserOperationSchema = z.discriminatedUnion("type", [
     itemId: entityIdSchema("itm"),
     text: boundedText
   }),
-  z.strictObject({ type: z.literal("remove_item"), itemId: entityIdSchema("itm") })
+  z.strictObject({ type: z.literal("remove_item"), itemId: entityIdSchema("itm") }),
+  RestoreSnapshotOperationSchema
 ]);
-
 export type UserOperation = z.infer<typeof UserOperationSchema>;
+
 export const TypedOperationSchema = z.union([ModelOperationSchema, UserOperationSchema]);
 export type TypedOperation = z.infer<typeof TypedOperationSchema>;
 
-export const OperationsRequestSchema = z.strictObject({
-  expectedRevision: z.number().int().positive(),
-  idempotencyKey: z.string().min(1).max(80),
+export const InteractiveOperationSchema = ToggleItemCheckedOperationSchema;
+export type InteractiveOperation = z.infer<typeof InteractiveOperationSchema>;
+
+export const InteractiveOperationsRequestSchema = z.strictObject({
+  expectedRevision: ExpectedRevisionSchema,
+  idempotencyKey: IdempotencyKeySchema,
+  operations: z.array(InteractiveOperationSchema).min(1).max(20)
+});
+export type InteractiveOperationsRequest = z.infer<typeof InteractiveOperationsRequestSchema>;
+
+export const UserMutationRequestSchema = z.strictObject({
+  expectedRevision: ExpectedRevisionSchema,
+  idempotencyKey: IdempotencyKeySchema,
   operations: z.array(UserOperationSchema).min(1).max(20)
 });
-export type OperationsRequest = z.infer<typeof OperationsRequestSchema>;
+export type UserMutationRequest = z.infer<typeof UserMutationRequestSchema>;
+
+export const OperationsRequestSchema = InteractiveOperationsRequestSchema;
+export type OperationsRequest = InteractiveOperationsRequest;

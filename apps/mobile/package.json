@@ -18,6 +18,7 @@
   "dependencies": {
     "@expo/config-plugins": "57.0.9",
     "@expo/vector-icons": "15.0.2",
+    "@unfiled/api-client": "workspace:*",
     "@unfiled/contracts": "workspace:*",
     "@unfiled/design-tokens": "workspace:*",
     "@unfiled/quick-capture-widget": "file:./modules/quick-capture-widget",
@@ -26,6 +27,7 @@
     "expo-dev-client": "57.0.16",
     "expo-haptics": "57.0.2",
     "expo-router": "57.0.17",
+    "expo-secure-store": "~57.0.2",
     "expo-splash-screen": "57.0.8",
     "expo-sqlite": "57.0.2",
     "expo-status-bar": "57.0.1",

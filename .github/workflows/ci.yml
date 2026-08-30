@@ -89,6 +89,9 @@ jobs:
       - name: Run database tests
         run: supabase test db
 
+      - name: Run deterministic local HTTP E2E
+        run: bash .github/workflows/scripts/milestone-b-http-e2e.sh
+
       - name: Stop local Supabase
         if: ${{ always() && steps.supabase-cli.outcome == 'success' }}
         run: supabase stop --no-backup

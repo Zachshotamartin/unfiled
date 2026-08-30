@@ -2,7 +2,7 @@
 
 Product and repository name: **Unfiled**. Trademark, App Store, package-name, social-handle, and domain review remain required before public launch.
 
-Implementation status: **Milestone A is implemented** with the monorepo, shared product contracts, local Supabase migrations, deterministic fake organization model, web and mobile shells, WidgetKit feasibility target, design tokens, and CI baseline. Milestones B through G remain the implementation roadmap. Apple signing, physical-device testing, and the Milestone 0 usability evidence remain human gates and are not implied by the repository bootstrap.
+Implementation status: **Milestones A and B are implemented; the credential-free Gate 2 code gate is green.** The repository now includes the monorepo, shared product contracts, local Supabase migrations, deterministic fake organization model, web and mobile shells, WidgetKit feasibility target, design tokens, CI baseline, authentication, and the complete manual-notes vertical slice. Milestones C through G remain the implementation roadmap. Apple signing, physical-device testing, cloud-preview checks, and Milestone 0 usability evidence remain human gates and are not implied by the local code gate.
 
 This plan is the spine of a full documentation set; see [docs/README.md](./README.md) for reading order. Companion documents:
 

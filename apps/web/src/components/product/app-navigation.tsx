@@ -1,137 +1,116 @@
+"use client";
+
 import {
+  ArchiveTrayIcon,
   ArrowsClockwiseIcon,
+  GearSixIcon,
   MagnifyingGlassIcon,
   NoteIcon,
+  SignOutIcon,
   SquaresFourIcon,
   TrayIcon
-} from "@phosphor-icons/react/ssr";
+} from "@phosphor-icons/react";
 import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { BrandLogo } from "@/components/brand-logo";
 
-interface NavItemProps {
-  active?: boolean;
+const items: readonly Readonly<{
+  exact?: boolean;
+  href: string;
   icon: ReactNode;
   label: string;
+}>[] = [
+  { exact: true, href: "/app", icon: <TrayIcon size={21} />, label: "Today" },
+  { href: "/app/notes", icon: <NoteIcon size={21} />, label: "Notes" },
+  { href: "/app/spaces", icon: <SquaresFourIcon size={21} />, label: "Spaces" },
+  { href: "/app/review", icon: <ArrowsClockwiseIcon size={21} />, label: "Review" },
+  { href: "/app/search", icon: <MagnifyingGlassIcon size={21} />, label: "Search" }
+];
+
+function isActive(pathname: string, href: string, exact = false): boolean {
+  return exact ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
 }
 
-function DisabledNavItem({ active = false, icon, label }: NavItemProps) {
-  const content = (
-    <>
-      {active ? (
-        <span
-          className="absolute top-2 bottom-2 -left-3 w-1 bg-action xl:-left-4"
-          aria-hidden="true"
-        />
-      ) : null}
+function DesktopItem({ exact = false, href, icon, label }: (typeof items)[number]) {
+  const pathname = usePathname();
+  const active = isActive(pathname, href, exact);
+  return (
+    <Link
+      href={href}
+      aria-current={active ? "page" : undefined}
+      className={`app-nav-item ${active ? "app-nav-item-active" : ""}`}
+    >
+      {active ? <span className="app-nav-marker" aria-hidden="true" /> : null}
       <span className="shrink-0" aria-hidden="true">
         {icon}
       </span>
       <span className="hidden xl:inline">{label}</span>
       <span className="sr-only xl:hidden">{label}</span>
-    </>
-  );
-
-  if (active) {
-    return (
-      <Link
-        href="/app"
-        aria-current="page"
-        className="relative flex min-h-12 w-full items-center gap-3 rounded-control bg-panel-raised px-3 text-left text-sm text-content transition-colors xl:px-4"
-      >
-        {content}
-      </Link>
-    );
-  }
-
-  return (
-    <button
-      type="button"
-      disabled
-      className="relative flex min-h-12 w-full items-center gap-3 rounded-control px-3 text-left text-sm text-muted-content transition-colors disabled:cursor-not-allowed xl:px-4"
-    >
-      {content}
-    </button>
+    </Link>
   );
 }
 
+async function signOut(router: ReturnType<typeof useRouter>): Promise<void> {
+  await fetch("/api/v1/auth/sign-out", { method: "POST" }).catch(() => undefined);
+  router.replace("/auth");
+  router.refresh();
+}
+
 export function DesktopAppNavigation() {
+  const router = useRouter();
   return (
-    <aside className="sticky top-0 hidden h-[100dvh] flex-col border-r border-outline bg-page px-3 py-5 md:flex xl:px-4">
+    <aside className="desktop-nav">
       <div className="hidden xl:block">
-        <BrandLogo />
+        <BrandLogo href="/app" />
       </div>
       <div className="mx-auto xl:hidden">
-        <BrandLogo compact />
+        <BrandLogo compact href="/app" />
       </div>
-      <nav aria-label="App navigation" className="mt-14 grid gap-2">
-        <DisabledNavItem active label="Today" icon={<TrayIcon size={21} weight="regular" />} />
-        <DisabledNavItem label="Notes" icon={<NoteIcon size={21} weight="regular" />} />
-        <DisabledNavItem label="Spaces" icon={<SquaresFourIcon size={21} weight="regular" />} />
-        <DisabledNavItem label="Review" icon={<ArrowsClockwiseIcon size={21} weight="regular" />} />
-        <DisabledNavItem label="Search" icon={<MagnifyingGlassIcon size={21} weight="regular" />} />
+      <nav aria-label="App navigation" className="mt-12 grid gap-1">
+        {items.map((item) => (
+          <DesktopItem key={item.href} {...item} />
+        ))}
       </nav>
-      <Link
-        href="/"
-        className="mt-auto flex min-h-12 items-center gap-3 rounded-control border border-outline px-3 text-sm text-muted-content hover:text-content xl:px-4"
+      <nav
+        aria-label="Library controls"
+        className="mt-auto grid gap-1 border-t border-outline pt-4"
       >
-        <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-panel-raised font-semibold text-content">
-          Z
-        </span>
-        <span className="hidden xl:inline">Zach</span>
-        <span className="sr-only xl:hidden">Back to Unfiled home</span>
-      </Link>
+        <DesktopItem href="/app/archive" label="Archive" icon={<ArchiveTrayIcon size={21} />} />
+        <DesktopItem href="/app/settings" label="Settings" icon={<GearSixIcon size={21} />} />
+        <button
+          type="button"
+          onClick={() => void signOut(router)}
+          className="app-nav-item text-muted-content hover:text-content"
+        >
+          <SignOutIcon size={21} aria-hidden="true" />
+          <span className="hidden xl:inline">Sign out</span>
+          <span className="sr-only xl:hidden">Sign out of Unfiled</span>
+        </button>
+      </nav>
     </aside>
   );
 }
 
 export function MobileAppNavigation() {
+  const pathname = usePathname();
   return (
-    <nav
-      aria-label="Mobile app navigation"
-      className="fixed right-0 bottom-0 left-0 z-20 grid grid-cols-5 border-t border-outline bg-page px-1 pb-[env(safe-area-inset-bottom)] md:hidden"
-    >
-      <Link
-        href="/app"
-        aria-current="page"
-        className="flex min-h-16 flex-col items-center justify-center gap-1 text-[11px] text-content"
-      >
-        <TrayIcon size={20} weight="bold" aria-hidden="true" />
-        Today
-      </Link>
-      <button
-        type="button"
-        disabled
-        className="flex min-h-16 flex-col items-center justify-center gap-1 text-[11px] text-muted-content"
-      >
-        <NoteIcon size={20} aria-hidden="true" />
-        Notes
-      </button>
-      <button
-        type="button"
-        disabled
-        className="flex min-h-16 flex-col items-center justify-center gap-1 text-[11px] text-muted-content"
-      >
-        <SquaresFourIcon size={20} aria-hidden="true" />
-        Spaces
-      </button>
-      <button
-        type="button"
-        disabled
-        className="flex min-h-16 flex-col items-center justify-center gap-1 text-[11px] text-muted-content"
-      >
-        <ArrowsClockwiseIcon size={20} aria-hidden="true" />
-        Review
-      </button>
-      <button
-        type="button"
-        disabled
-        className="flex min-h-16 flex-col items-center justify-center gap-1 text-[11px] text-muted-content"
-      >
-        <MagnifyingGlassIcon size={20} aria-hidden="true" />
-        Search
-      </button>
+    <nav aria-label="Mobile app navigation" className="mobile-nav">
+      {items.map((item) => {
+        const active = isActive(pathname, item.href, item.exact);
+        return (
+          <Link
+            key={item.href}
+            href={item.href}
+            aria-current={active ? "page" : undefined}
+            className={`mobile-nav-item ${active ? "text-content" : "text-muted-content"}`}
+          >
+            <span aria-hidden="true">{item.icon}</span>
+            {item.label}
+          </Link>
+        );
+      })}
     </nav>
   );
 }

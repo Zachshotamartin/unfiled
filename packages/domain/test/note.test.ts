@@ -43,7 +43,18 @@ describe("note aggregate", () => {
       ...baseNote,
       spaceId: "spc_01J6M9Q7G4BMKB33GSG3NJ6D1Y",
       bodyMarkdown: "- [ ] milk",
-      structuredData: { sections: [{ items: ["milk"] }] }
+      structuredData: {
+        schemaVersion: 1,
+        items: [
+          {
+            id: "itm_01J6M9Q7G4BMKB33GSG3NJ6D1X",
+            text: "milk",
+            checked: false,
+            ordinal: 0,
+            section: null
+          }
+        ]
+      }
     });
     const result = updateNoteTitle(note, {
       expectedRevision: 1,
@@ -79,6 +90,68 @@ describe("note aggregate", () => {
         now: "2026-08-30T18:31:00.000Z"
       })
     ).toThrow(/validation_failed/u);
+  });
+
+  it("initializes list, log, and project content from their canonical source", () => {
+    const list = createInitialNote({
+      ...baseNote,
+      bodyMarkdown: "## Market\n\n- [ ] milk"
+    }).note;
+    expect(list.bodyMarkdown).toBe("## Market\n\n- [ ] milk");
+    expect(list.structuredData).toMatchObject({
+      items: [{ text: "milk", section: "Market" }]
+    });
+
+    const log = createInitialNote({
+      ...baseNote,
+      type: "log",
+      bodyMarkdown: "Bench press: 8 reps"
+    }).note;
+    expect(log.structuredData).toMatchObject({
+      entries: [{ fields: { text: "Bench press: 8 reps" } }]
+    });
+    expect(log.bodyMarkdown).toContain("- text: Bench press: 8 reps");
+
+    const project = createInitialNote({
+      ...baseNote,
+      type: "project",
+      structuredData: {
+        schemaVersion: 1,
+        checklistItems: [
+          {
+            id: "itm_01J6M9Q7G4BMKB33GSG3NJ6D1X",
+            text: "Ship",
+            checked: true,
+            ordinal: 0,
+            lineIndex: 0
+          }
+        ]
+      }
+    }).note;
+    expect(project.bodyMarkdown).toBe("- [x] Ship");
+  });
+
+  it("rejects a supplied log structure whose Markdown projection disagrees", () => {
+    expect(() =>
+      createInitialNote({
+        ...baseNote,
+        type: "log",
+        bodyMarkdown: "edited outside the log fields",
+        structuredData: {
+          schemaVersion: 1,
+          entries: [
+            {
+              id: "ent_01J6M9Q7G4BMKB33GSG3NJ6D1X",
+              occurredAt: baseNote.now,
+              fields: { exercise: "Bench" }
+            }
+          ]
+        }
+      })
+    ).toThrow(/structure_conflict/u);
+    expect(() => createInitialNote({ ...baseNote, bodyMarkdown: "x".repeat(200_001) })).toThrow(
+      /validation_failed/u
+    );
   });
 
   it("canonicalizes nested values deterministically and safely freezes primitives", () => {
