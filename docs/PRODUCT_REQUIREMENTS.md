@@ -27,7 +27,7 @@ AC:
 - An invalid or expired code shows a specific, non-enumerating error (does not reveal whether the email has an account).
 - A successful sign-in on mobile and web establishes a session that survives app restart and browser refresh.
 - Rate limiting on code requests is enforced per email and per IP; the error message says when retry is possible.
-Edge cases: mistyped email (resend to corrected address works), code requested twice (latest code wins, both within TTL are acceptable if provider does so), clock skew on device.
+  Edge cases: mistyped email (resend to corrected address works), code requested twice (latest code wins, both within TTL are acceptable if provider does so), clock skew on device.
 
 **REQ-A2 (M): Sign out.**
 AC: signing out clears local session material; the capture outbox is preserved and clearly marked as belonging to the signed-out account; captures do not sync until the same account signs back in.
@@ -221,16 +221,16 @@ AC:
 
 ## 3. Non-functional requirements
 
-| ID | Requirement | Measure |
-| --- | --- | --- |
-| NFR-1 | Local capture acknowledgement | perceived < 200 ms, never network-blocked |
-| NFR-2 | API acknowledgement | p95 < 500 ms primary region (cold starts tracked separately) |
-| NFR-3 | Organization receipt | p95 < 8 s |
-| NFR-4 | Web vitals | LCP < 2.5 s, INP < 200 ms on authenticated shell |
-| NFR-5 | Capture durability | zero loss across crash/retry/duplicate/offline matrices |
-| NFR-6 | Accessibility | WCAG 2.1 AA minimum; AAA contrast for primary reading text; full criteria in DESIGN_SYSTEM.md §8 |
-| NFR-7 | Privacy | no note/capture text in logs, traces, or analytics; private notes never in model requests |
-| NFR-8 | Cost | per-user daily model budget with Inbox fallback; unit economics reviewed at Milestone G |
+| ID    | Requirement                   | Measure                                                                                          |
+| ----- | ----------------------------- | ------------------------------------------------------------------------------------------------ |
+| NFR-1 | Local capture acknowledgement | perceived < 200 ms, never network-blocked                                                        |
+| NFR-2 | API acknowledgement           | p95 < 500 ms primary region (cold starts tracked separately)                                     |
+| NFR-3 | Organization receipt          | p95 < 8 s                                                                                        |
+| NFR-4 | Web vitals                    | LCP < 2.5 s, INP < 200 ms on authenticated shell                                                 |
+| NFR-5 | Capture durability            | zero loss across crash/retry/duplicate/offline matrices                                          |
+| NFR-6 | Accessibility                 | WCAG 2.1 AA minimum; AAA contrast for primary reading text; full criteria in DESIGN_SYSTEM.md §8 |
+| NFR-7 | Privacy                       | no note/capture text in logs, traces, or analytics; private notes never in model requests        |
+| NFR-8 | Cost                          | per-user daily model budget with Inbox fallback; unit economics reviewed at Milestone G          |
 
 ## 4. Explicitly out of scope
 

@@ -1,8 +1,8 @@
 # Self-Organizing Notes Product: Full Build Plan
 
-Working title and selected brand direction: **Unfiled**. Keep the repository folder as `soft-index` only as a temporary technical path until the name passes trademark, App Store, package-name, social-handle, and domain review; then rename it once in a dedicated migration.
+Product and repository name: **Unfiled**. Trademark, App Store, package-name, social-handle, and domain review remain required before public launch.
 
-Plan status: selected product direction and implementation blueprint. No production claims in this document are implemented yet.
+Implementation status: **Milestone A is implemented** with the monorepo, shared product contracts, local Supabase migrations, deterministic fake organization model, web and mobile shells, WidgetKit feasibility target, design tokens, and CI baseline. Milestones B through G remain the implementation roadmap. Apple signing, physical-device testing, and the Milestone 0 usability evidence remain human gates and are not implied by the repository bootstrap.
 
 This plan is the spine of a full documentation set; see [docs/README.md](./README.md) for reading order. Companion documents:
 
@@ -167,9 +167,9 @@ export default {
   expo: {
     scheme: process.env.APP_SCHEME,
     ios: {
-      bundleIdentifier: process.env.IOS_BUNDLE_ID,
+      bundleIdentifier: process.env.IOS_BUNDLE_ID
     },
-    plugins: ['./plugins/withQuickCaptureWidget'],
+    plugins: ["./plugins/withQuickCaptureWidget"],
     extra: {
       eas: {
         build: {
@@ -177,21 +177,19 @@ export default {
             ios: {
               appExtensions: [
                 {
-                  targetName: 'QuickCaptureWidget',
+                  targetName: "QuickCaptureWidget",
                   bundleIdentifier: `${process.env.IOS_BUNDLE_ID}.quickcapture`,
                   entitlements: {
-                    'com.apple.security.application-groups': [
-                      `group.${process.env.IOS_BUNDLE_ID}`,
-                    ],
-                  },
-                },
-              ],
-            },
-          },
-        },
-      },
-    },
-  },
+                    "com.apple.security.application-groups": [`group.${process.env.IOS_BUNDLE_ID}`]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
 };
 ```
 
@@ -444,14 +442,14 @@ The same notes are visible and manually editable in the hosted web application.
 
 This category exists. The opportunity is a focused behavior and trust model, not the absence of competitors.
 
-| Product | Relevant strength | Gap this product should target |
-| --- | --- | --- |
-| Obsidian | Local files, links, plugins, deep research workflows | Organization still depends heavily on user-created structure and desktop-oriented habits |
-| Mem | Capture without organizing and an agent with broad workspace context | Broader chief-of-staff direction; this product should make routing receipts, correction, and small personal notes the center |
-| Tana | Structured nodes, supertags, capture, and AI | Powerful schema and outliner concepts introduce setup and vocabulary before value |
-| Capacities | Daily notes, object types, mobile capture, and review | The user still selects destinations and performs substantial review or conversion work |
-| Reflect | Fast networked notes, sync, encryption, and AI assistance | AI-assisted writing and graph features are broader than message-to-note routing |
-| Rill | Very close thesis: capture, automatic entities, tasks, and connections | Desktop and coding-agent orientation leaves room for a consumer phone-first product with a shared hosted web app |
+| Product    | Relevant strength                                                      | Gap this product should target                                                                                               |
+| ---------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Obsidian   | Local files, links, plugins, deep research workflows                   | Organization still depends heavily on user-created structure and desktop-oriented habits                                     |
+| Mem        | Capture without organizing and an agent with broad workspace context   | Broader chief-of-staff direction; this product should make routing receipts, correction, and small personal notes the center |
+| Tana       | Structured nodes, supertags, capture, and AI                           | Powerful schema and outliner concepts introduce setup and vocabulary before value                                            |
+| Capacities | Daily notes, object types, mobile capture, and review                  | The user still selects destinations and performs substantial review or conversion work                                       |
+| Reflect    | Fast networked notes, sync, encryption, and AI assistance              | AI-assisted writing and graph features are broader than message-to-note routing                                              |
+| Rill       | Very close thesis: capture, automatic entities, tasks, and connections | Desktop and coding-agent orientation leaves room for a consumer phone-first product with a shared hosted web app             |
 
 ### Selected differentiation
 
@@ -771,7 +769,7 @@ A brand-new account has zero notes, so routing has no candidates. Define this ex
 - The first receipt teaches the loop: when the first capture creates a note, the receipt explains in one line that future related captures will land in the same note.
 - Onboarding shows, and lets the user try, three example captures matching the flagship demonstration so the value is experienced within the first minute.
 
-Interactive tables are not an MVP surface. A `table` note type is a v1.1 candidate with this shape: user-defined typed columns limited to text, number, checkbox, date, and single-select; tap-to-edit cells using the same typed-operation pipeline; row add, reorder, and archive; column sort; CSV export. Formulas, cross-table relations, rollups, and database views stay out of scope per Section 5.2 — the table type is a structured grid, not a spreadsheet. Interactive workout *plans* (a planned session the user ticks through set by set, with rest timers) are likewise deferred to v1.1 as a template feature layered on the `log` type.
+Interactive tables are not an MVP surface. A `table` note type is a v1.1 candidate with this shape: user-defined typed columns limited to text, number, checkbox, date, and single-select; tap-to-edit cells using the same typed-operation pipeline; row add, reorder, and archive; column sort; CSV export. Formulas, cross-table relations, rollups, and database views stay out of scope per Section 5.2 — the table type is a structured grid, not a spreadsheet. Interactive workout _plans_ (a planned session the user ticks through set by set, with rest timers) are likewise deferred to v1.1 as a template feature layered on the `log` type.
 
 ## 7. Core User Flows
 
@@ -1173,7 +1171,7 @@ Organization includes database reads, an external model call, validation, a cond
 ## 11. Repository Layout
 
 ```text
-soft-index/
+unfiled/
   apps/
     web/                    # marketing, authenticated web app, API routes, workflows
     mobile/                 # Expo iOS and Android application
@@ -2015,6 +2013,7 @@ Deliver:
 - durable workflow adapter with fake decisions
 - processing status and receipts
 - retry and failure states
+- selected OQ-4 behavior: close the composer after the local durable save acknowledgement; burst-entry mode remains deferred
 
 Gate:
 
@@ -2165,23 +2164,24 @@ Create these issues after repository bootstrap:
 
 The plan proceeds with these defaults so implementation can start without waiting for more product choices:
 
-| Decision | Selected default | Revisit trigger |
-| --- | --- | --- |
-| Name | `Unfiled` selected creative direction; clearance pending | candidate passes meaning, collision, trademark, store, package, handle, and domain review |
-| Audience | single-user personal notes | repeated household or collaboration demand |
-| Platforms | responsive web plus Expo iOS and Android | native maintenance outweighs capture benefit |
-| iPhone quick capture | Lock Screen WidgetKit extension opens a focused Expo composer; no inline widget text field | Apple adds supported secure text input to widgets or physical-device evidence favors another surface |
-| Input | text first | routing and sync gates pass |
-| Note storage | Markdown canonical for prose types; `structured_data` canonical for list and log with deterministic Markdown projection | editor requirements exceed safe patching model |
-| Interactive surfaces | checklist toggling and log field editing in MVP; `table` type, input templates, and workout plans in v1.1 | early usage shows tables or plans are the retention driver |
-| Undo retention | full revision history kept; one-tap AI undo guaranteed 30 days | storage metrics justify pruning |
-| Organization | rules, retrieval, strict model plan, policy | evaluation shows a simpler path performs better |
-| Automation | balanced mode with Review for ambiguity | beta users choose cautious or automatic behavior |
-| AI provider | OpenAI and Anthropic adapters behind one port; app key default, BYOK supported | privacy, cost, quality, or availability evidence |
-| BYOK custody | Supabase Vault encrypted storage; server-side decryption only; no silent fallback | Vault limits or key-rotation evidence |
-| Hosting | Vercel plus Supabase | operational limits or cost justify migration |
-| Privacy | cloud sync, private manual note option, no E2EE claim | local-first product becomes the primary thesis |
-| Collaboration | out of scope | solo workflow is stable and demand is validated |
+| Decision                   | Selected default                                                                                                        | Revisit trigger                                                                                      |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Name                       | `Unfiled` selected creative direction; clearance pending                                                                | candidate passes meaning, collision, trademark, store, package, handle, and domain review            |
+| Audience                   | single-user personal notes                                                                                              | repeated household or collaboration demand                                                           |
+| Platforms                  | responsive web plus Expo iOS and Android                                                                                | native maintenance outweighs capture benefit                                                         |
+| iPhone quick capture       | Lock Screen WidgetKit extension opens a focused Expo composer; no inline widget text field                              | Apple adds supported secure text input to widgets or physical-device evidence favors another surface |
+| Input                      | text first                                                                                                              | routing and sync gates pass                                                                          |
+| Composer after save (OQ-4) | close after local durable acknowledgement; implementation is pending Milestone C                                        | M0 usability evidence favors rapid-entry burst mode                                                  |
+| Note storage               | Markdown canonical for prose types; `structured_data` canonical for list and log with deterministic Markdown projection | editor requirements exceed safe patching model                                                       |
+| Interactive surfaces       | checklist toggling and log field editing in MVP; `table` type, input templates, and workout plans in v1.1               | early usage shows tables or plans are the retention driver                                           |
+| Undo retention             | full revision history kept; one-tap AI undo guaranteed 30 days                                                          | storage metrics justify pruning                                                                      |
+| Organization               | rules, retrieval, strict model plan, policy                                                                             | evaluation shows a simpler path performs better                                                      |
+| Automation                 | balanced mode with Review for ambiguity                                                                                 | beta users choose cautious or automatic behavior                                                     |
+| AI provider                | OpenAI and Anthropic adapters behind one port; app key default, BYOK supported                                          | privacy, cost, quality, or availability evidence                                                     |
+| BYOK custody               | Supabase Vault encrypted storage; server-side decryption only; no silent fallback                                       | Vault limits or key-rotation evidence                                                                |
+| Hosting                    | Vercel plus Supabase                                                                                                    | operational limits or cost justify migration                                                         |
+| Privacy                    | cloud sync, private manual note option, no E2EE claim                                                                   | local-first product becomes the primary thesis                                                       |
+| Collaboration              | out of scope                                                                                                            | solo workflow is stable and demand is validated                                                      |
 
 Questions to answer through prototypes and beta evidence:
 

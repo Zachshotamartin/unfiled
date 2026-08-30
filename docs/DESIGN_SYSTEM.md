@@ -8,19 +8,19 @@ Design dials: `DESIGN_VARIANCE: 5`, `MOTION_INTENSITY: 3`, `VISUAL_DENSITY: 5`. 
 
 Semantic names only in components; raw hex lives here. All pairs require recorded contrast ratios at M0; targets: AA minimum everywhere, AAA (≥7:1) for primary reading text.
 
-| Token | Draft value | Role | Contrast vs canvas (approx, verify M0) |
-| --- | --- | --- | --- |
-| `color.canvas` | `#0B0C0E` (Ink) | app background | — |
-| `color.surface` | `#181B1F` (Graphite) | panes, composer | — |
-| `color.surface.raised` | `#22262A` | sheets, menus | — |
-| `color.border` | `rgba(242, 239, 232, 0.14)` | hairlines, dividers | non-text |
-| `color.text.primary` | `#F2EFE8` (Warm Paper) | body text | verify M0; target AAA |
-| `color.text.secondary` | `#9DA3A6` (Fog) | metadata, timestamps | verify M0; target AA |
-| `color.accent` | `#EE6F55` (Persimmon) | capture actions, selection, provenance | verify M0; target AA |
-| `color.accent.contrast` | `#0B0C0E` | text on accent fills | verify ≥4.5:1 |
-| `color.danger` | M0: muted coral, chosen by contrast test | destructive, failed states | ≥4.5:1 required |
-| `color.warning` | M0 | pending/attention | ≥4.5:1 |
-| `color.state.generated` | M0: accent-tinted surface | generated-block background + badge | non-color indicator also required |
+| Token                   | Draft value                              | Role                                   | Contrast vs canvas (approx, verify M0) |
+| ----------------------- | ---------------------------------------- | -------------------------------------- | -------------------------------------- |
+| `color.canvas`          | `#0B0C0E` (Ink)                          | app background                         | —                                      |
+| `color.surface`         | `#181B1F` (Graphite)                     | panes, composer                        | —                                      |
+| `color.surface.raised`  | `#22262A`                                | sheets, menus                          | —                                      |
+| `color.border`          | `rgba(242, 239, 232, 0.14)`              | hairlines, dividers                    | non-text                               |
+| `color.text.primary`    | `#F2EFE8` (Warm Paper)                   | body text                              | verify M0; target AAA                  |
+| `color.text.secondary`  | `#9DA3A6` (Fog)                          | metadata, timestamps                   | verify M0; target AA                   |
+| `color.accent`          | `#EE6F55` (Persimmon)                    | capture actions, selection, provenance | verify M0; target AA                   |
+| `color.accent.contrast` | `#0B0C0E`                                | text on accent fills                   | verify ≥4.5:1                          |
+| `color.danger`          | M0: muted coral, chosen by contrast test | destructive, failed states             | ≥4.5:1 required                        |
+| `color.warning`         | M0                                       | pending/attention                      | ≥4.5:1                                 |
+| `color.state.generated` | M0: accent-tinted surface                | generated-block background + badge     | non-color indicator also required      |
 
 One accent across the product. No pure black/white. A future light theme re-maps tokens only; components never reference hex. Theme delivery: CSS variables (web), token object via NativeWind/StyleSheet (native), single source in `packages/design-tokens`.
 

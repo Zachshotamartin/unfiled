@@ -1,0 +1,46 @@
+{
+  "name": "unfiled",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Capture-first notes that organize after you write.",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@10.14.0",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm check:boundaries && pnpm check:openapi",
+    "check:boundaries": "tsx scripts/check-boundaries.ts",
+    "check:expo": "pnpm --filter @unfiled/mobile exec expo install --check",
+    "check:openapi": "tsx scripts/generate-openapi.ts --check",
+    "db:reset": "supabase db reset --local",
+    "db:start": "supabase start",
+    "db:stop": "supabase stop",
+    "dev": "turbo run dev --parallel",
+    "dev:mobile": "pnpm --filter @unfiled/mobile dev",
+    "eval:routing": "pnpm --filter @unfiled/ai-routing eval",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "generate:openapi": "tsx scripts/generate-openapi.ts",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "test:coverage": "turbo run test:coverage",
+    "test:db": "supabase test db",
+    "typecheck": "turbo run typecheck"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "26.4.0",
+    "@vitest/coverage-v8": "4.1.11",
+    "eslint": "10.9.1",
+    "prettier": "3.9.6",
+    "supabase": "2.116.0",
+    "tsx": "4.23.13",
+    "turbo": "2.10.12",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.68.0",
+    "vitest": "4.1.11"
+  }
+}

@@ -4,11 +4,11 @@ Environments, CI, the enumerated test inventory, release checklists, backups, an
 
 ## 1. Environments
 
-| Env | Web/API | Database | AI | Secrets | Data |
-| --- | --- | --- | --- | --- | --- |
-| `local` | next dev / expo dev client | local Supabase (CLI) | mock model adapter default; real key opt-in | `.env.local`, never committed | seed fixtures only |
-| `preview` | Vercel preview per PR | isolated Supabase branch/project | real adapter, non-prod budget, cheap tier | Vercel preview scope | synthetic only — never production data |
-| `production` | protected Vercel project | protected Supabase project | evaluated config | production scope, rotation documented | real user data |
+| Env          | Web/API                    | Database                         | AI                                          | Secrets                               | Data                                   |
+| ------------ | -------------------------- | -------------------------------- | ------------------------------------------- | ------------------------------------- | -------------------------------------- |
+| `local`      | next dev / expo dev client | local Supabase (CLI)             | mock model adapter default; real key opt-in | `.env.local`, never committed         | seed fixtures only                     |
+| `preview`    | Vercel preview per PR      | isolated Supabase branch/project | real adapter, non-prod budget, cheap tier   | Vercel preview scope                  | synthetic only — never production data |
+| `production` | protected Vercel project   | protected Supabase project       | evaluated config                            | production scope, rotation documented | real user data                         |
 
 Rules: preview never points at production; the mock model adapter is deterministic (fixture-driven) so every CI run is reproducible; no test requires production credentials (Milestone A gate).
 
@@ -20,17 +20,17 @@ Rules: preview never points at production; the mock model adapter is determinist
 
 ## 3. CI pipeline (GitHub Actions, per PR)
 
-| Stage | Contents | Blocking |
-| --- | --- | --- |
-| 1 static | format check, ESLint, strict `tsc` per package, package-boundary check (`domain` imports nothing platform) | yes |
-| 2 unit | Vitest across packages, coverage gate ≥ 80% lines/branches on `domain`, `ai-routing`, `sync`, `contracts` | yes |
-| 3 database | migrations apply from zero; SQL tests: RLS allow/deny, grants, functions, constraints | yes |
-| 4 contract | shared API fixtures validated by web + mobile clients; error-code stability; OpenAPI generated and diffed | yes |
-| 5 routing (deterministic) | full corpus against mock adapter: preservation, validation, banding, injection cases | yes |
-| 6 build | `next build`; Expo `npx expo export` type/bundle check | yes |
-| 7 e2e (web) | Playwright critical path against preview deploy + branch DB | yes |
-| 8 security | gitleaks secret scan, `pnpm audit` (fail on high), canary-key log audit on E2E output | yes |
-| nightly | full stochastic eval (n=3) on main; Maestro device suite on EAS build; Lighthouse budgets | report + alert |
+| Stage                     | Contents                                                                                                   | Blocking       |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------- |
+| 1 static                  | format check, ESLint, strict `tsc` per package, package-boundary check (`domain` imports nothing platform) | yes            |
+| 2 unit                    | Vitest across packages, coverage gate ≥ 80% lines/branches on `domain`, `ai-routing`, `sync`, `contracts`  | yes            |
+| 3 database                | migrations apply from zero; SQL tests: RLS allow/deny, grants, functions, constraints                      | yes            |
+| 4 contract                | shared API fixtures validated by web + mobile clients; error-code stability; OpenAPI generated and diffed  | yes            |
+| 5 routing (deterministic) | full corpus against mock adapter: preservation, validation, banding, injection cases                       | yes            |
+| 6 build                   | `next build`; Expo `npx expo export` type/bundle check                                                     | yes            |
+| 7 e2e (web)               | Playwright critical path against preview deploy + branch DB                                                | yes            |
+| 8 security                | gitleaks secret scan, `pnpm audit` (fail on high), canary-key log audit on E2E output                      | yes            |
+| nightly                   | full stochastic eval (n=3) on main; Maestro device suite on EAS build; Lighthouse budgets                  | report + alert |
 
 Production deploy: merge to main → staging checks → migration approval gate (manual) → promote. Mobile: EAS preview channel per release branch; store builds only from tagged releases.
 
@@ -88,18 +88,18 @@ Supabase scheduled backups (verify plan tier ≥ daily + PITR if available). Qua
 
 ## 11. Monitoring and alerting (initial thresholds)
 
-| Signal | Warn | Page |
-| --- | --- | --- |
-| capture API error rate | > 1% over 10 min | > 5% |
-| workflow queue oldest age | > 2 min | > 10 min |
-| dead-letter jobs | any | > 10/hour |
-| receipt p95 | > 8 s | > 20 s |
-| invalid-plan rate | > 2% | > 10% |
-| wrong auto-apply (from corrections on auto-band) | > 1% weekly | — (review + consider band tightening) |
-| provider error rate | > 5% | circuit breaker stuck open > 15 min |
-| search index lag | > 1 min | > 10 min |
-| deletion reconciliation findings | any | — |
-| per-user model call anomaly (BYOK protection) | 3× personal baseline | 10× |
+| Signal                                           | Warn                 | Page                                  |
+| ------------------------------------------------ | -------------------- | ------------------------------------- |
+| capture API error rate                           | > 1% over 10 min     | > 5%                                  |
+| workflow queue oldest age                        | > 2 min              | > 10 min                              |
+| dead-letter jobs                                 | any                  | > 10/hour                             |
+| receipt p95                                      | > 8 s                | > 20 s                                |
+| invalid-plan rate                                | > 2%                 | > 10%                                 |
+| wrong auto-apply (from corrections on auto-band) | > 1% weekly          | — (review + consider band tightening) |
+| provider error rate                              | > 5%                 | circuit breaker stuck open > 15 min   |
+| search index lag                                 | > 1 min              | > 10 min                              |
+| deletion reconciliation findings                 | any                  | —                                     |
+| per-user model call anomaly (BYOK protection)    | 3× personal baseline | 10×                                   |
 
 Dashboards: capture funnel (received→organized/inbox/review/failed), band distribution over time, correction/undo trend, model cost per active user, sync outbox age distribution. All content-free.
 

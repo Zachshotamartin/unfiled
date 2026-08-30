@@ -1,6 +1,6 @@
 # Unfiled Brand System
 
-Status: **selected creative direction, v1.0.** `Unfiled` remains a launch-name candidate until trademark, App Store, package-name, social-handle, and domain clearance is complete. The repository directory stays `soft-index` until that review passes.
+Status: **selected product identity, v1.0.** The product and repository are named `Unfiled`; trademark, App Store, package-name, social-handle, and domain clearance remain release gates.
 
 This document is the visual and verbal source of truth for the public website, authenticated web product, iPhone app, and Lock Screen capture widget. The generated images under `design/brand/` are art-direction references. Where lettering, colors, icons, or tiny UI details in an image disagree with this document, this document wins.
 
@@ -55,13 +55,13 @@ Keep clear space equal to the width of the coral slip on every side. The preferr
 
 These values are authoritative. Generated reference images may contain imperfect printed hex labels and must not be sampled for implementation.
 
-| Brand token | Hex | Product token | Use |
-| --- | --- | --- | --- |
-| Ink | `#0B0C0E` | `color.canvas` | primary dark background, ink on light fields |
-| Graphite | `#181B1F` | `color.surface` | panes, composer, elevated dark regions |
-| Warm Paper | `#F2EFE8` | `color.text.primary` | primary type, light editorial fields |
-| Persimmon | `#EE6F55` | `color.accent` | capture action, active indicator, routing provenance |
-| Fog | `#9DA3A6` | `color.text.secondary` | timestamps, metadata, supporting copy |
+| Brand token | Hex       | Product token          | Use                                                  |
+| ----------- | --------- | ---------------------- | ---------------------------------------------------- |
+| Ink         | `#0B0C0E` | `color.canvas`         | primary dark background, ink on light fields         |
+| Graphite    | `#181B1F` | `color.surface`        | panes, composer, elevated dark regions               |
+| Warm Paper  | `#F2EFE8` | `color.text.primary`   | primary type, light editorial fields                 |
+| Persimmon   | `#EE6F55` | `color.accent`         | capture action, active indicator, routing provenance |
+| Fog         | `#9DA3A6` | `color.text.secondary` | timestamps, metadata, supporting copy                |
 
 Supporting interface values are derived rather than treated as new brand colors:
 
@@ -188,19 +188,19 @@ Use `Unfiled` as a product name, not as a speaking character. Prefer `Added to S
 
 ## 13. Asset manifest
 
-| Asset | Purpose |
-| --- | --- |
-| `design/brand/unfiled-brand-board-v1.png` | identity overview and visual-world reference |
-| `design/brand/mobile/01-lock-screen.png` | Lock Screen quick-capture reference |
-| `design/brand/mobile/02-quick-capture.png` | focused mobile composer |
-| `design/brand/mobile/03-today.png` | mobile receipt ledger |
-| `design/brand/mobile/04-notes-library.png` | manual note navigation |
-| `design/brand/mobile/05-shopping-note.png` | structured note detail |
-| `design/brand/mobile/06-review.png` | ambiguous-routing review |
-| `design/brand/web/01-hero.png`–`06-final-cta.png` | six public marketing sections |
-| `design/brand/web/07-authenticated-app.png` | signed-in desktop product |
-| `design/brand/vector/` | working SVG mark, monochrome, and app-icon sources |
-| `design/brand/GENERATION_PROMPTS.md` | normalized reproducible image-generation brief |
+| Asset                                             | Purpose                                            |
+| ------------------------------------------------- | -------------------------------------------------- |
+| `design/brand/unfiled-brand-board-v1.png`         | identity overview and visual-world reference       |
+| `design/brand/mobile/01-lock-screen.png`          | Lock Screen quick-capture reference                |
+| `design/brand/mobile/02-quick-capture.png`        | focused mobile composer                            |
+| `design/brand/mobile/03-today.png`                | mobile receipt ledger                              |
+| `design/brand/mobile/04-notes-library.png`        | manual note navigation                             |
+| `design/brand/mobile/05-shopping-note.png`        | structured note detail                             |
+| `design/brand/mobile/06-review.png`               | ambiguous-routing review                           |
+| `design/brand/web/01-hero.png`–`06-final-cta.png` | six public marketing sections                      |
+| `design/brand/web/07-authenticated-app.png`       | signed-in desktop product                          |
+| `design/brand/vector/`                            | working SVG mark, monochrome, and app-icon sources |
+| `design/brand/GENERATION_PROMPTS.md`              | normalized reproducible image-generation brief     |
 
 ## 14. Production handoff checklist
 

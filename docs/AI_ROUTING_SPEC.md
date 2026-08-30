@@ -32,12 +32,12 @@ The workflow persists after stages 1, 4, 5, and 6 so a crash resumes idempotentl
 
 Rule types, evaluated in user-set priority order, first match wins:
 
-| Type | Match semantics | Example |
-| --- | --- | --- |
-| `prefix` | capture starts with normalized token + `:` or space | `workout:` → current Workout log |
-| `phrase` | normalized phrase appears in first 80 chars | `shopping list` → Shopping space |
-| `alias` | whole-word match of alias phrase | `Roosevelt method` → Principles note |
-| `destination_mention` | explicit `to <note title>` / `in <note title>` tail | `add eggs to groceries` |
+| Type                  | Match semantics                                     | Example                              |
+| --------------------- | --------------------------------------------------- | ------------------------------------ |
+| `prefix`              | capture starts with normalized token + `:` or space | `workout:` → current Workout log     |
+| `phrase`              | normalized phrase appears in first 80 chars         | `shopping list` → Shopping space     |
+| `alias`               | whole-word match of alias phrase                    | `Roosevelt method` → Principles note |
+| `destination_mention` | explicit `to <note title>` / `in <note title>` tail | `add eggs to groceries`              |
 
 Normalization: lowercase, Unicode NFKC, collapse whitespace, strip trailing punctuation. Rules never partially match inside words.
 
@@ -112,7 +112,9 @@ Strict JSON schema (all fields required, `additionalProperties: false` everywher
   "type": "object",
   "properties": {
     "schemaVersion": { "const": 1 },
-    "captureKind": { "enum": ["list_items", "log_entry", "principle", "project_update", "freeform"] },
+    "captureKind": {
+      "enum": ["list_items", "log_entry", "principle", "project_update", "freeform"]
+    },
     "decision": { "enum": ["append_to_note", "create_note", "add_to_inbox", "needs_review"] },
     "destination": {
       "type": "object",
@@ -144,7 +146,7 @@ Strict JSON schema (all fields required, `additionalProperties: false` everywher
 
 Operation variants (`$defs/operation`, discriminated on `type`): `append_raw`, `append_paragraphs {paragraphs[]}`, `append_list_items {section?, items[≤50, each ≤500 chars]}`, `append_log_entry {entry}`, `update_structured_data {patch}`, `add_tags {tagIds[≤5]}`, `add_relation {toCandidateId, linkType}`, `create_note` is expressed via `destination.newNote`, not an operation. User-only operations (`toggle_item_checked`, `update_log_field`, `edit_item_text`, `remove_item`) are **absent from the model schema** by construction.
 
-Allowed reason codes (reject others): `explicit_shopping_intent`, `explicit_destination`, `open_daily_list`, `same_day_log`, `alias_match`, `semantic_match`, `recent_destination`, `type_match`, `no_candidate_fit`, `ambiguous_intent`, `duplicate_suspected`, `low_information`.
+Allowed reason codes (reject others): `explicit_shopping_intent`, `explicit_destination`, `open_daily_list`, `same_day_log`, `alias_match`, `semantic_match`, `recent_destination`, `type_match`, `no_candidate_fit`, `ambiguous_intent`, `duplicate_suspected`, `low_information`, `parser_override`.
 
 ## 6. Stage 4 — Validation (fail closed)
 
@@ -166,18 +168,18 @@ Deterministic extraction preference: when inferred kind is `list_items` or `log_
 
 Score = clamp01(Σ wᵢ·fᵢ), features in [0,1]:
 
-| Feature | Weight | Notes |
-| --- | --- | --- |
-| rule or alias near-match to chosen destination | 0.30 | exact rule match short-circuits before here |
-| explicit textual destination mention | 0.25 | |
-| open same-day list/log of matching type | 0.20 | |
-| capture-kind ↔ note-type compatibility | 0.10 | |
-| destination recency (decay over 14 days) | 0.05 | |
-| semantic similarity of capture→destination | 0.10 | cosine, calibrated |
-| margin: top1−top2 candidate similarity | 0.10 | separation, not affinity |
-| prior accepted decisions to this destination for this kind | 0.10 | |
-| model reason-code consistency with signals | 0.05 | penalty when contradicted |
-| duplicate-title suspicion | −0.15 | pushes toward review |
+| Feature                                                    | Weight | Notes                                       |
+| ---------------------------------------------------------- | ------ | ------------------------------------------- |
+| rule or alias near-match to chosen destination             | 0.30   | exact rule match short-circuits before here |
+| explicit textual destination mention                       | 0.25   |                                             |
+| open same-day list/log of matching type                    | 0.20   |                                             |
+| capture-kind ↔ note-type compatibility                     | 0.10   |                                             |
+| destination recency (decay over 14 days)                   | 0.05   |                                             |
+| semantic similarity of capture→destination                 | 0.10   | cosine, calibrated                          |
+| margin: top1−top2 candidate similarity                     | 0.10   | separation, not affinity                    |
+| prior accepted decisions to this destination for this kind | 0.10   |                                             |
+| model reason-code consistency with signals                 | 0.05   | penalty when contradicted                   |
+| duplicate-title suspicion                                  | −0.15  | pushes toward review                        |
 
 Weights sum > 1 deliberately; clamp applies. These are starting points — the eval harness fits them.
 
@@ -206,14 +208,14 @@ The system must never: reword user text in a note body; invent units, exercises,
 
 ## 10. Failure handling
 
-| Failure | Behavior |
-| --- | --- |
-| provider timeout/5xx | 1 retry → Inbox `provider_unavailable`, circuit breaker opens at 5 consecutive failures, banner shown |
-| schema invalid | Inbox `invalid_plan` |
-| stale revision at apply | re-plan once against new revision → second conflict to Review `revision_conflict` |
-| budget exceeded (per-user daily, app-key users only) | Inbox `budget_exhausted`, resets at user-local midnight |
-| user BYOK key rejected (401/403) | key marked `invalid`, Inbox `provider_key_invalid`, settings banner; fallback to app key only if user enabled it |
-| workflow crash | resume from last persisted stage, idempotent |
+| Failure                                              | Behavior                                                                                                         |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| provider timeout/5xx                                 | 1 retry → Inbox `provider_unavailable`, circuit breaker opens at 5 consecutive failures, banner shown            |
+| schema invalid                                       | Inbox `invalid_plan`                                                                                             |
+| stale revision at apply                              | re-plan once against new revision → second conflict to Review `revision_conflict`                                |
+| budget exceeded (per-user daily, app-key users only) | Inbox `budget_exhausted`, resets at user-local midnight                                                          |
+| user BYOK key rejected (401/403)                     | key marked `invalid`, Inbox `provider_key_invalid`, settings banner; fallback to app key only if user enabled it |
+| workflow crash                                       | resume from last persisted stage, idempotent                                                                     |
 
 ## 11. Search ranking (shared retrieval infrastructure)
 
@@ -228,7 +230,7 @@ Cases live in `packages/test-fixtures/routing-cases/*.yaml`, versioned, with a c
 ```yaml
 id: list-continuation-003
 category: same_day_list_continuation
-library: fixtures/library-small.json     # deterministic starting library
+library: fixtures/library-small.json # deterministic starting library
 capture: "add bananas"
 timezone: America/Los_Angeles
 expect:
@@ -246,15 +248,15 @@ empty/sparse library ×10, same-day list continuation ×15, cross-day list ×10,
 
 ### 12.3 Metrics and release thresholds (Gate 3 inputs)
 
-| Metric | Threshold to enable auto-apply |
-| --- | --- |
-| candidate recall (expected note in manifest) | ≥ 0.98 |
-| exact destination accuracy (auto band only) | ≥ 0.97 |
-| wrong auto-apply rate | ≤ 0.01 |
-| create-vs-append accuracy | ≥ 0.95 |
-| source-preservation failures | 0 |
-| invalid-plan rate | ≤ 0.02 (all fail closed) |
-| injection cases obeyed | 0 |
+| Metric                                       | Threshold to enable auto-apply |
+| -------------------------------------------- | ------------------------------ |
+| candidate recall (expected note in manifest) | ≥ 0.98                         |
+| exact destination accuracy (auto band only)  | ≥ 0.97                         |
+| wrong auto-apply rate                        | ≤ 0.01                         |
+| create-vs-append accuracy                    | ≥ 0.95                         |
+| source-preservation failures                 | 0                              |
+| invalid-plan rate                            | ≤ 0.02 (all fail closed)       |
+| injection cases obeyed                       | 0                              |
 
 ### 12.4 Procedure
 
@@ -264,16 +266,16 @@ Deterministic stages run in CI on every PR (mock model). Full stochastic eval (n
 
 User-facing settings and their exact effect on this pipeline:
 
-| Setting | Values | Effect |
-| --- | --- | --- |
-| Provider mode | `app_default`, `byok` (+ chosen provider) | which registry adapter and credential §5 uses |
-| Routing effort | `economical` | smallest structured-output tier for the provider; candidate cap 6; no fallback model; no low-margin resampling |
-| | `standard` (default) | default tier; candidate cap 8 |
-| | `thorough` | default tier, plus stronger-model fallback for `review`-band margins and n=2 sampling on low margin; BYOK-recommended (user pays) |
-| Expansion style | `off` | `generatedExpansion` must be null; validation rejects otherwise |
-| | `brief` (default) | expansion ≤ 200 chars |
-| | `detailed` | expansion ≤ 600 chars |
-| Fallback to app key | off (default) / on | behavior on BYOK auth failure (§10) |
+| Setting             | Values                                    | Effect                                                                                                                            |
+| ------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Provider mode       | `app_default`, `byok` (+ chosen provider) | which registry adapter and credential §5 uses                                                                                     |
+| Routing effort      | `economical`                              | smallest structured-output tier for the provider; candidate cap 6; no fallback model; no low-margin resampling                    |
+|                     | `standard` (default)                      | default tier; candidate cap 8                                                                                                     |
+|                     | `thorough`                                | default tier, plus stronger-model fallback for `review`-band margins and n=2 sampling on low margin; BYOK-recommended (user pays) |
+| Expansion style     | `off`                                     | `generatedExpansion` must be null; validation rejects otherwise                                                                   |
+|                     | `brief` (default)                         | expansion ≤ 200 chars                                                                                                             |
+|                     | `detailed`                                | expansion ≤ 600 chars                                                                                                             |
+| Fallback to app key | off (default) / on                        | behavior on BYOK auth failure (§10)                                                                                               |
 
 Rules: effort changes model tier and sampling, never the schema, validation, or scoring bands — trust behavior is identical at every effort level. Settings take effect on the next capture. Settings copy states the cost implication in one line when BYOK is active. Each `(provider, tier)` pair must meet the §12.3 thresholds on the evaluation corpus before it is selectable; a tier that fails stays hidden.
 
