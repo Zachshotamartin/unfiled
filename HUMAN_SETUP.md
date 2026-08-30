@@ -81,4 +81,7 @@ gh api --method PUT repos/Zachshotamartin/unfiled/branches/main/protection \
   -F 'restrictions=null'
 ```
 
-If the GitHub account plan rejects branch protection for the private repository, keep every merge behind a green `gh pr checks` result and record the API error in the final report.
+The command was attempted on 2026-08-30 and GitHub returned HTTP 403:
+`Upgrade to GitHub Pro or make this repository public to enable this feature.` Until the
+account is upgraded, every merge in this implementation run is manually gated behind a
+green `gh pr checks` result and the same limitation is recorded in the final report.
