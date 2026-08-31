@@ -1,0 +1,207 @@
+import Foundation
+
+enum APIEndpointConfiguration {
+    static let versionedBasePath = "/api/v1"
+
+    static func normalizedVersionedBaseURL(_ url: URL) -> URL? {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              components.user == nil,
+              components.password == nil,
+              components.query == nil,
+              components.fragment == nil,
+              components.path == versionedBasePath || components.path == "\(versionedBasePath)/"
+        else {
+            return nil
+        }
+        components.path = versionedBasePath
+        return components.url
+    }
+}
+
+public final class APIClient: Sendable {
+    public struct Limits: Equatable, Sendable {
+        public let requestBodyBytes: Int
+        public let responseBodyBytes: Int
+        public init(requestBodyBytes: Int = 1_048_576, responseBodyBytes: Int = 2_097_152) {
+            self.requestBodyBytes = requestBodyBytes
+            self.responseBodyBytes = responseBodyBytes
+        }
+    }
+
+    private struct NoBody: Encodable {}
+    private enum Authentication { case none, required, explicit(String) }
+
+    public let baseURL: URL
+    private let transport: any HTTPTransport
+    private let tokenProvider: (any AccessTokenProviding)?
+    private let limits: Limits
+
+    public init(baseURL: URL, transport: any HTTPTransport = URLSessionTransport(),
+                tokenProvider: (any AccessTokenProviding)? = nil, limits: Limits = .init()) throws {
+        guard let normalizedBaseURL = APIEndpointConfiguration.normalizedVersionedBaseURL(baseURL),
+              let scheme = normalizedBaseURL.scheme?.lowercased(),
+              let host = normalizedBaseURL.host?.lowercased(),
+              !host.isEmpty,
+              scheme == "https" || (scheme == "http" && ["localhost", "127.0.0.1", "::1"].contains(host)),
+              limits.requestBodyBytes > 0, limits.responseBodyBytes > 0 else {
+            throw APIClientError.invalidConfiguration
+        }
+        self.baseURL = normalizedBaseURL
+        self.transport = transport
+        self.tokenProvider = tokenProvider
+        self.limits = limits
+    }
+
+    func get<Response: Decodable>(_ path: String, query: [URLQueryItem] = [], authenticated: Bool = true,
+                                  explicitToken: String? = nil,
+                                  as: Response.Type = Response.self) async throws -> Response {
+        let auth: Authentication = explicitToken.map(Authentication.explicit) ?? (authenticated ? .required : .none)
+        return try await send("GET", path: path, query: query, body: Optional<NoBody>.none,
+                              authentication: auth, response: Response.self)
+    }
+
+    func postEmpty<Response: Decodable>(_ path: String, authenticated: Bool = true,
+                                         explicitToken: String? = nil,
+                                         as: Response.Type = Response.self) async throws -> Response {
+        try await post(path, body: Optional<NoBody>.none, authenticated: authenticated,
+                       explicitToken: explicitToken, as: Response.self)
+    }
+
+    func post<Response: Decodable, Body: Encodable>(_ path: String, body: Body?, idempotencyKey: String? = nil,
+                                                     authenticated: Bool = true, explicitToken: String? = nil,
+                                                     as: Response.Type = Response.self) async throws -> Response {
+        let auth: Authentication = explicitToken.map(Authentication.explicit) ?? (authenticated ? .required : .none)
+        return try await send("POST", path: path, body: body, idempotencyKey: idempotencyKey,
+                              authentication: auth, response: Response.self)
+    }
+
+    func put<Response: Decodable, Body: Encodable>(_ path: String, body: Body,
+                                                    authenticated: Bool = false,
+                                                    as: Response.Type = Response.self) async throws -> Response {
+        try await send("PUT", path: path, body: body,
+                       authentication: authenticated ? .required : .none, response: Response.self)
+    }
+
+    func patch<Response: Decodable, Body: Encodable>(_ path: String, body: Body, idempotencyKey: String,
+                                                      as: Response.Type = Response.self) async throws -> Response {
+        try await send("PATCH", path: path, body: body, idempotencyKey: idempotencyKey,
+                       authentication: .required, response: Response.self)
+    }
+
+    func delete<Response: Decodable, Body: Encodable>(_ path: String, body: Body, idempotencyKey: String,
+                                                       as: Response.Type = Response.self) async throws -> Response {
+        try await send("DELETE", path: path, body: body, idempotencyKey: idempotencyKey,
+                       authentication: .required, response: Response.self)
+    }
+
+    private func send<Response: Decodable, Body: Encodable>(
+        _ method: String, path: String, query: [URLQueryItem] = [], body: Body?,
+        idempotencyKey: String? = nil, authentication: Authentication, response: Response.Type
+    ) async throws -> Response {
+        let firstCredential: AccessTokenCredential?
+        let firstToken: String?
+        switch authentication {
+        case .none:
+            firstCredential = nil
+            firstToken = nil
+        case let .explicit(token):
+            firstCredential = nil
+            firstToken = token
+        case .required:
+            guard let tokenProvider else { throw APIClientError.authenticationRequired }
+            do {
+                let credential = try await tokenProvider.accessTokenCredential()
+                firstCredential = credential
+                firstToken = credential.token
+            }
+            catch { throw sanitized(error) }
+        }
+
+        let first = try await perform(method, path: path, query: query, body: body,
+                                      idempotencyKey: idempotencyKey, token: firstToken)
+        if first.http.statusCode == 401, case .required = authentication, let tokenProvider,
+           let rejectedCredential = firstCredential {
+            let refreshed: AccessTokenCredential
+            do {
+                refreshed = try await tokenProvider.refreshAfterUnauthorized(
+                    rejectedCredential: rejectedCredential
+                )
+            }
+            catch { throw sanitized(error) }
+            guard refreshed.userID == rejectedCredential.userID,
+                  refreshed.sessionGeneration == rejectedCredential.sessionGeneration else {
+                throw APIClientError.authenticationRequired
+            }
+            let retry = try await perform(method, path: path, query: query, body: body,
+                                          idempotencyKey: idempotencyKey, token: refreshed.token)
+            return try decode(retry.data, response: retry.http, as: Response.self)
+        }
+        return try decode(first.data, response: first.http, as: Response.self)
+    }
+
+    private func perform<Body: Encodable>(_ method: String, path: String, query: [URLQueryItem],
+                                           body: Body?, idempotencyKey: String?, token: String?) async throws
+        -> (data: Data, http: HTTPURLResponse) {
+        guard !path.contains(".."), var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+            throw APIClientError.invalidRequest
+        }
+        let root = components.path.hasSuffix("/") ? String(components.path.dropLast()) : components.path
+        components.path = root + (path.hasPrefix("/") ? path : "/\(path)")
+        components.queryItems = query.isEmpty ? nil : query
+        guard let url = components.url else { throw APIClientError.invalidRequest }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
+        request.httpMethod = method
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+        request.setValue("no-cache", forHTTPHeaderField: "Pragma")
+        if let token {
+            guard !token.isEmpty, !token.contains(where: { $0.isNewline }) else { throw APIClientError.authenticationRequired }
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        if let idempotencyKey {
+            guard Self.isValidIdempotencyKey(idempotencyKey) else { throw APIClientError.invalidRequest }
+            request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
+        }
+        if let body {
+            let encoded: Data
+            do { encoded = try APIJSON.makeEncoder().encode(body) }
+            catch { throw APIClientError.invalidRequest }
+            guard encoded.count <= limits.requestBodyBytes else {
+                throw APIClientError.requestBodyTooLarge(limit: limits.requestBodyBytes)
+            }
+            request.httpBody = encoded
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        do { return try await transport.data(for: request, maxResponseBytes: limits.responseBodyBytes) }
+        catch let error as APIClientError { throw error }
+        catch { throw APIClientError.transportFailure }
+    }
+
+    private func decode<Response: Decodable>(_ data: Data, response: HTTPURLResponse,
+                                              as: Response.Type) throws -> Response {
+        guard (200 ... 299).contains(response.statusCode) else {
+            let payload = try? APIJSON.makeDecoder().decode(APIErrorPayload.self, from: data)
+            throw APIClientError.http(status: response.statusCode, code: payload?.code,
+                                      requestId: payload?.requestId,
+                                      retryAfterSeconds: payload?.retryAfterSeconds)
+        }
+        do { return try APIJSON.makeDecoder().decode(Response.self, from: data) }
+        catch { throw APIClientError.malformedResponse(status: response.statusCode) }
+    }
+
+    private func sanitized(_ error: Error) -> APIClientError {
+        (error as? APIClientError) ?? .authenticationRequired
+    }
+
+    private static func isValidIdempotencyKey(_ value: String) -> Bool {
+        guard (1 ... 80).contains(value.utf8.count),
+              let first = value.utf8.first, isASCIIAlphaNumeric(first) else { return false }
+        return value.utf8.dropFirst().allSatisfy {
+            isASCIIAlphaNumeric($0) || $0 == 46 || $0 == 95 || $0 == 58 || $0 == 45
+        }
+    }
+
+    private static func isASCIIAlphaNumeric(_ byte: UInt8) -> Bool {
+        (48 ... 57).contains(byte) || (65 ... 90).contains(byte) || (97 ... 122).contains(byte)
+    }
+}

@@ -1,10 +1,27 @@
 # Unfiled
 
-Unfiled is a mobile-first notes app that lets a person capture a thought before deciding where it belongs. The system keeps the original capture, proposes or applies a reversible organization action, and makes every result easy to inspect and correct.
+Unfiled is a capture-first notes product: write before deciding where a thought belongs, then inspect, correct, or undo the organization result.
 
-Current status: **Milestones A, B, and the credential-free Milestone C Gate 3 are complete.** C.5a supplies the expand-only encrypted-library and managed-KMS custody boundary. The current C.5b change set implements the typed encrypted aggregate, service-only envelope/CAS and rollout RPCs, resumable verification-aware backfill, and managed note/capture adapters. Private-manual captures can use the encrypted path now; a fresh AI-assisted capture deliberately fails closed until C.5c supplies the organizer's atomic encrypted writer, and the production repository factory has not switched to these adapters. C.5d still has to remove the plaintext storage/search contract. Account-bound Vercel, AWS, database-login, CloudTrail, rotation, restore, Apple signing, and physical-iPhone evidence remains human-owned in `HUMAN_SETUP.md`. The product is not yet fully encrypted at rest and no mode is end-to-end encrypted.
+The canonical phone client is the native Apple app in [`apps/ios`](./apps/ios). It targets iOS 17 and newer and uses SwiftUI, a WidgetKit Lock Screen extension driven by App Intents, and an Xcode project generated from [`apps/ios/project.yml`](./apps/ios/project.yml) with XcodeGen. Its local capture outbox and note cache use GRDB's SQLCipher build, complete file protection, and a device-generated database key that Keychain releases only while the device is unlocked. The web client and iOS app share the same authenticated backend contracts. [ADR-0010](./docs/decisions/ADR-0010-native-ios-client-replacement.md) records the replacement. Android is intentionally outside this milestone; there is no supported Android client in the current product surface.
 
-Start with the [documentation index](./docs/README.md), the [brand system](./docs/BRAND_SYSTEM_UNFILED.md), or the [full build plan](./docs/BUILD_PLAN.md). The set covers product requirements with acceptance criteria, the complete AI routing specification, the database schema and RLS design, security and privacy (including encrypted bring-your-own-key support for OpenAI or Anthropic), the operations and test plan, the design system, open questions, and architecture decision records.
+The repository still requires account-bound Vercel, AWS, database-login, CloudTrail, Apple signing, archive, and physical-iPhone evidence before production release. Unsigned simulator builds verify compilation and tests, but do not establish provisioning, App Group behavior, Keychain/SQLCipher behavior on hardware, extension packaging, or App Store readiness. The product must not be described as end-to-end encrypted.
+
+## Native iOS quick start
+
+Install full Xcode and the repository-pinned XcodeGen 2.46.0 release, then run these commands from the repository root. The exact generator version is required because later XcodeGen releases may produce a different checked-in project order:
+
+```bash
+pnpm ios:generate
+pnpm ios:resolve
+pnpm ios:build
+pnpm ios:test
+```
+
+`pnpm ios:ci` runs those phases in order. The test script selects an available iPhone Simulator; set `UNFILED_IOS_TEST_DESTINATION` when a specific runtime/device is required.
+
+The generated project exposes `Unfiled Development`, `Unfiled Preview`, and `Unfiled` schemes. Development points at `http://127.0.0.1:3000/api/v1`; Preview and Production origins are defined with the same required `/api/v1` path in the corresponding files under [`apps/ios/Config`](./apps/ios/Config).
+
+Start with the [documentation index](./docs/README.md), the [brand system](./docs/BRAND_SYSTEM_UNFILED.md), the [full build plan](./docs/BUILD_PLAN.md), or the [human-owned release gates](./HUMAN_SETUP.md).
 
 ## Working product sentence
 

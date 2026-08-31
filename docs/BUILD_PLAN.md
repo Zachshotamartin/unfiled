@@ -2,7 +2,7 @@
 
 Product and repository name: **Unfiled**. Trademark, App Store, package-name, social-handle, and domain review remain required before public launch.
 
-Implementation status: **Milestones A, B, and the Milestone C credential-free Gate 3 are complete; C.5a custody/expansion and the C.5b encrypted-aggregate code slice are implemented.** C.5b adds typed encrypted note/capture aggregates, reservation-bound envelope operations, request-MAC replay, service-only CAS/read/backfill capabilities, database-controlled rollout through `encrypted_read`, and managed adapters. Private-manual encrypted capture is executable, while a fresh AI-assisted write deliberately fails closed until C.5c supplies the organizer's atomic encrypted writer. The production repository factory has not switched to the new adapters. Account-bound Vercel/AWS/database, CloudTrail, rotation, restore, Apple signing, and physical-device evidence remains a human gate. C.5c retrieval/organizer integration and C.5d plaintext contraction remain launch-blocking, so the current product is not yet eligible for a complete encrypted-at-rest claim.
+Implementation status: **The server/web portions of Milestones A–C are complete; [ADR-0010](./decisions/ADR-0010-native-ios-client-replacement.md) makes `apps/ios` the canonical phone client and reopens native release evidence. C.5a custody/expansion and the C.5b encrypted-aggregate code slice are implemented.** C.5b adds typed encrypted note/capture aggregates, reservation-bound envelope operations, request-MAC replay, service-only CAS/read/backfill capabilities, database-controlled rollout through `encrypted_read`, and managed adapters. Private-manual encrypted capture is executable, while a fresh AI-assisted write deliberately fails closed until C.5c supplies the organizer's atomic encrypted writer. The production repository factory has not switched to the new adapters. Account-bound Vercel/AWS/database, CloudTrail, rotation, restore, native SQLCipher, Apple signing, archive, and physical-device evidence remain human gates. C.5c retrieval/organizer integration, C.5d plaintext contraction, and the native release gate remain launch-blocking, so the current product is not yet eligible for a complete encrypted-at-rest or native-release claim.
 
 This plan is the spine of a full documentation set; see [docs/README.md](./README.md) for reading order. Companion documents:
 
@@ -30,11 +30,11 @@ The plan makes the following decisions:
 3. **Every automatic change produces a receipt and an undo path.** The user can see what happened, correct it in one or two taps, and teach the system a stable preference.
 4. **Manual notes remain a complete product.** Navigation, search, editing, folders or spaces, history, export, and recovery cannot depend on AI.
 5. **Start with text capture and five note types.** Voice, images, web clipping, collaboration, public publishing, and deep research workflows follow only after routing quality is proven.
-6. **Use one shared TypeScript domain and API, not one stretched UI.** The Next.js web application and Expo mobile application share contracts, domain logic, API clients, design tokens, and tests. They use platform-appropriate screen implementations.
+6. **Share one versioned API contract, not one stretched client runtime.** The Next.js web application and native SwiftUI iPhone application use platform-appropriate models and screens. OpenAPI, representative fixtures, semantic design tokens, and behavior tests keep them aligned; server TypeScript is not imported into the Swift client.
 7. **Use a durable background workflow for organization.** The request that accepts a capture returns quickly; routing and expansion continue reliably and can be retried idempotently.
 8. **Cloud sync is part of the MVP, but capture is offline-capable.** A phone without a connection can still accept a thought into a local outbox and sync it later.
 9. **Do not claim end-to-end encryption while server-side AI reads note content.** Provide a manual-only private-note mode and disclose the actual data path precisely.
-10. **Design the complete core loop before bootstrapping application code.** Start with information architecture, mobile wireframes, dark-mode tokens, high-fidelity core screens, responsive web adaptations, and a clickable prototype. The first coded vertical slice follows the approved design rather than inventing the product while implementing it.
+10. **Design the complete core loop before bootstrapping application code.** Start with information architecture, iPhone wireframes, dark-mode tokens, high-fidelity core screens, responsive web adaptations, and a clickable prototype. The first coded vertical slice follows the approved design rather than inventing the product while implementing it.
 11. **Prove a vertical slice before building a broad knowledge platform.** The first convincing coded demo is capture, route, append, receipt, correction, undo, and cross-device sync.
 12. **Treat Lock Screen capture as a core input surface.** The iPhone widget is part of the durable capture path, not a decorative status widget or a post-MVP extra. One tap must open a focused composer, save locally before any network call, and reuse the same idempotent sync path as an in-app capture.
 13. **Make encrypted library storage a gate before AI routing.** Milestone C.5 moves all content-bearing note, history, workflow, review, and retrieval material to application-encrypted envelopes. The server remains an authorized decryptor for the selected organizer, so this is not E2EE. The accepted first retrieval path is an encrypted, exact, per-user scan; persisted plaintext vectors require a future ADR.
@@ -69,13 +69,13 @@ Apple supports circular, rectangular, and inline accessory families on the iPhon
 #### Capture from the Lock Screen
 
 1. The user taps the widget.
-2. WidgetKit opens a deep link such as `<app-scheme>://capture?source=ios_lock_screen_widget` using `widgetURL(_:)`.
+2. WidgetKit runs `OpenQuickCaptureIntent`, which signals the fixed source and opens the host; an allowlisted `<app-scheme>://capture?source=ios_lock_screen_widget` URL provides the equivalent direct route.
 3. iOS authenticates the user if the device is locked.
-4. Expo Router opens the dedicated `/capture` route, not the home screen and not the last open note.
+4. The SwiftUI application consumes the App Group signal (or handles the equivalent allowlisted URL) and presents its dedicated capture destination, not the home screen or the last open note.
 5. The composer appears with no intermediate animation, onboarding, loading skeleton, folder picker, or AI greeting.
-6. The multiline input receives focus after the native scene and React tree are active; the keyboard opens automatically.
+6. The multiline input receives focus after the SwiftUI scene is active; the keyboard opens automatically.
 7. The user types and presses Send from the keyboard or taps the 44-point send control.
-8. The app writes the raw capture and its client ULID to SQLite in one transaction before displaying `Saved` or triggering haptics.
+8. The app commits the raw capture and its client ULID to the SQLCipher database through one GRDB transaction before displaying `Saved` or triggering haptics.
 9. Sync begins immediately when possible. The app may close or remain available for another capture; either way, organization continues independently.
 10. A short local acknowledgement says `Saved` and, only when already known, `Queued offline`. It must not invent the future destination.
 
@@ -103,116 +103,90 @@ Record only timings, route source, outcome codes, app version, and device class.
 ```text
 iPhone Lock Screen
   -> WidgetKit accessory widget
-  -> <app-scheme>://capture?source=ios_lock_screen_widget
-  -> Expo Router /capture
-  -> focused React Native CaptureComposer
-  -> SQLite transaction: draft + capture outbox row
+  -> OpenQuickCaptureIntent
+  -> content-free App Group signal
+  -> native intent/URL router
+  -> focused SwiftUI CaptureComposer
+  -> SQLCipher/GRDB transaction: draft + capture outbox row
   -> existing idempotent POST /api/v1/captures
   -> durable organization workflow
-  -> receipt visible in Today on mobile and web
+  -> receipt visible in Today on iPhone and web
 
-Main Expo app
+Main SwiftUI app
   -> App Group snapshot writer
   -> WidgetCenter timeline reload
   -> WidgetKit reads generic pending count only
 ```
 
-The widget is a native iOS app extension and runs in a separate process. It must not import the database client, call the AI provider, contain authentication tokens, or reproduce the capture service. Its only MVP responsibilities are rendering a safe launch surface, carrying a constant allowlisted deep link, and optionally reading a small non-sensitive snapshot from an App Group container.
+The widget is a native iOS app extension and runs in a separate process. It must not import the database client, call the AI provider, contain authentication tokens, or reproduce the capture service. Its only MVP responsibilities are rendering a safe launch surface, invoking the parameter-free App Intent, and optionally reading a small non-sensitive snapshot from an App Group container. The configured capture URL reaches the same destination for direct system routing.
 
-### 0.5 Native project strategy for the Expo application
+### 0.5 Native project strategy
 
-Use a small Swift WidgetKit extension generated by a checked-in Expo config plugin. Do not make the first production version depend on the current alpha `expo-widgets` API. As of this planning update, Expo's widget package is explicitly alpha, requires development builds, and does not yet document normal-widget deep linking clearly. Re-evaluate it at implementation time; adopt it only if it is stable, supports `widgetURL` or `Link` for this flow, and passes the same physical-device tests. See [Expo's current widget package documentation](https://github.com/expo/expo/blob/main/docs/pages/versions/v55.0.0/sdk/widgets.mdx) and [EAS iOS app-extension guidance](https://docs.expo.dev/build-reference/app-extensions/).
+The canonical phone client is a native SwiftUI iPhone application. WidgetKit and App Intents live beside the application in one declaratively generated Xcode project. ADR-0010 records the replacement decision; ADR-0003 records immutable identifiers.
 
-Keep generated native code reproducible. Store owned sources here:
+Authored project inputs live here:
 
 ```text
-apps/mobile/
-  app.config.ts
-  plugins/
-    withQuickCaptureWidget.ts
-  native-targets/
-    quick-capture-widget/
-      QuickCaptureWidget.swift
-      QuickCaptureWidgetBundle.swift
-      QuickCaptureProvider.swift
-      Assets.xcassets/
-      Info.plist
-      QuickCaptureWidget.entitlements
-  modules/
-    quick-capture-widget/
-      ios/
-        QuickCaptureWidgetModule.swift
-        UnfiledQuickCaptureBridge.podspec
-      src/index.ts
-  src/app/
-    capture.tsx
-    +native-intent.tsx
-  src/features/capture/
-    CaptureComposer.tsx
-    captureDraftRepository.ts
-    lockScreenCapture.ts
+apps/ios/
+  project.yml                         # XcodeGen source of truth
+  Config/
+    Base.xcconfig
+    Development.xcconfig
+    Preview.xcconfig
+    Production.xcconfig
+  Shared/                             # App Group constants and brand primitives
+  Unfiled/
+    Application/                      # app entry point, scene routing, composition
+    Auth/                             # session and Keychain boundary
+    Domain/                           # native models and operations
+    Networking/                       # versioned HTTPS client and strict DTOs
+    Persistence/                      # GRDB + SQLCipher database and migrations
+    Sync/                             # durable outbox and reconciliation
+    Features/                         # SwiftUI feature surfaces
+    Resources/
+    Supporting/                       # plist, entitlements, privacy manifest
+  QuickCaptureWidget/
+    QuickCaptureWidget.swift
+    OpenQuickCaptureIntent.swift
+    Resources/
+    Supporting/
+  UnfiledTests/
 ```
 
-`withQuickCaptureWidget.ts` must be deterministic and idempotent. During `expo prebuild`, it:
+`apps/ios/project.yml` declares the application, `QuickCaptureWidget`, and test targets; Swift Package dependencies; build configurations; shared schemes; target membership; and iOS 17 deployment floor. `Config/*.xcconfig` supplies fixed per-environment bundle IDs, App Group IDs, URL schemes, display names, and API origins. XcodeGen produces `apps/ios/Unfiled.xcodeproj` deterministically. Never introduce a durable change only through Xcode's project editor: change the declarative inputs and regenerate.
 
-1. Creates the `QuickCaptureWidget` extension target if it does not exist.
-2. Copies the checked-in Swift, plist, asset, and entitlement sources into the generated iOS project.
-3. Sets target membership, Swift version, deployment target, application-extension-only build settings, and the extension product type.
-4. Adds WidgetKit and SwiftUI frameworks.
-5. Gives both the main target and extension the same App Group entitlement.
-6. Sets the extension bundle identifier to `<main-bundle-id>.quickcapture`.
-7. Adds the extension to the containing application's Embed App Extensions phase once, without duplicating entries on repeated prebuilds.
+The application and extension share Swift sources only when those sources are extension-safe. The extension must not link persistence, networking, auth, or server-domain modules. Both targets receive the same App Group entitlement and environment-specific identifier through checked configuration. A clean generation/build check must prove that the extension is embedded once and that repeated generation is stable.
 
-Declare the extension before EAS generates credentials so provisioning includes the second bundle identifier and shared App Group:
+Local and CI commands are exposed at the repository root:
 
-```ts
-// apps/mobile/app.config.ts, representative shape
-export default {
-  expo: {
-    scheme: process.env.APP_SCHEME,
-    ios: {
-      bundleIdentifier: process.env.IOS_BUNDLE_ID
-    },
-    plugins: ["./plugins/withQuickCaptureWidget"],
-    extra: {
-      eas: {
-        build: {
-          experimental: {
-            ios: {
-              appExtensions: [
-                {
-                  targetName: "QuickCaptureWidget",
-                  bundleIdentifier: `${process.env.IOS_BUNDLE_ID}.quickcapture`,
-                  entitlements: {
-                    "com.apple.security.application-groups": [`group.${process.env.IOS_BUNDLE_ID}`]
-                  }
-                }
-              ]
-            }
-          }
-        }
-      }
-    }
-  }
-};
-```
+- `pnpm ios:generate` — generate the Xcode project from `project.yml`;
+- `pnpm ios:build` — perform a code-signing-disabled iOS Simulator build from the generated project;
+- `pnpm ios:test` — run the native tests on the selected Simulator;
+- `pnpm ios:ci` — generate, resolve Swift packages, build, and test in the same order as the macOS CI lane.
 
-Resolve `APP_SCHEME`, bundle identifiers, and App Group identifiers when the launch name is selected. Use fixed per-environment values in checked build profiles; never let an unset environment variable silently produce an invalid production entitlement.
+These commands require macOS and the selected Xcode/XcodeGen toolchain. They deliberately do not manage Apple credentials. Signing identities, App IDs, App Groups, and provisioning profiles are created and verified through the human release gate.
 
 ### 0.6 WidgetKit implementation
 
-Use `StaticConfiguration` because the user has no widget-side destination to configure. The full widget opens the same capture route with one `widgetURL`. Do not put multiple competing tap targets in the Lock Screen version.
+Use `StaticConfiguration` because the user has no widget-side destination to configure. The full widget contains one `Button(intent:)` backed by an `AppIntent` whose only effect is to signal the allowlisted quick-capture route and open the host application. Do not put competing tap targets or parameters in the Lock Screen version.
 
 Representative Swift structure:
 
 ```swift
+import AppIntents
 import SwiftUI
 import WidgetKit
 
-private let appGroup = "group.<resolved-bundle-id>"
-private let captureURL = URL(
-  string: "<resolved-app-scheme>://capture?source=ios_lock_screen_widget"
-)!
+struct OpenQuickCaptureIntent: AppIntent {
+  static let title: LocalizedStringResource = "Write in Unfiled"
+  static let openAppWhenRun = true
+
+  @MainActor
+  func perform() async throws -> some IntentResult {
+    AppGroupConfiguration.signalQuickCapture()
+    return .result()
+  }
+}
 
 struct QuickCaptureEntry: TimelineEntry {
   let date: Date
@@ -239,10 +213,10 @@ struct QuickCaptureProvider: TimelineProvider {
   }
 
   private func entry() -> QuickCaptureEntry {
-    let defaults = UserDefaults(suiteName: appGroup)
+    let defaults = AppGroupConfiguration.sharedDefaults
     return .init(
       date: .now,
-      pendingCount: defaults?.integer(forKey: "pendingCaptureCount") ?? 0
+      pendingCount: defaults?.integer(forKey: AppGroupConfiguration.pendingCaptureCountKey) ?? 0
     )
   }
 }
@@ -252,25 +226,27 @@ struct QuickCaptureWidgetView: View {
   let entry: QuickCaptureEntry
 
   var body: some View {
-    Group {
-      if family == .accessoryRectangular {
-        HStack(spacing: 8) {
-          Image(systemName: "square.and.pencil")
-          VStack(alignment: .leading, spacing: 1) {
-            Text("Write something").font(.headline)
-            if entry.pendingCount > 0 {
-              Text("\(entry.pendingCount) waiting to sync").font(.caption)
+    Button(intent: OpenQuickCaptureIntent()) {
+      Group {
+        if family == .accessoryRectangular {
+          HStack(spacing: 8) {
+            Image(systemName: "square.and.pencil")
+            VStack(alignment: .leading, spacing: 1) {
+              Text("Write something").font(.headline)
+              if entry.pendingCount > 0 {
+                Text("\(entry.pendingCount) waiting to sync").font(.caption)
+              }
             }
           }
-        }
-      } else {
-        ZStack {
-          AccessoryWidgetBackground()
-          Image(systemName: "square.and.pencil")
+        } else {
+          ZStack {
+            AccessoryWidgetBackground()
+            Image(systemName: "square.and.pencil")
+          }
         }
       }
     }
-    .widgetURL(captureURL)
+    .buttonStyle(.plain)
     .accessibilityLabel("New capture")
   }
 }
@@ -290,41 +266,32 @@ struct QuickCaptureWidget: Widget {
 }
 ```
 
-Replace placeholder identifiers at build generation, not with runtime string interpolation inside the extension. Verify the final Swift code against the selected Xcode and iOS SDK because WidgetKit appearance APIs evolve.
+Read identifiers through checked build settings and the shared configuration helper; never interpolate placeholders or environment variables at runtime. Verify the final Swift code against the selected Xcode and iOS SDK because WidgetKit appearance APIs evolve.
 
-### 0.7 Deep-link and composer implementation
+### 0.7 URL routing and composer implementation
 
-Expo Router supports deep links for file routes when a custom scheme is defined. See [Expo Router navigation and deep links](https://docs.expo.dev/router/basics/navigation/) and [linking into an Expo app](https://docs.expo.dev/linking/into-your-app/).
+The SwiftUI application receives URLs through its scene and sends them to one typed router. The router parses the configured scheme, rejects unknown hosts and paths, and maps the quick-capture source to a presentation value rather than performing the persistence side effect itself. See [SwiftUI `onOpenURL`](<https://developer.apple.com/documentation/swiftui/view/onopenurl(perform:)>) and [Migrating to the SwiftUI life cycle](https://developer.apple.com/documentation/swiftui/migrating-to-the-swiftui-life-cycle).
 
 Implementation rules:
 
-- `/capture` accepts only an allowlisted `source` enum. Ignore every other query parameter. Never accept note content, destination IDs, or commands from this unauthenticated URL.
-- `+native-intent.tsx` rewrites legacy or malformed capture URLs to `/capture?source=ios_lock_screen_widget` and sends unknown native paths to a safe route.
+- The router requires the configured scheme and `capture` host, reads only a recognized `source` enum, and ignores all other path/query material. A missing or unrecognized source becomes the ordinary in-app capture origin. Never accept note content, destination IDs, operations, credentials, or arbitrary return URLs.
+- The scene-level router normalizes the widget signal to the `ios_lock_screen_widget` source. A URL with the wrong scheme or host is inert; every accepted URL can only present a blank composer.
 - The source enum adds `ios_lock_screen_widget`; analytics and the API may receive that enum, but server behavior and authorization stay identical.
-- On a warm launch, dismiss any open modal and present the dedicated composer. On a cold launch, make `/capture` the initial resolved route without rendering the normal home screen first.
-- Keep one draft row per local profile and capture source. Update it in SQLite with a short debounce and flush immediately when the app backgrounds.
-- Do not rely on JSX `autoFocus` alone. Hold a `TextInput` ref, wait for the app state to be `active` and navigation interactions to finish, call `focus()` on the next animation frame, and retry once if `isFocused()` is false. Cancel pending focus work when the route unmounts.
+- On a warm launch, dismiss a conflicting sheet and present the dedicated composer. On a cold launch, resolve capture intent during application composition so the normal home screen does not flash first.
+- Keep one draft row per local profile and capture source. Update it through the GRDB repository with a short debounce and flush immediately when the scene backgrounds.
+- Use SwiftUI focus state after the scene becomes active. Schedule focus on the main actor after presentation, retry once if the editor is not focused, and cancel pending work when the composer disappears.
 - The keyboard Return key inserts a newline in multiline mode. Provide a separate accessible Send button and an optional keyboard accessory Send action; never make an accidental Return submit a multi-line capture.
-- Submission runs one SQLite transaction that inserts the capture, inserts or updates the outbox record, and deletes the draft. Only after commit may the UI show `Saved` and emit success haptics.
+- Submission asks one persistence actor to run a GRDB transaction that inserts the capture, inserts or updates the outbox record, and deletes the draft. Only after the SQLCipher transaction commits may the UI show `Saved` and emit success haptics.
 - Disable Send only while the local transaction is committing. Trim for the empty check, but preserve the user's original whitespace and exact raw body in the stored source capture according to the capture contract.
 - Generate the ULID before the transaction and reuse it as the API idempotency key. A rapid double tap, app restart, or sync retry must still produce one server capture.
 
-### 0.8 App Group bridge and widget refresh
+### 0.8 App Group snapshot and widget refresh
 
-Create a tiny Expo native bridge. Its CocoaPods pod and Swift module are named `UnfiledQuickCaptureBridge` so they cannot collide with the `QuickCaptureWidget` extension target. The Expo entry class remains `QuickCaptureWidgetModule` and registers the JavaScript module as `QuickCaptureWidget`. Its public JavaScript API is deliberately narrow:
+`AppGroupConfiguration` is a small extension-safe Swift helper shared by target membership. The host writes only a schema version, a bounded non-negative pending count, and the one-shot capture signal to `UserDefaults(suiteName:)`, then calls `WidgetCenter.shared.reloadTimelines(ofKind:)` after a debounced count change. WidgetKit controls the actual reload schedule, so the count is informative, never authoritative.
 
-```ts
-type WidgetSnapshot = {
-  pendingCaptureCount: number;
-};
+The App Intent may set only the capture signal before asking iOS to open the host. The application consumes and clears that signal, then resolves the same allowlisted route used by its URL handler. Repeated intent delivery is harmless and cannot submit content.
 
-export function setWidgetSnapshot(snapshot: WidgetSnapshot): Promise<void>;
-export function reloadQuickCaptureWidget(): Promise<void>;
-```
-
-The Swift module writes only `pendingCaptureCount` and a schema version to `UserDefaults(suiteName:)`, then calls `WidgetCenter.shared.reloadTimelines(ofKind: "QuickCaptureWidget")`. Call it after the local outbox count changes, with a debounce to avoid unnecessary reload requests. WidgetKit controls the actual reload schedule, so the count is helpful but never authoritative.
-
-Do not share the SQLite file, Supabase session, raw captures, user email, note titles, or API keys with the extension. If App Group provisioning fails, the widget must still render the generic capture action and open the composer; it may omit the pending count.
+Do not share the SQLCipher file, Supabase session, raw captures, drafts, user email, note titles, destination names, or key material with the extension. If App Group provisioning fails, the widget can still render but its intent signal is unavailable; direct URL routing is a separately testable entry, not a silent widget fallback. This configuration failure blocks release and must be caught by the signed physical-device gate.
 
 ### 0.9 Backend and data-contract changes
 
@@ -339,16 +306,16 @@ The widget does not get a special backend endpoint. Reuse the normal capture pip
 
 ### 0.10 Signing, builds, and developer workflow
 
-The widget cannot run in Expo Go. Use an EAS development build and a physical iPhone for the primary workflow.
+Simulator CI is intentionally unsigned. Use a signed development configuration and a physical iPhone for the primary widget, App Intent, protected-data, and SQLCipher workflow.
 
 Before the first shared build:
 
 1. Register the main App ID and the explicit widget-extension App ID in the Apple Developer portal.
 2. Register one App Group and enable it on both identifiers.
-3. Declare the EAS app extension before credential generation.
-4. Generate or refresh provisioning profiles for both targets after capabilities exist.
-5. Run `expo prebuild --clean` in CI or a clean verification job and confirm the config plugin reproduces the target without a hand-edited Xcode project.
-6. Build the Debug extension with Xcode previews, then install the EAS development build on a real phone.
+3. Add the application and extension capabilities before generating provisioning profiles.
+4. Generate or refresh profiles for both targets after App Group membership exists.
+5. Run `pnpm ios:generate` from a clean checkout and confirm XcodeGen reproduces the application, extension, schemes, package dependencies, build settings, and entitlements.
+6. Build the Development scheme with Xcode previews, then install the signed application on a real phone.
 7. Test the release provisioning profile before TestFlight; Debug success alone is insufficient evidence.
 
 Keep an automated native-project inspection script that fails CI if the generated extension is missing its bundle identifier, App Group entitlement, embedded appex product, supported families, or shared scheme URL.
@@ -359,11 +326,11 @@ Automated coverage:
 
 - unit tests for source allowlisting, native-path rewriting, draft persistence, outbox transaction, and duplicate submission
 - contract test proving `ios_lock_screen_widget` is accepted by client, API, and database schemas
-- config-plugin test that runs prebuild twice and compares target, build phase, plist, and entitlement counts
+- XcodeGen test that generates twice and compares targets, schemes, package references, build phases, plist paths, and entitlements
 - Swift tests for App Group snapshot defaults and schema migration
 - Xcode snapshot or preview coverage for circular and rectangular families in accented, tinted, clear, dark, and light contexts
 - API restart test proving the same ULID syncs exactly once
-- mobile integration test that opens the production-scheme URL and asserts `/capture`, focused input, local save, and queued state
+- native integration tests for both the App Intent signal and configured URL, asserting capture presentation, focused input, encrypted local save, and queued state
 
 Physical-device matrix:
 
@@ -376,7 +343,7 @@ Physical-device matrix:
 - VoiceOver, Switch Control, Reduce Motion, Reduce Transparency, and Bold Text
 - dark, light, tinted, clear, and always-on-display presentation where supported
 - rapid double tap, repeated deep link, empty send, very long capture, emoji, right-to-left text, and dictation through the system keyboard
-- storage pressure and simulated SQLite failure, which must show an honest error rather than `Saved`
+- storage pressure, locked/unavailable database-key material, and simulated SQLCipher transaction failure, which must show an honest error rather than `Saved`
 
 Release gate:
 
@@ -389,11 +356,11 @@ Release gate:
 
 ### 0.12 Delivery order
 
-1. Add the `/capture` deep-link route and prove reliable cold- and warm-start autofocus using a temporary URL before creating the widget target.
-2. Add draft persistence and the SQLite outbox transaction; pass termination and duplicate tests.
+1. Add the native capture URL route and prove reliable cold- and warm-start focus using a temporary URL before creating the widget target.
+2. Add draft persistence and the GRDB/SQLCipher outbox transaction; pass termination and duplicate tests.
 3. Prototype both widget families in a minimal native test host and approve the Lock Screen design states.
-4. Implement the deterministic config plugin and EAS extension declaration.
-5. Add App Group snapshot storage and the narrow native refresh module.
+4. Implement and determinism-test the XcodeGen application, extension, test targets, schemes, and environment configurations.
+5. Add the extension-safe App Group snapshot helper and App Intent.
 6. Run the physical-device matrix and tune launch performance.
 7. Add onboarding instructions, telemetry without content, CI project inspection, and TestFlight validation.
 8. Only after the Lock Screen path passes its gate, reuse the same deep link for an optional Home Screen widget, Action Button shortcut, App Shortcut, or Control Center control.
@@ -426,7 +393,7 @@ Organization should become more accurate through explicit corrections and determ
 
 ### The flagship demonstration
 
-A user opens the mobile app and submits three messages over a day:
+A user opens the native iPhone app and submits three messages over a day:
 
 1. `shopping: milk, spinach, batteries`
 2. `bench 135 x 8, 145 x 6, 155 x 4; incline dumbbell 45 x 10 for 3 sets`
@@ -464,7 +431,7 @@ The product is not marketed as a second brain, research tool, or autonomous chie
 - The user always knows what changed.
 - A wrong decision is easy to correct and undo.
 - Corrections become stable personal routing rules.
-- The mobile app is the primary capture surface, not a companion afterthought.
+- The native iPhone app is the primary capture surface, not a companion afterthought.
 - Manual browsing and editing are obvious enough that the user never feels trapped behind AI.
 
 ### Product language
@@ -574,11 +541,11 @@ Do not make medical, therapeutic, or accessibility claims without appropriate ev
 ### 5.1 MVP scope
 
 - Email magic-link or one-time-code authentication
-- iOS and Android application through Expo development builds
+- native SwiftUI iPhone application for iOS 17 or later; another mobile platform is outside this milestone
 - iPhone Lock Screen quick-capture widget that opens a focused, offline-capable composer through a deep link
 - Responsive web application and marketing page hosted on Vercel
-- Text capture from mobile and web
-- Offline mobile capture outbox
+- Text capture from native iPhone and web
+- Offline native capture outbox
 - Five note types: generic note, list, log, principle, project
 - Interactive typed note surfaces: tap-to-toggle checklist items on list and project notes, tap-to-edit numeric fields on log entries
 - Spaces, notes, tags, date views, archive, and manual editor
@@ -637,7 +604,7 @@ Do not make medical, therapeutic, or accessibility claims without appropriate ev
 
 ## 6. Information Architecture and UX
 
-### 6.1 Mobile navigation
+### 6.1 Native iPhone navigation
 
 Use a five-destination bottom navigation:
 
@@ -649,7 +616,7 @@ Use a five-destination bottom navigation:
 
 `Settings`, `Archive`, `Routing rules`, and account controls live behind the profile button. The capture action opens a focused composer rather than switching to a permanent tab screen.
 
-Mobile has no dedicated Inbox tab. Inbox captures surface in two places: a `Needs a home` section at the top of `Today`, and inside `Review` when they carry suggested destinations. The web rail keeps a dedicated `Inbox` entry because desktop has room for it. Both surfaces read from the same underlying state: a capture whose processing status is `inbox`.
+The iPhone application has no dedicated Inbox tab. Inbox captures surface in two places: a `Needs a home` section at the top of `Today`, and inside `Review` when they carry suggested destinations. The web rail keeps a dedicated `Inbox` entry because desktop has room for it. Both surfaces read from the same underlying state: a capture whose processing status is `inbox`.
 
 ### 6.2 Web navigation
 
@@ -689,7 +656,7 @@ The Notes screen provides manual navigation:
 - note types
 - all notes
 
-On mobile, opening a note shows a clear back path and a compact breadcrumb such as `Health / Workouts / Aug 30`. On web, the hierarchy remains visible in the rail.
+On iPhone, opening a note shows a clear back path and a compact breadcrumb such as `Health / Workouts / Aug 30`. On web, the hierarchy remains visible in the rail.
 
 ### 6.5 Capture composer
 
@@ -745,7 +712,7 @@ The MVP editor supports:
 - simple tags and note links
 - undo and redo
 
-Avoid a custom block editor in the first milestone. Use revision checks for writes and add a richer editor only when the cross-platform behavior is proven. The canonical content source differs by note type; Section 6.9 and Section 12.1 define the rule.
+Avoid a custom block editor in the first milestone. Use revision checks for writes and add a richer editor only when equivalent web/Swift behavior is proven. The canonical content source differs by note type; Section 6.9 and Section 12.1 define the rule.
 
 ### 6.9 Interactive typed note surfaces
 
@@ -1103,7 +1070,7 @@ Each case includes expected candidate set, permitted decisions, forbidden destin
 
 - **Monorepo:** pnpm workspaces plus Turborepo
 - **Web:** Next.js App Router, React, TypeScript, deployed to Vercel
-- **Mobile:** Expo, React Native, Expo Router, EAS development and store builds
+- **Native iPhone:** Swift 6, SwiftUI, WidgetKit, App Intents, iOS 17+, and XcodeGen
 - **API:** versioned Next.js route handlers in the web deployment for MVP
 - **Auth, database, storage, realtime:** Supabase
 - **Database:** PostgreSQL with Row Level Security; encrypted content envelopes and encrypted per-user retrieval documents
@@ -1112,32 +1079,32 @@ Each case includes expected candidate set, permitted decisions, forbidden destin
 - **AI:** official OpenAI JavaScript SDK, Responses API, strict Structured Outputs
 - **Validation:** Zod at application boundaries plus database constraints
 - **Web styling:** Tailwind CSS with semantic CSS variables
-- **Native styling:** NativeWind or platform StyleSheet using the same semantic tokens, chosen after a prototype
+- **Native styling:** SwiftUI semantic theme primitives derived from the approved visual tokens, with Dynamic Type and system accessibility behavior
 - **Server data access:** generated Supabase types plus reviewed SQL functions for transactional mutations
-- **Client data fetching:** TanStack Query with a generated typed API client
-- **Local mobile persistence:** Expo SQLite for capture outbox and cached read models
+- **Client data fetching:** TanStack Query on web; actor-isolated `URLSession` client with strict `Codable` DTOs on iPhone
+- **Local native persistence:** GRDB backed by SQLCipher for drafts, capture outbox, sync metadata, and bounded cached read models; database key in Keychain
 - **Web offline draft storage:** IndexedDB
-- **Testing:** Vitest or Node test runner for packages, Playwright for web, Maestro for device flows, SQL tests for RLS and database functions
+- **Testing:** Vitest or Node test runner for packages, Playwright for web, XCTest/XCUITest for native behavior, and SQL tests for RLS and database functions
 - **Observability:** Vercel logs and traces plus Sentry for client and server errors, with note content redacted
 
 Pin actual versions during bootstrap after verifying current compatibility. Do not copy version numbers from this planning date into a future lockfile without checking official release guidance.
 
 ### 10.2 Why two clients
 
-Expo Router can target web, but this product benefits from two optimized surfaces:
+This product benefits from two optimized client surfaces:
 
 - The native app needs offline capture, keyboard behavior, haptics, share sheet, widgets, notifications, and app-store delivery.
 - The hosted web product needs a strong desktop editor, responsive split-pane navigation, marketing routes, metadata, and Vercel-native APIs.
 
-Share domain logic and visual tokens. Do not force every web editor interaction through React Native Web or duplicate the backend.
+Share the versioned HTTPS/OpenAPI contract, fixtures, behavioral rules, and semantic visual tokens. Do not duplicate the backend or claim runtime-code sharing between TypeScript and Swift.
 
 ### 10.3 Logical architecture
 
 ```text
-Expo mobile app                       Next.js web app
-  | local outbox                        | web capture/editor
-  |                                     |
-  +------------ versioned HTTPS API ----+
+Native SwiftUI iPhone app             Next.js web app
+  | SQLCipher outbox                     | web capture/editor
+  |                                       |
+  +------------- versioned HTTPS API -----+
                         |
                  auth and rate limits
                         |
@@ -1154,12 +1121,12 @@ Expo mobile app                       Next.js web app
                 both clients refresh
 ```
 
-The iOS input edge sits in front of the mobile application:
+The iOS input edge sits in front of the SwiftUI application:
 
 ```text
 Lock Screen WidgetKit extension
-  -> allowlisted deep link
-  -> Expo Router /capture
+  -> App Intent / allowlisted URL
+  -> SwiftUI capture destination
   -> the same local outbox and API path shown above
 ```
 
@@ -1185,15 +1152,18 @@ unfiled/
   apps/
     web/                    # marketing, authenticated app, owner-authorized API
     worker/                 # separately deployed organization/index worker; AI-only KMS role
-    mobile/                 # Expo iOS and Android application
-      plugins/              # deterministic native-target config plugins
-      native-targets/       # checked-in WidgetKit extension sources and assets
-      modules/              # narrow Expo native bridges, including widget refresh
+    ios/                    # native SwiftUI iPhone application and generated Xcode project
+      Config/               # checked build settings for each environment
+      Shared/               # extension-safe App Group and brand primitives
+      Unfiled/              # app, domain, networking, persistence, sync, and feature sources
+      QuickCaptureWidget/   # WidgetKit extension and App Intent
+      UnfiledTests/         # Swift unit, integration, and presentation tests
+      project.yml           # XcodeGen source of truth
   packages/
     contracts/              # versioned API schemas and DTOs
     domain/                 # notes, captures, routing, revisions, undo
     ai-routing/             # candidates, prompt schemas, scoring, model port
-    api-client/             # typed client used by web and mobile
+    api-client/             # typed TypeScript client used by web/server tests
     database/               # migrations, generated types, SQL functions, RLS tests
     sync/                   # outbox, idempotency, cursors, reconciliation
     search/                 # encrypted retrieval documents, ranking, index lifecycle
@@ -1226,15 +1196,17 @@ unfiled/
 Dependency direction:
 
 ```text
-contracts <- domain <- application services <- web/mobile adapters
+contracts <- domain <- application services <- web/worker adapters
                          ^
                          |-- database adapter
                          |-- workflow adapter
                          |-- OpenAI adapter
                          |-- search adapter
+
+OpenAPI + fixtures <-> native Swift DTOs/repositories/views
 ```
 
-`domain` must not import Next.js, Expo, Supabase, Vercel, or the OpenAI SDK.
+The TypeScript `domain` package must not import Next.js, Supabase, Vercel, Apple frameworks, or the OpenAI SDK. Swift domain and persistence code must not import server packages; the native network boundary depends only on the versioned API contract and fixtures.
 
 ## 12. Data Model
 
@@ -1529,9 +1501,9 @@ Every mutation accepts an idempotency key. Errors use stable machine codes and s
 
 ## 14. Offline Capture and Sync
 
-### 14.1 Mobile outbox
+### 14.1 Native iPhone outbox
 
-The mobile client writes each capture to Expo SQLite before showing success. The row includes:
+The native iPhone client commits each capture through GRDB into its SQLCipher database before showing success. The row includes:
 
 - client ULID
 - raw content
@@ -1540,7 +1512,7 @@ The mobile client writes each capture to Expo SQLite before showing success. The
 - sync state
 - retry count and last safe error
 
-A background sync loop sends pending rows with bounded exponential backoff. App foregrounding, connection restoration, and manual retry can wake the loop.
+A foreground-owned sync loop sends pending rows with bounded exponential backoff. It starts or wakes when the scene is active, connectivity returns, or the user retries, and stops as soon as the scene becomes inactive. Server-side organization continues independently after durable acceptance; the native client does not decrypt its protected database or promise network retries while backgrounded.
 
 ### 14.2 Server authority
 
@@ -1562,7 +1534,7 @@ The web app stores unsent composer text and pending submissions in IndexedDB. Fu
 
 ### Design read
 
-A calm personal utility, dark-first and mobile-first, with the hierarchy of a good editor rather than the density of a research dashboard. It should feel private, grounded, and fast. Avoid AI-purple gradients, glowing agent avatars, chat bubbles as the primary UI, and decorative knowledge graphs.
+A calm personal utility, dark-first and phone-first, with the hierarchy of a good editor rather than the density of a research dashboard. It should feel private, grounded, and fast. Avoid AI-purple gradients, glowing agent avatars, chat bubbles as the primary UI, and decorative knowledge graphs.
 
 Working design dials:
 
@@ -1575,12 +1547,12 @@ Working design dials:
 Complete this sequence before framework and database bootstrap:
 
 1. **Journey map:** diagram the paths from idea to durable capture, pending organization, receipt, correction, Review, manual edit, search, and undo.
-2. **Information architecture:** finalize the mobile bottom navigation, web rail, note hierarchy, breadcrumbs, and the relationship between Today, Inbox, Notes, Spaces, and Review.
-3. **Low-fidelity mobile wireframes:** design the smallest phone viewport first for Today, Capture, Lock Screen widget entry, processing, receipt, Notes, note editor, Review, Search, offline, and error states.
-4. **Low-fidelity desktop wireframes:** adapt the same tasks to a left-rail and editor layout. Do not merely stretch the mobile screen.
+2. **Information architecture:** finalize the iPhone tab navigation, web rail, note hierarchy, breadcrumbs, and the relationship between Today, Inbox, Notes, Spaces, and Review.
+3. **Low-fidelity iPhone wireframes:** design the smallest supported phone first for Today, Capture, Lock Screen widget entry, processing, receipt, Notes, note editor, Review, Search, offline, and error states.
+4. **Low-fidelity desktop wireframes:** adapt the same tasks to a left-rail and editor layout. Do not merely stretch the iPhone screen.
 5. **Brand foundation:** use [BRAND_SYSTEM_UNFILED.md](./BRAND_SYSTEM_UNFILED.md) to produce the vector mark/wordmark, app and WidgetKit variants, public-site narrative, voice rules, and a documented name-clearance outcome.
 6. **Dark visual system:** convert the brand palette into semantic color, type, spacing, radius, icon, motion, focus, and elevation tokens with contrast evidence.
-7. **High-fidelity mobile screens:** create the complete flagship flow, including both Lock Screen widget families, locked and unlocked entry, keyboard-open capture, restored draft, optimistic Saved state, background processing, receipt, Move, and Undo. Include the interactive surfaces: checking items off a list one-handed and tap-to-edit numeric fields on a workout entry.
+7. **High-fidelity iPhone screens:** create the complete flagship flow, including both Lock Screen widget families, locked and unlocked entry, keyboard-open capture, restored draft, optimistic Saved state, background processing, receipt, Move, and Undo. Include the interactive surfaces: checking items off a list one-handed and tap-to-edit numeric fields on a workout entry.
 8. **High-fidelity web screens:** create Today, the manual Notes library, the editor, Search, and Review at laptop and wide-desktop sizes.
 9. **Public website system:** implement the six-section narrative defined by the brand system as separate responsive sections with real product crops and one global CTA contract.
 10. **Clickable prototype:** connect the flagship shopping, workout, mindset, ambiguous-routing, manual-edit, and undo flows using realistic copy.
@@ -1589,7 +1561,7 @@ Complete this sequence before framework and database bootstrap:
 
 Apply the taste-skill preflight to the marketing surface and the relevant product-design rules to the application. The product UI is a daily utility, so prioritize clarity over landing-page spectacle. Do not use fake dashboard screenshots, generic three-card layouts, decorative glows, unexplained motion, or a chat-first shell.
 
-Design approval means the core loop is coherent across mobile and web. It does not mean every future settings page is polished before engineering starts.
+Design approval means the core loop is coherent across iPhone and web. It does not mean every future settings page is polished before engineering starts.
 
 ### Theme
 
@@ -1637,7 +1609,7 @@ Honor reduced motion. Do not use perpetual AI shimmer after loading completes.
 
 - WCAG AA minimum, AAA target for primary reading text
 - minimum 44 by 44 point touch targets
-- Dynamic Type and font scaling on mobile
+- Dynamic Type and font scaling on iPhone
 - keyboard navigation and visible focus on web
 - screen-reader labels and live announcements for Save, processing, receipt, error, and undo
 - reduced motion and reduced transparency behavior
@@ -1795,7 +1767,7 @@ Persisted retrieval documents are ciphertext; PostgreSQL never receives plaintex
 
 ### 18.3 Contract tests
 
-- mobile and web clients validate the same API fixtures
+- Swift and web clients validate the same versioned API fixtures
 - server returns stable error codes
 - old supported client schema versions remain compatible
 - idempotent retries return the original capture and mutation
@@ -1821,13 +1793,13 @@ Separate deterministic tests from stochastic model evaluations. Pin prompt, sche
 
 Critical flows:
 
-1. sign in on web and mobile
+1. sign in on web and the native iPhone client
 2. open the app from the Lock Screen widget while terminated and reach a focused blank composer
 3. type from the system keyboard, save locally, terminate immediately, and recover the capture
 4. save a capture online
 5. save a capture offline, restart the app, reconnect, and sync once
 6. route a shopping list and append a second message
-7. check off a shopping item on mobile and observe the change on web
+7. check off a shopping item on iPhone and observe the change on web
 8. route a workout log and correct a numeric field through tap-to-edit
 9. send an ambiguous capture to Review
 10. correct a destination and create a routing rule
@@ -1923,12 +1895,13 @@ Never point preview deployments at production user data.
 - Use migration checks before production promotion.
 - Configure custom domain only after the working name passes review.
 
-### Mobile
+### Native iPhone
 
-- Expo development builds for internal testing
-- EAS preview channel for beta
-- production iOS and Android builds after platform-specific privacy manifests, icons, screenshots, deep links, and deletion flows are complete
-- runtime API environment pinned per build profile
+- XcodeGen Development scheme and unsigned Simulator build for local/CI checks
+- signed Preview scheme distributed through the TestFlight internal group after archive inspection
+- production iPhone build only after privacy manifest, icons, screenshots, URL routes, account deletion, SQLCipher migration, WidgetKit, and App Intent flows are complete
+- API origin, bundle identifier, App Group, URL scheme, and display name pinned in the selected `.xcconfig`
+- Apple signing, App Group provisioning, signed entitlements, and physical-device behavior remain human gates and are never inferred from Simulator CI
 
 ### Database
 
@@ -1949,8 +1922,8 @@ Never point preview deployments at production user data.
 - RLS tests
 - deterministic mock-model scenarios
 - web build
-- Expo type and bundle checks
-- clean Expo prebuild plus idempotent native-target inspection for the WidgetKit extension
+- clean `pnpm ios:generate` and deterministic XcodeGen target/configuration inspection
+- `pnpm ios:build` and `pnpm ios:test` with signing disabled on an iOS 17+ Simulator
 - iOS archive check for the signed, embedded widget appex and shared App Group entitlement
 - Playwright critical path
 - secret scanning and dependency audit
@@ -1964,11 +1937,11 @@ Effort assumes one developer working part-time with AI assistance, including tes
 Deliver:
 
 - journey map and finalized information architecture
-- low-fidelity mobile and desktop wireframes
+- low-fidelity iPhone and desktop wireframes
 - Unfiled vector mark/wordmark, app icon, WidgetKit template variants, and recorded name-clearance status
 - six-section public-site responsive design based on `design/brand/web/01-hero.png` through `06-final-cta.png`
 - dark-first semantic token sheet with contrast checks
-- high-fidelity flagship mobile flow
+- high-fidelity flagship iPhone flow
 - circular and rectangular Lock Screen widget designs plus locked, cold-launch, restored-draft, offline, and focus-failure states
 - high-fidelity manual Notes, editor, Search, and Review web screens
 - realistic loading, offline, processing, receipt, ambiguity, failure, and undo states
@@ -2001,8 +1974,8 @@ Deliver:
 
 Gate:
 
-- web and mobile shells compile
-- a clean prebuild creates one valid QuickCaptureWidget target on both the first and second run
+- web and native iPhone shells compile
+- clean XcodeGen runs create one valid application, `QuickCaptureWidget`, and test target on both the first and second generation
 - packages test independently
 - local database migrates from zero
 - no production credentials are required for tests
@@ -2017,7 +1990,7 @@ Deliver:
 - interactive checklist toggling on list and project notes through typed operations
 - tags and note links
 - revisions
-- mobile and web navigation
+- native iPhone and web navigation
 - dark-first tokens and core states
 
 Gate:
@@ -2029,14 +2002,14 @@ Gate:
 
 ### Milestone C: Durable capture, Lock Screen entry, and receipt, 2-3 weeks
 
-**Implementation status (2026-08-31):** the credential-free Gate 3 is recorded green. Its final local database gate applied every migration from zero with zero lint findings and passed 18 pgTAP files / 822 assertions; the aggregate code, coverage, build, dependency, HTTP E2E, static-asset, and responsive visual checks also passed. Focused widget tests, mobile typecheck/lint, and the generated-project inspect gate passed. With Xcode 26.6 selected, unsigned builds of both the `QuickCaptureWidget` target and the full `UnfiledDev` workspace passed for the iPhone 17 Pro simulator. Renaming the Expo bridge pod/Swift module to `UnfiledQuickCaptureBridge` fixed its CocoaPods module collision while preserving `QuickCaptureWidget` as the WidgetKit target. This local simulator evidence does not substitute for Apple signing, a physical-device SQLCipher/widget matrix, an extension archive inspection, or cloud-preview canary/performance evidence; those remain pending in [HUMAN_SETUP.md](../HUMAN_SETUP.md).
+**Implementation status (2026-08-31):** the credential-free backend/web portion of Gate 3 is recorded green. Its final local database gate applied every migration from zero with zero lint findings and passed 18 pgTAP files / 822 assertions; the aggregate code, coverage, dependency, HTTP E2E, static-asset, and responsive visual checks also passed. Earlier client/widget evidence belongs to the superseded client and does not establish the SwiftUI replacement. ADR-0010 therefore reopens the native portion of this gate. Clean XcodeGen generation, SQLCipher persistence, Swift tests, unsigned Simulator build, Apple signing, physical-device widget/restart behavior, archive inspection, and cloud-preview canary/performance evidence must be recorded independently.
 
 Deliver:
 
-- mobile SQLite outbox
-- iOS `/capture` deep-link route with reliable cold- and warm-start focus
-- circular and rectangular WidgetKit Lock Screen extension generated by the checked-in config plugin
-- App Group snapshot bridge, EAS app-extension credentials, and physical-device launch matrix
+- native GRDB/SQLCipher outbox and migration layer
+- native capture route with reliable cold- and warm-start focus
+- circular and rectangular WidgetKit Lock Screen extension declared by XcodeGen, with one App Intent
+- content-free App Group snapshot helper, Apple application/extension credentials, and physical-device launch matrix
 - locally persisted widget-originated drafts and expired-session recovery
 - web IndexedDB draft and submission queue
 - idempotent capture API
@@ -2077,7 +2050,7 @@ Deliver:
 - hybrid lexical/trigram/semantic/recency/title ranking by exact per-user in-memory scan, with stale-index repair and incomplete-coverage fail-safe
 - **C.5d cutover/contract:** encrypted read/write/search/export/retention paths, authenticated `POST` search bodies, `no-store` responses, plaintext contract removal, and canary verification
 - owner-authorized streaming export, live-data deletion, backup-expiry handling, rotation/rewrap, restore, and reindex runbooks
-- client note caches that preserve the existing mobile SQLCipher and encrypted IndexedDB boundaries
+- client note caches that preserve the native GRDB/SQLCipher and encrypted web IndexedDB boundaries
 
 C.5b's established local evidence is 93/93 `@unfiled/encrypted-aggregate` tests, 38/38 focused note read/write/coordinator security tests, 14/14 adversarial note aggregate repository tests, and 20 database files / 1,091 assertions, including 101/101 assertions for `073_encrypted_aggregate_dual_write.test.sql`. These are code and local-database results, not production KMS, CloudTrail, database-login, Apple-signing, physical-device, or backup-restore evidence.
 
@@ -2152,7 +2125,7 @@ Gate:
 Deliver:
 
 - Vercel production deployment
-- internal mobile beta builds
+- internal native iPhone beta builds
 - seeded demo account with clearly labeled synthetic data
 - architecture diagram and demo video
 - privacy policy, terms, security contact, and support path
@@ -2161,7 +2134,7 @@ Deliver:
 
 Gate:
 
-- a fresh user can complete the flagship demonstration on mobile and inspect the same result on web
+- a fresh user can complete the flagship demonstration on iPhone and inspect the same result on web
 - CI, migrations, backups, alerts, and deletion flow have recorded evidence
 - the README distinguishes implemented features from roadmap items
 
@@ -2169,7 +2142,7 @@ Gate:
 
 - Portfolio MVP through Milestone D: approximately 8-13 part-time weeks
 - Strong personal beta through Milestone F: approximately 12-18 part-time weeks
-- Release-quality web plus iOS and Android beta: approximately 13-20 part-time weeks
+- Release-quality web plus native iPhone beta: approximately 13-20 part-time weeks
 
 These ranges intentionally exceed the sum of the individual milestone estimates: they include integration work between milestones, rework from gate failures, and review overhead that per-milestone numbers do not capture.
 
@@ -2195,7 +2168,7 @@ Verify that a user correction changes later decisions in a visible and predictab
 
 ### Gate 5: Is native worth maintaining?
 
-Continue both native platforms only if offline capture, keyboard behavior, share integration, or widgets show real value beyond the responsive web app. Otherwise ship iOS first or narrow the native surface.
+Continue the native iPhone client only if offline capture, keyboard behavior, system integration, or widgets show real value beyond the responsive web app. Otherwise narrow the native surface while preserving the durable capture path. Any additional platform requires its own scope and maintenance decision after this milestone.
 
 ### Gate 6: Is this ready for public personal data?
 
@@ -2205,18 +2178,18 @@ Require tested RLS, deletion, export, logging redaction, provider disclosure, ba
 
 Create these issues after repository bootstrap:
 
-1. Lock the iOS app scheme, main bundle identifier, widget bundle identifier, and App Group identifier for development, preview, and production.
-2. Build `/capture`, source allowlisting, native-path rewriting, and the cold- and warm-start focus harness.
-3. Add widget-originated draft persistence plus the SQLite outbox transaction and restart recovery test.
+1. Lock the iOS URL scheme, main bundle identifier, widget bundle identifier, and App Group identifier for Development, Preview, and Release configurations.
+2. Build the SwiftUI capture destination, source allowlisting, native URL handling, and the cold- and warm-start focus harness.
+3. Add widget-originated draft persistence plus the GRDB/SQLCipher outbox transaction and restart recovery test.
 4. Prototype circular and rectangular Lock Screen widget views in SwiftUI.
-5. Implement and idempotency-test `withQuickCaptureWidget.ts` plus the EAS app-extension declaration.
-6. Implement the narrow App Group snapshot and WidgetCenter refresh module.
+5. Implement and determinism-test `apps/ios/project.yml`, all three `.xcconfig` environments, and clean XcodeGen output.
+6. Implement the extension-safe App Group snapshot, App Intent, and WidgetCenter refresh helper.
 7. Define versioned IDs, errors, note types, capture states, capture sources, and organization operations.
 8. Create the initial Supabase schema, grants, RLS policies, and cross-user tests.
 9. Build the fake-model shopping-list vertical slice through a transactional note revision.
 10. Implement the idempotent capture API and status endpoint.
-11. Build Today, Notes, Capture, Review, and Search navigation shells.
-12. Implement the Markdown editor and expected-revision save contract on both clients.
+11. Build native Today, Notes, Capture, Review, and Search navigation shells with Dynamic Type and accessibility identifiers.
+12. Implement the Markdown editor and expected-revision save contract on the web and native clients.
 13. Implement mutation receipts and safe undo.
 14. Complete C.5 encrypted-library migration and build exact per-user candidate retrieval with deterministic rules, lexical/trigram features, recency, and optional encrypted embeddings.
 15. Define the strict organization JSON schema and hostile-output fixtures.
@@ -2224,7 +2197,7 @@ Create these issues after repository bootstrap:
 17. Build the routing evaluation runner and baseline report.
 18. Add private manual notes and assert they never enter model or embedding requests.
 19. Add export and deletion reconciliation.
-20. Deploy preview web and generate internal Expo builds with the signed extension.
+20. Deploy preview web; generate a signed native Preview archive; inspect the embedded extension and entitlements; distribute to the TestFlight internal group.
 21. Implement typed user operations — toggle, field edit, item edit and remove — through `POST /api/v1/notes/:id/operations` with the shared mutation and undo pipeline.
 22. Implement the list and log Markdown projection with determinism tests and the re-parse versus structure-conflict rule.
 
@@ -2236,8 +2209,8 @@ The plan proceeds with these defaults so implementation can start without waitin
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | Name                       | `Unfiled` selected creative direction; clearance pending                                                                | candidate passes meaning, collision, trademark, store, package, handle, and domain review            |
 | Audience                   | single-user personal notes                                                                                              | repeated household or collaboration demand                                                           |
-| Platforms                  | responsive web plus Expo iOS and Android                                                                                | native maintenance outweighs capture benefit                                                         |
-| iPhone quick capture       | Lock Screen WidgetKit extension opens a focused Expo composer; no inline widget text field                              | Apple adds supported secure text input to widgets or physical-device evidence favors another surface |
+| Platforms                  | responsive web plus a native SwiftUI iPhone client on iOS 17+; no second mobile platform in this milestone              | post-release evidence supports a separately scoped platform                                          |
+| iPhone quick capture       | Lock Screen WidgetKit extension and App Intent open a focused native composer; no inline widget text field              | Apple adds supported secure text input to widgets or physical-device evidence favors another surface |
 | Input                      | text first                                                                                                              | routing and sync gates pass                                                                          |
 | Composer after save (OQ-4) | close after local durable acknowledgement; implemented in Milestone C                                                   | M0 usability evidence favors rapid-entry burst mode                                                  |
 | Note storage               | Markdown canonical for prose types; `structured_data` canonical for list and log with deterministic Markdown projection | editor requirements exceed safe patching model                                                       |
@@ -2262,13 +2235,13 @@ Questions to answer through prototypes and beta evidence:
 - Should onboarding starter spaces be opt-in, opt-out, or created lazily on first matching capture?
 - Which corrections deserve a permanent rule suggestion?
 - At what library size does semantic ranking materially improve candidate recall enough to justify its provider cost?
-- Does Android need the same first release timing as iOS?
+- After the iPhone release gate is green, is there enough validated demand to plan another native client in a separate ADR?
 
 ## 25. Definition of Done for the First Public Portfolio Version
 
 The project is ready to present when all of the following are true:
 
-- A user can capture offline on mobile and close the app without losing the thought.
+- A user can capture offline on iPhone and close the app without losing the thought.
 - A user can tap the iPhone Lock Screen widget, authenticate if required, type into an already-focused composer, and receive a local durable acknowledgement without choosing a destination.
 - The capture syncs once and produces a visible organization receipt.
 - Shopping, workout, principle, project, and generic examples route through the same system.
@@ -2276,14 +2249,14 @@ The project is ready to present when all of the following are true:
 - The original capture remains inspectable.
 - A shopping item can be checked off on one device and observed on the other, and a workout number can be corrected with a tap.
 - Wrong routes can be moved and undone.
-- Manual navigation and editing are obvious on mobile and web.
+- Manual navigation and editing are obvious on iPhone and web.
 - A manual edit cannot be overwritten by a stale AI job.
 - Search finds content by exact words, approximate words, date, space, and meaning.
 - Private manual notes never enter model requests or embeddings.
 - Durable note, history, workflow, review, and retrieval content is application-encrypted; production keys are KMS-backed and product copy makes no E2EE claim.
 - Candidate retrieval is owner-isolated, revision-fresh, and fails safe when its encrypted index is incomplete.
 - RLS, idempotency, crash recovery, deletion, and export have automated evidence.
-- Web is deployed to Vercel and mobile has installable beta builds.
+- Web is deployed to Vercel and the native iPhone application has an installable, signed beta build.
 - The product explains its AI and privacy behavior plainly.
 - The repository documents architecture, tradeoffs, test results, current limitations, and next steps.
 
@@ -2297,7 +2270,7 @@ One wrong append can make the user distrust all future automatic changes. Mitiga
 
 Notes products attract tasks, calendars, reminders, graphs, publishing, collaboration, and research features. Protect the create-or-append capture loop until it is excellent.
 
-### Cross-platform editor complexity
+### Multi-client editor complexity
 
 A sophisticated block editor can consume the project. Start with canonical Markdown, platform-native editing behavior, and a constrained feature set.
 
@@ -2330,15 +2303,16 @@ Product landscape reviewed while creating this plan:
 
 Current implementation guidance to recheck at bootstrap and major upgrades:
 
-- [Expo Router introduction](https://docs.expo.dev/router/introduction/)
-- [Expo monorepo guidance](https://docs.expo.dev/guides/monorepos/)
-- [Expo linking into an app](https://docs.expo.dev/linking/into-your-app/)
-- [Expo EAS iOS app extensions](https://docs.expo.dev/build-reference/app-extensions/)
+- [Apple: SwiftUI](https://developer.apple.com/documentation/swiftui)
+- [Apple: App Intents](https://developer.apple.com/documentation/appintents)
+- [XcodeGen](https://github.com/yonaskolb/XcodeGen)
+- [SQLCipher GRDB](https://github.com/sqlcipher/GRDB.swift)
+- [Apple: Keychain Services](https://developer.apple.com/documentation/security/keychain-services)
 - [Apple: Creating a widget extension](https://developer.apple.com/documentation/WidgetKit/Creating-a-Widget-Extension)
 - [Apple: Linking to app scenes from a widget](https://developer.apple.com/documentation/widgetkit/linking-to-specific-app-scenes-from-your-widget-or-live-activity)
 - [Apple: Widget interactivity](https://developer.apple.com/documentation/widgetkit/adding-interactivity-to-widgets-and-live-activities)
 - [Apple: Widget design guidance](https://developer.apple.com/design/human-interface-guidelines/widgets)
-- [Supabase React Native Auth](https://supabase.com/docs/guides/auth/quickstarts/react-native)
+- [Supabase Auth](https://supabase.com/docs/guides/auth)
 - [Supabase Row Level Security](https://supabase.com/docs/guides/database/postgres/row-level-security)
 - [Supabase vector columns](https://supabase.com/docs/guides/ai/vector-columns)
 - [Supabase Queues](https://supabase.com/docs/guides/queues)

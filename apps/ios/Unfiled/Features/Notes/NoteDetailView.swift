@@ -1,0 +1,449 @@
+import SwiftUI
+
+struct NoteDetailView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    @State private var optimisticChecks: [String: Bool] = [:]
+    @State private var updatingItemIDs: Set<String> = []
+    @State private var showsCompleted = false
+    @State private var pendingNoteAction: PendingNoteAction?
+    @State private var isPerformingNoteAction = false
+    @State private var feedbackMessage: String?
+
+    let note: NoteDetailPresentation
+    var isArchived = false
+    let onEdit: @MainActor () -> Void
+    let onShowRevisionHistory: @MainActor () -> Void
+    let onOpenProvenance: @MainActor () -> Void
+    let onToggleChecklistItem: @MainActor (String, Bool) async throws -> Void
+    let onSetArchived: @MainActor (Bool) async throws -> Void
+    let onDelete: @MainActor () async throws -> Void
+
+    private var progress: ChecklistProgress {
+        ChecklistProgress(items: note.checklistItems, overrides: optimisticChecks)
+    }
+
+    private var openItems: [ChecklistItemPresentation] {
+        note.checklistItems.filter { !resolvedCheck(for: $0) }
+    }
+
+    private var completedItems: [ChecklistItemPresentation] {
+        note.checklistItems.filter { resolvedCheck(for: $0) }
+    }
+
+    private var readableBody: String {
+        NoteDetailContent.bodyWithoutChecklistProjection(note.bodyMarkdown)
+    }
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                noteHeader
+
+                if !readableBody.isEmpty {
+                    Text(NoteDetailContent.markdown(readableBody))
+                        .font(.body)
+                        .lineSpacing(6)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 26)
+                        .accessibilityIdentifier("noteDetail.body")
+
+                    SectionRule()
+                }
+
+                if !note.checklistItems.isEmpty {
+                    checklist
+                    SectionRule()
+                }
+
+                if let provenance = note.provenance, !provenance.isEmpty {
+                    Button(action: onOpenProvenance) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "tray.and.arrow.down")
+                                .font(.body.weight(.medium))
+                                .foregroundStyle(UnfiledTheme.persimmon)
+                            Text(provenance)
+                                .font(.subheadline)
+                                .foregroundStyle(UnfiledTheme.fog)
+                                .multilineTextAlignment(.leading)
+                            Spacer(minLength: 12)
+                            Image(systemName: "arrow.right")
+                                .foregroundStyle(UnfiledTheme.persimmon)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 68, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Opens the captures that updated this note")
+                    .accessibilityIdentifier("noteDetail.provenance")
+                }
+
+                if let feedbackMessage {
+                    Label(feedbackMessage, systemImage: "exclamationmark.circle")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(UnfiledTheme.persimmon)
+                        .padding(.vertical, 18)
+                        .accessibilityIdentifier("noteDetail.feedback")
+                }
+            }
+            .padding(.horizontal, UnfiledTheme.screenPadding)
+            .padding(.bottom, 52)
+        }
+        .toolbar { toolbar }
+        .confirmationDialog(
+            pendingNoteAction?.title ?? "Update note",
+            isPresented: Binding(
+                get: { pendingNoteAction != nil },
+                set: { if !$0 { pendingNoteAction = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let pendingNoteAction {
+                Button(pendingNoteAction.buttonTitle, role: pendingNoteAction.role) {
+                    perform(pendingNoteAction)
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingNoteAction = nil }
+        } message: {
+            Text(pendingNoteAction?.message ?? "")
+        }
+        .onChange(of: note.currentRevision) { _, _ in
+            optimisticChecks.removeAll()
+            updatingItemIDs.removeAll()
+            feedbackMessage = nil
+        }
+        .unfiledScreen()
+    }
+
+    private var noteHeader: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .center, spacing: 10) {
+                UnfiledMark(size: 30)
+                Spacer()
+                if isArchived {
+                    Label("Archived", systemImage: "archivebox")
+                        .font(.caption.weight(.medium).monospaced())
+                        .foregroundStyle(UnfiledTheme.fog)
+                }
+            }
+
+            Text(note.title)
+                .font(.largeTitle.weight(.bold))
+                .tracking(-1.7)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("noteDetail.title")
+
+            if !note.spacePath.isEmpty {
+                Text(note.spacePath)
+                    .font(.footnote.weight(.medium).monospaced())
+                    .foregroundStyle(UnfiledTheme.fog)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Space, \(note.spacePath)")
+            }
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 18) { metadata }
+                VStack(alignment: .leading, spacing: 8) { metadata }
+            }
+            .font(.footnote.weight(.medium))
+            .foregroundStyle(UnfiledTheme.fog)
+        }
+        .padding(.top, 12)
+        .padding(.bottom, 24)
+        .overlay(alignment: .bottom) { SectionRule() }
+    }
+
+    @ViewBuilder
+    private var metadata: some View {
+        Label(note.type.capitalized, systemImage: icon(for: note.type))
+        Label(privacyLabel, systemImage: privacyIcon)
+        Text("Revision \(note.currentRevision)")
+    }
+
+    private var checklist: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Checklist")
+                    .font(.title3.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
+                Spacer()
+                Text(progress.shortLabel)
+                    .font(.caption.weight(.medium).monospaced())
+                    .foregroundStyle(UnfiledTheme.fog)
+            }
+            .padding(.top, 24)
+            .padding(.bottom, 10)
+
+            ForEach(openItems) { item in
+                checklistRow(item)
+            }
+
+            if !completedItems.isEmpty {
+                Button {
+                    if reduceMotion {
+                        showsCompleted.toggle()
+                    } else {
+                        withAnimation(.easeOut(duration: 0.2)) { showsCompleted.toggle() }
+                    }
+                } label: {
+                    HStack {
+                        Text("Completed")
+                            .font(.body.weight(.semibold))
+                        Text("\(completedItems.count)")
+                            .font(.caption.weight(.medium).monospaced())
+                            .foregroundStyle(UnfiledTheme.fog)
+                        Spacer()
+                        Image(systemName: showsCompleted ? "chevron.up" : "chevron.down")
+                            .foregroundStyle(UnfiledTheme.fog)
+                    }
+                    .frame(minHeight: 52)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(showsCompleted ? "Expanded" : "Collapsed")
+                .accessibilityIdentifier("noteDetail.completedToggle")
+
+                if showsCompleted {
+                    ForEach(completedItems) { item in
+                        checklistRow(item)
+                    }
+                }
+            }
+        }
+        .padding(.bottom, 14)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Checklist, \(progress.accessibilityLabel)")
+    }
+
+    private func checklistRow(_ item: ChecklistItemPresentation) -> some View {
+        let isChecked = resolvedCheck(for: item)
+        let isUpdating = updatingItemIDs.contains(item.id)
+
+        return Button {
+            toggle(item, to: !isChecked)
+        } label: {
+            HStack(alignment: .center, spacing: 15) {
+                ZStack {
+                    Circle()
+                        .stroke(isChecked ? UnfiledTheme.persimmon : UnfiledTheme.fog, lineWidth: 1.5)
+                        .frame(width: 30, height: 30)
+                    if isChecked {
+                        Circle()
+                            .fill(UnfiledTheme.persimmon)
+                            .frame(width: 30, height: 30)
+                        Image(systemName: "checkmark")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(UnfiledTheme.ink)
+                    } else if isUpdating {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(UnfiledTheme.fog)
+                    }
+                }
+                .frame(width: UnfiledTheme.minimumTouchTarget, height: UnfiledTheme.minimumTouchTarget)
+
+                Text(item.text)
+                    .font(.body)
+                    .foregroundStyle(isChecked ? UnfiledTheme.fog : UnfiledTheme.paper)
+                    .strikethrough(isChecked)
+                    .multilineTextAlignment(.leading)
+
+                Spacer(minLength: 8)
+            }
+            .frame(maxWidth: .infinity, minHeight: 62, alignment: .leading)
+            .contentShape(Rectangle())
+            .overlay(alignment: .bottom) { SectionRule() }
+        }
+        .buttonStyle(.plain)
+        .disabled(isUpdating)
+        .accessibilityLabel(item.text)
+        .accessibilityValue(
+            "\(isChecked ? "Checked" : "Not checked"), \(progress.remaining) remaining"
+        )
+        .accessibilityHint("Double tap to mark \(isChecked ? "not completed" : "completed")")
+        .accessibilityIdentifier("noteDetail.checklist.\(item.id)")
+    }
+
+    @ToolbarContentBuilder
+    private var toolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            Button("Edit", systemImage: "square.and.pencil", action: onEdit)
+                .labelStyle(.iconOnly)
+                .frame(minWidth: 44, minHeight: 44)
+                .accessibilityIdentifier("noteDetail.edit")
+
+            Menu {
+                Button("Revision history", systemImage: "clock.arrow.circlepath") {
+                    onShowRevisionHistory()
+                }
+                Button(
+                    isArchived ? "Restore from archive" : "Archive",
+                    systemImage: isArchived ? "arrow.uturn.backward" : "archivebox"
+                ) {
+                    pendingNoteAction = .archive(!isArchived)
+                }
+                Button("Delete note", systemImage: "trash", role: .destructive) {
+                    pendingNoteAction = .delete
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.title3)
+                    .foregroundStyle(UnfiledTheme.paper)
+                    .frame(width: 44, height: 44)
+            }
+            .disabled(isPerformingNoteAction)
+            .accessibilityLabel("Note actions")
+            .accessibilityIdentifier("noteDetail.actions")
+        }
+    }
+
+    private var privacyLabel: String {
+        note.privacy == PrivacyMode.privateManual.rawValue ? "Private manual" : "AI assisted"
+    }
+
+    private var privacyIcon: String {
+        note.privacy == PrivacyMode.privateManual.rawValue ? "lock" : "tray.and.arrow.down"
+    }
+
+    private func icon(for type: String) -> String {
+        switch type {
+        case NoteType.list.rawValue: "checklist"
+        case NoteType.log.rawValue: "chart.bar.doc.horizontal"
+        case NoteType.principle.rawValue: "quote.opening"
+        case NoteType.project.rawValue: "list.bullet.clipboard"
+        default: "note.text"
+        }
+    }
+
+    private func resolvedCheck(for item: ChecklistItemPresentation) -> Bool {
+        optimisticChecks[item.id] ?? item.checked
+    }
+
+    private func toggle(_ item: ChecklistItemPresentation, to checked: Bool) {
+        guard !updatingItemIDs.contains(item.id) else { return }
+        let previous = resolvedCheck(for: item)
+        optimisticChecks[item.id] = checked
+        updatingItemIDs.insert(item.id)
+        feedbackMessage = nil
+
+        Task { @MainActor in
+            do {
+                try await onToggleChecklistItem(item.id, checked)
+                UIAccessibility.post(
+                    notification: .announcement,
+                    argument: "\(item.text), \(checked ? "checked" : "not checked")"
+                )
+            } catch {
+                optimisticChecks[item.id] = previous
+                feedbackMessage = "That item was not updated. The latest note has been restored."
+                UIAccessibility.post(notification: .announcement, argument: feedbackMessage)
+            }
+            updatingItemIDs.remove(item.id)
+        }
+    }
+
+    private func perform(_ action: PendingNoteAction) {
+        pendingNoteAction = nil
+        isPerformingNoteAction = true
+        feedbackMessage = nil
+
+        Task { @MainActor in
+            do {
+                switch action {
+                case let .archive(archived):
+                    try await onSetArchived(archived)
+                case .delete:
+                    try await onDelete()
+                }
+                isPerformingNoteAction = false
+            } catch {
+                feedbackMessage = action.failureMessage
+                isPerformingNoteAction = false
+            }
+        }
+    }
+}
+
+private enum PendingNoteAction: Equatable {
+    case archive(Bool)
+    case delete
+
+    var title: String {
+        switch self {
+        case .archive(true): "Archive this note?"
+        case .archive(false): "Restore this note?"
+        case .delete: "Move this note to Recently Deleted?"
+        }
+    }
+
+    var buttonTitle: String {
+        switch self {
+        case .archive(true): "Archive"
+        case .archive(false): "Restore"
+        case .delete: "Delete"
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .archive(true): "The note stays available in Archive."
+        case .archive(false): "The note returns to your active library."
+        case .delete: "You can recover it during the retention window."
+        }
+    }
+
+    var role: ButtonRole? {
+        self == .delete ? .destructive : nil
+    }
+
+    var failureMessage: String {
+        switch self {
+        case .archive(true): "The note was not archived. Try again."
+        case .archive(false): "The note was not restored. Try again."
+        case .delete: "The note was not deleted. Try again."
+        }
+    }
+}
+
+struct ChecklistProgress: Equatable {
+    let completed: Int
+    let total: Int
+
+    init(items: [ChecklistItemPresentation], overrides: [String: Bool] = [:]) {
+        total = items.count
+        completed = items.reduce(into: 0) { count, item in
+            if overrides[item.id] ?? item.checked { count += 1 }
+        }
+    }
+
+    var remaining: Int { max(total - completed, 0) }
+    var shortLabel: String { "\(completed) of \(total)" }
+    var accessibilityLabel: String {
+        "\(completed) completed, \(remaining) remaining"
+    }
+}
+
+enum NoteDetailContent {
+    static func bodyWithoutChecklistProjection(_ body: String) -> String {
+        body
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !isChecklistLine(String($0)) }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func markdown(_ source: String) -> AttributedString {
+        (try? AttributedString(
+            markdown: source,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        )) ?? AttributedString(source)
+    }
+
+    private static func isChecklistLine(_ line: String) -> Bool {
+        let normalized = line.trimmingCharacters(in: .whitespaces).lowercased()
+        return ["- [ ] ", "- [x] ", "* [ ] ", "* [x] ", "+ [ ] ", "+ [x] "]
+            .contains { normalized.hasPrefix($0) }
+    }
+}
