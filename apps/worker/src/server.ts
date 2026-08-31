@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 
+import { createWorkerComposition } from "./composition";
 import { loadWorkerConfig } from "./config";
-import { createWorkerApp } from "./http";
 
 const HARD_BODY_LIMIT_BYTES = 16_384;
 
@@ -64,7 +64,8 @@ async function send(response: Response, outgoing: ServerResponse): Promise<void>
 }
 
 const config = loadWorkerConfig();
-const application = createWorkerApp({ config });
+const composition = createWorkerComposition(config);
+const application = composition.app;
 const server = createServer((incoming, outgoing) => {
   void webRequest(incoming)
     .then((request) => application(request))
@@ -80,3 +81,11 @@ const server = createServer((incoming, outgoing) => {
 });
 
 server.listen(config.port, "127.0.0.1");
+
+const close = (): void => {
+  server.close(() => {
+    void composition.close().finally(() => process.exit(0));
+  });
+};
+process.once("SIGINT", close);
+process.once("SIGTERM", close);

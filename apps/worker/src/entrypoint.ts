@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
 
 import { loadWorkerConfig } from "./config";
-import { createWorkerApp, type WorkerApp } from "./http";
-import { createVercelTrustedSourcesInvocationAuth } from "./invocation-auth-adapter";
-import { createWorkerKeyManagementAdapter } from "./key-management-adapter";
+import { createWorkerComposition } from "./composition";
+import type { WorkerApp } from "./http";
 
 let application: WorkerApp | undefined;
 
@@ -35,17 +34,7 @@ export function handleWorkerRequest(request: Request): Promise<Response> {
   try {
     if (application === undefined) {
       const config = loadWorkerConfig();
-      application = createWorkerApp({
-        config,
-        keyManagement: createWorkerKeyManagementAdapter(),
-        ...(config.invocationAuth.kind === "production-verifier"
-          ? {
-              productionInvocationAuth: createVercelTrustedSourcesInvocationAuth({
-                trustedSource: config.invocationAuth.trustedSource
-              })
-            }
-          : {})
-      });
+      application = createWorkerComposition(config).app;
     }
     return application(request);
   } catch {

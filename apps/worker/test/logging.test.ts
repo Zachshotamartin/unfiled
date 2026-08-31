@@ -36,4 +36,58 @@ describe("structured worker logging", () => {
     });
     expect(serialized).not.toContain("private-plaintext-canary");
   });
+
+  it("includes only the optional operational error fields when supplied", () => {
+    const sink = vi.fn();
+    const logger = createStructuredLogger(sink, () => new Date("2026-08-30T12:00:00.000Z"));
+
+    logger.log({
+      durationMs: 25_000,
+      errorClass: "timeout",
+      event: "request.completed",
+      level: "error",
+      method: "POST",
+      outcome: "error",
+      requestId: "request-2",
+      retryable: true,
+      route: "internal_drain",
+      runtime: "production",
+      status: 504
+    });
+
+    expect(JSON.parse(String(sink.mock.calls[0]?.[0]))).toMatchObject({
+      errorClass: "timeout",
+      retryable: true,
+      service: "unfiled-worker"
+    });
+  });
+
+  it("uses the default console sink and clock without adding unsafe fields", () => {
+    const consoleSink = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    try {
+      createStructuredLogger().log({
+        durationMs: 0,
+        event: "request.completed",
+        level: "info",
+        method: "GET",
+        outcome: "ok",
+        requestId: "request-default-sink",
+        route: "health",
+        runtime: "local",
+        status: 200
+      });
+
+      expect(consoleSink).toHaveBeenCalledOnce();
+      const parsed = JSON.parse(String(consoleSink.mock.calls[0]?.[0])) as Record<string, unknown>;
+      expect(parsed).toMatchObject({
+        event: "request.completed",
+        requestId: "request-default-sink",
+        service: "unfiled-worker"
+      });
+      expect(typeof parsed.timestamp).toBe("string");
+      expect(Object.keys(parsed)).not.toContain("body");
+    } finally {
+      consoleSink.mockRestore();
+    }
+  });
 });

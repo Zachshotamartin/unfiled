@@ -6,7 +6,7 @@ import {
   SpaceMutationResultSchema,
   TagMutationResultSchema
 } from "@unfiled/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedRequest } from "@/server/auth/session";
 import { InMemoryManualNotesRepository } from "@/server/product/in-memory-repository";
@@ -106,6 +106,65 @@ describe("manual note route handlers", () => {
     );
     expect(mismatched.status).toBe(409);
     expect(mismatchBody.code).toBe("invalid_idempotency_key");
+  });
+
+  it("wakes indexing only after a durable note mutation and passes no user content", async () => {
+    const scheduleIndexDrain = vi.fn();
+    const repository = new InMemoryManualNotesRepository(false);
+    const handlers = createManualNotesHandlers({
+      authenticate: () => authenticated(),
+      repository,
+      scheduleIndexDrain
+    });
+    const created = await handlers.createNote(
+      request("/api/v1/notes", "POST", {
+        idempotencyKey: "index-wakeup-create",
+        title: "Private scheduler canary",
+        type: "generic"
+      })
+    );
+    expect(created.status).toBe(201);
+    expect(scheduleIndexDrain).toHaveBeenCalledOnce();
+    expect(scheduleIndexDrain).toHaveBeenCalledWith();
+
+    const invalid = await handlers.createNote(
+      request("/api/v1/notes", "POST", {
+        idempotencyKey: "index-wakeup-invalid",
+        title: "",
+        type: "generic"
+      })
+    );
+    expect(invalid.status).toBe(400);
+    expect(scheduleIndexDrain).toHaveBeenCalledTimes(1);
+
+    const stale = await handlers.updateNote(
+      request(`/api/v1/notes/${NOTE_ID}`, "PATCH", {
+        expectedRevision: 99,
+        idempotencyKey: "index-wakeup-stale",
+        title: "Must not schedule"
+      }),
+      { noteId: NOTE_ID }
+    );
+    expect(stale.status).toBe(404);
+    expect(scheduleIndexDrain).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not turn a completed note mutation into an error when prompt scheduling fails", async () => {
+    const handlers = createManualNotesHandlers({
+      authenticate: () => authenticated(),
+      repository: new InMemoryManualNotesRepository(false),
+      scheduleIndexDrain: () => {
+        throw new Error("request lifecycle unavailable");
+      }
+    });
+    const response = await handlers.createNote(
+      request("/api/v1/notes", "POST", {
+        idempotencyKey: "index-wakeup-failure",
+        title: "Durable first",
+        type: "generic"
+      })
+    );
+    expect(response.status).toBe(201);
   });
 
   it("undoes creation by soft deleting at revision two and can undo that inverse", async () => {

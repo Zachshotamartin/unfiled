@@ -34,73 +34,77 @@ struct EmailOTPSignInView: View {
             VStack(alignment: .leading, spacing: 0) {
                 AuthFieldLabel(text: "Email address")
 
-                HStack(spacing: 8) {
-                    TextField(
-                        "Email address",
-                        text: $email,
-                        prompt: Text("you@example.com").foregroundStyle(UnfiledTheme.fog)
-                    )
-                        .font(.system(.body))
-                        .foregroundStyle(UnfiledTheme.paper)
-                        .tint(UnfiledTheme.persimmon)
-                        .textInputAutocapitalization(.never)
-                        .textContentType(.emailAddress)
-                        .keyboardType(.emailAddress)
-                        .autocorrectionDisabled()
-                        .submitLabel(.continue)
-                        .focused($isEmailFocused)
-                        .onSubmit(requestCode)
-                        .accessibilityLabel("Email address")
-                        .accessibilityIdentifier(AuthAccessibilityIdentifier.emailField)
-
-                    if !email.isEmpty {
-                        Button {
-                            email = ""
-                            errorMessage = nil
-                            isEmailFocused = true
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 18))
-                                .foregroundStyle(UnfiledTheme.fog)
-                                .frame(width: UnfiledTheme.minimumTouchTarget, height: UnfiledTheme.minimumTouchTarget)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Clear email address")
-                    }
-                }
-                .padding(.leading, 16)
-                .padding(.trailing, 6)
-                .frame(minHeight: 56)
-                .background(UnfiledTheme.graphite)
-                .overlay {
-                    RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius)
-                        .stroke(
-                            isEmailFocused ? UnfiledTheme.persimmon : UnfiledTheme.border,
-                            lineWidth: isEmailFocused ? 2 : 1
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 8) {
+                        TextField(
+                            "Email address",
+                            text: $email,
+                            prompt: Text("you@example.com").foregroundStyle(UnfiledTheme.fog)
                         )
-                }
-                .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
-                .padding(.top, 9)
+                            .font(.system(.body))
+                            .foregroundStyle(UnfiledTheme.paper)
+                            .tint(UnfiledTheme.persimmon)
+                            .textInputAutocapitalization(.never)
+                            .textContentType(.emailAddress)
+                            .keyboardType(.emailAddress)
+                            .autocorrectionDisabled()
+                            .submitLabel(.continue)
+                            .focused($isEmailFocused)
+                            .onSubmit(requestCode)
+                            .accessibilityLabel("Email address")
+                            .accessibilityIdentifier(AuthAccessibilityIdentifier.emailField)
 
-                Group {
+                        if !email.isEmpty {
+                            Button {
+                                email = ""
+                                errorMessage = nil
+                                isEmailFocused = true
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 18))
+                                    .foregroundStyle(UnfiledTheme.fog)
+                                    .frame(
+                                        width: UnfiledTheme.minimumTouchTarget,
+                                        height: UnfiledTheme.minimumTouchTarget
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Clear email address")
+                        }
+                    }
+                    .padding(.leading, 16)
+                    .padding(.trailing, 6)
+                    .frame(minHeight: 56)
+                    .background(UnfiledTheme.graphite)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius)
+                            .stroke(
+                                isEmailFocused ? UnfiledTheme.persimmon : UnfiledTheme.border,
+                                lineWidth: isEmailFocused ? 2 : 1
+                            )
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
+
                     if let errorMessage {
                         AuthInlineMessage(
                             message: errorMessage,
                             kind: .error,
                             accessibilityIdentifier: AuthAccessibilityIdentifier.emailError
                         )
+                        .padding(.top, UnfiledTheme.controlStackSpacing)
                     }
-                }
-                .frame(minHeight: 54, alignment: .leading)
 
-                AuthPrimaryButton(
-                    title: "Send sign-in code",
-                    loadingTitle: "Sending code…",
-                    isLoading: isSubmitting,
-                    isDisabled: !AuthFormRules.canRequestCode(email: email, isSubmitting: isSubmitting),
-                    accessibilityIdentifier: AuthAccessibilityIdentifier.emailSubmit,
-                    action: requestCode
-                )
+                    AuthPrimaryButton(
+                        title: "Send sign-in code",
+                        loadingTitle: "Sending code…",
+                        isLoading: isSubmitting,
+                        isDisabled: !AuthFormRules.canRequestCode(email: email, isSubmitting: isSubmitting),
+                        accessibilityIdentifier: AuthAccessibilityIdentifier.emailSubmit,
+                        action: requestCode
+                    )
+                    .padding(.top, UnfiledTheme.controlStackSpacing)
+                }
+                .padding(.top, 9)
 
                 Text("We use this address only to sign you in and identify your account.")
                     .font(.system(.footnote))

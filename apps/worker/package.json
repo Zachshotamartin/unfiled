@@ -5,8 +5,15 @@
   "type": "module",
   "description": "Isolated organization and encrypted-index worker for Unfiled.",
   "dependencies": {
+    "@unfiled/content-crypto": "workspace:*",
+    "@unfiled/encrypted-aggregate": "workspace:*",
     "@unfiled/key-management": "workspace:*",
-    "@vercel/oidc": "3.8.5"
+    "@unfiled/search": "workspace:*",
+    "@vercel/oidc": "3.8.5",
+    "pg": "8.23.0"
+  },
+  "devDependencies": {
+    "@types/pg": "8.23.1"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

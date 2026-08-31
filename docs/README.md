@@ -71,7 +71,7 @@ The milestone owner recorded the credential-free aggregate Gate 3 decision as gr
 | Apple signing/archive, physical iPhone SQLCipher/widget matrix, cloud canary/log audit, and preview performance        | pending human evidence in `HUMAN_SETUP.md`                     |
 | C.5a custody/expansion code                                                                                            | pass; 989 pgTAP + 12 Terraform tests; account evidence pending |
 | C.5b encrypted aggregate and managed adapters                                                                          | implemented; focused evidence recorded below                   |
-| C.5c encrypted organizer/RAG integration and C.5d plaintext contraction                                                | not implemented; launch-blocking                               |
+| C.5c private RAG/organizer and C.5d plaintext contraction                                                              | index worker implemented; verifier/organizer/cutover pending   |
 
 ## Milestone C.5a boundary
 
@@ -85,7 +85,7 @@ C.5b implements the application-side typed encrypted aggregate and strict servic
 
 The private-manual capture branch can seal and persist its source and receipt through the encrypted aggregate. A fresh AI-assisted capture is intentionally rejected with `encrypted_organizer_write_unavailable` until C.5c can atomically commit generated notes, mutations, receipts, and index work. The production repository factory still selects the legacy path, so checked-in adapter code and backfill machinery do not imply production cutover.
 
-The first C.5c slice implements the encrypted index capability contract, generation attestation/activation gate, strict float32 encrypted payload codec, and bounded exact-scan retrieval/ranking primitives. The production index worker and atomic organizer remain deliberately disconnected and fail closed; this is not a production index or a complete C.5 claim. Local evidence for this slice is 29/29 search tests, 103/103 encrypted-aggregate tests, and 21 database files / 1,123 assertions from a clean rebuild.
+The current C.5c slice implements the encrypted index capability contract, generation attestation/activation gate, strict float32 encrypted payload codec, bounded exact-scan retrieval/ranking primitives, a production-composed index worker, and a content-free web wake-up/recovery caller. The worker is isolated behind exact Vercel OIDC source claims, a hostname- and certificate-verified dedicated PostgreSQL login with only six RPCs, and AI-only KMS custody. The shadow-generation seed/verifier controller and atomic organizer remain deliberately absent and fail closed, so this is not a complete production index or C.5 claim. Local evidence for this slice is 29/29 search tests, 103/103 encrypted-aggregate tests, 158/158 worker tests, 378/378 web tests, and 22 database files / 1,132 assertions from a clean rebuild.
 
 Local C.5b evidence established in this change set includes 93/93 encrypted-aggregate package tests, 38/38 note read/write/coordinator security tests, 14/14 adversarial note-repository tests, and 20 database test files / 1,091 assertions, including 101/101 assertions in `073_encrypted_aggregate_dual_write.test.sql`. C.5c must connect the organizer and encrypted retrieval adapter; C.5d must stop plaintext writes, remove plaintext reads/search/indexes/columns, pass canary and restore gates, and age out or destroy exposed backups before any complete-library encryption-at-rest claim.
 

@@ -22,6 +22,7 @@
     "@unfiled/encrypted-aggregate": "workspace:*",
     "@unfiled/key-management": "workspace:*",
     "@unfiled/sync": "workspace:*",
+    "@vercel/oidc": "3.8.5",
     "next": "16.3.3",
     "react": "19.2.8",
     "react-dom": "19.2.8",

@@ -32,6 +32,7 @@ import {
 
 import type { NoteMutationResult, NoteRecord, SpaceRecord } from "@/lib/product/types";
 import { authenticateRequest, type AuthenticatedRequest } from "@/server/auth/session";
+import { scheduleIndexDrain as scheduleProductionIndexDrain } from "@/server/indexing/index-worker-scheduler";
 import { createProductionRepository } from "@/server/product/supabase-http-repository";
 import type { ManualNotesRepository, RepositoryContext } from "@/server/product/repository";
 
@@ -56,6 +57,7 @@ type Schema<T> = Readonly<{
 export type ManualNotesDependencies = Readonly<{
   authenticate?: (request: Request) => Promise<AuthenticatedRequest>;
   repository: ManualNotesRepository | (() => ManualNotesRepository);
+  scheduleIndexDrain?: () => void;
 }>;
 
 function parse<T>(schema: Schema<T>, value: unknown): T {
@@ -207,6 +209,16 @@ function positiveLimit(value: string | null): number {
 
 export function createManualNotesHandlers(dependencies: ManualNotesDependencies) {
   const authenticate = dependencies.authenticate ?? authenticateRequest;
+  const scheduleIndexDrain = dependencies.scheduleIndexDrain ?? scheduleProductionIndexDrain;
+
+  function noteMutationResponse(result: NoteMutationResult, status = 200): Response {
+    try {
+      scheduleIndexDrain();
+    } catch {
+      // The committed mutation and encrypted index queue are authoritative.
+    }
+    return jsonResponse(mutationResponse(result), status);
+  }
 
   async function run(
     request: Request,
@@ -292,7 +304,7 @@ export function createManualNotesHandlers(dependencies: ManualNotesDependencies)
           },
           idempotencyKey
         );
-        return jsonResponse(mutationResponse(result), 201);
+        return noteMutationResponse(result, 201);
       });
     },
 
@@ -322,7 +334,7 @@ export function createManualNotesHandlers(dependencies: ManualNotesDependencies)
           update,
           requireIdempotencyKey(request, body)
         );
-        return jsonResponse(mutationResponse(result));
+        return noteMutationResponse(result);
       });
     },
 
@@ -334,7 +346,7 @@ export function createManualNotesHandlers(dependencies: ManualNotesDependencies)
           expectedRevision: input.expectedRevision,
           idempotencyKey: requireIdempotencyKey(request, body)
         });
-        return jsonResponse(mutationResponse(result));
+        return noteMutationResponse(result);
       });
     },
 
@@ -347,7 +359,7 @@ export function createManualNotesHandlers(dependencies: ManualNotesDependencies)
           idempotencyKey: requireIdempotencyKey(request, body),
           spaceId: input.spaceId
         });
-        return jsonResponse(mutationResponse(result));
+        return noteMutationResponse(result);
       });
     },
 
@@ -360,7 +372,7 @@ export function createManualNotesHandlers(dependencies: ManualNotesDependencies)
           expectedRevision: input.expectedRevision,
           idempotencyKey: requireIdempotencyKey(request, body)
         });
-        return jsonResponse(mutationResponse(result));
+        return noteMutationResponse(result);
       });
     },
 
@@ -376,7 +388,7 @@ export function createManualNotesHandlers(dependencies: ManualNotesDependencies)
             idempotencyKey: requireIdempotencyKey(request, body)
           }
         );
-        return jsonResponse(mutationResponse(result));
+        return noteMutationResponse(result);
       });
     },
 
@@ -393,7 +405,7 @@ export function createManualNotesHandlers(dependencies: ManualNotesDependencies)
             idempotencyKey: requireIdempotencyKey(request, body)
           }
         );
-        return jsonResponse(mutationResponse(result));
+        return noteMutationResponse(result);
       });
     },
 
@@ -425,7 +437,7 @@ export function createManualNotesHandlers(dependencies: ManualNotesDependencies)
             idempotencyKey: requireIdempotencyKey(request, body)
           }
         );
-        return jsonResponse(mutationResponse(result));
+        return noteMutationResponse(result);
       });
     },
 
@@ -441,7 +453,7 @@ export function createManualNotesHandlers(dependencies: ManualNotesDependencies)
             idempotencyKey: requireIdempotencyKey(request, body)
           }
         );
-        return jsonResponse(mutationResponse(result));
+        return noteMutationResponse(result);
       });
     },
 
@@ -609,7 +621,7 @@ export function createManualNotesHandlers(dependencies: ManualNotesDependencies)
           linkType: input.linkType,
           toNoteId: input.toNoteId
         });
-        return jsonResponse(mutationResponse(result));
+        return noteMutationResponse(result);
       });
     },
 
@@ -628,7 +640,7 @@ export function createManualNotesHandlers(dependencies: ManualNotesDependencies)
             toNoteId: input.toNoteId
           }
         );
-        return jsonResponse(mutationResponse(result));
+        return noteMutationResponse(result);
       });
     },
 
@@ -645,7 +657,7 @@ export function createManualNotesHandlers(dependencies: ManualNotesDependencies)
             idempotencyKey: requireIdempotencyKey(request, body)
           }
         );
-        return jsonResponse(mutationResponse(result));
+        return noteMutationResponse(result);
       });
     },
 
@@ -662,7 +674,7 @@ export function createManualNotesHandlers(dependencies: ManualNotesDependencies)
             idempotencyKey: requireIdempotencyKey(request, body)
           }
         );
-        return jsonResponse(mutationResponse(result));
+        return noteMutationResponse(result);
       });
     },
 
