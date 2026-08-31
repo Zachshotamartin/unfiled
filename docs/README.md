@@ -1,6 +1,6 @@
 # Unfiled Product Documentation
 
-This directory is the planning and implementation-reference set for **Unfiled**. Milestones A, B, and the credential-free portion of Milestone C are complete. Gate 3 was recorded green on 2026-08-30 with a clean database rebuild, zero database-lint findings, and 18 pgTAP files / 822 assertions. Cloud-preview, physical-device, extension-signing, and usability evidence remains human-owned in `HUMAN_SETUP.md`; no document should imply that evidence has already been collected. Milestone C.5 is the next launch-blocking milestone and must application-encrypt the complete note/library path under managed KMS custody and land the encrypted per-user RAG index before AI routing. Capture crypto alone does not make current manual-note storage fully encrypted.
+This directory is the planning and implementation-reference set for **Unfiled**. Milestones A, B, and the credential-free portion of Milestone C are complete. Gate 3 was recorded green on 2026-08-30 with a clean database rebuild, zero database-lint findings, and 18 pgTAP files / 822 assertions. The C.5a code slice now supplies the expand-only encrypted schema and RAG lifecycle, managed-key package and Terraform policy, isolated worker trust boundary, dedicated non-bypass worker database role, and root-rewrap CAS contract. Its account-bound Vercel/AWS/database evidence is still pending in `HUMAN_SETUP.md`, and C.5b–d remain launch-blocking. Capture crypto and expand-only columns do not make the current manual-note library fully encrypted.
 
 ## Reading order
 
@@ -15,7 +15,7 @@ This directory is the planning and implementation-reference set for **Unfiled**.
 9. [DESIGN_SYSTEM.md](./DESIGN_SYSTEM.md) — tokens, components, states, and accessibility rules. Initial skeleton; completed during Milestone 0.
 10. [OPEN_QUESTIONS.md](./OPEN_QUESTIONS.md) — deferred decisions with defaults, options, and decision triggers.
 11. [GLOSSARY.md](./GLOSSARY.md) — the product vocabulary used consistently across documents and code.
-12. [decisions/](./decisions/) — architecture decision records: [ADR-0001 foundational choices](./decisions/ADR-0001-foundational-technology-and-scope-choices.md), [ADR-0002 BYOK provider strategy](./decisions/ADR-0002-byok-provider-strategy.md), [ADR-0003 immutable native identifiers](./decisions/ADR-0003-native-identifiers.md), [ADR-0004 structured note canonical data](./decisions/ADR-0004-structured-note-canonical-data-and-stable-items.md), [ADR-0005 durable capture job adapter](./decisions/ADR-0005-durable-capture-job-adapter.md), and [ADR-0006 encrypted library/private RAG](./decisions/ADR-0006-application-encrypted-library-and-private-rag.md).
+12. [decisions/](./decisions/) — architecture decision records: [ADR-0001 foundational choices](./decisions/ADR-0001-foundational-technology-and-scope-choices.md), [ADR-0002 BYOK provider strategy](./decisions/ADR-0002-byok-provider-strategy.md), [ADR-0003 immutable native identifiers](./decisions/ADR-0003-native-identifiers.md), [ADR-0004 structured note canonical data](./decisions/ADR-0004-structured-note-canonical-data-and-stable-items.md), [ADR-0005 durable capture job adapter](./decisions/ADR-0005-durable-capture-job-adapter.md), [ADR-0006 encrypted library/private RAG](./decisions/ADR-0006-application-encrypted-library-and-private-rag.md), and [ADR-0007 dedicated worker database capability/root rewrap](./decisions/ADR-0007-dedicated-worker-database-capability-and-root-rewrap.md).
 13. [HUMAN_SETUP.md](../HUMAN_SETUP.md) — account, cloud-preview, browser, canary-log, performance, and physical-device gates that cannot run credential-free in CI.
 
 ## Document status
@@ -26,9 +26,9 @@ This directory is the planning and implementation-reference set for **Unfiled**.
 | PRODUCT_REQUIREMENTS.md    | Complete for MVP scope                                                       | revised at each milestone gate      |
 | AI_ROUTING_SPEC.md         | Complete; weights and thresholds are initial values pending evaluation       | Milestone D                         |
 | DATA_MODEL.md              | Initial migrations landed; checked-in migrations are authoritative           | Milestone A and every schema change |
-| SECURITY_AND_PRIVACY.md    | Target architecture; current note plaintext gap called out                   | Milestone C.5 and Gate 6            |
-| ENCRYPTION_ARCHITECTURE.md | Capture foundation audit; note/KMS migration remains                         | Milestone C.5                       |
-| OPERATIONS_TEST_PLAN.md    | Current; B/C code gates recorded, human gates remain pending                 | every milestone                     |
+| SECURITY_AND_PRIVACY.md    | C.5a boundary implemented; plaintext note cutover remains                    | Milestone C.5 and Gate 6            |
+| ENCRYPTION_ARCHITECTURE.md | Capture + C.5a custody/expansion audit; C.5b–d remain                        | Milestone C.5                       |
+| OPERATIONS_TEST_PLAN.md    | Current; B/C gates and C.5a code boundary recorded; human gates remain       | every milestone                     |
 | BRAND_SYSTEM_UNFILED.md    | Selected v1 creative direction; name clearance and vector production pending | Milestone 0                         |
 | DESIGN_SYSTEM.md           | Initial skeleton with token draft                                            | Milestone 0                         |
 | OPEN_QUESTIONS.md          | Live document                                                                | continuous                          |
@@ -54,19 +54,26 @@ The milestone owner recorded the credential-free aggregate Gate 2 code decision 
 
 The milestone owner recorded the credential-free aggregate Gate 3 decision as green on 2026-08-30. Cloud, Apple-signing, and physical-device evidence remains explicitly pending and is not implied by this local code gate.
 
-| Evidence                                                                                                               | Current result                                  |
-| ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| capture contracts, `/api/v1/captures` OpenAPI surface, and shared API client                                           | pass; 33 contract tests and 14 API-client tests |
-| AES-256-GCM capture envelopes with owner/resource/version/kind binding and ciphertext-only active database persistence | implemented                                     |
-| capture tables and storage RPCs denied to clients; verified Next API uses service-only owner-scoped RPCs               | implemented                                     |
-| leased workflow claims, heartbeats, retry/recovery, dead-letter handling, receipts, and deletion scrubbing             | implemented                                     |
-| Web Crypto-encrypted IndexedDB intents/outbox and SQLCipher mobile drafts/outbox                                       | pass; web 119 tests and mobile 86 tests         |
-| complete local pgTAP suite                                                                                             | pass; 18 files / 822 assertions                 |
-| aggregate format, lint, typecheck, coverage, build, OpenAPI, Expo/prebuild, database, and routing gates                | pass                                            |
-| frozen-lockfile install, production dependency audit, and built-app/local-Supabase HTTP E2E                            | pass; zero known production vulnerabilities     |
-| responsive production UI and static assets                                                                             | pass at desktop and 390 px; no failed images    |
-| Apple signing/archive, physical iPhone SQLCipher/widget matrix, cloud canary/log audit, and preview performance        | pending human evidence in `HUMAN_SETUP.md`      |
-| C.5 complete-library encryption, production managed KMS, and encrypted per-user RAG                                    | not implemented; launch-blocking next milestone |
+| Evidence                                                                                                               | Current result                                                 |
+| ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| capture contracts, `/api/v1/captures` OpenAPI surface, and shared API client                                           | pass; 33 contract tests and 14 API-client tests                |
+| AES-256-GCM capture envelopes with owner/resource/version/kind binding and ciphertext-only active database persistence | implemented                                                    |
+| capture tables and storage RPCs denied to clients; verified Next API uses service-only owner-scoped RPCs               | implemented                                                    |
+| leased workflow claims, heartbeats, retry/recovery, dead-letter handling, receipts, and deletion scrubbing             | implemented                                                    |
+| Web Crypto-encrypted IndexedDB intents/outbox and SQLCipher mobile drafts/outbox                                       | pass; web 119 tests and mobile 86 tests                        |
+| complete local pgTAP suite                                                                                             | pass; 18 files / 822 assertions                                |
+| aggregate format, lint, typecheck, coverage, build, OpenAPI, Expo/prebuild, database, and routing gates                | pass                                                           |
+| frozen-lockfile install, production dependency audit, and built-app/local-Supabase HTTP E2E                            | pass; zero known production vulnerabilities                    |
+| responsive production UI and static assets                                                                             | pass at desktop and 390 px; no failed images                   |
+| Apple signing/archive, physical iPhone SQLCipher/widget matrix, cloud canary/log audit, and preview performance        | pending human evidence in `HUMAN_SETUP.md`                     |
+| C.5a custody/expansion code                                                                                            | pass; 989 pgTAP + 12 Terraform tests; account evidence pending |
+| C.5b–d complete-library encryption, encrypted RAG adapter, and plaintext contraction                                   | not implemented; launch-blocking                               |
+
+## Milestone C.5a boundary
+
+C.5a is an expand-only security foundation, not the encrypted-library release gate. It adds owner/class/purpose/version-bound intermediate-key records; four distinct KMS root families with exact-context policies; web-versus-worker OIDC identities; encrypted-column and content-free RAG/job schema; a separately deployable worker that accepts only an exact trusted web caller; and the `unfiled_index_worker` PostgreSQL role with no login, RLS bypass, inherited role, table, sequence, or private-schema capability. Its runtime allowlist is exactly six RAG RPCs. Root rewrap remains a service-only, locked CAS operation and is unavailable to the worker. See [ADR-0007](./decisions/ADR-0007-dedicated-worker-database-capability-and-root-rewrap.md).
+
+The checked-in tests can prove policy shape and fail-closed behavior without credentials. They cannot prove the deployed Vercel header path, STS exchange, direct private-KMS denial, CloudTrail capture, production database connection identity, key rotation, or backup restore. Those account-bound checks remain pending in [HUMAN_SETUP.md](../HUMAN_SETUP.md). C.5b must dual-write/backfill the aggregate, C.5c must connect and validate the encrypted retrieval adapter, and C.5d must cut over reads and remove the plaintext contract before any complete-library encryption claim.
 
 ## Rules for maintaining this set
 

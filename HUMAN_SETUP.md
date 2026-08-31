@@ -5,8 +5,10 @@ This file contains only steps that require a human account, physical device, pai
 ## Completed during bootstrap
 
 - GitHub CLI authenticated as `Zachshotamartin`.
-- Private repository created at `https://github.com/Zachshotamartin/unfiled`.
+- Public repository created at `https://github.com/Zachshotamartin/unfiled`.
 - Product, GitHub repository, and local project root renamed to `unfiled`.
+- `main` branch protection enabled with strict `CI`, admin enforcement, and force-push/deletion
+  protection.
 
 ## Local prerequisites
 
@@ -35,7 +37,7 @@ Complete these human validation items before treating Milestone 0 as approved:
 
 1. Create separate preview and production projects at Supabase.
 2. Enable Vault and confirm the project plan supports the required backup and point-in-time recovery targets.
-3. Store each project URL, anonymous key, service-role key, and database password only in the matching Vercel environment.
+3. Store each project URL, anonymous key, service-role key, and database password only in the matching interactive web/API Vercel environment. The isolated `apps/worker` project must never receive a global Supabase service-role/secret key; its later C.5c database credential is scoped separately below.
 4. Link preview from a trusted shell: `pnpm supabase link --project-ref <preview-project-ref>`.
 5. Review migrations, then apply: `pnpm supabase db push --linked`.
 6. Never link a developer preview deployment to production data.
@@ -43,7 +45,7 @@ Complete these human validation items before treating Milestone 0 as approved:
 ## Vercel
 
 1. Import `Zachshotamartin/unfiled` into Vercel and set the root directory to `apps/web`.
-2. Set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and provider application keys in the appropriate environment scopes.
+2. In the `apps/web` project, set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and provider application keys in the appropriate environment scopes. Do not copy the service-role key into the separate `apps/worker` project.
 3. Generate a separate OTP rate-limit pepper for each deployed environment with
    `openssl rand -hex 32`. Add it with `vercel env add AUTH_RATE_LIMIT_PEPPER preview` and
    `vercel env add AUTH_RATE_LIMIT_PEPPER production`; never reuse a provider, Supabase, or cron
@@ -98,21 +100,140 @@ Complete these human validation items before treating Milestone 0 as approved:
    The fingerprint key must remain stable through ordinary wrapping-key rotations. Never reuse it as the KEK. `UNFILED_CONTENT_RETIRED_KEKS` is only for a bounded, audited rewrap window and must not become an indefinite archive of old keys.
 
 3. Add independent Preview values interactively with `vercel env add UNFILED_CONTENT_KEK_ID preview`, `vercel env add UNFILED_CONTENT_KEK preview`, `vercel env add UNFILED_CONTENT_FINGERPRINT_KEY preview`, and `vercel env add CRON_SECRET preview`. Interactive entry keeps values out of shell history. The environment-backed resolver is restricted to local and isolated Preview data.
-4. Do not launch Production capture storage with a root KEK in Vercel environment variables. Production remains blocked until the checked-in managed KMS/HSM resolver, least-privilege decrypt identity, key-use audit trail, rotation runbook, and restore drill are complete. The final setup steps will identify the selected provider and exact commands when that adapter lands.
+4. Do not launch Production capture storage with a root KEK in Vercel environment variables. C.5a now checks in the AWS KMS resolver, least-privilege identities, Terraform policies, and rotation contract, but Production remains blocked until the account-bound setup and evidence below pass and C.5b–d cut over the complete note path.
 5. Migration `20260830000012_durable_capture_workflow.sql` deliberately aborts with `legacy_capture_encryption_backfill_required` if an older environment contains capture text. For disposable Preview data, recreate the project. For data that must be retained, stop writes and use the audited backfill/verification tool delivered with the production key adapter; never edit the migration to discard or relabel plaintext.
 6. The checked-in Vercel Hobby schedule calls `/api/internal/captures/drain` daily at 03:07 UTC. `after()` and active clients provide normal prompt processing; the daily call is dormant-work recovery. On Vercel Pro or Enterprise, change only that capture schedule in `apps/web/vercel.json` to `* * * * *`, deploy, and confirm authenticated one-minute invocations. Hobby deployments reject schedules more frequent than daily.
 7. After deploying Preview, create one synthetic canary capture, wait for its Inbox receipt, and inspect the `captures` row with an authorized administrative session. `raw_text` must equal `[encrypted]`, the canary must not appear anywhere in the row or logs, `content_envelope.version` must equal `1`, and `content_fingerprint` must be a 64-character keyed digest. Public API responses must contain the authenticated plaintext only after owner authorization and must never contain the envelope, fingerprint, or key identifier.
 
-### Production managed KMS and isolated worker — wait for C.5 code
+### Production managed KMS and isolated worker — C.5a account evidence pending
 
-These are account-bound steps for the repository owner. Do not perform them until the C.5a implementation supplies the exact generated policy files, environment names, and verification command; placeholder IAM policies are not safe enough for production.
+The checked-in C.5a module at `infra/aws-kms` now defines the exact production identities and four independently controlled KMS roots. These steps create billable, account-bound cloud resources. They may be completed after the C.5a pull request is merged, but they do **not** authorize real note traffic yet: C.5b–d must still replace every plaintext aggregate/read path and pass the final cutover gate.
 
-1. Create two Vercel projects from this repository: the interactive `apps/web` deployment and the separately deployed `apps/worker` organization/index runtime. Record their exact team, project, and Production environment OIDC subjects.
-2. In the selected AWS region, create independent customer-managed KMS keys/aliases for `ai_assisted` and `private_manual`. Enable rotation and CloudTrail data-event auditing.
-3. Create distinct AWS roles for the web API and worker. Bind each trust policy to its exact Vercel OIDC subject. The worker role receives only AI-assisted key permissions; the web role receives the owner-authorized key classes required by the interactive API. Neither role receives a static AWS access key.
-4. Configure the checked-in `@vercel/oidc-aws-credentials-provider` adapter in each Vercel project, then run the supplied role-separation probe. A direct private-manual decrypt attempt from the worker must be denied and logged.
-5. Configure alarms for denied/unusual KMS use, disable/deletion scheduling, and worker attempts against the private alias. Keep KMS key administrators separate from runtime decrypt principals.
-6. Complete the recorded outage, rotation/rewrap, restored-backup, and pre-cutover-backup-expiry drills before enabling `encrypted_only` or `contracted` in Production.
+1. Record eight exact values: AWS region; a dedicated non-runtime KMS administrator role/user ARN;
+   Vercel team slug and `team_...` owner ID; and the distinct project **name** plus `prj_...` ID
+   for both web and worker. Project names—not IDs—appear in OIDC subjects.
+2. Create or select two Vercel projects from this repository. Set the web Root Directory to
+   `apps/web` and the worker Root Directory to `apps/worker`. In both projects, enable **Team
+   Issuer** under Settings → Security → Secure Backend Access (OIDC). Under the worker project's
+   Deployment Protection, configure **Trusted Sources** to authorize only web Production → worker
+   Production. Do not authorize Preview, another project, or a team/project wildcard.
+3. From `infra/aws-kms`, copy `terraform.tfvars.example` to the ignored `terraform.tfvars`, replace every placeholder, and authenticate Terraform with an administrator identity. If the team's Vercel issuer already exists in that AWS account, use the import command in `infra/aws-kms/README.md` instead of creating a duplicate.
+4. Run `terraform init`, `terraform fmt -check -recursive`, `terraform validate`, `terraform test`, `terraform plan -out unfiled-kms.tfplan`, and finally `terraform apply unfiled-kms.tfplan`. Confirm the plan creates two exact-subject runtime roles and these four aliases:
+   - `alias/unfiled/ai-assisted/object-wrap`
+   - `alias/unfiled/ai-assisted/content-mac`
+   - `alias/unfiled/private-manual/object-wrap`
+   - `alias/unfiled/private-manual/content-mac`
+5. Copy only Terraform's non-secret outputs into Vercel Production settings. Both projects receive
+   `UNFILED_AWS_REGION`; each receives its matching `UNFILED_AWS_ROLE_ARN`. Both receive the active
+   `UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN` and `UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN`. Only web receives
+   the two active `UNFILED_PRIVATE_*_KMS_KEY_ARN` values and, when C.5b wires it, the complete web
+   registry. In the worker set all of:
+
+   ```dotenv
+   UNFILED_WORKER_ENV=production
+   UNFILED_WORKER_PROJECT_ID=<worker-prj-id>
+   UNFILED_WORKER_EXPECTED_OIDC_SUBJECT=<terraform-worker_oidc_subject>
+   UNFILED_TRUSTED_SOURCE_TEAM_SLUG=<exact-team-slug>
+   UNFILED_TRUSTED_SOURCE_OWNER_ID=<team-id>
+   UNFILED_TRUSTED_SOURCE_WEB_PROJECT_ID=<web-prj-id>
+   UNFILED_TRUSTED_SOURCE_WEB_PROJECT_NAME=<exact-web-project-name>
+   UNFILED_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT=<terraform-web_oidc_subject>
+   ```
+
+   Set `UNFILED_RETIRED_AI_ROOT_REGISTRY_JSON` only to the literal result of
+   `terraform output -raw worker_retired_ai_root_registry_json` (initially `[]`); never hand-convert
+   the broader registry. Vercel injects `VERCEL_ENV` and `VERCEL_PROJECT_ID`; do not override them.
+   Never configure AWS access keys, a root KEK, a private KMS identifier, a user/browser session
+   secret, `CRON_SECRET`, the local drain bearer, `SUPABASE_SERVICE_ROLE_KEY`,
+   `SUPABASE_SECRET_KEY`, or another global Supabase service/secret variant in the worker project.
+
+6. Deploy both projects and call the protected worker only from web Production. Before cutover,
+   prove that Vercel preserves `x-vercel-trusted-oidc-idp-token` for the handler and exposes the
+   workload token through the request context used by `@vercel/oidc-aws-credentials-provider`.
+   The probe must exchange the real short-lived identity through STS and complete GenerateDataKey
+   plus Decrypt on both active AI roots. Never print or return either raw token. Header presence,
+   local JWT parsing, or constructing a KMS client without successful calls is not evidence.
+7. Configure a CloudTrail trail that retains read and write **management events** and does not
+   exclude KMS events. KMS cryptographic operations are management events, not CloudTrail data
+   events. Encryption-context values are logged, so they must remain the four non-secret
+   owner/class/purpose/key-record identifiers and must never contain note text or email addresses.
+   Add alerting for access denials, unusual KMS volume, key disable/deletion scheduling, and worker
+   attempts against private-manual roots.
+8. Execute `runKeyCustodyProbe` with the deployed worker identity and both private root ARNs supplied
+   only to the controlled probe runner—not to worker environment configuration. The recorded report
+   must have `privateDenialEvidence === "direct_kms"`, AI generation/decryption success, denial on
+   GenerateDataKey and Decrypt for both private purposes, wrong-context rejection, content-free
+   events, and matching CloudTrail evidence.
+9. Follow `infra/aws-kms/README.md` for the staged → active/retired two-apply rotation. A 21st
+   runtime-decryptable retired generation is intentionally blocked until a separately reviewed
+   archived-root lifecycle exists. Complete and record KMS outage, intermediate/root rewrap,
+   restored-backup, and pre-cutover-backup-expiry drills before advancing any owner to
+   `encrypted_only` or `contracted`. For each root rewrap, the interactive/admin service first
+   verifies the KMS `ReEncrypt` result names the intended active full key ARN, then calls the
+   service-only `rewrap_user_content_key` RPC with the expected old ARN and current rewrap count.
+   Record that one call updates ciphertext, new/previous ARN, count, and server timestamp together;
+   an exact retry reports replay; a changed ciphertext or stale ARN/count fails; and the dedicated
+   worker role cannot execute the RPC. Do not update those columns directly.
+
+### Dedicated production worker database login — provision with C.5c, not before
+
+Migration `20260830000015_encrypted_library_expansion.sql` creates the exact PostgreSQL role
+`unfiled_index_worker`, but deliberately leaves it `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS`, and
+without a password. It has no relation or sequence privileges, no access to the `private` schema,
+no role membership, and no executable public functions except the six RAG capabilities listed in
+[ADR-0007](./docs/decisions/ADR-0007-dedicated-worker-database-capability-and-root-rewrap.md).
+Do not provision this credential while the worker drain adapter still returns its intentional
+`503`. Complete these steps only after C.5c's reviewed database adapter is merged and before enabling
+production index jobs:
+
+1. In the Supabase dashboard, enable database SSL enforcement and download/record the current CA
+   chain and the serverless **transaction pooler** connection information for the production
+   project. The C.5c driver must disable prepared statements if its PostgreSQL library requires that
+   for transaction pooling. It must perform certificate and hostname verification equivalent to
+   `sslmode=verify-full`; `sslmode=disable`, `rejectUnauthorized: false`, and encryption without
+   certificate/hostname verification are release blockers.
+2. Open `psql` from a trusted administrator session over that verified TLS connection. Apply every
+   migration first. Then enable login and set a generated password without placing it in SQL text,
+   shell history, a ticket, or this file:
+
+   ```psql
+   ALTER ROLE unfiled_index_worker LOGIN;
+   \password unfiled_index_worker
+   ```
+
+   Let `\password` prompt interactively, save the generated value directly to the production
+   password manager/Vercel secret flow, and close the administrator session. Never grant
+   `service_role`, `authenticator`, another parent role, `INHERIT`, `BYPASSRLS`, `SUPERUSER`,
+   `CREATEDB`, `CREATEROLE`, or `REPLICATION`.
+
+3. Build the server-only pooler URI from Supabase's displayed transaction-pooler template using the
+   exact custom role `unfiled_index_worker` and its prompted password. Do not improvise the hostname,
+   project suffix, port, or CA. Add only that URI to the worker Production project as
+   `UNFILED_WORKER_DATABASE_URL`. It must not use an `EXPO_PUBLIC_`/`NEXT_PUBLIC_` name and must not
+   be copied to the web project, Preview, logs, CI, Terraform, or source control. Do not add
+   `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_SECRET_KEY`, any framework-prefixed equivalent, or an
+   RLS-bypassing database URL to the worker.
+4. From the deployed C.5c adapter's database session, record a content-free readiness result proving
+   `session_user = 'unfiled_index_worker'`. `SET ROLE unfiled_index_worker` is not acceptable:
+   security-definer RPCs check the original connection identity. Confirm again that the role is not
+   superuser, cannot bypass RLS, cannot inherit, and has no membership. A connection for which the
+   pooler reports another `session_user` fails closed and blocks rollout.
+5. Run the deployed privilege probe. It must prove zero direct SELECT/INSERT/UPDATE/DELETE or sequence
+   access across `public` and `private`, no `private` schema use, no public create, and EXECUTE on
+   exactly: `claim_note_index_jobs`, `heartbeat_note_index_job`, `commit_note_rag_index`,
+   `fail_note_index_job`, `recover_stale_note_index_jobs`, and `list_active_note_rag_index`. Direct
+   note/key/RAG-table reads, key registration/activation/rewrap, generation creation/activation, and
+   every other function must return permission denied. Record identifiers, SQLSTATE/outcome, and
+   timestamps only—never rows, ciphertext, credentials, tokens, or note content.
+6. Exercise lease loss, worker timeout, database outage, pooler reconnect, and credential revocation.
+   Jobs must remain queued or recover through the bounded RPCs; no code may fall back to a global
+   Supabase credential, direct table access, plaintext job payload, or private-manual key. Enable the
+   drain only after these checks and the Vercel/AWS evidence above are green.
+7. Rotate this credential independently of Supabase service keys. Drain/pause the worker, use the
+   same trusted `psql` `\password unfiled_index_worker` prompt, update the Vercel Production secret,
+   redeploy/recycle pooled connections, prove the old credential is rejected and the new session has
+   the same exact allowlist, then resume. A database rebuild or replay of the role-creating migration
+   returns it to `NOLOGIN`; repeat the explicit provisioning/probe instead of weakening the migration.
 
 Until those steps and C.5 pass, Unfiled may be shown as a portfolio work in progress but must not claim that the complete note library is encrypted or that private-manual mode is end-to-end encrypted.
 
@@ -175,19 +296,6 @@ These checks are intentionally human-owned until preview project credentials and
 
 ## GitHub protection
 
-After the first CI run creates the `CI` check, run:
-
-```bash
-gh api --method PUT repos/Zachshotamartin/unfiled/branches/main/protection \
-  -H "Accept: application/vnd.github+json" \
-  -F 'required_status_checks[strict]=true' \
-  -F 'required_status_checks[contexts][]=CI' \
-  -F 'enforce_admins=true' \
-  -F 'required_pull_request_reviews=null' \
-  -F 'restrictions=null'
-```
-
-The command was attempted on 2026-08-30 and GitHub returned HTTP 403:
-`Upgrade to GitHub Pro or make this repository public to enable this feature.` Until the
-account is upgraded, every merge in this implementation run is manually gated behind a
-green `gh pr checks` result and the same limitation is recorded in the final report.
+Completed on 2026-08-30 after the repository became public. `main` requires the strict aggregate
+`CI` status, applies the rule to administrators, and rejects force-pushes and branch deletion. Keep
+that aggregate job as the stable required-check name when CI lanes change.

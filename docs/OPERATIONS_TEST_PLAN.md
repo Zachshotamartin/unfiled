@@ -21,16 +21,17 @@ Rules: preview never points at production; the mock model adapter is determinist
 
 ## 3. CI pipeline (GitHub Actions, per PR)
 
-| Stage                     | Contents                                                                                                                                        | Blocking |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| 1 static                  | format check, ESLint, strict `tsc` per package, package-boundary check (`domain` imports nothing platform)                                      | yes      |
-| 2 unit                    | Vitest across packages; ≥80% lines/branches on core packages; scoped mobile auth/capture gate ≥90% statements/lines/functions and ≥85% branches | yes      |
-| 3 database                | migrations apply from zero; SQL tests: RLS/grants/functions plus C.5 envelope/index invariants when landed                                      | yes      |
-| 4 contract                | shared API fixtures validated by web + mobile clients; error-code stability; OpenAPI generated and diffed                                       | yes      |
-| 5 routing (deterministic) | full corpus against mock adapter: preservation, validation, banding, injection cases                                                            | yes      |
-| 6 build                   | `next build`; Expo `npx expo export` type/bundle check                                                                                          | yes      |
-| 7 local HTTP E2E          | built Next.js + local Supabase: auth/manual-note flows plus capture create/replay/drain/detail/receipt/delete and encrypted-row checks          | yes      |
-| 8 automated security      | gitleaks committed-content scan and `pnpm audit --prod --audit-level high`                                                                      | yes      |
+| Stage                     | Contents                                                                                                                                         | Blocking |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------- |
+| 1 static                  | format check, ESLint, strict `tsc` per package, package-boundary check (`domain` imports nothing platform)                                       | yes      |
+| 2 unit                    | Vitest across packages; ≥80% lines/branches on core packages; scoped mobile auth/capture gate ≥90% statements/lines/functions and ≥85% branches  | yes      |
+| 3 database                | migrations apply from zero; SQL tests: RLS/grants/functions plus C.5 envelope/index invariants when landed                                       | yes      |
+| 4 contract                | shared API fixtures validated by web + mobile clients; error-code stability; OpenAPI generated and diffed                                        | yes      |
+| 5 routing (deterministic) | full corpus against mock adapter: preservation, validation, banding, injection cases                                                             | yes      |
+| 6 build                   | `next build`; Expo `npx expo export` type/bundle check                                                                                           | yes      |
+| 7 local HTTP E2E          | built Next.js + local Supabase: auth/manual-note flows plus capture create/replay/drain/detail/receipt/delete and encrypted-row checks           | yes      |
+| 8 automated security      | gitleaks committed-content scan and `pnpm audit --prod --audit-level high`                                                                       | yes      |
+| 9 infrastructure          | Terraform format/validate/test for four KMS root families, exact-subject OIDC roles, context-bound policy, rotation states, and worker isolation | yes      |
 
 Preview Playwright, cloud canary-log inspection, performance smoke, stochastic real-provider evaluation, Maestro device coverage, and Lighthouse budgets are not represented as automated CI. They require cloud accounts, preview credentials, provider decisions, or physical devices and remain explicit gates in [HUMAN_SETUP.md](../HUMAN_SETUP.md). A release may not substitute the local HTTP gate for those later milestone gates.
 
@@ -43,6 +44,10 @@ Production deploy: merge to main → staging checks → migration approval gate 
 `ai-routing`: rule matching per type (prefix/phrase/alias/destination_mention) incl. normalization and priority; encrypted candidate assembly incl. tenant/private/generation/revision predicates, stale repair cap, cache invalidation, and incomplete-coverage fail-safe; schema parsing incl. 20+ hostile fixtures; preservation/scoring/banding; effort config; provider adapters.
 
 `content-crypto`: randomized round trip; tampered payload/wrapped key/context; wrong owner/resource/version/kind/key; malformed/oversized envelope; resolver no-fallback; rewrap; plaintext-canary absence from errors.
+
+`key-management`: exact four-field KMS context; owner/class/purpose/key-record binding; four distinct active roots; local-only resolver rejection in production; Vercel OIDC transport; static-AWS-credential rejection; GenerateDataKey/Decrypt readiness; worker AI-only generate/unwrap facade; private-root direct-denial evidence; root-rewrap authorization, monotonic lifecycle, replay, and abort propagation.
+
+`worker`: exact Vercel Trusted Sources issuer/audience/subject/owner/project/environment validation; one-hour token bound; no authorization/bypass fallback; production environment denylist; active/retired AI-root registry parsing; no private root or global Supabase credential; real KMS readiness before authority; request/lease cancellation; retained-facade revocation; bounded JSON and content-free failure responses.
 
 `sync`: outbox state machine (pending→synced, retry/backoff, permanent failure), restart recovery, duplicate suppression, cursor monotonicity, reconciliation.
 
@@ -66,6 +71,8 @@ Production deploy: merge to main → staging checks → migration approval gate 
 11. C.5 envelope schema rejects missing/wrong context; keyed idempotency replay is stable while ciphertext remains randomized.
 12. RAG tables deny clients/cross-users; worker cannot claim private/deleted/stale notes; only the active generation/current revision is eligible; privacy/delete races exclude immediately.
 13. Contract migration leaves no plaintext content column, FTS/trigram/vector index, `note_chunks`, or unkeyed content hash.
+14. C.5a worker role is `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS`, unprivileged, and outside every inherited role; it has no direct table/sequence/private-schema/admin-function capability and exactly six RAG RPC grants. `SET ROLE` cannot satisfy the functions' exact `session_user` guard.
+15. Root rewrap is client/worker-denied and service-only; it locks the owner/key row, compares the expected old full ARN and counter, atomically writes new ciphertext/ARN/previous ARN/count/time, replays only an exact already-applied result, and rejects stale or mismatched calls.
 
 ## 6. Test inventory — routing evaluation
 
@@ -110,7 +117,11 @@ NFR targets from PRODUCT_REQUIREMENTS §3 will be measured by Playwright traces,
 
 **Milestone C Gate 3:** recorded green for the credential-free code gate on 2026-08-30. Shared capture contracts/OpenAPI/client support; owner-bound AES-256-GCM capture envelopes; service-only capture tables, queue capabilities, and owner-scoped RPCs; leased claims, heartbeats, retry/recovery, dead-letter handling, receipts, deletion scrubbing, and retention downgrades; Web Crypto-encrypted IndexedDB intents/outbox; and SQLCipher mobile drafts/outbox all passed their focused and aggregate gates. The final local database run applied every migration from zero, reported zero warning-level lint findings, and passed 18 files / 822 pgTAP assertions. Format, lint, strict typecheck, coverage, builds, OpenAPI, Expo dependency/prebuild, routing eval, frozen-lockfile install, production dependency audit, built-app HTTP E2E, static-asset, and responsive visual checks passed. Apple signing and archive inspection, the physical-iPhone SQLCipher/widget/restart matrix, cloud-preview canary/log inspection, and preview performance smoke remain pending human evidence in `HUMAN_SETUP.md` and are not implied by this code gate.
 
-**Milestone C.5 gate (planned, not yet green):** REQ-E1/E2/R8/R9 and E2E-18–20 pass; plaintext schema/index contract completes; managed-KMS IAM separation, fail-closed behavior, rewrap, and restore are witnessed; encrypted retrieval performance/quality gates pass. Milestone D auto-routing and any “encrypted notes” product claim are blocked until then.
+**Milestone C.5a code boundary:** recorded green for the credential-free code gate on 2026-08-30. The surface covers four independently versioned KMS root families, exact-context managed-key custody, separate exact-subject web/worker roles, an isolated trusted-caller worker, expand-only encrypted aggregate/RAG schema, race-safe encrypted index lifecycle, a dedicated non-bypass worker database role with exactly six RPCs, and a service-only root-rewrap CAS. The final run passed frozen-lockfile install and production dependency audit, format/lint/type/boundary/OpenAPI/Expo checks, all 15-package coverage lanes, deterministic routing evaluation, production builds, the local HTTP acceptance suite, a zero-from-scratch database rebuild with zero warning-level lint findings and 19 files / 989 pgTAP assertions, and 12 Terraform policy/rotation tests. Focused security suites passed 34 content-crypto, 46 key-management, and 62 worker tests; the final adversarial review reported no remaining P0–P3 findings. This code result is not the complete C.5 gate and does not prove a deployed trust path.
+
+**C.5a account evidence (pending):** deploy the two exact Vercel projects; prove Trusted Sources header preservation; exchange the real worker OIDC identity through STS; generate and decrypt against both active AI roots; directly deny GenerateDataKey and Decrypt against both private roots; retain matching content-free CloudTrail management events; connect through hostname- and certificate-verified TLS with `session_user = 'unfiled_index_worker'`; prove that login has only the six-RPC surface; and complete outage, rotation/rewrap, rollback, and restored-backup drills. `HUMAN_SETUP.md` owns the exact procedure.
+
+**Complete Milestone C.5 gate (not yet green):** C.5b–d must make REQ-E1/E2/R8/R9 and E2E-18–20 pass; complete the plaintext schema/index contract; witness managed-KMS separation, fail-closed behavior, rewrap, and restore; and pass encrypted retrieval performance/quality gates. Milestone D auto-routing and any complete-library “encrypted notes” product claim are blocked until then.
 
 The production dependency audit reports zero known advisories. The root `pnpm` override resolves transitive `uuid` consumers to `uuid@11.1.1`, removing the previously reported Expo config-plugin build-chain advisory; Gate 3 reconfirmed this result from the frozen lockfile.
 
@@ -122,7 +133,7 @@ The production dependency audit reports zero known advisories. The root `pnpm` o
 
 ## 10. Backups and restore drill
 
-Supabase scheduled backups (verify plan tier ≥ daily + PITR if available). Quarterly drill: restore to scratch, restore only authorized KMS access separately, verify envelope authentication/content parity without logging plaintext, run deletion replay, time, and record gaps. A backup containing a deleted user's wrapped intermediate key can remain decryptable under the shared root until expiry; deletion copy and restore access controls must reflect this. Pre-cutover plaintext backups remain a documented risk until aged out.
+Supabase scheduled backups (verify plan tier ≥ daily + PITR if available). Quarterly drill: restore to scratch, restore only authorized KMS access separately, verify envelope authentication/content parity without logging plaintext, run deletion replay, time, and record gaps. Restore must retain each intermediate-key record's exact root ARN, wrapped bytes, version, previous root, rewrap count, and four KMS-context identifiers. A backup containing a deleted user's wrapped intermediate key can remain decryptable under the shared root until expiry; deletion copy and restore access controls must reflect this. Pre-cutover plaintext backups remain a documented risk until aged out.
 
 ## 11. Monitoring and alerting (initial thresholds)
 

@@ -136,14 +136,47 @@ jobs:
           CODE_SIGNING_REQUIRED=NO
           build
 
+  infrastructure:
+    name: KMS and workload policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.3
+
+      - name: Check Terraform formatting
+        working-directory: infra/aws-kms
+        run: terraform fmt -check -recursive
+
+      - name: Initialize providers without a backend
+        working-directory: infra/aws-kms
+        run: terraform init -backend=false -input=false
+
+      - name: Validate KMS and exact-subject policies
+        working-directory: infra/aws-kms
+        run: terraform validate -no-color
+
+      - name: Test four-key and workload-isolation contracts
+        working-directory: infra/aws-kms
+        run: terraform test -no-color
+
   ci:
     name: CI
     if: always()
-    needs: [quality, native-widget]
+    needs: [quality, native-widget, infrastructure]
     runs-on: ubuntu-latest
     steps:
       - name: Require every CI lane
         env:
+          INFRASTRUCTURE_RESULT: ${{ needs.infrastructure.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
           NATIVE_RESULT: ${{ needs.native-widget.result }}
-        run: test "$QUALITY_RESULT" = success && test "$NATIVE_RESULT" = success
+        run: >-
+          test "$QUALITY_RESULT" = success &&
+          test "$NATIVE_RESULT" = success &&
+          test "$INFRASTRUCTURE_RESULT" = success

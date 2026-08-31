@@ -1,9 +1,13 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
   ContentCryptoError,
   ContentCryptoErrorCode,
   contentCryptoLimits,
+  encryptedContentKinds,
   generateKeyEncryptionKey,
   importKeyEncryptionKey,
   openBytes,
@@ -38,7 +42,59 @@ function mutateBase64(value: string): string {
   return `${first === "A" ? "B" : "A"}${value.slice(1)}`;
 }
 
+function byteView(source: BufferSource): Uint8Array {
+  return ArrayBuffer.isView(source)
+    ? new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    : new Uint8Array(source);
+}
+
 describe("content envelope encryption", () => {
+  it("covers every content kind required by the encrypted-library SQL contract", async () => {
+    const migration = await readFile(
+      path.resolve(
+        import.meta.dirname,
+        "../../../supabase/migrations/20260830000015_encrypted_library_expansion.sql"
+      ),
+      "utf8"
+    );
+    const sqlKinds = new Set(
+      [
+        ...migration.matchAll(
+          /private\.valid_(?:encrypted_field|content_envelope)\(\s*[^,]+,\s*[^,]+,\s*[^,]+,\s*[^,]+,\s*'([a-z_]+)'/gu
+        )
+      ].flatMap((match) => (match[1] === undefined ? [] : [match[1]]))
+    );
+    const expectedSqlKinds = [
+      "capture",
+      "capture_receipt",
+      "generated_block",
+      "idempotency_response",
+      "note_content",
+      "note_mutation",
+      "note_rag_index",
+      "note_revision",
+      "organization_decision",
+      "organization_mutation_attempt",
+      "review_item",
+      "routing_rule",
+      "space_display",
+      "tag_display"
+    ];
+
+    expect([...sqlKinds].sort()).toEqual(expectedSqlKinds);
+    expect(encryptedContentKinds).toEqual(expect.arrayContaining(expectedSqlKinds));
+  });
+
+  it.each(encryptedContentKinds)("round-trips the canonical %s envelope kind", async (kind) => {
+    const encryptionKey = await key();
+    const kindContext: EncryptionContext = { ...context, kind };
+    const plaintext = `canonical-kind:${kind}`;
+    const envelope = await sealUtf8(plaintext, kindContext, encryptionKey);
+
+    expect(envelope.context.kind).toBe(kind);
+    await expect(openUtf8(envelope, kindContext, encryptionKey)).resolves.toBe(plaintext);
+  });
+
   it("round-trips UTF-8 content without exposing plaintext in the envelope", async () => {
     const encryptionKey = await key();
     const plaintext = "Roosevelt method: commit first, learn next. 🗂️";
@@ -225,6 +281,61 @@ describe("content envelope encryption", () => {
     await expect(generateKeyEncryptionKey("valid-key", unsupported)).rejects.toSatisfy(
       expectCode(ContentCryptoErrorCode.UNSUPPORTED_RUNTIME)
     );
+  });
+
+  it("keeps the raw-key import copy alive only until Web Crypto resolves", async () => {
+    const source = new Uint8Array(32).fill(41);
+    const importedKey = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, [
+      "encrypt",
+      "decrypt"
+    ]);
+    let importedBytes: Uint8Array = new Uint8Array();
+    let resolveImport: ((key: CryptoKey) => void) | undefined;
+    const importKey = vi.fn((_format: KeyFormat, keyData: BufferSource) => {
+      importedBytes = byteView(keyData);
+      return new Promise<CryptoKey>((resolve) => {
+        resolveImport = resolve;
+      });
+    });
+    const pending = importKeyEncryptionKey("zeroized-key", source, {
+      getRandomValues: crypto.getRandomValues.bind(crypto),
+      subtle: { importKey }
+    } as unknown as Crypto);
+
+    expect(importedBytes).toEqual(new Uint8Array(32).fill(41));
+    expect(importedBytes).not.toBe(source);
+    source.fill(42);
+    expect(importedBytes).toEqual(new Uint8Array(32).fill(41));
+    if (resolveImport === undefined) throw new Error("Expected Web Crypto import to start");
+    resolveImport(importedKey);
+
+    await expect(pending).resolves.toMatchObject({ keyId: "zeroized-key" });
+    expect(importedBytes).toEqual(new Uint8Array(32));
+    expect(source).toEqual(new Uint8Array(32).fill(42));
+  });
+
+  it("zeroes the raw-key import copy when Web Crypto rejects", async () => {
+    const source = new Uint8Array(32).fill(43);
+    let importedBytes: Uint8Array = new Uint8Array();
+    let rejectImport: ((reason: Error) => void) | undefined;
+    const importKey = vi.fn((_format: KeyFormat, keyData: BufferSource) => {
+      importedBytes = byteView(keyData);
+      return new Promise<CryptoKey>((_resolve, reject) => {
+        rejectImport = reject;
+      });
+    });
+    const pending = importKeyEncryptionKey("rejected-key", source, {
+      getRandomValues: crypto.getRandomValues.bind(crypto),
+      subtle: { importKey }
+    } as unknown as Crypto);
+
+    expect(importedBytes).toEqual(new Uint8Array(32).fill(43));
+    if (rejectImport === undefined) throw new Error("Expected Web Crypto import to start");
+    rejectImport(new Error("synthetic import failure"));
+
+    await expect(pending).rejects.toThrow("synthetic import failure");
+    expect(importedBytes).toEqual(new Uint8Array(32));
+    expect(source).toEqual(new Uint8Array(32).fill(43));
   });
 
   it("rejects invalid UTF-8 after successful authentication", async () => {

@@ -11,6 +11,11 @@ node_modules
 playwright-report
 test-results
 results.sarif
+.terraform/
+*.tfplan
+*.tfstate
+*.tfstate.*
+terraform.tfvars
 apps/mobile/android
 apps/mobile/ios
 supabase/.branches
