@@ -19,6 +19,7 @@ interface StructuralInventory {
   embedPhases: number;
   embeddedProducts: number;
   productReferences: number;
+  sqlCipherEnabled: boolean;
   sourceMembership: Record<string, number>;
   widgetFiles: Record<string, string>;
 }
@@ -65,6 +66,9 @@ async function projectFile(): Promise<string> {
 
 async function inventory(): Promise<StructuralInventory> {
   const pbxProject = await readFile(await projectFile(), "utf8");
+  const podfileProperties = JSON.parse(
+    await readFile(path.join(iosRoot, "Podfile.properties.json"), "utf8")
+  ) as Record<string, unknown>;
   const widgetRoot = path.join(iosRoot, targetName);
   const widgetFiles = await filesRecursively(widgetRoot);
   const sourceNames = [
@@ -115,12 +119,16 @@ async function inventory(): Promise<StructuralInventory> {
       pbxProject,
       /\/\* QuickCaptureWidget\.appex \*\/ = \{isa = PBXFileReference;[^\n]*explicitFileType = "wrapper\.app-extension";/gu
     ),
+    sqlCipherEnabled: podfileProperties["expo.sqlite.useSQLCipher"] === "true",
     sourceMembership,
     widgetFiles: hashes
   };
 }
 
 async function verifyRenderedConfiguration(current: StructuralInventory): Promise<void> {
+  if (!current.sqlCipherEnabled) {
+    fail("Expo SQLite did not render the required SQLCipher native build property");
+  }
   if (current.appExtensionTargets !== 1) {
     fail(`expected one app-extension target, found ${current.appExtensionTargets}`);
   }
@@ -218,7 +226,7 @@ async function main(): Promise<void> {
     fail("the second clean prebuild changed the structural inventory");
   }
   process.stdout.write(
-    `QuickCaptureWidget prebuild is deterministic for ${variant}: one target, product, and embed phase.\n`
+    `QuickCaptureWidget and SQLCipher prebuild are deterministic for ${variant}: one target, product, and embed phase.\n`
   );
 }
 

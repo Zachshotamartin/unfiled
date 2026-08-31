@@ -131,8 +131,12 @@ describe("versioned contracts", () => {
         id: request.clientCaptureId,
         rawContent: request.rawContent,
         source: request.source,
+        deviceId: "",
         privacy: request.privacy,
+        explicitDestinationNoteId: null,
+        expansionDisabled: request.expansionDisabled,
         clientCreatedAt: request.clientCreatedAt,
+        clientTimezone: request.clientTimezone,
         receivedAt: "2026-08-30T18:30:01.000Z",
         status: "queued",
         lastErrorCode: null
@@ -192,9 +196,10 @@ describe("versioned contracts", () => {
     }
   });
 
-  it("keeps future capture schemas shared without advertising an absent HTTP route", () => {
-    expect(openApiDocument.paths).not.toHaveProperty("/captures");
-    expect(openApiDocument.components.schemas).not.toHaveProperty("CaptureCreateRequest");
-    expect(openApiDocument.components.schemas).not.toHaveProperty("CaptureCreateResponse");
+  it("publishes the shared durable-capture contract", () => {
+    expect(openApiDocument.paths).toHaveProperty("/captures");
+    expect(openApiDocument.paths).toHaveProperty("/captures/{captureId}/receipt");
+    expect(openApiDocument.components.schemas).toHaveProperty("CaptureCreateRequest");
+    expect(openApiDocument.components.schemas).toHaveProperty("CaptureCreateResponse");
   });
 });

@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-trap 'echo "Milestone B HTTP E2E failed near line $LINENO." >&2' ERR
+trap 'echo "Milestone C HTTP E2E failed near line $LINENO." >&2' ERR
 
 e2e_tmp_dir="$(mktemp -d)"
 e2e_app_pid=""
@@ -32,14 +32,27 @@ set +a
 e2e_supabase_url="${API_URL:-http://127.0.0.1:54321}"
 e2e_app_url="http://127.0.0.1:3100"
 e2e_run_id="${E2E_RUN_ID:-$(date +%s)-$$}"
+e2e_cron_secret="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))')"
+e2e_standalone_dir="$e2e_tmp_dir/standalone"
+
+# Next's standalone output intentionally omits public/ and .next/static. Stage
+# the complete deployable artifact so this gate catches broken UI assets too.
+cp -R apps/web/.next/standalone "$e2e_standalone_dir"
+cp -R apps/web/public "$e2e_standalone_dir/apps/web/public"
+cp -R apps/web/.next/static "$e2e_standalone_dir/apps/web/.next/static"
 
 NEXT_PUBLIC_SUPABASE_URL="$e2e_supabase_url" \
 NEXT_PUBLIC_SUPABASE_ANON_KEY="$ANON_KEY" \
 SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY" \
 NEXT_PUBLIC_SITE_URL="$e2e_app_url" \
+AUTH_RATE_LIMIT_PEPPER="ci-auth-rate-limit-pepper-000000000001" \
+UNFILED_CONTENT_KEK_ID="ci-content-kek-v1" \
+UNFILED_CONTENT_KEK="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" \
+UNFILED_CONTENT_FINGERPRINT_KEY="AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE" \
+CRON_SECRET="$e2e_cron_secret" \
 HOSTNAME="127.0.0.1" \
 PORT="3100" \
-  node apps/web/.next/standalone/apps/web/server.js \
+  node "$e2e_standalone_dir/apps/web/server.js" \
   >"$e2e_tmp_dir/web.log" 2>&1 &
 e2e_app_pid="$!"
 
@@ -54,6 +67,15 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 curl --fail --silent --show-error --output /dev/null "$e2e_app_url/api/health"
+curl --fail --silent --show-error --output /dev/null \
+  "$e2e_app_url/brand/unfiled-mark.svg"
+e2e_hero_asset="$(find apps/web/.next/static/media -maxdepth 1 -name '01-hero.*.png' -print -quit)"
+if [[ -z "$e2e_hero_asset" ]]; then
+  echo "The built hero asset was not found." >&2
+  exit 1
+fi
+curl --fail --silent --show-error --output /dev/null \
+  "$e2e_app_url/_next/static/media/$(basename "$e2e_hero_asset")"
 
 e2e_auth_response="$(
   curl --fail --silent --show-error \
@@ -364,6 +386,98 @@ request_json GET '/review-items?state=open&limit=30' | node -e '
   });
 '
 
+e2e_capture_id="cap_$(node -e '
+  const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+  const bytes = require("node:crypto").randomBytes(26);
+  process.stdout.write(Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join(""));
+')"
+e2e_capture_canary="encrypted-capture-$e2e_run_id"
+e2e_capture_created_at="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+e2e_capture_body="{\"clientCaptureId\":\"$e2e_capture_id\",\"rawContent\":\"$e2e_capture_canary\",\"source\":\"web\",\"clientCreatedAt\":\"$e2e_capture_created_at\",\"clientTimezone\":\"UTC\",\"privacy\":\"ai_assisted\",\"expansionDisabled\":false}"
+e2e_capture_create="$(request_json POST /captures "$e2e_capture_body" "$e2e_capture_id")"
+e2e_capture_job_id="$(
+  printf '%s' "$e2e_capture_create" | E2E_CAPTURE_ID="$e2e_capture_id" E2E_CAPTURE_CANARY="$e2e_capture_canary" node -e '
+    let input = "";
+    process.stdin.on("data", (chunk) => (input += chunk));
+    process.stdin.on("end", () => {
+      const value = JSON.parse(input);
+      if (value.capture?.id !== process.env.E2E_CAPTURE_ID) process.exit(1);
+      if (value.capture?.rawContent !== process.env.E2E_CAPTURE_CANARY) process.exit(1);
+      if (value.capture?.status !== "queued" || value.replayed !== false) process.exit(1);
+      if (typeof value.jobId !== "string" || !value.jobId.startsWith("job_")) process.exit(1);
+      process.stdout.write(value.jobId);
+    });
+  '
+)"
+
+request_json POST /captures "$e2e_capture_body" "$e2e_capture_id" | \
+  E2E_CAPTURE_ID="$e2e_capture_id" E2E_CAPTURE_JOB_ID="$e2e_capture_job_id" node -e '
+    let input = "";
+    process.stdin.on("data", (chunk) => (input += chunk));
+    process.stdin.on("end", () => {
+      const value = JSON.parse(input);
+      if (value.capture?.id !== process.env.E2E_CAPTURE_ID) process.exit(1);
+      if (value.jobId !== process.env.E2E_CAPTURE_JOB_ID || value.replayed !== true) process.exit(1);
+    });
+  '
+
+curl --fail --silent --show-error \
+  --header "authorization: Bearer $e2e_cron_secret" \
+  "$e2e_app_url/api/internal/captures/drain" >/dev/null
+
+e2e_capture_detail="$(request_json GET "/captures/$e2e_capture_id")"
+printf '%s' "$e2e_capture_detail" | \
+  E2E_CAPTURE_ID="$e2e_capture_id" E2E_CAPTURE_CANARY="$e2e_capture_canary" node -e '
+    let input = "";
+    process.stdin.on("data", (chunk) => (input += chunk));
+    process.stdin.on("end", () => {
+      const value = JSON.parse(input);
+      if (value.capture?.id !== process.env.E2E_CAPTURE_ID) process.exit(1);
+      if (value.capture?.rawContent !== process.env.E2E_CAPTURE_CANARY) process.exit(1);
+      if (value.capture?.status !== "inbox") process.exit(1);
+      if (value.capture?.receipt?.outcome !== "kept_in_inbox") process.exit(1);
+      if (value.capture?.receipt?.captureId !== process.env.E2E_CAPTURE_ID) process.exit(1);
+    });
+  '
+
+e2e_stored_capture="$(
+  curl --fail --silent --show-error \
+    --header "apikey: $SERVICE_ROLE_KEY" \
+    --header "authorization: Bearer $SERVICE_ROLE_KEY" \
+    "$e2e_supabase_url/rest/v1/captures?id=eq.$e2e_capture_id&select=raw_text,content_envelope,content_fingerprint"
+)"
+printf '%s' "$e2e_stored_capture" | E2E_CAPTURE_CANARY="$e2e_capture_canary" node -e '
+  let input = "";
+  process.stdin.on("data", (chunk) => (input += chunk));
+  process.stdin.on("end", () => {
+    const rows = JSON.parse(input);
+    if (!Array.isArray(rows) || rows.length !== 1) process.exit(1);
+    const row = rows[0];
+    if (JSON.stringify(row).includes(process.env.E2E_CAPTURE_CANARY)) process.exit(1);
+    if (row.raw_text !== "[encrypted]") process.exit(1);
+    if (row.content_envelope?.version !== 1 || row.content_envelope?.suite !== "A256GCM") process.exit(1);
+    if (!/^[0-9a-f]{64}$/.test(row.content_fingerprint)) process.exit(1);
+  });
+'
+
+if grep --fixed-strings --quiet "$e2e_capture_canary" "$e2e_tmp_dir/web.log"; then
+  echo "Capture plaintext appeared in the web server log." >&2
+  exit 1
+fi
+
+e2e_capture_delete_key="milestone-c-http-capture-delete-$e2e_run_id"
+request_json DELETE "/captures/$e2e_capture_id" \
+  "{\"idempotencyKey\":\"$e2e_capture_delete_key\",\"removeInsertedContent\":false,\"expectedNoteRevisions\":[]}" \
+  "$e2e_capture_delete_key" | E2E_CAPTURE_ID="$e2e_capture_id" node -e '
+    let input = "";
+    process.stdin.on("data", (chunk) => (input += chunk));
+    process.stdin.on("end", () => {
+      const value = JSON.parse(input);
+      if (value.captureId !== process.env.E2E_CAPTURE_ID || value.replayed !== false) process.exit(1);
+      if (value.removedInsertedContent !== false || value.contentRemovalMutations?.length !== 0) process.exit(1);
+    });
+  '
+
 request_json POST /auth/sign-out | node -e '
   let input = "";
   process.stdin.on("data", (chunk) => (input += chunk));
@@ -372,4 +486,4 @@ request_json POST /auth/sign-out | node -e '
   });
 '
 
-echo "Milestone B local HTTP E2E passed."
+echo "Milestone C local HTTP E2E passed."

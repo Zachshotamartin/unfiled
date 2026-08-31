@@ -178,6 +178,10 @@
     font-size: 0.75rem;
   }
 
+  .field-label {
+    display: block;
+  }
+
   .product-shell {
     min-height: 100dvh;
     background: var(--color-canvas);

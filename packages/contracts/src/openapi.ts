@@ -11,6 +11,21 @@ import {
   AuthVerifyRequestSchema,
   AuthVerifyResponseSchema
 } from "./auth.js";
+import {
+  CaptureCreateRequestSchema,
+  CaptureCreateResponseSchema,
+  CaptureContentRemovalMutationSchema,
+  CaptureDeleteRequestSchema,
+  CaptureDeleteResponseSchema,
+  CaptureDetailResponseSchema,
+  CaptureListQuerySchema,
+  CaptureListResponseSchema,
+  CaptureReceiptResponseSchema,
+  CaptureReceiptSchema,
+  CaptureRetryRequestSchema,
+  CaptureRetryResponseSchema,
+  CaptureSummarySchema
+} from "./captures.js";
 import { ApiErrorSchema } from "./errors.js";
 import { MutationResultSchema, MutationUndoRequestSchema } from "./mutations.js";
 import {
@@ -97,7 +112,23 @@ const idempotencyHeader = {
   in: "header",
   required: true,
   description: "Caller-generated key that remains stable across retries.",
-  schema: { type: "string", minLength: 1, maxLength: 80 }
+  schema: {
+    type: "string",
+    pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    minLength: 1,
+    maxLength: 80
+  }
+} as const;
+const captureIdempotencyHeader = {
+  ...idempotencyHeader,
+  description:
+    "The clientCaptureId from the request body. It must remain byte-identical across retries.",
+  schema: {
+    type: "string",
+    pattern: "^cap_[0-9A-HJKMNP-TV-Z]{26}$",
+    minLength: 30,
+    maxLength: 30
+  }
 } as const;
 
 function pathId(name: string, pattern: string) {
@@ -114,6 +145,7 @@ const linkId = pathId("linkId", "^lnk_[0-9A-HJKMNP-TV-Z]{26}$");
 const spaceId = pathId("spaceId", "^spc_[0-9A-HJKMNP-TV-Z]{26}$");
 const tagId = pathId("tagId", "^tag_[0-9A-HJKMNP-TV-Z]{26}$");
 const mutationId = pathId("mutationId", "^mut_[0-9A-HJKMNP-TV-Z]{26}$");
+const captureId = pathId("captureId", "^cap_[0-9A-HJKMNP-TV-Z]{26}$");
 
 const cursorQuery = {
   name: "cursor",
@@ -179,6 +211,29 @@ const reviewStateQuery = {
     default: "open"
   }
 } as const;
+const captureStatusQuery = {
+  name: "status",
+  in: "query",
+  required: false,
+  schema: {
+    type: "string",
+    enum: ["queued", "processing", "done", "needs_review", "failed", "inbox"]
+  }
+} as const;
+const captureFromQuery = {
+  name: "from",
+  in: "query",
+  required: false,
+  description: "Inclusive clientCreatedAt lower bound for the offline-safe capture timeline.",
+  schema: { type: "string", format: "date-time" }
+} as const;
+const captureToQuery = {
+  name: "to",
+  in: "query",
+  required: false,
+  description: "Exclusive clientCreatedAt upper bound for the offline-safe capture timeline.",
+  schema: { type: "string", format: "date-time" }
+} as const;
 
 const commonErrors = {
   "400": errorResponse,
@@ -192,7 +247,7 @@ export const openApiDocument = {
   info: {
     title: "Unfiled API",
     version: "1.0.0",
-    description: "Versioned API for authentication and manual note management."
+    description: "Versioned API for durable capture, authentication, and note management."
   },
   servers: [{ url: "/api/v1" }],
   paths: {
@@ -264,6 +319,79 @@ export const openApiDocument = {
           "400": errorResponse,
           "401": errorResponse,
           "429": errorResponse
+        }
+      }
+    },
+    "/captures": {
+      get: {
+        operationId: "listCaptures",
+        summary: "List captures by processing state and original client time",
+        description:
+          "Orders by server receivedAt descending with capture ID as a stable tie-breaker. Date filters apply to clientCreatedAt as a half-open [from, to) interval.",
+        security: authenticated,
+        parameters: [captureStatusQuery, limitQuery, cursorQuery, captureFromQuery, captureToQuery],
+        responses: {
+          "200": jsonResponse("Paginated capture summaries", "CaptureListResponse"),
+          ...commonErrors
+        }
+      },
+      post: {
+        operationId: "createCapture",
+        summary: "Durably create a capture and its organization job",
+        security: authenticated,
+        parameters: [captureIdempotencyHeader],
+        requestBody: jsonBody("CaptureCreateRequest"),
+        responses: {
+          "202": jsonResponse("Durable capture accepted", "CaptureCreateResponse"),
+          ...commonErrors
+        }
+      }
+    },
+    "/captures/{captureId}": {
+      get: {
+        operationId: "getCapture",
+        summary: "Get one capture with its durable receipt when available",
+        security: authenticated,
+        parameters: [captureId],
+        responses: {
+          "200": jsonResponse("Capture detail", "CaptureDetailResponse"),
+          ...commonErrors
+        }
+      },
+      delete: {
+        operationId: "deleteCapture",
+        summary: "Remove a capture source and optionally its inserted note content",
+        security: authenticated,
+        parameters: [captureId, idempotencyHeader],
+        requestBody: jsonBody("CaptureDeleteRequest"),
+        responses: {
+          "200": jsonResponse("Capture deletion result", "CaptureDeleteResponse"),
+          ...commonErrors
+        }
+      }
+    },
+    "/captures/{captureId}/receipt": {
+      get: {
+        operationId: "getCaptureReceipt",
+        summary: "Get the durable organization receipt for one capture",
+        security: authenticated,
+        parameters: [captureId],
+        responses: {
+          "200": jsonResponse("Capture organization receipt", "CaptureReceiptResponse"),
+          ...commonErrors
+        }
+      }
+    },
+    "/captures/{captureId}/retry": {
+      post: {
+        operationId: "retryCapture",
+        summary: "Retry a safely retryable capture organization job",
+        security: authenticated,
+        parameters: [captureId, idempotencyHeader],
+        requestBody: jsonBody("CaptureRetryRequest"),
+        responses: {
+          "202": jsonResponse("Capture retry accepted", "CaptureRetryResponse"),
+          ...commonErrors
         }
       }
     },
@@ -593,6 +721,19 @@ export const openApiDocument = {
       AuthSignOutResponse: openApiSchema(AuthSignOutResponseSchema),
       AuthVerifyRequest: openApiSchema(AuthVerifyRequestSchema),
       AuthVerifyResponse: openApiSchema(AuthVerifyResponseSchema),
+      CaptureCreateRequest: openApiSchema(CaptureCreateRequestSchema),
+      CaptureCreateResponse: openApiSchema(CaptureCreateResponseSchema),
+      CaptureContentRemovalMutation: openApiSchema(CaptureContentRemovalMutationSchema),
+      CaptureSummary: openApiSchema(CaptureSummarySchema),
+      CaptureListQuery: openApiSchema(CaptureListQuerySchema),
+      CaptureListResponse: openApiSchema(CaptureListResponseSchema),
+      CaptureDetailResponse: openApiSchema(CaptureDetailResponseSchema),
+      CaptureReceipt: openApiSchema(CaptureReceiptSchema),
+      CaptureReceiptResponse: openApiSchema(CaptureReceiptResponseSchema),
+      CaptureRetryRequest: openApiSchema(CaptureRetryRequestSchema),
+      CaptureRetryResponse: openApiSchema(CaptureRetryResponseSchema),
+      CaptureDeleteRequest: openApiSchema(CaptureDeleteRequestSchema),
+      CaptureDeleteResponse: openApiSchema(CaptureDeleteResponseSchema),
       NoteCreateRequest: openApiSchema(NoteCreateRequestSchema),
       NoteListQuery: openApiSchema(NoteListQuerySchema),
       NoteUpdateRequest: openApiSchema(NoteUpdateRequestSchema),

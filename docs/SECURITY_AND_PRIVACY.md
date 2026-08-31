@@ -2,14 +2,16 @@
 
 Threat model, enforcement design, data-path disclosure, deletion, and incident handling. The checklist in §10 gates Gate 6 (public personal data) in [BUILD_PLAN.md](./BUILD_PLAN.md) §22.
 
+**Implementation status:** this document includes the accepted Milestone C.5 target, not a claim about the current note schema. Captures have an application-crypto foundation; manual-note content and legacy SQL search remain plaintext until C.5 migrates them and its gate passes. Unfiled is not E2EE because authorized application services can decrypt content.
+
 ## 1. Data classification
 
-| Class                    | Examples                                                     | Handling                                                                                               |
-| ------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| Content (most sensitive) | capture text, note bodies, structured data, generated blocks | never in logs/traces/analytics; provider-bound only when AI-assisted; encrypted at rest and in transit |
-| Behavioral               | decisions, bands, reason codes, feedback events              | no content; retained per DATA_MODEL §7                                                                 |
-| Identity                 | email, auth identifiers, device IDs                          | Supabase Auth custody; pseudonymized in telemetry                                                      |
-| Operational              | latencies, tokens, queue depths                              | freely retained                                                                                        |
+| Class                    | Examples                                                     | Handling                                                                                                                    |
+| ------------------------ | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| Content (most sensitive) | capture text, note bodies, structured data, generated blocks | never in logs/traces/analytics; provider-bound only when AI-assisted; C.5 target is application encryption at rest plus TLS |
+| Behavioral               | decisions, bands, reason codes, feedback events              | no content; retained per DATA_MODEL §7                                                                                      |
+| Identity                 | email, auth identifiers, device IDs                          | Supabase Auth custody; pseudonymized in telemetry                                                                           |
+| Operational              | latencies, tokens, queue depths                              | freely retained                                                                                                             |
 
 ## 2. Trust boundaries and threat model
 
@@ -20,8 +22,8 @@ Boundaries: (B1) client ↔ API, (B2) API ↔ database, (B3) workflow ↔ model 
 | T1  | Cross-user data access (IDOR)                         | B1/B2    | RLS on every table + server-derived user ID; no client-supplied user IDs trusted                                                                                            | RLS deny suite in CI                    |
 | T2  | Forged decisions/mutations from client                | B2       | telemetry and mutation tables writable only via `security definer` functions / service role                                                                                 | DB grant tests                          |
 | T3  | Prompt injection via capture or note snippet          | B4       | model has no tools; output is data; schema + candidate-ID + allowlist validation; injection eval cases                                                                      | AI spec §12 injection set = 0 obeyed    |
-| T4  | Model exfiltrates other-user content                  | B3       | candidate retrieval is user-scoped SQL; manifest recorded and auditable                                                                                                     | unit test on retrieval predicate        |
-| T5  | Private note leaks into model/embeddings              | B3       | `privacy` predicate at query level; no embedding row created                                                                                                                | REQ-R7 automated assertion              |
+| T4  | Model exfiltrates other-user content                  | B3       | owner-scoped encrypted retrieval; owner/privacy/revision checked before context and again before write; encrypted manifest is auditable                                     | tenant/race retrieval tests             |
+| T5  | Private note leaks into model/embeddings              | B3       | exclude at enqueue, worker claim, index query, candidate assembly, and provider builder; worker lacks private-key IAM                                                       | REQ-R7/REQ-R8 provider-spy tests        |
 | T6  | Content leaks into logs/Sentry                        | B5       | structured logger with denylist serializer; Sentry `beforeSend` scrubbing; replay text masking                                                                              | log-audit test fixture                  |
 | T7  | Magic-link/code interception or brute force           | B1       | provider TTLs, rate limits per email+IP, non-enumerating errors                                                                                                             | REQ-A1 tests                            |
 | T8  | Stolen device with open session                       | B1       | mobile tokens in Keychain/Keystore; local credentials cleared immediately on sign-out; online sign-out requests global provider revocation; deletion signs out all sessions | manual test G                           |
@@ -34,6 +36,9 @@ Boundaries: (B1) client ↔ API, (B2) API ↔ database, (B3) workflow ↔ model 
 | T15 | Theft of stored user API keys (DB compromise)         | B2       | keys in Supabase Vault (or AES-256-GCM with server-held KEK), never plaintext at rest; table has zero client access                                                         | grant tests + custody review            |
 | T16 | User API key leaks via logs, errors, or API responses | B5/B1    | key plaintext exists only transiently in workflow memory; logger denylist; status endpoints return last-four only                                                           | log-audit fixture includes a canary key |
 | T17 | Key misuse blast radius (our bug spends user's money) | B3       | per-user rate limits and payload caps apply to BYOK identically; spend estimate shown in settings; anomaly alert on per-user call volume                                    | budget/limit tests                      |
+| T18 | Database/backup disclosure reveals note content       | B2       | per-object authenticated envelopes; per-user intermediate keys; production KMS root outside Supabase/Vercel; plaintext indexes removed                                      | C.5 canary + restore tests              |
+| T19 | Embedding/index disclosure reveals semantic content   | B2       | lexical signals, snippets, and embeddings share one encrypted per-note envelope; no persisted plaintext vector/FTS                                                          | schema/index inspection + canary test   |
+| T20 | Stale/private index race enters model context         | B3/B4    | active-generation + exact-revision eligibility, immediate privacy/delete exclusion, pre-model/pre-write revalidation, degraded auto-apply fail-safe                         | lifecycle/concurrency tests             |
 
 ## 3. Authentication and authorization
 
@@ -45,11 +50,21 @@ Boundaries: (B1) client ↔ API, (B2) API ↔ database, (B3) workflow ↔ model 
 
 ## 4. AI privacy modes and disclosure
 
-Two modes per note/capture (DATA_MODEL `privacy_mode`). Plain-language disclosure, to appear in the privacy policy and in-app:
+Two modes per note/capture (DATA_MODEL `privacy_mode`). The following is target copy and must not be published until the C.5 data path matches it:
 
 > Notes with AI assistance are stored encrypted on our servers (Supabase) and, when we organize a capture, we send that capture plus short summaries of a few of your candidate notes to our AI provider (OpenAI) to decide where it belongs. We request that the provider not store these requests (`store: false`). Private manual notes are never sent to the AI provider, never embedded, and never used in AI search. Unfiled is not end-to-end encrypted: our servers can read AI-assisted notes in order to organize them.
 
 No E2EE claims anywhere in marketing or app copy. `store: false` behavior re-verified against provider docs at implementation and on SDK upgrades.
+
+### 4.1 Application-encrypted library and key custody (C.5 target)
+
+Every durable content field and derived search artifact uses a fresh AES-256-GCM DEK with authenticated context binding owner, resource, record version, and kind. Per-user intermediate keys for object wrapping and content MACs are independent purposes. Resolution binds owner, class, purpose, and key ID; history stays under the private class whenever either side of a privacy transition is private. Production uses managed KMS/HSM custody, initially AWS KMS `GenerateDataKey` with Vercel OIDC short-lived roles; static production root KEKs in environment variables are forbidden.
+
+AI-assisted and private-manual keys use separate aliases, principals, and audit trails. The organizer/indexer runs in a separately deployed `apps/worker` project with an exact OIDC subject and AI-only AWS role; it cannot share the interactive API's deployment identity. The owner-authorized web/API project uses a different role and may decrypt private notes for CRUD, export, and lexical search, so private-manual is not E2EE. The current same-deployment `after()`/cron adapter must be retired before this boundary is claimed in production.
+
+The accepted RAG path pages and exact-scans only the authenticated user's encrypted active-generation documents with bounded concurrency and memory. Persisted lexical features, snippets, and embeddings are ciphertext; bounded float32 embeddings use a strict versioned binary encoding and reject non-finite values, dimension/model mismatch, or oversized features. Private notes never receive an index row. Stale rows are ineligible, privacy/delete changes exclude immediately, and incomplete coverage disables RAG-based auto-apply. Plaintext pgvector/FTS requires a future ADR and privacy review.
+
+KMS failure, envelope authentication failure, or missing key version fails closed. Rotation rewraps DEKs and is audited. Old backups can contain wrapped intermediate keys still decryptable under the retained shared KMS root, so account deletion is not immediate backup erasure; the stated backup window remains part of the promise.
 
 ## 5. Prompt injection posture
 
@@ -71,12 +86,15 @@ Circuit breaker: 5 consecutive provider failures opens for 60 s (exponential up 
 ## 7. Secrets and logging
 
 - Secrets only in Vercel/Supabase/EAS secret stores; rotation procedure documented per secret; any exposure → immediate rotation + audit.
+- Content root keys are the exception to ordinary app-secret custody: production roots stay in managed KMS/HSM and workloads use short-lived identity, not a static Vercel secret.
 - Logging rules (enforced by a single shared logger): never log `raw_text`, `body_markdown`, `structured_data`, `content`, prompts, model responses, tokens, magic links, or auth headers. Log IDs, states, codes, durations, counts. Trace IDs are request-scoped; user identifiers in telemetry are one-way pseudonymous.
 - Sentry: `sendDefaultPii: false`, breadcrumb and event scrubbing for the fields above, replay masking on all text inputs.
 
 ## 7.1 Bring-your-own-key custody
 
 Users may store their own OpenAI or Anthropic API key so organization runs on their account, with model-effort settings (AI spec §14). Custody rules:
+
+Provider-key custody is separate from note-content key custody in §4.1. A user's model API key must never wrap note content.
 
 1. **Storage:** Supabase Vault is the selected mechanism (authenticated encryption, key material outside the table). Fallback if Vault proves unsuitable: app-layer AES-256-GCM with the KEK only in the server secret store, ciphertext in `user_provider_keys.key_ciphertext`. Plaintext keys are never written to any table, log, trace, or backup.
 2. **Write path:** `PUT /me/provider-key` validates the key with a minimal-cost test call to the provider before storing; failure returns a safe error and stores nothing.
@@ -93,11 +111,11 @@ Account deletion (`delete_account`):
 1. Revoke all sessions.
 2. Cancel queued organization jobs; abort in-flight workflow runs at next checkpoint.
 3. Hard-delete user rows (cascades from `auth.users` cover owned tables); destroy any Vault secrets for stored provider keys; verify row counts are zero per table and record a deletion audit row (user pseudonym, counts, timestamp).
-4. Search artifacts and embeddings die by cascade; verify.
+4. Every encrypted retrieval generation and index job dies by cascade; verify no active-generation or cache entry remains.
 5. Provider side: no stored content by design (`store: false`); document provider retention in the policy.
 6. Backups age out within the documented window (≤30 days target).
 
-Note deletion: soft 30 days (restorable), then hard delete cascading chunks, embeddings, links, and blocks. A reconciliation job runs daily: finds orphaned chunks/embeddings/blocks and hard-deleted leftovers; alerting on nonzero findings. Deletion reconciliation has an automated test (Milestone F gate).
+Note deletion: soft 30 days (restorable and excluded from retrieval), then hard delete cascading index documents/jobs, links, and blocks. A reconciliation job finds orphaned derived rows and hard-deleted leftovers; alert on nonzero findings. Backup copies age out under the published window.
 
 ## 9. Incident response
 
@@ -111,6 +129,9 @@ Note deletion: soft 30 days (restorable), then hard delete cascading chunks, emb
 - [ ] Grant tests: telemetry/mutation tables not client-writable
 - [ ] Injection eval: 0 obeyed instructions
 - [ ] Private-note exclusion assertion green
+- [ ] C.5 ciphertext canaries absent from rows, indexes, queues, idempotency records, Realtime, logs, traces, analytics, and restored post-cutover backups
+- [ ] Managed-KMS IAM separation, fail-closed outage, rewrap rotation, and restore drills green; no static production root KEK
+- [ ] Encrypted RAG tenant/generation/revision/privacy races and incomplete-coverage fail-safe green
 - [ ] Log audit: seeded content strings absent from logs/Sentry events in a full E2E run
 - [ ] Deletion: account + note deletion reconciliation tests green; manual drill performed
 - [ ] Export completeness verified against fixture library

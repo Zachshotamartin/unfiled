@@ -15,7 +15,7 @@ const nextConfig: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
   reactStrictMode: true,
-  transpilePackages: ["@unfiled/api-client", "@unfiled/contracts"],
+  transpilePackages: ["@unfiled/api-client", "@unfiled/content-crypto", "@unfiled/contracts"],
   webpack(config) {
     config.resolve.extensionAlias = {
       ...config.resolve.extensionAlias,

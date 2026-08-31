@@ -5,10 +5,12 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 
 import { AuthProvider, useSession } from "../auth/AuthProvider";
+import { useCaptureOutboxSync } from "../features/capture/useCaptureOutboxSync";
 import { nativeTheme } from "../theme/nativeTheme";
 
 function RootNavigator(): ReactElement {
   const { lastProfileId, session, status } = useSession();
+  useCaptureOutboxSync();
   if (status === "loading") {
     return (
       <View accessibilityLabel="Loading Unfiled" style={styles.loading}>
@@ -29,6 +31,7 @@ function RootNavigator(): ReactElement {
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="notes" />
         <Stack.Screen name="spaces" />
+        <Stack.Screen name="captures" />
       </Stack.Protected>
       <Stack.Protected guard={session === null}>
         <Stack.Screen name="(auth)" />
