@@ -27,6 +27,19 @@ const rules: Readonly<Record<string, BoundaryRule>> = Object.freeze({
     forbidden: ["next", "expo", "react", "react-native", "@supabase", "openai", "@anthropic-ai"],
     sourceRoots: ["src"]
   },
+  "packages/encrypted-aggregate": {
+    forbidden: [
+      "next",
+      "expo",
+      "react",
+      "react-native",
+      "@supabase",
+      "@vercel",
+      "openai",
+      "@anthropic-ai"
+    ],
+    sourceRoots: ["src"]
+  },
   "apps/worker": {
     forbidden: ["next", "expo", "react", "react-native", "@unfiled/web", "@unfiled/mobile"],
     sourceRoots: ["src", "api"]

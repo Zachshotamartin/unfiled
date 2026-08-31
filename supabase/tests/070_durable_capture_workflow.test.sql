@@ -86,11 +86,27 @@ select ok(
   'authenticated callers have no direct capture read or delete grant'
 );
 select is(
-  (select count(*) from pg_policies
-   where schemaname = 'public'
-     and tablename = 'captures'),
-  0::bigint,
-  'captures retain no client policy that a future table grant could reactivate'
+  (
+    select array_agg(
+      policyname || ':' || cmd || ':' || roles::text
+      order by policyname
+    )::text
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'captures'
+  ),
+  '{"captures_select:SELECT:{authenticated}"}',
+  'captures expose only the rollout-gated owner-select policy identity'
+);
+select ok(
+  (
+    select qual = '((user_id = auth.uid()) AND legacy_plaintext_reads_allowed(user_id))'
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'captures'
+      and policyname = 'captures_select'
+  ),
+  'the capture owner-select policy is fenced by owner identity and plaintext rollout state'
 );
 select ok(
   not has_function_privilege(
@@ -251,6 +267,7 @@ select is(
   'false',
   'the first create is not a replay'
 );
+reset role;
 select is(
   (select raw_text from public.captures
    where id = 'cap_77000000000000000000000001'),
@@ -314,6 +331,8 @@ select ok(
     ? 'encryptedContent'),
   'create acknowledgement does not echo ciphertext back to the caller'
 );
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select is(
   public.create_capture_with_job(
     '11111111-1111-4111-8111-111111111111'::uuid,
@@ -343,6 +362,7 @@ select throws_ok(
   'invalid_idempotency_key',
   'reusing a capture ID with a different request fingerprint is rejected'
 );
+reset role;
 select is(
   (select count(*) from public.organization_jobs
    where capture_id = 'cap_77000000000000000000000001'),
@@ -359,6 +379,8 @@ select is(
   2::bigint,
   'only first acceptance emits capture and job events'
 );
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select throws_ok(
   $$select public.create_capture_with_job(
     '11111111-1111-4111-8111-111111111111'::uuid,
@@ -407,6 +429,7 @@ select throws_ok(
   'invalid_capture',
   'a numeric JSON scalar cannot masquerade as base64url envelope text'
 );
+reset role;
 select throws_ok(
   $$update public.captures
     set content_envelope = jsonb_set(
@@ -419,6 +442,8 @@ select throws_ok(
   'new row for relation "captures" violates check constraint "captures_encrypted_content_shape"',
   'the active-row constraint also fails closed for nested JSON nulls'
 );
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select public.create_capture_with_job(
   '11111111-1111-4111-8111-111111111111'::uuid,
   pg_temp.capture_payload(
@@ -426,6 +451,7 @@ select public.create_capture_with_job(
     'web', '2026-08-30T18:31:00Z', 'UTC'
   ) || jsonb_build_object('privacy', 'private_manual')
 );
+reset role;
 select is(
   (select capture.status::text || ':' || job.state::text
    from public.captures as capture
@@ -434,6 +460,8 @@ select is(
   'inbox:succeeded',
   'private-manual capture settles without entering the organization queue'
 );
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select is(
   public.get_capture_receipt(
     '11111111-1111-4111-8111-111111111111'::uuid,
@@ -488,6 +516,7 @@ select is(
   'A256GCM',
   'only the service claim receives the encrypted capture envelope'
 );
+reset role;
 select is(
   (select job.state::text || ':' || capture.status::text
    from public.organization_jobs as job
@@ -502,6 +531,8 @@ select is(
   1,
   'the claim increments the bounded attempt counter once'
 );
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select is(
   jsonb_array_length(public.claim_capture_jobs('worker-competing', 1, 60) -> 'jobs'),
   0,
@@ -541,6 +572,7 @@ select is(
   'awaiting_retry',
   'a retryable provider outage is durably scheduled'
 );
+reset role;
 select is(
   (select capture.status::text || ':' || capture.last_error_code::text
    from public.captures as capture
@@ -553,6 +585,8 @@ select is(
   'false',
   'the first failure transition is not a replay'
 );
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select is(
   public.fail_capture_job(
     (select value -> 'jobs' -> 0 ->> 'jobId' from workflow_values where key = 'claim-one'),
@@ -575,17 +609,23 @@ select throws_ok(
   'invalid_idempotency_key',
   'a replayed lease transition rejects a different retry envelope'
 );
+reset role;
 update public.organization_jobs
 set available_at = clock_timestamp() - interval '1 second'
 where capture_id = 'cap_77000000000000000000000001';
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 insert into workflow_values (key, value)
 values ('claim-two', public.claim_capture_jobs('worker-b', 1, 60));
+reset role;
 select is(
   (select attempt from public.organization_jobs
    where capture_id = 'cap_77000000000000000000000001'),
   2,
   'the due retry is claimed as a second bounded attempt'
 );
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 insert into workflow_values (key, value)
 select 'complete-inbox', public.complete_capture_job(
   value -> 'jobs' -> 0 ->> 'jobId',
@@ -619,6 +659,7 @@ select throws_ok(
   'invalid_idempotency_key',
   'a completed lease rejects a different terminal replay payload'
 );
+reset role;
 select is(
   (select count(*) from public.capture_receipts
    where capture_id = 'cap_77000000000000000000000001'),
@@ -636,11 +677,12 @@ select public.create_capture_with_job(
   )
 );
 
-set local role service_role;
-select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+reset role;
 update public.organization_jobs
 set attempt = 4
 where capture_id = 'cap_77000000000000000000000008';
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 insert into workflow_values (key, value)
 values ('claim-exhaustion', public.claim_capture_jobs('worker-exhaustion', 1, 60));
 select is(
@@ -687,6 +729,7 @@ select is(
   'true',
   'the exhausted failure transition replays without duplicate effects'
 );
+reset role;
 select is(
   (select count(*) from public.capture_receipts
    where capture_id = 'cap_77000000000000000000000008'),
@@ -829,6 +872,7 @@ select is(
   'true',
   'manual retry replays by its strict idempotency envelope'
 );
+reset role;
 select ok(
   (
     select not (response_json -> 'capture' ? 'encryptedContent')
@@ -840,6 +884,8 @@ select ok(
   ),
   'retry idempotency persists metadata only and never a replayable content envelope'
 );
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select throws_ok(
   $$select public.get_capture_receipt(
     '11111111-1111-4111-8111-111111111111'::uuid,
@@ -860,14 +906,18 @@ select public.create_capture_with_job(
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select public.claim_capture_jobs('worker-stale', 10, 60);
+reset role;
 update public.organization_jobs
 set lease_expires_at = clock_timestamp() - interval '1 second'
 where capture_id = 'cap_77000000000000000000000003';
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select is(
   public.recover_stale_capture_jobs(100) ->> 'recovered',
   '1',
   'stale lease recovery claims each expired running job once'
 );
+reset role;
 select is(
   (select state::text from public.organization_jobs
    where capture_id = 'cap_77000000000000000000000003'),
@@ -910,8 +960,7 @@ values (
   )
 );
 
-set local role service_role;
-select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+reset role;
 insert into public.organization_decisions (
   capture_id, user_id, candidate_manifest, signals, validated_plan,
   band, score, margin, destination_note_id, reason_codes
@@ -935,13 +984,20 @@ select
   value ->> 'mutationId',
   'routed'
 from workflow_values where key = 'created-note';
-select public.claim_capture_jobs('worker-routed', 10, 60);
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+insert into workflow_values (key, value)
+values ('claim-routed', public.claim_capture_jobs('worker-routed', 10, 60));
 insert into workflow_values (key, value)
 select
   'complete-routed',
-  public.complete_capture_job(job.id, job.lease_token, 'done')
-from public.organization_jobs as job
-where job.capture_id = 'cap_77000000000000000000000004';
+  public.complete_capture_job(
+    value -> 'jobs' -> 0 ->> 'jobId',
+    (value -> 'jobs' -> 0 ->> 'leaseToken')::uuid,
+    'done'
+  )
+from workflow_values
+where key = 'claim-routed';
 select is(
   (select value -> 'receipt' ->> 'outcome'
    from workflow_values where key = 'complete-routed'),
@@ -954,6 +1010,7 @@ select is(
   2,
   'receipt actions only expose the persisted open and undo mutations'
 );
+reset role;
 select ok(
   (
     select position('Removal target' in row_to_json(receipt)::text) = 0
@@ -998,6 +1055,7 @@ select is(
   'true',
   'optional content removal is backed by a persisted inverse mutation'
 );
+reset role;
 select is(
   (select relation from public.capture_note_links
    where capture_id = 'cap_77000000000000000000000004'),
@@ -1102,6 +1160,7 @@ select public.delete_capture(
   false,
   '[]'::jsonb
 );
+reset role;
 select is(
   (
     select count(*)
@@ -1112,16 +1171,6 @@ select is(
   ),
   0::bigint,
   'deleting a capture atomically purges its prior retry replay snapshots'
-);
-select throws_ok(
-  $$select public.retry_capture(
-    '11111111-1111-4111-8111-111111111111'::uuid,
-    'cap_77000000000000000000000002',
-    'retry-capture-two'
-  )$$,
-  'P0001',
-  'not_found',
-  'an old retry key cannot resurrect or reveal a deleted capture'
 );
 select ok(
   not exists (
@@ -1135,6 +1184,18 @@ select ok(
       )
   ),
   'capture retry and delete idempotency records remain content-free after deletion'
+);
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+select throws_ok(
+  $$select public.retry_capture(
+    '11111111-1111-4111-8111-111111111111'::uuid,
+    'cap_77000000000000000000000002',
+    'retry-capture-two'
+  )$$,
+  'P0001',
+  'not_found',
+  'an old retry key cannot resurrect or reveal a deleted capture'
 );
 
 select is(

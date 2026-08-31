@@ -442,21 +442,24 @@ printf '%s' "$e2e_capture_detail" | \
 
 e2e_stored_capture="$(
   curl --fail --silent --show-error \
+    --request POST \
     --header "apikey: $SERVICE_ROLE_KEY" \
     --header "authorization: Bearer $SERVICE_ROLE_KEY" \
-    "$e2e_supabase_url/rest/v1/captures?id=eq.$e2e_capture_id&select=raw_text,content_envelope,content_fingerprint"
+    --header "content-type: application/json" \
+    --data "{\"p_owner_id\":\"11111111-1111-4111-8111-111111111111\",\"p_capture_id\":\"$e2e_capture_id\"}" \
+    "$e2e_supabase_url/rest/v1/rpc/get_capture_storage_attestation"
 )"
-printf '%s' "$e2e_stored_capture" | E2E_CAPTURE_CANARY="$e2e_capture_canary" node -e '
+printf '%s' "$e2e_stored_capture" | \
+  E2E_CAPTURE_ID="$e2e_capture_id" E2E_CAPTURE_CANARY="$e2e_capture_canary" node -e '
   let input = "";
   process.stdin.on("data", (chunk) => (input += chunk));
   process.stdin.on("end", () => {
-    const rows = JSON.parse(input);
-    if (!Array.isArray(rows) || rows.length !== 1) process.exit(1);
-    const row = rows[0];
-    if (JSON.stringify(row).includes(process.env.E2E_CAPTURE_CANARY)) process.exit(1);
-    if (row.raw_text !== "[encrypted]") process.exit(1);
-    if (row.content_envelope?.version !== 1 || row.content_envelope?.suite !== "A256GCM") process.exit(1);
-    if (!/^[0-9a-f]{64}$/.test(row.content_fingerprint)) process.exit(1);
+    const value = JSON.parse(input);
+    if (value.captureId !== process.env.E2E_CAPTURE_ID) process.exit(1);
+    if (JSON.stringify(value).includes(process.env.E2E_CAPTURE_CANARY)) process.exit(1);
+    if (value.rawTextTombstoned !== true || value.envelopeV1 !== true) process.exit(1);
+    if (value.suiteA256Gcm !== true || value.fingerprintShapeValid !== true) process.exit(1);
+    if ("raw_text" in value || "rawContent" in value || "contentEnvelope" in value) process.exit(1);
   });
 '
 
@@ -477,6 +480,19 @@ request_json DELETE "/captures/$e2e_capture_id" \
       if (value.removedInsertedContent !== false || value.contentRemovalMutations?.length !== 0) process.exit(1);
     });
   '
+
+# Leave the shared local database reusable for a subsequent test pass. The API
+# deliberately soft-deletes notes, which removes their searchable plaintext
+# projections without bypassing the same revision/idempotency contracts used by
+# clients.
+e2e_delete_note_key="milestone-b-http-delete-note-$e2e_run_id"
+request_json DELETE "/notes/$e2e_note_id" \
+  "{\"expectedRevision\":7,\"idempotencyKey\":\"$e2e_delete_note_key\"}" \
+  "$e2e_delete_note_key" >/dev/null
+e2e_delete_second_key="milestone-b-http-delete-second-$e2e_run_id"
+request_json DELETE "/notes/$e2e_second_note_id" \
+  "{\"expectedRevision\":3,\"idempotencyKey\":\"$e2e_delete_second_key\"}" \
+  "$e2e_delete_second_key" >/dev/null
 
 request_json POST /auth/sign-out | node -e '
   let input = "";

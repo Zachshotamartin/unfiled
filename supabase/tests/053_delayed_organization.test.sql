@@ -57,8 +57,12 @@ create temporary table b_org_runtime (
 ) on commit drop;
 grant all on table b_org_runtime to authenticated, service_role;
 
-set local role service_role;
-select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+create temporary table b_org_notes (
+  key text primary key,
+  note_id text not null
+) on commit drop;
+grant all on table b_org_notes to authenticated, service_role;
+
 insert into public.captures (
   id, user_id, source, raw_text, content_envelope, content_fingerprint,
   content_length, privacy, client_created_at, client_timezone, status
@@ -119,6 +123,8 @@ insert into public.organization_decisions (
   0.950,
   array['test_fixture']
 );
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 insert into b_org_runtime (job_id, capture_id, lease_token)
 select
   claimed_job ->> 'jobId',
@@ -166,13 +172,15 @@ select is(
   'organization success fixture is created'
 );
 reset role;
+insert into b_org_notes (key, note_id)
+select 'success', id from public.notes where title = 'B Organization Success';
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 create temporary table b_org_success as
 select public.apply_delayed_organization_mutation(
   runtime.job_id,
   runtime.lease_token,
-  (select id from public.notes where title = 'B Organization Success'),
+  (select note_id from b_org_notes where key = 'success'),
   1,
   '[{"type":"set_title","title":"B Organization Applied"}]'::jsonb,
   'b-org-success'
@@ -235,7 +243,7 @@ select is(
   public.apply_delayed_organization_mutation(
     runtime.job_id,
     runtime.lease_token,
-    (select id from public.notes where title = 'B Organization Applied'),
+    (select note_id from b_org_notes where key = 'success'),
     1,
     '[{"type":"set_title","title":"B Organization Applied"}]'::jsonb,
     'b-org-success'
@@ -248,17 +256,23 @@ from b_org_runtime as runtime;
 -- Simulate a committed effect whose HTTP response is lost. Recovery and a new
 -- lease must replay the same logical request without appending again.
 update b_org_runtime set previous_lease_token = lease_token;
+reset role;
 update public.organization_jobs
 set lease_expires_at = clock_timestamp() - interval '1 second'
 where id = (select job_id from b_org_runtime);
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select is(
   public.recover_stale_capture_jobs(10) ->> 'recovered',
   '1',
   'lost-response recovery expires the original effect lease'
 );
+reset role;
 update public.organization_jobs
 set available_at = clock_timestamp() - interval '1 second'
 where id = (select job_id from b_org_runtime);
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 update b_org_runtime
 set lease_token = (
   select (claimed_job ->> 'leaseToken')::uuid
@@ -279,7 +293,7 @@ select is(
   public.apply_delayed_organization_mutation(
     runtime.job_id,
     runtime.lease_token,
-    (select id from public.notes where title = 'B Organization Applied'),
+    (select note_id from b_org_notes where key = 'success'),
     1,
     '[{"type":"set_title","title":"B Organization Applied"}]'::jsonb,
     'b-org-success'
@@ -334,13 +348,15 @@ select is(
   'manual content advances to N+1 before delayed apply'
 );
 reset role;
+insert into b_org_notes (key, note_id)
+select 'replan', id from public.notes where title = 'B Manual N Plus One';
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select is(
   public.apply_delayed_organization_mutation(
     runtime.job_id,
     runtime.lease_token,
-    (select id from public.notes where title = 'B Manual N Plus One'),
+    (select note_id from b_org_notes where key = 'replan'),
     1,
     '[{"type":"set_title","title":"B Stale Organization Plan"}]'::jsonb,
     'b-org-first-conflict'
@@ -391,7 +407,7 @@ create temporary table b_org_second_conflict as
 select public.apply_delayed_organization_mutation(
   runtime.job_id,
   runtime.lease_token,
-  (select id from public.notes where title = 'B Manual N Plus Two'),
+  (select note_id from b_org_notes where key = 'replan'),
   2,
   '[{"type":"set_title","title":"B Replanned Organization Content"}]'::jsonb,
   'b-org-second-conflict'
@@ -437,7 +453,7 @@ select is(
   public.apply_delayed_organization_mutation(
     runtime.job_id,
     runtime.lease_token,
-    (select id from public.notes where title = 'B Manual N Plus Two'),
+    (select note_id from b_org_notes where key = 'replan'),
     2,
     '[{"type":"set_title","title":"B Replanned Organization Content"}]'::jsonb,
     'b-org-second-conflict'
@@ -462,13 +478,15 @@ select is(
   'organization structure fixture is created'
 );
 reset role;
+insert into b_org_notes (key, note_id)
+select 'structure', id from public.notes where title = 'B Organization Structure';
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select is(
   public.apply_delayed_organization_mutation(
     runtime.job_id,
     runtime.lease_token,
-    (select id from public.notes where title = 'B Organization Structure'),
+    (select note_id from b_org_notes where key = 'structure'),
     1,
     '[{"type":"replace_body_markdown","bodyMarkdown":"- [ ] safe\nlossy prose"}]'::jsonb,
     'b-org-structure-conflict'
@@ -538,6 +556,10 @@ select is(
 );
 
 reset role;
+insert into b_org_notes (key, note_id)
+select 'fence', id from public.notes where title = 'B Lease Fence';
+insert into b_org_notes (key, note_id)
+select 'post_fence', id from public.notes where title = 'B Post Lease Fence';
 create function pg_temp.expire_delayed_organization_lease()
 returns trigger
 language plpgsql
@@ -564,7 +586,7 @@ select throws_ok(
     'select public.apply_delayed_organization_mutation(%L, %L::uuid, %L, 1, %L::jsonb, %L)',
     runtime.job_id,
     runtime.lease_token,
-    (select id from public.notes where title = 'B Post Lease Fence'),
+    (select note_id from b_org_notes where key = 'post_fence'),
     '[{"type":"set_title","title":"Post-check write"}]',
     'b-org-post-expiry'
   ),
@@ -600,7 +622,7 @@ select throws_ok(
     'select public.apply_delayed_organization_mutation(%L, %L::uuid, %L, 1, %L::jsonb, %L)',
     runtime.job_id,
     'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-    (select id from public.notes where title = 'B Lease Fence'),
+    (select note_id from b_org_notes where key = 'fence'),
     '[{"type":"set_title","title":"Wrong token write"}]',
     'b-org-wrong-token'
   ),
@@ -619,17 +641,18 @@ select is(
   'wrong-token rejection leaves note state and content unchanged'
 );
 
-set local role service_role;
-select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+reset role;
 update public.organization_jobs
 set lease_expires_at = clock_timestamp() - interval '1 second'
 where id = (select job_id from b_org_runtime);
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select throws_ok(
   format(
     'select public.apply_delayed_organization_mutation(%L, %L::uuid, %L, 1, %L::jsonb, %L)',
     runtime.job_id,
     runtime.lease_token,
-    (select id from public.notes where title = 'B Lease Fence'),
+    (select note_id from b_org_notes where key = 'fence'),
     '[{"type":"set_title","title":"Expired token write"}]',
     'b-org-expired-token'
   ),
@@ -660,7 +683,7 @@ select throws_ok(
     'select public.apply_delayed_organization_mutation(%L, %L::uuid, %L, 1, %L::jsonb, %L)',
     runtime.job_id,
     runtime.lease_token,
-    (select id from public.notes where title = 'B Lease Fence'),
+    (select note_id from b_org_notes where key = 'fence'),
     '[{"type":"set_title","title":"Recovered token write"}]',
     'b-org-recovered-token'
   ),
@@ -679,11 +702,12 @@ select is(
   'recovered-token rejection leaves note state and content unchanged'
 );
 
-set local role service_role;
-select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+reset role;
 update public.organization_jobs
 set available_at = clock_timestamp() - interval '1 second'
 where id = (select job_id from b_org_runtime);
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 update b_org_runtime
 set lease_token = (
   select (claimed_job ->> 'leaseToken')::uuid
@@ -713,7 +737,7 @@ select throws_ok(
     'select public.apply_delayed_organization_mutation(%L, %L::uuid, %L, 1, %L::jsonb, %L)',
     runtime.job_id,
     runtime.lease_token,
-    (select id from public.notes where title = 'B Lease Fence'),
+    (select note_id from b_org_notes where key = 'fence'),
     '[{"type":"set_title","title":"Deleted capture write"}]',
     'b-org-deleted-capture-token'
   ),

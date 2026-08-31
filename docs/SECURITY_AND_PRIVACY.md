@@ -2,7 +2,7 @@
 
 Threat model, enforcement design, data-path disclosure, deletion, and incident handling. The checklist in §10 gates Gate 6 (public personal data) in [BUILD_PLAN.md](./BUILD_PLAN.md) §22.
 
-**Implementation status:** captures have an application-crypto foundation, and C.5a implements the expand-only schema, managed-key/workload contracts, isolated worker, dedicated non-bypass worker database role, and root-rewrap CAS boundary. Production account evidence and C.5b–d migration/cutover are still pending. Manual-note content and legacy SQL search remain plaintext until the complete C.5 gate passes. Unfiled is not E2EE because authorized application services can decrypt content.
+**Implementation status:** captures have an application-crypto foundation; C.5a implements the expand-only schema, managed-key/workload contracts, isolated worker, dedicated non-bypass worker database role, and root-rewrap CAS boundary; and C.5b implements the typed encrypted aggregate, managed note/capture adapters, and verified rollout/backfill machinery through `encrypted_read`. The production repository factory is not yet wired to C.5b. Fresh AI-assisted aggregate capture deliberately fails closed until C.5c adds the organizer's atomic encrypted writer, and C.5d still must remove the plaintext note/search contract. Production account, rotation, restore, Apple-signing, and physical-device evidence also remains pending. Unfiled is not E2EE because authorized application services can decrypt content.
 
 ## 1. Data classification
 
@@ -41,6 +41,7 @@ Boundaries: (B1) client ↔ API, (B2) API ↔ database, (B3) workflow ↔ model 
 | T20 | Stale/private index race enters model context         | B3/B4    | active-generation + exact-revision eligibility, immediate privacy/delete exclusion, pre-model/pre-write revalidation, degraded auto-apply fail-safe                         | lifecycle/concurrency tests                |
 | T21 | Worker DB credential bypasses private-content policy  | B2/B3    | exact `unfiled_index_worker` login; NOINHERIT/NOBYPASSRLS; no relation access; six-RPC allowlist; original-session guard; no global service key                             | grant/role/SET ROLE + deployed-login tests |
 | T22 | Root rewrap tears or overwrites a concurrent update   | B2       | service-only locked CAS over expected old ARN/count; atomic ciphertext/root/previous/count/time; exact replay; worker denied                                                | rewrap RPC race/replay/grant tests         |
+| T23 | Encrypted retry commits a different logical write     | B2/B4    | database-owned stable IDs; request-MAC claim before randomized encryption; exact semantic capture replay comparison; single-use wrap reservations                           | C.5b replay/conflict/race tests            |
 
 ## 3. Authentication and authorization
 
@@ -59,13 +60,17 @@ Two modes per note/capture (DATA_MODEL `privacy_mode`). The following is target 
 
 No E2EE claims anywhere in marketing or app copy. `store: false` behavior re-verified against provider docs at implementation and on SDK upgrades.
 
-### 4.1 Application-encrypted library and key custody (C.5 target; C.5a foundation implemented)
+### 4.1 Application-encrypted library and key custody (C.5 target; C.5a/b foundation implemented)
 
 Every durable content field and derived search artifact uses a fresh AES-256-GCM DEK with authenticated context binding owner, resource, record version, and kind. Per-user intermediate keys for object wrapping and content MACs are independent purposes. Resolution binds owner, class, purpose, and key ID; history stays under the private class whenever either side of a privacy transition is private. Production uses managed KMS/HSM custody, initially AWS KMS `GenerateDataKey` with Vercel OIDC short-lived roles; static production root KEKs in environment variables are forbidden.
 
 AI-assisted and private-manual keys use separate aliases, principals, and audit trails. C.5a supplies a separately deployable `apps/worker` project with an exact OIDC subject, exact trusted web caller, AI-only AWS role, and dedicated database role; it cannot share the interactive API's deployment identity or global Supabase credential. The owner-authorized web/API project uses a different role and may decrypt private notes for CRUD, export, and lexical search, so private-manual is not E2EE. The current same-deployment `after()`/cron adapter must be retired, and the account-bound identity/denial evidence must pass, before this boundary is claimed in production.
 
-The accepted RAG path pages and exact-scans only the authenticated user's encrypted active-generation documents with bounded concurrency and memory. C.5a implements the ciphertext-only tables and transaction/race invariants, not the C.5c repository, embeddings, ranking, or production index. Persisted lexical features, snippets, and embeddings must share one ciphertext envelope; bounded float32 embeddings use a strict versioned binary encoding and reject non-finite values, dimension/model mismatch, or oversized features. Private notes never receive an index row. Stale rows are ineligible, privacy/delete changes exclude immediately, and incomplete coverage disables RAG-based auto-apply. Plaintext pgvector/FTS requires a future ADR and privacy review.
+The C.5b aggregate accepts only exact typed encrypted payloads and binds every envelope to the owner, resource, record version, content kind, key class, and database-issued single-use wrap reservation. Logical writes claim stable database-owned identities and a request MAC before randomized encryption. Completed retries must match the original logical request before the encrypted response is returned; revision, mutation, and replay history use the private key class whenever either side of a privacy transition is private. Service reads expose ciphertext and bounded operational metadata rather than legacy content. Managed adapters create per-operation custody/RPC scopes, propagate cancellation, validate returned ownership and context, and fail closed instead of falling back to plaintext.
+
+The private-manual capture branch can persist its source and receipt through that encrypted boundary. The AI-assisted branch is present at the repository layer, but the database deliberately rejects a fresh write with `encrypted_organizer_write_unavailable` until C.5c can atomically seal the generated note/mutation/receipt/index work. The production repository factory remains on the legacy path; no owner rollout or complete at-rest claim follows from the adapter implementation alone.
+
+The accepted RAG path pages and exact-scans only the authenticated user's encrypted active-generation documents with bounded concurrency and memory. C.5a implements the ciphertext-only tables and transaction/race invariants, while the C.5c repository, embeddings, ranking, and production index remain pending. Persisted lexical features, snippets, and embeddings must share one ciphertext envelope; bounded float32 embeddings use a strict versioned binary encoding and reject non-finite values, dimension/model mismatch, or oversized features. Private notes never receive an index row. Stale rows are ineligible, privacy/delete changes exclude immediately, and incomplete coverage disables RAG-based auto-apply. Plaintext pgvector/FTS requires a future ADR and privacy review.
 
 KMS failure, envelope authentication failure, or missing key version fails closed. Intermediate-key rotation rewraps DEKs; root rotation KMS-reencrypts the wrapped intermediate key and persists the result through a service-only locked CAS that the worker cannot call. Both are audited. Old backups can contain wrapped intermediate keys still decryptable under a retained shared KMS root, so account deletion is not immediate backup erasure; the stated backup window remains part of the promise.
 
@@ -138,6 +143,7 @@ Note deletion: soft 30 days (restorable and excluded from retrieval), then hard 
 - [ ] Worker uses exact trusted caller + OIDC workload identities and the direct private-root probe records GenerateDataKey/Decrypt denials for both private purposes
 - [ ] Worker database session is exactly `unfiled_index_worker` over verified TLS, has only the six-RPC allowlist, and is denied tables, private schema, admin/key RPCs, role inheritance, and RLS bypass
 - [ ] Root-rewrap RPC exact replay/stale-CAS tests green; worker cannot execute it; production rotation counts reach zero before retired-root removal is considered
+- [ ] Encrypted aggregate reservation/request-MAC/replay/tamper tests green; rollout rescan passes before each owner reaches `encrypted_read`
 - [ ] Encrypted RAG tenant/generation/revision/privacy races and incomplete-coverage fail-safe green
 - [ ] Log audit: seeded content strings absent from logs/Sentry events in a full E2E run
 - [ ] Deletion: account + note deletion reconciliation tests green; manual drill performed

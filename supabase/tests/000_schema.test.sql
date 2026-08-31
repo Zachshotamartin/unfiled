@@ -75,9 +75,16 @@ select is(
   'RLS is enabled on every exposed or service-owned table'
 );
 select is(
-  (select count(*) from pg_policies where schemaname = 'public'),
-  20::bigint,
-  'the complete RPC-only capture, queue, and owner-scoped policy set is installed'
+  (
+    select array_agg(
+      tablename || ':' || policyname || ':' || cmd
+      order by tablename, policyname
+    )::text
+    from pg_policies
+    where schemaname = 'public'
+  ),
+  '{capture_note_links:capture_note_links_select:SELECT,captures:captures_select:SELECT,feedback_events:feedback_events_select:SELECT,generated_blocks:generated_blocks_select:SELECT,note_chunks:note_chunks_select:SELECT,note_links:note_links_select:SELECT,note_mutations:note_mutations_select:SELECT,note_revisions:note_revisions_select:SELECT,note_tags:note_tags_select:SELECT,notes:notes_select:SELECT,organization_decisions:organization_decisions_select:SELECT,organization_mutation_attempts:organization_mutation_attempts_select_own:SELECT,profiles:profiles_delete:DELETE,profiles:profiles_insert:INSERT,profiles:profiles_select:SELECT,profiles:profiles_update:UPDATE,review_items:review_items_select:SELECT,routing_rules:routing_rules_select:SELECT,spaces:spaces_select:SELECT,tags:tags_select:SELECT,user_events:user_events_select:SELECT}',
+  'the exact RPC-only capture, queue, and owner-scoped policy identities are installed'
 );
 select ok(
   has_table_privilege('authenticated', 'public.notes', 'SELECT'),

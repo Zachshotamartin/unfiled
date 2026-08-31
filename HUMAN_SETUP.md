@@ -15,8 +15,8 @@ This file contains only steps that require a human account, physical device, pai
 1. Install Node.js 22.18 or newer. Expo config imports the checked TypeScript native-identity source directly, which requires Node's stable type stripping.
 2. Install pnpm 10.14.0: `npm install --global pnpm@10.14.0`.
 3. Install Docker Desktop and start it before database commands.
-4. Install full Xcode from the Mac App Store. This machine currently exposes only Command Line Tools, so `xcodebuild` cannot build or archive the widget extension.
-5. After Xcode opens once, select it: `sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`.
+4. Install full Xcode from the Mac App Store. This machine has Xcode 26.6 installed and selected at `/Applications/Xcode.app/Contents/Developer`; on a new Mac, open Xcode once and select it with `sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`.
+5. Treat local unsigned simulator builds as code evidence only. They do not prove Apple signing, archive contents, App Group provisioning, installation, or behavior on a physical iPhone.
 6. Install an Android SDK through Android Studio for Android device builds.
 7. Copy `apps/mobile/.env.example` to `apps/mobile/.env.local`. Keep
    `EXPO_PUBLIC_API_BASE_URL=http://localhost:3000` for the iOS Simulator; use

@@ -1,6 +1,6 @@
 # Unfiled Product Documentation
 
-This directory is the planning and implementation-reference set for **Unfiled**. Milestones A, B, and the credential-free portion of Milestone C are complete. Gate 3 was recorded green on 2026-08-30 with a clean database rebuild, zero database-lint findings, and 18 pgTAP files / 822 assertions. The C.5a code slice now supplies the expand-only encrypted schema and RAG lifecycle, managed-key package and Terraform policy, isolated worker trust boundary, dedicated non-bypass worker database role, and root-rewrap CAS contract. Its account-bound Vercel/AWS/database evidence is still pending in `HUMAN_SETUP.md`, and C.5b–d remain launch-blocking. Capture crypto and expand-only columns do not make the current manual-note library fully encrypted.
+This directory is the planning and implementation-reference set for **Unfiled**. Milestones A, B, and the credential-free portion of Milestone C are complete. Gate 3 was recorded green on 2026-08-30 with a clean database rebuild, zero database-lint findings, and 18 pgTAP files / 822 assertions. C.5a supplies the expand-only encrypted schema and RAG lifecycle, managed-key package and Terraform policy, isolated worker trust boundary, dedicated non-bypass worker database role, and root-rewrap CAS contract. The current C.5b change set adds the typed encrypted aggregate, service-only rollout/backfill/write/read capabilities, and managed note/capture adapters. The production repository factory is not yet wired to those adapters; fresh AI-assisted capture remains deliberately fail-closed until C.5c adds the organizer atomic writer, and C.5d must still remove the plaintext contract. Account-bound cloud and physical-device evidence remains pending in `HUMAN_SETUP.md`, so the note library is not yet eligible for a complete encrypted-at-rest claim.
 
 ## Reading order
 
@@ -15,20 +15,20 @@ This directory is the planning and implementation-reference set for **Unfiled**.
 9. [DESIGN_SYSTEM.md](./DESIGN_SYSTEM.md) — tokens, components, states, and accessibility rules. Initial skeleton; completed during Milestone 0.
 10. [OPEN_QUESTIONS.md](./OPEN_QUESTIONS.md) — deferred decisions with defaults, options, and decision triggers.
 11. [GLOSSARY.md](./GLOSSARY.md) — the product vocabulary used consistently across documents and code.
-12. [decisions/](./decisions/) — architecture decision records: [ADR-0001 foundational choices](./decisions/ADR-0001-foundational-technology-and-scope-choices.md), [ADR-0002 BYOK provider strategy](./decisions/ADR-0002-byok-provider-strategy.md), [ADR-0003 immutable native identifiers](./decisions/ADR-0003-native-identifiers.md), [ADR-0004 structured note canonical data](./decisions/ADR-0004-structured-note-canonical-data-and-stable-items.md), [ADR-0005 durable capture job adapter](./decisions/ADR-0005-durable-capture-job-adapter.md), [ADR-0006 encrypted library/private RAG](./decisions/ADR-0006-application-encrypted-library-and-private-rag.md), and [ADR-0007 dedicated worker database capability/root rewrap](./decisions/ADR-0007-dedicated-worker-database-capability-and-root-rewrap.md).
+12. [decisions/](./decisions/) — architecture decision records: [ADR-0001 foundational choices](./decisions/ADR-0001-foundational-technology-and-scope-choices.md), [ADR-0002 BYOK provider strategy](./decisions/ADR-0002-byok-provider-strategy.md), [ADR-0003 immutable native identifiers](./decisions/ADR-0003-native-identifiers.md), [ADR-0004 structured note canonical data](./decisions/ADR-0004-structured-note-canonical-data-and-stable-items.md), [ADR-0005 durable capture job adapter](./decisions/ADR-0005-durable-capture-job-adapter.md), [ADR-0006 encrypted library/private RAG](./decisions/ADR-0006-application-encrypted-library-and-private-rag.md), [ADR-0007 dedicated worker database capability/root rewrap](./decisions/ADR-0007-dedicated-worker-database-capability-and-root-rewrap.md), and [ADR-0008 encrypted aggregate rollout/replay](./decisions/ADR-0008-encrypted-aggregate-rollout-and-replay.md).
 13. [HUMAN_SETUP.md](../HUMAN_SETUP.md) — account, cloud-preview, browser, canary-log, performance, and physical-device gates that cannot run credential-free in CI.
 
 ## Document status
 
 | Document                   | Status                                                                       | Owned by milestone                  |
 | -------------------------- | ---------------------------------------------------------------------------- | ----------------------------------- |
-| BUILD_PLAN.md              | Current; A/B and credential-free C gate complete                             | revised at each milestone gate      |
+| BUILD_PLAN.md              | Current; A/B/C code gates and C.5b implementation status recorded            | revised at each milestone gate      |
 | PRODUCT_REQUIREMENTS.md    | Complete for MVP scope                                                       | revised at each milestone gate      |
 | AI_ROUTING_SPEC.md         | Complete; weights and thresholds are initial values pending evaluation       | Milestone D                         |
 | DATA_MODEL.md              | Initial migrations landed; checked-in migrations are authoritative           | Milestone A and every schema change |
-| SECURITY_AND_PRIVACY.md    | C.5a boundary implemented; plaintext note cutover remains                    | Milestone C.5 and Gate 6            |
-| ENCRYPTION_ARCHITECTURE.md | Capture + C.5a custody/expansion audit; C.5b–d remain                        | Milestone C.5                       |
-| OPERATIONS_TEST_PLAN.md    | Current; B/C gates and C.5a code boundary recorded; human gates remain       | every milestone                     |
+| SECURITY_AND_PRIVACY.md    | C.5b aggregate boundary implemented; production cutover remains              | Milestone C.5 and Gate 6            |
+| ENCRYPTION_ARCHITECTURE.md | Capture + C.5a/b custody and aggregate audit; C.5c/d remain                  | Milestone C.5                       |
+| OPERATIONS_TEST_PLAN.md    | Current; B/C gates and C.5a/b code evidence recorded; human gates remain     | every milestone                     |
 | BRAND_SYSTEM_UNFILED.md    | Selected v1 creative direction; name clearance and vector production pending | Milestone 0                         |
 | DESIGN_SYSTEM.md           | Initial skeleton with token draft                                            | Milestone 0                         |
 | OPEN_QUESTIONS.md          | Live document                                                                | continuous                          |
@@ -65,15 +65,27 @@ The milestone owner recorded the credential-free aggregate Gate 3 decision as gr
 | aggregate format, lint, typecheck, coverage, build, OpenAPI, Expo/prebuild, database, and routing gates                | pass                                                           |
 | frozen-lockfile install, production dependency audit, and built-app/local-Supabase HTTP E2E                            | pass; zero known production vulnerabilities                    |
 | responsive production UI and static assets                                                                             | pass at desktop and 390 px; no failed images                   |
+| focused widget tests, mobile typecheck/lint, and generated-project inspect gate                                        | pass                                                           |
+| CocoaPods/Swift bridge `UnfiledQuickCaptureBridge`; WidgetKit target `QuickCaptureWidget`                              | pass; distinct module names avoid the prior collision          |
+| unsigned `QuickCaptureWidget` target and full `UnfiledDev` workspace builds with selected Xcode 26.6                   | pass for the iPhone 17 Pro simulator only                      |
 | Apple signing/archive, physical iPhone SQLCipher/widget matrix, cloud canary/log audit, and preview performance        | pending human evidence in `HUMAN_SETUP.md`                     |
 | C.5a custody/expansion code                                                                                            | pass; 989 pgTAP + 12 Terraform tests; account evidence pending |
-| C.5b–d complete-library encryption, encrypted RAG adapter, and plaintext contraction                                   | not implemented; launch-blocking                               |
+| C.5b encrypted aggregate and managed adapters                                                                          | implemented; focused evidence recorded below                   |
+| C.5c encrypted organizer/RAG integration and C.5d plaintext contraction                                                | not implemented; launch-blocking                               |
 
 ## Milestone C.5a boundary
 
 C.5a is an expand-only security foundation, not the encrypted-library release gate. It adds owner/class/purpose/version-bound intermediate-key records; four distinct KMS root families with exact-context policies; web-versus-worker OIDC identities; encrypted-column and content-free RAG/job schema; a separately deployable worker that accepts only an exact trusted web caller; and the `unfiled_index_worker` PostgreSQL role with no login, RLS bypass, inherited role, table, sequence, or private-schema capability. Its runtime allowlist is exactly six RAG RPCs. Root rewrap remains a service-only, locked CAS operation and is unavailable to the worker. See [ADR-0007](./decisions/ADR-0007-dedicated-worker-database-capability-and-root-rewrap.md).
 
-The checked-in tests can prove policy shape and fail-closed behavior without credentials. They cannot prove the deployed Vercel header path, STS exchange, direct private-KMS denial, CloudTrail capture, production database connection identity, key rotation, or backup restore. Those account-bound checks remain pending in [HUMAN_SETUP.md](../HUMAN_SETUP.md). C.5b must dual-write/backfill the aggregate, C.5c must connect and validate the encrypted retrieval adapter, and C.5d must cut over reads and remove the plaintext contract before any complete-library encryption claim.
+The checked-in tests can prove policy shape and fail-closed behavior without credentials. They cannot prove the deployed Vercel header path, STS exchange, direct private-KMS denial, CloudTrail capture, production database connection identity, key rotation, or backup restore. Those account-bound checks remain pending in [HUMAN_SETUP.md](../HUMAN_SETUP.md).
+
+## Milestone C.5b boundary
+
+C.5b implements the application-side typed encrypted aggregate and strict service-only database capabilities described in [ADR-0008](./decisions/ADR-0008-encrypted-aggregate-rollout-and-replay.md). The database owns stable write identities, wrap reservations, request-MAC replay claims, exact revision compare-and-swap, envelope projections, verification evidence, resumable owner-scoped backfill, and only the `expanded → dual_write → encrypted_read` portion of rollout. Managed adapters create fresh callback-scoped custody/runtime clients and do not fall back to the legacy repository when an encrypted operation fails.
+
+The private-manual capture branch can seal and persist its source and receipt through the encrypted aggregate. A fresh AI-assisted capture is intentionally rejected with `encrypted_organizer_write_unavailable` until C.5c can atomically commit generated notes, mutations, receipts, and index work. The production repository factory still selects the legacy path, so checked-in adapter code and backfill machinery do not imply production cutover.
+
+Local C.5b evidence established in this change set includes 93/93 encrypted-aggregate package tests, 38/38 note read/write/coordinator security tests, 14/14 adversarial note-repository tests, and 20 database test files / 1,091 assertions, including 101/101 assertions in `073_encrypted_aggregate_dual_write.test.sql`. C.5c must connect the organizer and encrypted retrieval adapter; C.5d must stop plaintext writes, remove plaintext reads/search/indexes/columns, pass canary and restore gates, and age out or destroy exposed backups before any complete-library encryption-at-rest claim.
 
 ## Rules for maintaining this set
 
