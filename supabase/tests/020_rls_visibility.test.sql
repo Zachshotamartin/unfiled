@@ -48,17 +48,18 @@ values (
 
 insert into public.captures (
   id, user_id, source, raw_text, client_created_at, client_timezone,
-  received_at, status
+  received_at, status, deleted_at
 )
 values (
   'cap_70000000000000000000000009',
   '22222222-2222-4222-8222-222222222222',
   'web',
-  'synthetic other-user capture',
+  '[deleted]',
   '2026-08-30 22:02:00+00',
   'UTC',
   '2026-08-30 22:02:01+00',
-  'organized'
+  'deleted',
+  '2026-08-30 22:03:00+00'
 );
 
 insert into public.organization_jobs (
@@ -294,10 +295,26 @@ select ok(exists(select 1 from public.notes where id = 'note_0000000000000000000
 select ok(not exists(select 1 from public.notes where id = 'note_00000000000000000000000009'), 'notes: cross-user row hidden');
 select ok(exists(select 1 from public.note_revisions where id = 'rev_00000000000000000000000001'), 'note_revisions: owned row visible');
 select ok(not exists(select 1 from public.note_revisions where id = 'rev_00000000000000000000000009'), 'note_revisions: cross-user row hidden');
-select ok(exists(select 1 from public.captures where id = 'cap_00000000000000000000000001'), 'captures: owned row visible');
-select ok(not exists(select 1 from public.captures where id = 'cap_70000000000000000000000009'), 'captures: cross-user row hidden');
-select ok(exists(select 1 from public.organization_jobs where id = 'job_00000000000000000000000001'), 'organization_jobs: owned row visible');
-select ok(not exists(select 1 from public.organization_jobs where id = 'job_70000000000000000000000009'), 'organization_jobs: cross-user row hidden');
+select ok(
+  not has_table_privilege('authenticated', 'public.captures', 'SELECT'),
+  'captures: clients have no direct read privilege'
+);
+select throws_ok(
+  'select * from public.captures',
+  '42501',
+  'permission denied for table captures',
+  'captures: even an owned ciphertext row is available only through the server boundary'
+);
+select ok(
+  not has_table_privilege('authenticated', 'public.organization_jobs', 'SELECT'),
+  'organization_jobs: clients cannot read worker lease capabilities'
+);
+select throws_ok(
+  'select * from public.organization_jobs',
+  '42501',
+  'permission denied for table organization_jobs',
+  'organization_jobs: even an owned queue row is available only through reviewed server projections'
+);
 select ok(exists(select 1 from public.organization_decisions where id = 'dec_00000000000000000000000001'), 'organization_decisions: owned row visible');
 select ok(not exists(select 1 from public.organization_decisions where id = 'dec_70000000000000000000000009'), 'organization_decisions: cross-user row hidden');
 select ok(exists(select 1 from public.note_mutations where id = 'mut_00000000000000000000000001'), 'note_mutations: owned row visible');

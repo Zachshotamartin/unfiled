@@ -43,6 +43,19 @@ AC:
 **REQ-A4 (M): Data export.**
 AC: export produces a downloadable archive with Markdown files organized by space, a JSON manifest (IDs, types, dates, tags, links, source captures), and routing rules; export completes for a library of at least 1,000 notes; the archive contains no other user's data (tested).
 
+### E1.5 — Encrypted library (Milestone C.5)
+
+**REQ-E1 (M): Application-encrypted durable content.**
+AC:
+
+- Note titles/bodies/structured data, spaces/tags, revisions, generated blocks, routing conditions, mutation/inverse snapshots, organization/review payloads, idempotency responses, snippets, lexical features, hashes, and embeddings persist only as authenticated ciphertext after cutover.
+- A seeded canary for every content kind appears in no database field/index, queue/dead letter, Realtime payload, log, trace, analytics event, or plaintext temporary export file.
+- Typed CRUD, expected-revision CAS, replay, history, undo, sync, streaming export, soft delete, and hard-delete cascade retain their existing behavior.
+- Product copy says application-encrypted, not E2EE, and identifies the operational metadata that remains visible.
+
+**REQ-E2 (M): Managed production key custody.**
+AC: production root keys remain in managed KMS/HSM; workloads use short-lived identity; AI/private key classes and principals are separate; KMS or envelope failure has no plaintext fallback; rewrap rotation and backup restore pass. Deletion copy states that old backups may remain decryptable until the published expiry window.
+
 ### E2 — Capture (Milestone C)
 
 **REQ-C1 (M): One-field capture.**
@@ -101,6 +114,12 @@ AC: a brand-new account's first captures only `create_note` or `add_to_inbox`; n
 
 **REQ-R7 (M): Private captures never reach the model.**
 AC: a capture marked private, and any private note, never appears in model requests, embeddings, or AI search — enforced in code and asserted by an automated test that inspects the outbound request builder.
+
+**REQ-R8 (M): Tenant-isolated encrypted candidate index.**
+AC: each AI-assisted note has at most one encrypted retrieval document per generation; private notes have none; retrieval reads only the authenticated user's active generation at the exact current note revision and revalidates owner/privacy/revision before model and write. Provider-spy and race tests show zero cross-user/private disclosure.
+
+**REQ-R9 (M): Stale-index behavior fails safe.**
+AC: stale rows never surface; at most 50 recent eligible notes use direct-decrypt repair; over-cap, failed repair, or unverified coverage disables RAG-based auto-apply and routes to Review/Inbox unless an explicit deterministic rule resolves the capture. Model change builds a verified shadow generation; key rotation rewraps without re-embedding; delete/privacy changes exclude immediately.
 
 ### E4 — Receipts and processing state (Milestone C/D)
 
@@ -174,13 +193,13 @@ MVP constraint: nothing in the operation schema, `structured_data` versioning, o
 ### E8 — Search (Milestone F; text search from B)
 
 **REQ-S1 (M): Text search.**
-AC: exact-word and prefix search over titles and bodies returns results with snippet, note path, and date; results respect archive state (excluded by default, includable via filter).
+AC: exact-word and prefix search over titles and bodies returns results with snippet, note path, and date; results respect archive state. Search is an authenticated `POST` and query/content is absent from URLs and logs.
 
 **REQ-S2 (M): Hybrid search.**
-AC: trigram handles misspellings (`spinich` finds spinach); vector similarity finds `that quote about promising first` → the Roosevelt principle note; ranking follows AI spec §11; stale-revision chunks never surface (tested by editing then immediately searching).
+AC: trigram handles misspellings (`spinich` finds spinach); semantic similarity finds `that quote about promising first` → the Roosevelt principle note; ranking follows AI spec §11; only active-generation, current-revision encrypted documents surface. Persisted plaintext vectors/FTS are out of scope without a future ADR.
 
 **REQ-S3 (M): Filters.**
-AC: type, space, tag, and date-range filters compose with text queries; private manual notes appear in text search but never via embeddings.
+AC: type, space, tag, and date-range filters compose with text queries; private manual notes appear through owner-authorized in-memory lexical search only, and neither private content nor private query reaches an embedding provider.
 
 ### E9 — Sync and realtime (Milestone C)
 
@@ -221,16 +240,18 @@ AC:
 
 ## 3. Non-functional requirements
 
-| ID    | Requirement                   | Measure                                                                                          |
-| ----- | ----------------------------- | ------------------------------------------------------------------------------------------------ |
-| NFR-1 | Local capture acknowledgement | perceived < 200 ms, never network-blocked                                                        |
-| NFR-2 | API acknowledgement           | p95 < 500 ms primary region (cold starts tracked separately)                                     |
-| NFR-3 | Organization receipt          | p95 < 8 s                                                                                        |
-| NFR-4 | Web vitals                    | LCP < 2.5 s, INP < 200 ms on authenticated shell                                                 |
-| NFR-5 | Capture durability            | zero loss across crash/retry/duplicate/offline matrices                                          |
-| NFR-6 | Accessibility                 | WCAG 2.1 AA minimum; AAA contrast for primary reading text; full criteria in DESIGN_SYSTEM.md §8 |
-| NFR-7 | Privacy                       | no note/capture text in logs, traces, or analytics; private notes never in model requests        |
-| NFR-8 | Cost                          | per-user daily model budget with Inbox fallback; unit economics reviewed at Milestone G          |
+| ID     | Requirement                   | Measure                                                                                          |
+| ------ | ----------------------------- | ------------------------------------------------------------------------------------------------ |
+| NFR-1  | Local capture acknowledgement | perceived < 200 ms, never network-blocked                                                        |
+| NFR-2  | API acknowledgement           | p95 < 500 ms primary region (cold starts tracked separately)                                     |
+| NFR-3  | Organization receipt          | p95 < 8 s                                                                                        |
+| NFR-4  | Web vitals                    | LCP < 2.5 s, INP < 200 ms on authenticated shell                                                 |
+| NFR-5  | Capture durability            | zero loss across crash/retry/duplicate/offline matrices                                          |
+| NFR-6  | Accessibility                 | WCAG 2.1 AA minimum; AAA contrast for primary reading text; full criteria in DESIGN_SYSTEM.md §8 |
+| NFR-7  | Privacy                       | no note/capture text in logs, traces, or analytics; private notes never in model requests        |
+| NFR-8  | Cost                          | per-user daily model budget with Inbox fallback; unit economics reviewed at Milestone G          |
+| NFR-9  | Encrypted retrieval           | at 1,000 notes: cold exact retrieval p95 < 2 s excluding provider; warm p95 < 250 ms             |
+| NFR-10 | Retrieval quality             | candidate recall ≥ 0.98; wrong auto-apply ≤ 0.01, including stale/missing-index cases            |
 
 ## 4. Explicitly out of scope
 

@@ -9,7 +9,13 @@ select set_config(
   true
 );
 
-select plan(42);
+select plan(50);
+
+select ok(
+  not has_function_privilege('service_role', 'private.apply_user_note_mutation_core(text,integer,jsonb,text)', 'EXECUTE')
+    and not has_function_privilege('service_role', 'private.apply_user_note_mutation_core_unchecked(text,integer,jsonb,text)', 'EXECUTE'),
+  'service role cannot bypass the public manual-mutation RPC through either private core'
+);
 
 -- Empty lists are valid, and replacing a populated list with blank Markdown is lossless.
 select is(public.create_note('b-empty-list-create', 'list', 'B Empty List', '') ->> 'replayed', 'false', 'blank list creation succeeds');
@@ -47,6 +53,22 @@ select is(
   'structure_conflict', 'restore_snapshot rejects a project body/checklist mismatch'
 );
 select is((select current_revision from public.notes where title = 'B Strict Operations'), 1, 'forged snapshot appends no revision');
+
+-- SQL NULL must be rejected before the legacy mutation core can claim
+-- idempotency or append any durable state. Reusing the rejected key with a
+-- valid operation proves the guard leaves no partial claim behind.
+select is(public.create_note('b-null-op-create', 'generic', 'B Null Operations', 'unchanged') ->> 'replayed', 'false', 'SQL NULL mutation fixture is created');
+select throws_ok(
+  $$select public.apply_user_note_mutation((select id from public.notes where title = 'B Null Operations'), 1, null::jsonb, 'b-null-operations')$$,
+  '22023', 'validation_failed', 'public manual mutation rejects SQL NULL operations'
+);
+select is((select count(*) from public.note_revisions where note_id = (select id from public.notes where title = 'B Null Operations')), 1::bigint, 'SQL NULL operations append no revision');
+select is((select count(*) from public.note_mutations where idempotency_key = 'b-null-operations'), 0::bigint, 'SQL NULL operations append no mutation');
+reset role;
+select is((select count(*) from public.api_idempotency_records where idempotency_key = 'b-null-operations'), 0::bigint, 'SQL NULL operations leave no idempotency claim');
+set local role authenticated;
+select is((select count(*) from public.user_events where entity_id = (select id from public.notes where title = 'B Null Operations') or entity_id in (select id from public.note_revisions where note_id = (select id from public.notes where title = 'B Null Operations')) or entity_id in (select id from public.note_mutations where note_id = (select id from public.notes where title = 'B Null Operations'))), 3::bigint, 'SQL NULL operations emit no event');
+select is(public.apply_user_note_mutation((select id from public.notes where title = 'B Null Operations'), 1, '[{"type":"set_title","title":"B Null Operations Valid"}]'::jsonb, 'b-null-operations') -> 'note' ->> 'currentRevision', '2', 'the rejected key remains usable for a valid manual mutation');
 
 -- Log headings use the same strict ISO-offset grammar as the frozen contract.
 select is(public.create_note('b-strict-log-create', 'log', 'B Strict ISO Log', '') ->> 'replayed', 'false', 'strict log fixture is created');

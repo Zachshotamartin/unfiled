@@ -9,6 +9,16 @@ import {
   AuthSignOutResponseSchema,
   AuthVerifyRequestSchema,
   AuthVerifyResponseSchema,
+  CaptureCreateRequestSchema,
+  CaptureCreateResponseSchema,
+  CaptureDeleteRequestSchema,
+  CaptureDeleteResponseSchema,
+  CaptureDetailResponseSchema,
+  CaptureListQuerySchema,
+  CaptureListResponseSchema,
+  CaptureReceiptResponseSchema,
+  CaptureRetryRequestSchema,
+  CaptureRetryResponseSchema,
   InteractiveOperationsRequestSchema,
   MutationResultSchema,
   MutationUndoRequestSchema,
@@ -54,6 +64,10 @@ import {
   type AuthOtpVerifyRequest,
   type AuthRefreshRequest,
   type AuthVerifyRequest,
+  type CaptureCreateRequest,
+  type CaptureDeleteRequest,
+  type CaptureListQuery,
+  type CaptureRetryRequest,
   type InteractiveOperationsRequest,
   type MutationUndoRequest,
   type NoteArchiveRequest,
@@ -184,6 +198,57 @@ export function createApiClient(options: ApiClientOptions) {
 
     signOut() {
       return request("/auth/sign-out", { method: "POST" }, AuthSignOutResponseSchema);
+    },
+
+    createCapture(input: CaptureCreateRequest) {
+      const body = CaptureCreateRequestSchema.parse(input);
+      return request(
+        "/captures",
+        { body, idempotencyKey: body.clientCaptureId, method: "POST" },
+        CaptureCreateResponseSchema
+      );
+    },
+
+    listCaptures(input: Partial<CaptureListQuery> = {}) {
+      const query = CaptureListQuerySchema.parse(input);
+      const suffix = queryString([
+        ["status", query.status],
+        ["limit", query.limit],
+        ["cursor", query.cursor],
+        ["from", query.from],
+        ["to", query.to]
+      ]);
+      return request(`/captures${suffix}`, {}, CaptureListResponseSchema);
+    },
+
+    getCapture(captureId: string) {
+      const id = entityIdSchema("cap").parse(captureId);
+      return request(`/captures/${id}`, {}, CaptureDetailResponseSchema);
+    },
+
+    getCaptureReceipt(captureId: string) {
+      const id = entityIdSchema("cap").parse(captureId);
+      return request(`/captures/${id}/receipt`, {}, CaptureReceiptResponseSchema);
+    },
+
+    retryCapture(captureId: string, input: CaptureRetryRequest) {
+      const id = entityIdSchema("cap").parse(captureId);
+      const body = CaptureRetryRequestSchema.parse(input);
+      return request(
+        `/captures/${id}/retry`,
+        { body, idempotencyKey: body.idempotencyKey, method: "POST" },
+        CaptureRetryResponseSchema
+      );
+    },
+
+    deleteCapture(captureId: string, input: CaptureDeleteRequest) {
+      const id = entityIdSchema("cap").parse(captureId);
+      const body = CaptureDeleteRequestSchema.parse(input);
+      return request(
+        `/captures/${id}`,
+        { body, idempotencyKey: body.idempotencyKey, method: "DELETE" },
+        CaptureDeleteResponseSchema
+      );
     },
 
     listNotes(input: Partial<NoteListQuery> = {}) {

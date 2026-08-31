@@ -369,6 +369,10 @@ describe("Milestone B manual-note contracts", () => {
       "/auth/session",
       "/auth/sign-out",
       "/auth/verify",
+      "/captures",
+      "/captures/{captureId}",
+      "/captures/{captureId}/receipt",
+      "/captures/{captureId}/retry",
       "/notes",
       "/notes/{noteId}",
       "/notes/{noteId}/links",
@@ -392,8 +396,6 @@ describe("Milestone B manual-note contracts", () => {
     ] as const;
 
     for (const path of expectedPaths) expect(openApiDocument.paths).toHaveProperty(path);
-    expect(openApiDocument.paths).not.toHaveProperty("/captures");
-
     for (const pathItem of Object.values(openApiDocument.paths)) {
       for (const method of ["post", "put", "patch", "delete"] as const) {
         const operation = pathItem[method as keyof typeof pathItem] as

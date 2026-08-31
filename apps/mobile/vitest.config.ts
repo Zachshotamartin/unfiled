@@ -10,7 +10,7 @@ export default defineConfig({
         "config/**/*.ts",
         "plugins/quickCaptureWidgetConfig.ts",
         "src/auth/{authApi,session,sessionLifecycle,sessionRepository}.ts",
-        "src/features/capture/{captureSource,captureSubmission,nativeIntent}.ts"
+        "src/features/capture/{captureActionCoordinator,captureActionIntents,captureDatabaseKeyCore,captureOutboxCoordinator,captureSource,captureSubmission,nativeIntent}.ts"
       ],
       provider: "v8",
       thresholds: { branches: 85, functions: 90, lines: 90, statements: 90 }

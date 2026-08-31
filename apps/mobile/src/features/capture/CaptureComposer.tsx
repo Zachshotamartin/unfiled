@@ -27,14 +27,18 @@ import { useSession } from "../../auth/AuthProvider";
 import { nativeTheme } from "../../theme/nativeTheme";
 import {
   commitCaptureToOutbox,
+  defaultCapturePreferences,
   discardCaptureDraft,
   loadCaptureDraft,
   pendingCaptureCount,
-  saveCaptureDraft
+  saveCaptureDraft,
+  type CapturePreferences
 } from "./captureDraftRepository";
+import { requestCaptureOutboxDrain } from "./captureOutboxSignals";
 import { captureSourceLabel, type NativeCaptureSource } from "./captureSource";
 import { submitCapture } from "./captureSubmission";
 import { scheduleWidgetPendingCount } from "./lockScreenCapture";
+import { useNoteList } from "../notes/useNotesApi";
 
 const DRAFT_DEBOUNCE_MS = 250;
 
@@ -48,12 +52,19 @@ export function CaptureComposer({ source }: CaptureComposerProps): ReactElement 
   const insets = useSafeAreaInsets();
   const inputRef = useRef<ComponentRef<typeof TextInput>>(null);
   const bodyRef = useRef("");
+  const preferencesRef = useRef<CapturePreferences>({ ...defaultCapturePreferences });
   const draftTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const mounted = useRef(true);
   const [body, setBody] = useState("");
+  const [preferences, setPreferences] = useState<CapturePreferences>({
+    ...defaultCapturePreferences
+  });
   const [committing, setCommitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const [restored, setRestored] = useState(false);
+  const notes = useNoteList();
+  const destinationNotes = notes.value.slice(0, 3);
 
   const flushDraft = useCallback(async (): Promise<void> => {
     if (profileId === null) return;
@@ -63,7 +74,7 @@ export function CaptureComposer({ source }: CaptureComposerProps): ReactElement 
     if (currentBody.length === 0) {
       await discardCaptureDraft(profileId, source);
     } else {
-      await saveCaptureDraft(profileId, source, currentBody);
+      await saveCaptureDraft(profileId, source, currentBody, preferencesRef.current);
     }
   }, [profileId, source]);
 
@@ -73,7 +84,13 @@ export function CaptureComposer({ source }: CaptureComposerProps): ReactElement 
     void loadCaptureDraft(profileId, source).then((draft) => {
       if (!mounted.current || draft === null) return;
       bodyRef.current = draft.body;
+      preferencesRef.current = {
+        expansionDisabled: draft.expansionDisabled,
+        explicitDestinationNoteId: draft.explicitDestinationNoteId,
+        privacy: draft.privacy
+      };
       setBody(draft.body);
+      setPreferences(preferencesRef.current);
       setRestored(true);
     });
     return () => {
@@ -126,8 +143,23 @@ export function CaptureComposer({ source }: CaptureComposerProps): ReactElement 
       setRestored(false);
       if (draftTimer.current !== undefined) clearTimeout(draftTimer.current);
       draftTimer.current = setTimeout(() => {
-        if (profileId !== null) void saveCaptureDraft(profileId, source, bodyRef.current);
+        if (profileId !== null) {
+          void saveCaptureDraft(profileId, source, bodyRef.current, preferencesRef.current);
+        }
       }, DRAFT_DEBOUNCE_MS);
+    },
+    [profileId, source]
+  );
+
+  const updatePreferences = useCallback(
+    (update: (current: CapturePreferences) => CapturePreferences): void => {
+      const next = update(preferencesRef.current);
+      preferencesRef.current = next;
+      setPreferences(next);
+      setMessage(null);
+      if (profileId !== null && bodyRef.current.length > 0) {
+        void saveCaptureDraft(profileId, source, bodyRef.current, next);
+      }
     },
     [profileId, source]
   );
@@ -161,12 +193,20 @@ export function CaptureComposer({ source }: CaptureComposerProps): ReactElement 
     setCommitting(true);
     setMessage(null);
     const result = await submitCapture({
-      persist: () => commitCaptureToOutbox(profileId, source, rawContent, session !== null),
+      persist: () =>
+        commitCaptureToOutbox({
+          preferences: preferencesRef.current,
+          profileId,
+          rawContent,
+          sessionAvailable: session !== null,
+          source
+        }),
       sideEffects: [
         async () => {
           const count = await pendingCaptureCount(profileId);
           scheduleWidgetPendingCount(count);
         },
+        () => Promise.resolve(requestCaptureOutboxDrain()),
         () => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
       ]
     });
@@ -179,6 +219,8 @@ export function CaptureComposer({ source }: CaptureComposerProps): ReactElement 
 
     bodyRef.current = "";
     setBody("");
+    preferencesRef.current = { ...defaultCapturePreferences };
+    setPreferences(preferencesRef.current);
     setRestored(false);
     setMessage(
       session === null
@@ -187,7 +229,9 @@ export function CaptureComposer({ source }: CaptureComposerProps): ReactElement 
     );
     if (mounted.current) setCommitting(false);
     void result.effects;
-    router.replace("/(tabs)");
+    router.replace(
+      `/(tabs)?captureSaved=${session === null ? "waiting" : "ready"}&captureId=${result.value.clientCaptureId}`
+    );
   }, [committing, profileId, session, source]);
 
   const canSubmit = body.trim().length > 0 && !committing;
@@ -211,11 +255,159 @@ export function CaptureComposer({ source }: CaptureComposerProps): ReactElement 
           <BrandMark size={20} />
           <Text style={styles.sourceText}>{captureSourceLabel(source)}</Text>
         </View>
-        <View style={styles.topBarSpacer} />
+        <Pressable
+          accessibilityLabel={optionsOpen ? "Hide capture options" : "Show capture options"}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: optionsOpen }}
+          hitSlop={8}
+          onPress={() => setOptionsOpen((open) => !open)}
+          style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
+        >
+          <Ionicons
+            color={optionsOpen ? nativeTheme.color.accent : nativeTheme.color.textPrimary}
+            name="options-outline"
+            size={23}
+          />
+        </Pressable>
       </View>
 
       <View style={styles.composer}>
         {restored ? <Text style={styles.draftLabel}>Unsaved draft</Text> : null}
+        {optionsOpen ? (
+          <View accessibilityLabel="Capture options" style={styles.optionsPanel}>
+            <View style={styles.optionGroup}>
+              <Text style={styles.optionLabel}>Processing</Text>
+              <View style={styles.optionChoices}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: preferences.privacy === "ai_assisted" }}
+                  onPress={() =>
+                    updatePreferences((current) => ({ ...current, privacy: "ai_assisted" }))
+                  }
+                  style={[
+                    styles.optionButton,
+                    preferences.privacy === "ai_assisted" && styles.optionButtonSelected
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.optionButtonText,
+                      preferences.privacy === "ai_assisted" && styles.optionButtonTextSelected
+                    ]}
+                  >
+                    Organize
+                  </Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: preferences.privacy === "private_manual" }}
+                  onPress={() =>
+                    updatePreferences((current) => ({
+                      ...current,
+                      expansionDisabled: true,
+                      privacy: "private_manual"
+                    }))
+                  }
+                  style={[
+                    styles.optionButton,
+                    preferences.privacy === "private_manual" && styles.optionButtonSelected
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.optionButtonText,
+                      preferences.privacy === "private_manual" && styles.optionButtonTextSelected
+                    ]}
+                  >
+                    Private
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+
+            <View style={styles.optionGroup}>
+              <Text style={styles.optionLabel}>Destination</Text>
+              <View style={styles.destinationChoices}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: preferences.explicitDestinationNoteId === null }}
+                  onPress={() =>
+                    updatePreferences((current) => ({
+                      ...current,
+                      explicitDestinationNoteId: null
+                    }))
+                  }
+                  style={[
+                    styles.destinationButton,
+                    preferences.explicitDestinationNoteId === null &&
+                      styles.destinationButtonSelected
+                  ]}
+                >
+                  <Text style={styles.destinationText}>Automatic</Text>
+                </Pressable>
+                {destinationNotes.map((note) => (
+                  <Pressable
+                    accessibilityLabel={`Send to ${note.title}`}
+                    accessibilityRole="button"
+                    accessibilityState={{
+                      selected: preferences.explicitDestinationNoteId === note.id
+                    }}
+                    key={note.id}
+                    onPress={() =>
+                      updatePreferences((current) => ({
+                        ...current,
+                        explicitDestinationNoteId: note.id
+                      }))
+                    }
+                    style={[
+                      styles.destinationButton,
+                      preferences.explicitDestinationNoteId === note.id &&
+                        styles.destinationButtonSelected
+                    ]}
+                  >
+                    <Text style={styles.destinationText}>{note.title}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+
+            <Pressable
+              accessibilityRole="switch"
+              accessibilityState={{
+                checked: !preferences.expansionDisabled,
+                disabled: preferences.privacy === "private_manual"
+              }}
+              disabled={preferences.privacy === "private_manual"}
+              onPress={() =>
+                updatePreferences((current) => ({
+                  ...current,
+                  expansionDisabled: !current.expansionDisabled
+                }))
+              }
+              style={styles.expansionRow}
+            >
+              <View style={styles.expansionCopy}>
+                <Text style={styles.expansionTitle}>Helpful expansion</Text>
+                <Text style={styles.expansionDetail}>
+                  {preferences.privacy === "private_manual"
+                    ? "Off for private captures"
+                    : preferences.expansionDisabled
+                      ? "Off"
+                      : "On"}
+                </Text>
+              </View>
+              <Ionicons
+                color={
+                  preferences.expansionDisabled
+                    ? nativeTheme.color.textDisabled
+                    : nativeTheme.color.accent
+                }
+                name={preferences.expansionDisabled ? "toggle-outline" : "toggle"}
+                size={31}
+              />
+            </Pressable>
+          </View>
+        ) : null}
         <TextInput
           ref={inputRef}
           accessibilityLabel="Capture text"
@@ -233,6 +425,11 @@ export function CaptureComposer({ source }: CaptureComposerProps): ReactElement 
           textAlignVertical="top"
           value={body}
         />
+        {body.length >= 9_000 ? (
+          <Text accessibilityLiveRegion="polite" style={styles.characterCount}>
+            {10_000 - body.length} characters left
+          </Text>
+        ) : null}
         <View style={styles.composerFooter}>
           <Text accessibilityLiveRegion="polite" style={styles.message}>
             {message ??
@@ -261,6 +458,13 @@ export function CaptureComposer({ source }: CaptureComposerProps): ReactElement 
 }
 
 const styles = StyleSheet.create({
+  characterCount: {
+    alignSelf: "flex-end",
+    color: nativeTheme.color.textSecondary,
+    fontFamily: nativeTheme.fontFamily.mono,
+    fontSize: 11,
+    marginBottom: 8
+  },
   composer: {
     backgroundColor: nativeTheme.color.surface,
     borderColor: nativeTheme.color.border,
@@ -286,6 +490,35 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     textTransform: "uppercase"
   },
+  destinationButton: {
+    borderColor: nativeTheme.color.border,
+    borderRadius: nativeTheme.radius.input,
+    borderWidth: StyleSheet.hairlineWidth,
+    maxWidth: "100%",
+    minHeight: 44,
+    paddingHorizontal: 11,
+    paddingVertical: 8
+  },
+  destinationButtonSelected: {
+    backgroundColor: nativeTheme.color.surfaceRaised,
+    borderColor: nativeTheme.color.accent
+  },
+  destinationChoices: { flexDirection: "row", flexWrap: "wrap", gap: 7 },
+  destinationText: {
+    color: nativeTheme.color.textPrimary,
+    flexShrink: 1,
+    fontSize: 12,
+    fontWeight: "600"
+  },
+  expansionCopy: { flex: 1, paddingRight: 12 },
+  expansionDetail: { color: nativeTheme.color.textSecondary, fontSize: 11, marginTop: 2 },
+  expansionRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    minHeight: 44
+  },
+  expansionTitle: { color: nativeTheme.color.textPrimary, fontSize: 13, fontWeight: "600" },
   iconButton: {
     alignItems: "center",
     height: 44,
@@ -307,6 +540,39 @@ const styles = StyleSheet.create({
     fontFamily: nativeTheme.fontFamily.sans,
     fontSize: 13,
     lineHeight: 18
+  },
+  optionButton: {
+    alignItems: "center",
+    borderColor: nativeTheme.color.border,
+    borderRadius: nativeTheme.radius.input,
+    borderWidth: StyleSheet.hairlineWidth,
+    flex: 1,
+    minHeight: 44,
+    paddingHorizontal: 12,
+    paddingVertical: 9
+  },
+  optionButtonSelected: {
+    backgroundColor: nativeTheme.color.accent,
+    borderColor: nativeTheme.color.accent
+  },
+  optionButtonText: { color: nativeTheme.color.textSecondary, fontSize: 12, fontWeight: "700" },
+  optionButtonTextSelected: { color: nativeTheme.color.accentContrast },
+  optionChoices: { flexDirection: "row", gap: 8 },
+  optionGroup: { gap: 7 },
+  optionLabel: {
+    color: nativeTheme.color.textSecondary,
+    fontFamily: nativeTheme.fontFamily.mono,
+    fontSize: 10,
+    fontWeight: "600",
+    letterSpacing: 0.5,
+    textTransform: "uppercase"
+  },
+  optionsPanel: {
+    borderBottomColor: nativeTheme.color.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    gap: 14,
+    marginBottom: 16,
+    paddingBottom: 16
   },
   pressed: { opacity: 0.55 },
   screen: { backgroundColor: nativeTheme.color.canvas, flex: 1 },
@@ -333,6 +599,5 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingBottom: 12,
     paddingHorizontal: 8
-  },
-  topBarSpacer: { width: 44 }
+  }
 });

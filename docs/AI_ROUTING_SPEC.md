@@ -22,7 +22,7 @@ OrganizeInput   { captureId, userId, text, clientTimezone, explicitDestination?,
   Stage 4 validation   -> ValidPlan | ValidationFailure
   Stage 5 scoring      -> BandedDecision { band: auto|review|inbox, score, margin, reasonCodes }
   Stage 6 application  -> MutationResult | ReviewItem | InboxState
-  Stage 7 indexing     -> (async) chunk + embed changed content
+  Stage 7 indexing     -> (async) encrypted index document for changed revision
   Stage 8 receipt      -> ReceiptEvent
 ```
 
@@ -45,18 +45,32 @@ A rule match produces a short-circuit plan (destination + extraction kind) with 
 
 ## 4. Stage 2 — Candidate retrieval
 
-Build a manifest of at most **8** candidates from these sources, deduplicated, in priority order:
+Candidate retrieval is an owner-scoped service over the active encrypted index generation. It exact-scans the authenticated user's decrypted-in-memory index documents; persisted snippets, lexical features, and embeddings remain ciphertext. Build a manifest of at most **8** candidates from these sources, deduplicated, in priority order:
 
 1. rule near-misses (disabled rules excluded)
 2. pinned notes and the user's active destinations
 3. open same-day daily notes matching inferred type (open Shopping list, today's Workout log)
-4. full-text + trigram match of capture text against titles and recent content (top 5 by rank)
-5. vector similarity of the capture embedding against note summary embeddings (top 5, cosine ≥ 0.30)
+4. lexical + trigram match of capture text against encrypted index documents after authorized decryption (top 5 by rank)
+5. semantic similarity of the capture embedding against decrypted bounded note embeddings (top 5, cosine ≥ 0.30)
 6. destinations of the user's last 10 accepted decisions for similar capture kinds
 
-Private manual notes are excluded at the query level (SQL predicate, not post-filter). Per candidate, the manifest sends only: `candidateId`, title, type, space path, open state, last-updated age bucket, up to 3 section headings, and a ≤200-char latest snippet. Never full bodies. Manifest recorded on the decision row.
+Private-manual notes are excluded before index loading, not post-filtered. The retrieval service accepts only the active generation and rows where `indexed_revision` equals the current note revision, then revalidates owner, privacy, deletion state, generation, and revision before model context and again before write. Per candidate, the model receives only: `candidateId`, title, type, space path, open state, last-updated age bucket, up to 3 section headings, and a ≤200-char latest snippet. Never full bodies. The persisted candidate manifest and routing plan are encrypted content, not telemetry.
 
 Inferred capture kind (syntax only, pre-model): `list_items` (delimiter pattern ≥2 items), `log_entry` (number-unit patterns like `135 x 8`), `principle` (aphorism heuristics: no imperatives, abstract nouns — weak signal only), else `freeform`.
+
+### 4.1 Encrypted index lifecycle and degraded behavior
+
+The retrieval store selected by [ADR-0006](./decisions/ADR-0006-application-encrypted-library-and-private-rag.md) has:
+
+- `rag_index_generations`: user + embedding model/version + build/active state and verified coverage
+- `note_rag_index`: one encrypted lexical/semantic document per eligible note and generation, plus owner/note/revision eligibility metadata
+- `note_index_jobs`: content-free target IDs, revision/generation, lease, attempts, and timestamps
+
+A note mutation atomically queues its target revision. The worker can claim only current, non-deleted `ai_assisted` notes, and its KMS principal cannot decrypt the private-manual key class. It writes an index document only if eligibility and revision still match at commit. A privacy flip or delete makes the note ineligible in the same note transaction; asynchronous row cleanup is not the security boundary. Account/note deletion cascades every generation row and pending job.
+
+Stale or missing index rows never enter the manifest. The service may directly decrypt and rank at most 50 recently changed eligible notes as a repair bridge. If more than 50 are missing/stale, any repair fails, or the active generation lacks verified coverage, RAG cannot authorize `auto`: an otherwise automatic result becomes Review/Inbox unless an explicit deterministic rule already selected the destination. This state is observable through content-free coverage/lag metrics.
+
+An embedding-model change builds a complete new generation beside the active one; activation is atomic only after exact eligible-note coverage is verified. Ordinary content-key rotation rewraps index DEKs without recomputing embeddings. A bounded five-minute in-process LRU may cache decrypted documents under `(userId, generationId, modelId, revisionToken)`; it is cleared on privacy/deletion/generation invalidation and never becomes a shared or persistent plaintext cache. The C.5 baseline uses an exact scan. A persisted plaintext FTS/vector index requires a future ADR and privacy review.
 
 ## 5. Stage 3 — Model contract
 
@@ -213,13 +227,19 @@ The system must never: reword user text in a note body; invent units, exercises,
 | provider timeout/5xx                                 | 1 retry → Inbox `provider_unavailable`, circuit breaker opens at 5 consecutive failures, banner shown            |
 | schema invalid                                       | Inbox `invalid_plan`                                                                                             |
 | stale revision at apply                              | re-plan once against new revision → second conflict to Review `revision_conflict`                                |
+| retrieval generation incomplete / repair cap hit     | no RAG-based auto-apply; deterministic explicit rule may proceed, otherwise Review/Inbox                         |
+| KMS or envelope authentication failure               | no plaintext fallback; preserve encrypted source, fail safely to retry/Review with content-free telemetry        |
 | budget exceeded (per-user daily, app-key users only) | Inbox `budget_exhausted`, resets at user-local midnight                                                          |
 | user BYOK key rejected (401/403)                     | key marked `invalid`, Inbox `provider_key_invalid`, settings banner; fallback to app key only if user enabled it |
 | workflow crash                                       | resume from last persisted stage, idempotent                                                                     |
 
 ## 11. Search ranking (shared retrieval infrastructure)
 
-`final = 0.35·fts_rank + 0.15·trigram_sim + 0.30·vector_sim + 0.10·recency + 0.10·title_exact` with pinned boost ×1.2; filters pre-apply. Private notes: FTS/trigram only.
+For AI-assisted notes, the authorized service decrypts only that user's active-generation index documents and computes:
+
+`final = 0.35·lexical_rank + 0.15·trigram_sim + 0.30·semantic_sim + 0.10·recency + 0.10·title_exact`, with pinned boost `×1.2`; filters pre-apply. Organization retrieval follows §4.1 freshness and coverage gates.
+
+User-initiated search is a separate path. Private-manual notes may be decrypted and matched lexically in owner-authorized process memory, but have no persisted index row or embedding. Neither a private query nor private content is sent to an embedding provider. Search requests use authenticated `POST` bodies so query text is not copied into URLs, access logs, or browser history. No search path synthesizes an answer over the library in MVP.
 
 ## 12. Evaluation corpus and harness
 
@@ -244,7 +264,7 @@ expect:
 
 ### 12.2 Category coverage (minimum counts for the D-milestone baseline)
 
-empty/sparse library ×10, same-day list continuation ×15, cross-day list ×10, workout shorthand variants ×20, journal/freeform ×15, principles ×10, project updates ×10, task-vs-shopping ambiguity ×15, duplicate/near-duplicate ×10, **adversarial injection ×15**, invalid-ID/hostile-output replay ×10, stale revision ×5, private-note exclusion ×5, multilingual ×10 (documented as unsupported until passing). ≈160 cases minimum.
+empty/sparse library ×10, same-day list continuation ×15, cross-day list ×10, workout shorthand variants ×20, journal/freeform ×15, principles ×10, project updates ×10, task-vs-shopping ambiguity ×15, duplicate/near-duplicate ×10, **adversarial injection ×15**, invalid-ID/hostile-output replay ×10, stale revision ×5, private-note exclusion ×5, encrypted-index stale/missing/generation races ×10, cross-tenant retrieval ×5, multilingual ×10 (documented as unsupported until passing). ≈175 cases minimum.
 
 ### 12.3 Metrics and release thresholds (Gate 3 inputs)
 
@@ -257,6 +277,8 @@ empty/sparse library ×10, same-day list continuation ×15, cross-day list ×10,
 | source-preservation failures                 | 0                              |
 | invalid-plan rate                            | ≤ 0.02 (all fail closed)       |
 | injection cases obeyed                       | 0                              |
+
+At 1,000 eligible notes, exact encrypted retrieval additionally gates at p95 < 2 s cold (excluding the query-embedding provider) and < 250 ms warm. The benchmark includes decryption and ranking and reports cache state explicitly.
 
 ### 12.4 Procedure
 
@@ -281,4 +303,4 @@ Rules: effort changes model tier and sampling, never the schema, validation, or 
 
 ## 14. Telemetry
 
-Per decision (no note text): capture kind, band, score, margin, reason codes, rule short-circuit flag, candidate count, model tokens/latency/version, validation outcome, eventual user action (accept/move/undo). This feeds §8 personalization and §12 metrics.
+Per decision (no note text): capture kind, band, score, margin, reason codes, rule short-circuit flag, candidate count, model tokens/latency/version, validation outcome, eventual user action (accept/move/undo). Index telemetry is limited to generation/model IDs, eligible/indexed/stale counts, queue age, repair count, cache hit, and latency—never query text, snippets, features, or embeddings. This feeds §8 personalization and §12 metrics.

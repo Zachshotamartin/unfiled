@@ -150,17 +150,18 @@ values (
 
 insert into public.captures (
   id, user_id, source, raw_text, explicit_destination_note_id,
-  client_created_at, client_timezone, status
+  client_created_at, client_timezone, status, deleted_at
 )
 values (
   'cap_75000000000000000000000001',
   '11111111-1111-4111-8111-111111111111',
   'web',
-  'retention capture fixture',
+  '[deleted]',
   'note_75000000000000000000000001',
   '2026-07-01T12:00:00Z',
   'UTC',
-  'organized'
+  'deleted',
+  '2026-07-01T12:01:00Z'
 );
 
 insert into public.organization_jobs (
@@ -526,16 +527,18 @@ values (
 );
 insert into public.captures (
   id, user_id, source, raw_text, explicit_destination_note_id,
-  client_created_at, client_timezone
+  client_created_at, client_timezone, status, deleted_at
 )
 values (
   'cap_75000000000000000000000005',
   '22222222-2222-4222-8222-222222222222',
   'web',
-  'forged cross-owner retention fixture',
+  '[deleted]',
   'note_75000000000000000000000005',
   '2026-07-01T12:00:00Z',
-  'UTC'
+  'UTC',
+  'deleted',
+  '2026-07-01T12:01:00Z'
 );
 
 set local role service_role;

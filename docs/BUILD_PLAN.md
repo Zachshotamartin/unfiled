@@ -2,7 +2,7 @@
 
 Product and repository name: **Unfiled**. Trademark, App Store, package-name, social-handle, and domain review remain required before public launch.
 
-Implementation status: **Milestones A and B are implemented; the credential-free Gate 2 code gate is green.** The repository now includes the monorepo, shared product contracts, local Supabase migrations, deterministic fake organization model, web and mobile shells, WidgetKit feasibility target, design tokens, CI baseline, authentication, and the complete manual-notes vertical slice. Milestones C through G remain the implementation roadmap. Apple signing, physical-device testing, cloud-preview checks, and Milestone 0 usability evidence remain human gates and are not implied by the local code gate.
+Implementation status: **Milestones A, B, and the Milestone C credential-free Gate 3 are complete.** The capture path includes shared contracts and OpenAPI, application-encrypted AES-256-GCM capture envelopes, service-only owner-scoped storage RPCs, leased workers with heartbeats/retry/dead-letter behavior, durable receipts and deletion, a Web Crypto-encrypted IndexedDB queue, and a SQLCipher-backed mobile draft/outbox. Gate 3 passed a clean database rebuild with zero lint findings and 18 pgTAP files / 822 assertions, plus all aggregate code, build, dependency, HTTP, static-asset, and responsive visual checks. Apple signing, physical-device and extension-archive testing, cloud-preview checks, and Milestone 0 usability evidence remain human gates and are not implied by the credential-free code status. Milestone C.5 is the next launch-blocking implementation milestone: it must encrypt the entire note/library data path under managed KMS custody and add the encrypted per-user RAG index before Milestone D.
 
 This plan is the spine of a full documentation set; see [docs/README.md](./README.md) for reading order. Companion documents:
 
@@ -10,6 +10,7 @@ This plan is the spine of a full documentation set; see [docs/README.md](./READM
 - [AI_ROUTING_SPEC.md](./AI_ROUTING_SPEC.md): pipeline contracts, prompt, schemas, scoring, provider/effort settings, and evaluation corpus
 - [DATA_MODEL.md](./DATA_MODEL.md): full DDL, RLS policies, transactional functions, structured-data schemas, retention
 - [SECURITY_AND_PRIVACY.md](./SECURITY_AND_PRIVACY.md): threat model, BYOK key custody, disclosure, deletion pipeline, incident handling
+- [ENCRYPTION_ARCHITECTURE.md](./ENCRYPTION_ARCHITECTURE.md): implemented capture-crypto foundation and the remaining encrypted-library boundary
 - [OPERATIONS_TEST_PLAN.md](./OPERATIONS_TEST_PLAN.md): environments, CI, enumerated test inventory, release checklists, backups, monitoring
 - [DESIGN_SYSTEM.md](./DESIGN_SYSTEM.md): tokens, components, states, accessibility rules (skeleton; completed during Milestone 0)
 - [BRAND_SYSTEM_UNFILED.md](./BRAND_SYSTEM_UNFILED.md): identity, voice, in-app, Lock Screen, signed-in web, and marketing-site application
@@ -36,6 +37,7 @@ The plan makes the following decisions:
 10. **Design the complete core loop before bootstrapping application code.** Start with information architecture, mobile wireframes, dark-mode tokens, high-fidelity core screens, responsive web adaptations, and a clickable prototype. The first coded vertical slice follows the approved design rather than inventing the product while implementing it.
 11. **Prove a vertical slice before building a broad knowledge platform.** The first convincing coded demo is capture, route, append, receipt, correction, undo, and cross-device sync.
 12. **Treat Lock Screen capture as a core input surface.** The iPhone widget is part of the durable capture path, not a decorative status widget or a post-MVP extra. One tap must open a focused composer, save locally before any network call, and reuse the same idempotent sync path as an in-app capture.
+13. **Make encrypted library storage a gate before AI routing.** Milestone C.5 moves all content-bearing note, history, workflow, review, and retrieval material to application-encrypted envelopes. The server remains an authorized decryptor for the selected organizer, so this is not E2EE. The accepted first retrieval path is an encrypted, exact, per-user scan; persisted plaintext vectors require a future ADR.
 
 ## 0. Priority Feature: iPhone Lock Screen Quick Capture
 
@@ -928,23 +930,27 @@ client capture
   -> schema and ownership validation
   -> calibrated policy decision
   -> transactional note mutation or Review item
-  -> search re-index
+  -> encrypted index job
   -> receipt event
 ```
 
 ### 9.2 Candidate retrieval
 
-Do not send the entire note library on every request. Build a bounded candidate set using:
+Do not send the entire note library on every request. Candidate retrieval is a tenant-scoped service over the active encrypted index generation selected in [ADR-0006](./decisions/ADR-0006-application-encrypted-library-and-private-rag.md). It loads only the authenticated user's current `ai_assisted` index documents, decrypts them into a bounded process-memory working set, and combines:
 
 1. explicit routing rules and aliases
 2. currently pinned or active notes
 3. note type inferred from syntax
 4. recency and open-state signals
-5. PostgreSQL full-text and trigram matches
-6. vector similarity against note summaries and recent chunks
+5. lexical and trigram matches over decrypted normalized features
+6. semantic similarity over decrypted bounded embeddings
 7. prior confirmed destinations for similar captures
 
-Send only the candidate IDs, safe summaries, relevant headings, latest snippets, and note metadata required for the decision.
+Rank with `0.35 lexical + 0.15 trigram + 0.30 semantic + 0.10 recency + 0.10 title exact`, then apply the pinned boost `×1.2`. Send at most eight candidate IDs, titles, relevant headings, bounded snippets, and necessary metadata to the model—never full bodies.
+
+Private-manual notes are excluded before index access and have no embedding or RAG row. A candidate is eligible only when its owner, privacy, deletion state, active generation, and `indexed_revision == notes.current_revision` all match; revalidate those conditions before model context and before mutation. Missing or stale rows never surface silently. Retrieval may directly decrypt and rank at most 50 recently changed eligible notes as a repair bridge; materially incomplete coverage disables RAG-based auto-apply and sends the capture to Review or Inbox unless an explicit deterministic rule resolves it.
+
+The initial implementation performs an exact scan of encrypted per-user index documents, with a bounded five-minute in-process cache keyed by user, generation, model, and revision token. No plaintext shared cache, PostgreSQL FTS index, or persisted plaintext vector is allowed. Reindex builds a complete shadow generation and flips it atomically; a privacy change or deletion excludes the note immediately even if cleanup is pending. Key rotation rewraps index DEKs without re-embedding, while an embedding-model change builds a new generation. See [AI_ROUTING_SPEC.md](./AI_ROUTING_SPEC.md) §4 for lifecycle and failure behavior.
 
 ### 9.3 Structured organization schema
 
@@ -1098,7 +1104,8 @@ Each case includes expected candidate set, permitted decisions, forbidden destin
 - **Mobile:** Expo, React Native, Expo Router, EAS development and store builds
 - **API:** versioned Next.js route handlers in the web deployment for MVP
 - **Auth, database, storage, realtime:** Supabase
-- **Database:** PostgreSQL with Row Level Security and `pgvector`
+- **Database:** PostgreSQL with Row Level Security; encrypted content envelopes and encrypted per-user retrieval documents
+- **Key custody:** managed KMS/HSM in production through a provider interface; environment-backed keys are local/synthetic-preview only
 - **Durable background processing:** Vercel Workflows behind an internal `OrganizationJobRunner` port
 - **AI:** official OpenAI JavaScript SDK, Responses API, strict Structured Outputs
 - **Validation:** Zod at application boundaries plus database constraints
@@ -1135,7 +1142,8 @@ Expo mobile app                       Next.js web app
               capture and note services
                   |              |
           Supabase Postgres      durable organization workflow
-          RLS, search, vector        |
+          RLS, ciphertext, jobs      |
+                  |                  +-> managed KMS authorization
                   |                  +-> OpenAI structured plan
                   |                  +-> validated mutation transaction
                   |
@@ -1173,7 +1181,8 @@ Organization includes database reads, an external model call, validation, a cond
 ```text
 unfiled/
   apps/
-    web/                    # marketing, authenticated web app, API routes, workflows
+    web/                    # marketing, authenticated app, owner-authorized API
+    worker/                 # separately deployed organization/index worker; AI-only KMS role
     mobile/                 # Expo iOS and Android application
       plugins/              # deterministic native-target config plugins
       native-targets/       # checked-in WidgetKit extension sources and assets
@@ -1185,7 +1194,7 @@ unfiled/
     api-client/             # typed client used by web and mobile
     database/               # migrations, generated types, SQL functions, RLS tests
     sync/                   # outbox, idempotency, cursors, reconciliation
-    search/                 # full-text, vector, ranking contracts
+    search/                 # encrypted retrieval documents, ranking, index lifecycle
     design-tokens/          # color, type, spacing, motion, z-index, icon rules
     test-fixtures/          # deterministic users, notes, captures, AI cases
   supabase/
@@ -1421,16 +1430,15 @@ This table backs the `add a relation to an allowed note ID` operation, inline no
 - resolution
 - created and resolved timestamps
 
-#### `note_chunks`
+#### Encrypted library envelopes and retrieval index (Milestone C.5 target)
 
-- `id`
-- note ID and revision
-- ordinal and text hash
-- full-text search vector
-- embedding vector
-- created timestamp
+Content-bearing note columns and dependent snapshots become authenticated envelopes bound to owner, resource, version, and content kind. This covers note title/body/structured data, revisions, generated blocks, mutation and inverse snapshots, review and organization payloads, content-bearing idempotency responses, and derived search material. Plaintext columns retain only operational metadata required for RLS, CAS, queueing, filtering, and retention.
 
-Embeddings are derived data. Deleting a note must delete its chunks.
+- `rag_index_generations`: user, embedding model/version, state, coverage counters, activation timestamp
+- `note_rag_index`: user, note, generation, indexed revision, eligibility metadata, and one encrypted document containing lexical features, headings, bounded snippet, and bounded embeddings
+- `note_index_jobs`: user, note, target revision/generation, lease and retry metadata; no content
+
+`note_chunks` and its plaintext `tsvector`, content, hashes, and vector are removed after verified cutover. Deleting a note cascades every retrieval generation row and pending job. [DATA_MODEL.md](./DATA_MODEL.md) distinguishes the currently checked-in schema from this unimplemented target.
 
 #### `feedback_events`
 
@@ -1447,7 +1455,9 @@ Embeddings are derived data. Deleting a note must delete its chunks.
 - Mutation, new revision, note update, capture link, decision status, and receipt event commit together.
 - Duplicate capture submissions return the original result.
 - A stale revision never overwrites a newer manual revision.
-- Search indexes may update asynchronously, but their source revision is recorded so stale chunks are ignored.
+- A note mutation atomically enqueues its target retrieval revision, but indexing may complete asynchronously.
+- Retrieval accepts only the active generation at the exact current note revision; stale rows are never eligible.
+- Typed operations, CAS, idempotency responses, revision history, undo, export, and deletion retain their behavior after content moves to encrypted envelopes.
 
 ## 13. API Contract
 
@@ -1686,6 +1696,8 @@ Provide two note modes:
 
 The product must explain that AI-assisted cloud notes are not end-to-end encrypted from the application server. `store: false` controls provider-side response storage behavior but is not a substitute for a complete privacy policy or data-processing disclosure.
 
+Milestone C.5 application-encrypts both modes at rest. Production object DEKs are wrapped through per-user intermediate keys backed by managed KMS/HSM custody; no root content key lives in Vercel or Supabase. Separate key classes and principals prevent the organization worker from decrypting `private_manual` content. The owner-authorized interactive API may still decrypt private notes for CRUD, export, and lexical search, so the mode is not E2EE. KMS failure must fail closed without plaintext persistence.
+
 ### 16.4 Secrets and logging
 
 - OpenAI, Anthropic, and Supabase application secrets exist only in server or build-secret stores.
@@ -1715,30 +1727,35 @@ Export contains:
 - routing rules
 - optional revision history
 
-Deletion removes active rows, derived chunks, embeddings, queued work, and provider-facing pending artifacts. Publish backup-retention timing and test deletion reconciliation.
+Deletion removes active envelopes, wrapped DEKs, every retrieval generation, queued index work, and provider-facing pending artifacts. Old backups may still contain a decryptable wrapped intermediate key under the shared KMS root until they expire; do not claim immediate cryptographic erasure. Publish backup-retention timing and test deletion reconciliation.
 
 ## 17. Search
 
 ### MVP search stack
 
-Use hybrid ranking:
+Use the C.5 encrypted per-user retrieval service for AI-assisted notes:
 
 1. exact title and alias match
-2. PostgreSQL full-text rank
+2. lexical rank over decrypted index features
 3. trigram similarity for spelling variation
-4. vector similarity
+4. semantic similarity over decrypted embeddings
 5. recency and pinned-note boost
 6. note-type and space filters
 
 Results display the matching snippet, note path, and date. AI answer generation over the library is not required. Search should return notes, not synthesize facts the user did not ask for.
 
+Persisted retrieval documents are ciphertext; PostgreSQL never receives plaintext snippets, token indexes, or vectors in the accepted initial path. Owner-authorized user search may scan private-manual notes lexically in process memory, but must not send either the private query or private content to an embedding provider. Search queries use authenticated `POST` bodies, not URL parameters.
+
 ### Indexing rules
 
-- Each chunk records its source note revision.
-- Query ignores chunks from older revisions.
-- Private manual notes use local or permitted text search only and have no embedding.
-- Index jobs are idempotent.
-- Deletion and archive state propagate to search.
+- Every retrieval row records user, generation, note, and exact source revision.
+- Query accepts only the active generation and current revision, then revalidates privacy/ownership before returning a result.
+- Private-manual notes have no RAG row or embedding in any generation.
+- Index jobs are content-free, leased, idempotent, and atomically enqueued with the note mutation.
+- Privacy changes and deletion exclude immediately; physical cleanup follows by cascade/reconciliation.
+- Model changes build and verify a shadow generation before activation; key rotation rewraps without re-embedding.
+- A bounded direct-decrypt repair path covers at most 50 recent missing/stale notes. Material coverage loss disables RAG-based auto-apply.
+- A plaintext vector or FTS design requires a future ADR and privacy review.
 
 ## 18. Testing and Evaluation
 
@@ -1759,6 +1776,8 @@ Results display the matching snippet, note path, and date. AI answer generation 
 - local-date logic across time zones and daylight-saving transitions
 - Markdown preservation
 - privacy-mode filtering
+- envelope context/tamper rejection, resolver fail-closed behavior, key rewrap, and canary absence from errors
+- encrypted candidate ranking, active-generation selection, stale-index fallback cap, and incomplete-coverage fail-safe
 
 ### 18.2 Database tests
 
@@ -1767,8 +1786,10 @@ Results display the matching snippet, note path, and date. AI answer generation 
 - unique daily-note constraints hold under concurrency
 - capture and job insert atomically
 - conditional revision mutation rejects stale writes
-- delete cascades remove chunks and derived data
+- delete cascades remove encrypted retrieval generations, jobs, and derived data
 - export scope excludes other users
+- content canaries are absent from persisted rows, indexes, idempotency responses, queues, Realtime payloads, and logs
+- index jobs cannot claim private notes; cross-user, stale-revision, and inactive-generation retrieval is denied
 
 ### 18.3 Contract tests
 
@@ -1813,6 +1834,8 @@ Critical flows:
 13. search and open the updated note on the other client
 14. export data
 15. delete the account
+16. seed unique canaries across every content-bearing artifact, exercise route/edit/review/undo/search, and prove durable stores and telemetry contain ciphertext only
+17. flip an indexed note to private or delete it during retrieval and prove it cannot enter candidate/model context
 
 ### 18.6 Performance targets
 
@@ -1825,6 +1848,8 @@ Targets for the portfolio MVP:
 - web LCP under 2.5 seconds for the authenticated shell on a representative connection
 - web INP under 200 ms
 - no capture loss in crash, retry, duplicate, and offline test matrices
+- at 1,000 eligible notes, encrypted exact candidate retrieval p95 under 2 seconds cold (excluding query-embedding provider) and 250 ms warm
+- candidate recall at least 0.98 and wrong auto-apply rate at most 0.01 with stale/missing-index cases included
 
 Tune or revise targets from measured baselines. Do not hide failures by excluding slow successful jobs.
 
@@ -1874,7 +1899,7 @@ Trace metadata excludes note content.
 - bounded candidate context
 - small structured-output model selected by evaluation for normal routes
 - stronger model fallback only for allowed ambiguous cases if it measurably improves outcomes
-- embeddings computed on changed chunks only
+- encrypted index documents and embeddings recomputed only for changed note revisions or a new model generation
 - no AI call for manual edits
 - per-user daily budget with graceful Inbox fallback
 
@@ -1909,7 +1934,8 @@ Never point preview deployments at production user data.
 - production migrations run through CI with an explicit approval gate
 - scheduled backups and a documented restore drill
 - connection pooling configured for Vercel workloads
-- vector indexes created only after representative data supports the selected index type and parameters
+- application-content keys resolve through managed KMS/HSM with short-lived workload identity; environment root keys are rejected in production
+- persisted plaintext FTS/vector indexes are absent after the C.5 contract migration
 
 ### CI checks
 
@@ -2001,6 +2027,8 @@ Gate:
 
 ### Milestone C: Durable capture, Lock Screen entry, and receipt, 2-3 weeks
 
+**Implementation status (2026-08-30):** the credential-free Gate 3 is recorded green. The final local database gate applied every migration from zero with zero lint findings and passed 18 pgTAP files / 822 assertions; the aggregate code, coverage, build, dependency, HTTP E2E, static-asset, and responsive visual checks also passed. The generated widget target and application code do not substitute for Apple signing, a physical-device SQLCipher/widget matrix, an extension archive inspection, or cloud-preview canary/performance evidence; those remain pending in [HUMAN_SETUP.md](../HUMAN_SETUP.md).
+
 Deliver:
 
 - mobile SQLite outbox
@@ -2023,11 +2051,41 @@ Gate:
 - provider and workflow failures never lose the source capture
 - a receipt can be observed on both clients
 
+### Milestone C.5: Encrypted Library + Private RAG, 2-3 weeks
+
+This security milestone is a hard prerequisite for Milestone D. It implements [ADR-0006](./decisions/ADR-0006-application-encrypted-library-and-private-rag.md); until its gate is green, documentation and product copy must not claim that the note library is fully encrypted.
+
+Deliver:
+
+- **C.5a custody/expansion:** a production managed-KMS resolver using short-lived workload identity; independent object-wrap/content-MAC purposes; per-user intermediate keys; owner/class/purpose/key-bound resolution; and separate AI-assisted/private key classes
+- a separately deployed `apps/worker` Vercel project with an exact OIDC subject and AI-only AWS role; the interactive web/API project uses a different subject/role and the current same-deployment `after()`/cron organizer is retired before production isolation is claimed
+- **C.5b encrypted aggregate:** server-side domain operations plus service-only envelope/CAS RPCs and a database rollout state `expanded → dual_write → encrypted_read → encrypted_only → contracted`
+- versioned AES-256-GCM envelopes for note title/body/structured data, revisions, generated blocks, organization/review payloads, mutation and idempotency snapshots, and routing-rule content
+- server-side typed mutation/CAS/idempotency RPCs that atomically persist encrypted current state, history, receipts, and a content-free index job
+- a resumable expand/backfill/verify/cutover/contract migration that removes legacy plaintext columns, functions, indexes, and `note_chunks`
+- content-free resource references for encrypted idempotency responses and sticky private classification for revisions/mutations spanning a privacy transition
+- **C.5c private RAG:** paged encrypted exact scan with bounded concurrency/memory, strict versioned float32 embedding encoding, shadow-generation activation, stale-index repair, and incomplete-coverage fail-safe
+- `rag_index_generations`, encrypted one-document-per-note `note_rag_index`, and content-free leased `note_index_jobs`
+- hybrid lexical/trigram/semantic/recency/title ranking by exact per-user in-memory scan, with stale-index repair and incomplete-coverage fail-safe
+- **C.5d cutover/contract:** encrypted read/write/search/export/retention paths, authenticated `POST` search bodies, `no-store` responses, plaintext contract removal, and canary verification
+- owner-authorized streaming export, live-data deletion, backup-expiry handling, rotation/rewrap, restore, and reindex runbooks
+- client note caches that preserve the existing mobile SQLCipher and encrypted IndexedDB boundaries
+
+Gate:
+
+- canary fixtures prove no title, body, structured value, revision, generated content, operation/inverse, review/decision payload, snippet, token, embedding, or unkeyed content hash persists in rows, indexes, queues, idempotency responses, Realtime, logs, traces, or analytics
+- RLS and KMS IAM deny cross-user access; an independent worker deployment cannot decrypt the private key class even if its role is exercised directly; KMS failure never falls back to plaintext
+- CRUD, typed mutations, CAS, replay, history, undo, sync, export, soft/hard deletion, and restore retain parity through encrypted storage
+- private notes produce zero index rows and zero model/embedding calls; privacy flips and deletes exclude them immediately under race tests
+- only active-generation rows at the current note revision are eligible; stale/missing coverage follows the bounded repair path and cannot authorize unsafe auto-apply
+- the 1,000-note exact-retrieval latency and routing-quality targets in §18.6 pass
+- production key rotation/rewrap and backup restore succeed; pre-cutover backup exposure is documented until expiry
+
 ### Milestone D: AI create-or-append routing, 2-3 weeks
 
 Deliver:
 
-- candidate retrieval
+- encrypted per-user candidate retrieval wired to the organization pipeline
 - strict organization schema
 - OpenAI adapter
 - deterministic scoring policy
@@ -2064,7 +2122,7 @@ Gate:
 
 Deliver:
 
-- full-text, trigram, and vector search
+- user-facing hybrid search and relevance polish over the encrypted retrieval service
 - note links and source-capture inspector
 - tap-to-edit numeric fields on log entries with stepper quick-entry and prior-value placeholders
 - accessibility pass
@@ -2075,7 +2133,7 @@ Deliver:
 Gate:
 
 - critical web and native accessibility flows pass
-- search ignores stale and private embeddings
+- search ignores stale generations; private notes use owner-authorized lexical-only search and never embeddings
 - export is human-readable and complete
 - deletion reconciliation passes
 
@@ -2150,7 +2208,7 @@ Create these issues after repository bootstrap:
 11. Build Today, Notes, Capture, Review, and Search navigation shells.
 12. Implement the Markdown editor and expected-revision save contract on both clients.
 13. Implement mutation receipts and safe undo.
-14. Build candidate retrieval with deterministic rules, full text, and recency before embeddings.
+14. Complete C.5 encrypted-library migration and build exact per-user candidate retrieval with deterministic rules, lexical/trigram features, recency, and optional encrypted embeddings.
 15. Define the strict organization JSON schema and hostile-output fixtures.
 16. Add the OpenAI Responses adapter behind `OrganizationModel`.
 17. Build the routing evaluation runner and baseline report.
@@ -2171,7 +2229,7 @@ The plan proceeds with these defaults so implementation can start without waitin
 | Platforms                  | responsive web plus Expo iOS and Android                                                                                | native maintenance outweighs capture benefit                                                         |
 | iPhone quick capture       | Lock Screen WidgetKit extension opens a focused Expo composer; no inline widget text field                              | Apple adds supported secure text input to widgets or physical-device evidence favors another surface |
 | Input                      | text first                                                                                                              | routing and sync gates pass                                                                          |
-| Composer after save (OQ-4) | close after local durable acknowledgement; implementation is pending Milestone C                                        | M0 usability evidence favors rapid-entry burst mode                                                  |
+| Composer after save (OQ-4) | close after local durable acknowledgement; implemented in Milestone C                                                   | M0 usability evidence favors rapid-entry burst mode                                                  |
 | Note storage               | Markdown canonical for prose types; `structured_data` canonical for list and log with deterministic Markdown projection | editor requirements exceed safe patching model                                                       |
 | Interactive surfaces       | checklist toggling and log field editing in MVP; `table` type, input templates, and workout plans in v1.1               | early usage shows tables or plans are the retention driver                                           |
 | Undo retention             | full revision history kept; one-tap AI undo guaranteed 30 days                                                          | storage metrics justify pruning                                                                      |
@@ -2179,6 +2237,8 @@ The plan proceeds with these defaults so implementation can start without waitin
 | Automation                 | balanced mode with Review for ambiguity                                                                                 | beta users choose cautious or automatic behavior                                                     |
 | AI provider                | OpenAI and Anthropic adapters behind one port; app key default, BYOK supported                                          | privacy, cost, quality, or availability evidence                                                     |
 | BYOK custody               | Supabase Vault encrypted storage; server-side decryption only; no silent fallback                                       | Vault limits or key-rotation evidence                                                                |
+| Content-key custody        | per-object DEKs, per-user intermediate keys, and managed production KMS/HSM through short-lived workload identity       | independent review changes the hierarchy or local-first becomes the thesis                           |
+| Retrieval storage          | encrypted exact per-user index scan; no persisted plaintext FTS or vectors                                              | 1,000-note latency gate fails; any replacement requires a new ADR and privacy review                 |
 | Hosting                    | Vercel plus Supabase                                                                                                    | operational limits or cost justify migration                                                         |
 | Privacy                    | cloud sync, private manual note option, no E2EE claim                                                                   | local-first product becomes the primary thesis                                                       |
 | Collaboration              | out of scope                                                                                                            | solo workflow is stable and demand is validated                                                      |
@@ -2191,7 +2251,7 @@ Questions to answer through prototypes and beta evidence:
 - Should the default capture close immediately or remain open for rapid consecutive entries?
 - Should onboarding starter spaces be opt-in, opt-out, or created lazily on first matching capture?
 - Which corrections deserve a permanent rule suggestion?
-- Is semantic search useful before a user has enough notes to justify embeddings?
+- At what library size does semantic ranking materially improve candidate recall enough to justify its provider cost?
 - Does Android need the same first release timing as iOS?
 
 ## 25. Definition of Done for the First Public Portfolio Version
@@ -2210,6 +2270,8 @@ The project is ready to present when all of the following are true:
 - A manual edit cannot be overwritten by a stale AI job.
 - Search finds content by exact words, approximate words, date, space, and meaning.
 - Private manual notes never enter model requests or embeddings.
+- Durable note, history, workflow, review, and retrieval content is application-encrypted; production keys are KMS-backed and product copy makes no E2EE claim.
+- Candidate retrieval is owner-isolated, revision-fresh, and fails safe when its encrypted index is incomplete.
 - RLS, idempotency, crash recovery, deletion, and export have automated evidence.
 - Web is deployed to Vercel and mobile has installable beta builds.
 - The product explains its AI and privacy behavior plainly.

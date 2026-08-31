@@ -3,7 +3,7 @@
   "info": {
     "title": "Unfiled API",
     "version": "1.0.0",
-    "description": "Versioned API for authentication and manual note management."
+    "description": "Versioned API for durable capture, authentication, and note management."
   },
   "servers": [{ "url": "/api/v1" }],
   "paths": {
@@ -203,6 +203,378 @@
         }
       }
     },
+    "/captures": {
+      "get": {
+        "operationId": "listCaptures",
+        "summary": "List captures by processing state and original client time",
+        "description": "Orders by server receivedAt descending with capture ID as a stable tie-breaker. Date filters apply to clientCreatedAt as a half-open [from, to) interval.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["queued", "processing", "done", "needs_review", "failed", "inbox"]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 30 }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "Inclusive clientCreatedAt lower bound for the offline-safe capture timeline.",
+            "schema": { "type": "string", "format": "date-time" }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Exclusive clientCreatedAt upper bound for the offline-safe capture timeline.",
+            "schema": { "type": "string", "format": "date-time" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated capture summaries",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CaptureListResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createCapture",
+        "summary": "Durably create a capture and its organization job",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "The clientCaptureId from the request body. It must remain byte-identical across retries.",
+            "schema": {
+              "type": "string",
+              "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$",
+              "minLength": 30,
+              "maxLength": 30
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CaptureCreateRequest" }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Durable capture accepted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CaptureCreateResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/captures/{captureId}": {
+      "get": {
+        "operationId": "getCapture",
+        "summary": "Get one capture with its durable receipt when available",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "captureId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Capture detail",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CaptureDetailResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteCapture",
+        "summary": "Remove a capture source and optionally its inserted note content",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "captureId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Caller-generated key that remains stable across retries.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "minLength": 1,
+              "maxLength": 80
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CaptureDeleteRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Capture deletion result",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CaptureDeleteResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/captures/{captureId}/receipt": {
+      "get": {
+        "operationId": "getCaptureReceipt",
+        "summary": "Get the durable organization receipt for one capture",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "captureId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Capture organization receipt",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CaptureReceiptResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/captures/{captureId}/retry": {
+      "post": {
+        "operationId": "retryCapture",
+        "summary": "Retry a safely retryable capture organization job",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "captureId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Caller-generated key that remains stable across retries.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "minLength": 1,
+              "maxLength": 80
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/CaptureRetryRequest" } }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Capture retry accepted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CaptureRetryResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
     "/notes": {
       "get": {
         "operationId": "listNotes",
@@ -302,7 +674,12 @@
             "in": "header",
             "required": true,
             "description": "Caller-generated key that remains stable across retries.",
-            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "minLength": 1,
+              "maxLength": 80
+            }
           }
         ],
         "requestBody": {
@@ -409,7 +786,12 @@
             "in": "header",
             "required": true,
             "description": "Caller-generated key that remains stable across retries.",
-            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "minLength": 1,
+              "maxLength": 80
+            }
           }
         ],
         "requestBody": {
@@ -467,7 +849,12 @@
             "in": "header",
             "required": true,
             "description": "Caller-generated key that remains stable across retries.",
-            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "minLength": 1,
+              "maxLength": 80
+            }
           }
         ],
         "requestBody": {
@@ -529,7 +916,12 @@
             "in": "header",
             "required": true,
             "description": "Caller-generated key that remains stable across retries.",
-            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "minLength": 1,
+              "maxLength": 80
+            }
           }
         ],
         "requestBody": {
@@ -638,7 +1030,12 @@
             "in": "header",
             "required": true,
             "description": "Caller-generated key that remains stable across retries.",
-            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "minLength": 1,
+              "maxLength": 80
+            }
           }
         ],
         "requestBody": {
@@ -708,7 +1105,12 @@
             "in": "header",
             "required": true,
             "description": "Caller-generated key that remains stable across retries.",
-            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "minLength": 1,
+              "maxLength": 80
+            }
           }
         ],
         "requestBody": {
@@ -772,7 +1174,12 @@
             "in": "header",
             "required": true,
             "description": "Caller-generated key that remains stable across retries.",
-            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "minLength": 1,
+              "maxLength": 80
+            }
           }
         ],
         "requestBody": {
@@ -840,7 +1247,12 @@
             "in": "header",
             "required": true,
             "description": "Caller-generated key that remains stable across retries.",
-            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "minLength": 1,
+              "maxLength": 80
+            }
           }
         ],
         "requestBody": {
@@ -904,7 +1316,12 @@
             "in": "header",
             "required": true,
             "description": "Caller-generated key that remains stable across retries.",
-            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "minLength": 1,
+              "maxLength": 80
+            }
           }
         ],
         "requestBody": {
@@ -964,7 +1381,12 @@
             "in": "header",
             "required": true,
             "description": "Caller-generated key that remains stable across retries.",
-            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "minLength": 1,
+              "maxLength": 80
+            }
           }
         ],
         "requestBody": {
@@ -1024,7 +1446,12 @@
             "in": "header",
             "required": true,
             "description": "Caller-generated key that remains stable across retries.",
-            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "minLength": 1,
+              "maxLength": 80
+            }
           }
         ],
         "requestBody": {
@@ -1147,7 +1574,12 @@
             "in": "header",
             "required": true,
             "description": "Caller-generated key that remains stable across retries.",
-            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "minLength": 1,
+              "maxLength": 80
+            }
           }
         ],
         "requestBody": {
@@ -1258,7 +1690,12 @@
             "in": "header",
             "required": true,
             "description": "Caller-generated key that remains stable across retries.",
-            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "minLength": 1,
+              "maxLength": 80
+            }
           }
         ],
         "requestBody": {
@@ -1367,7 +1804,12 @@
             "in": "header",
             "required": true,
             "description": "Caller-generated key that remains stable across retries.",
-            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "minLength": 1,
+              "maxLength": 80
+            }
           }
         ],
         "requestBody": {
@@ -1429,7 +1871,12 @@
             "in": "header",
             "required": true,
             "description": "Caller-generated key that remains stable across retries.",
-            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "minLength": 1,
+              "maxLength": 80
+            }
           }
         ],
         "requestBody": {
@@ -1536,7 +1983,12 @@
             "in": "header",
             "required": true,
             "description": "Caller-generated key that remains stable across retries.",
-            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "minLength": 1,
+              "maxLength": 80
+            }
           }
         ],
         "requestBody": {
@@ -1596,7 +2048,12 @@
             "in": "header",
             "required": true,
             "description": "Caller-generated key that remains stable across retries.",
-            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "minLength": 1,
+              "maxLength": 80
+            }
           }
         ],
         "requestBody": {
@@ -1654,7 +2111,12 @@
             "in": "header",
             "required": true,
             "description": "Caller-generated key that remains stable across retries.",
-            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "minLength": 1,
+              "maxLength": 80
+            }
           }
         ],
         "requestBody": {
@@ -1781,7 +2243,12 @@
             "in": "header",
             "required": true,
             "description": "Caller-generated key that remains stable across retries.",
-            "schema": { "type": "string", "minLength": 1, "maxLength": 80 }
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "minLength": 1,
+              "maxLength": 80
+            }
           }
         ],
         "requestBody": {
@@ -2089,6 +2556,1045 @@
           }
         },
         "required": ["accessToken", "refreshToken", "expiresAt", "user"],
+        "additionalProperties": false
+      },
+      "CaptureCreateRequest": {
+        "type": "object",
+        "properties": {
+          "clientCaptureId": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" },
+          "rawContent": { "type": "string", "minLength": 1, "maxLength": 10000 },
+          "source": {
+            "type": "string",
+            "enum": ["mobile", "web", "ios_lock_screen_widget", "share_sheet", "import"]
+          },
+          "deviceId": { "type": "string", "maxLength": 120 },
+          "clientCreatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "clientTimezone": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "privacy": {
+            "default": "ai_assisted",
+            "type": "string",
+            "enum": ["ai_assisted", "private_manual"]
+          },
+          "explicitDestinationNoteId": {
+            "type": "string",
+            "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "expansionDisabled": { "default": false, "type": "boolean" }
+        },
+        "required": [
+          "clientCaptureId",
+          "rawContent",
+          "source",
+          "clientCreatedAt",
+          "clientTimezone",
+          "privacy",
+          "expansionDisabled"
+        ],
+        "additionalProperties": false
+      },
+      "CaptureCreateResponse": {
+        "type": "object",
+        "properties": {
+          "capture": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" },
+              "rawContent": { "type": "string", "minLength": 1, "maxLength": 10000 },
+              "source": {
+                "type": "string",
+                "enum": ["mobile", "web", "ios_lock_screen_widget", "share_sheet", "import"]
+              },
+              "deviceId": { "type": "string", "maxLength": 120 },
+              "privacy": { "type": "string", "enum": ["ai_assisted", "private_manual"] },
+              "explicitDestinationNoteId": {
+                "anyOf": [
+                  { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                  { "type": "null" }
+                ]
+              },
+              "expansionDisabled": { "type": "boolean" },
+              "clientCreatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              "clientTimezone": { "type": "string", "minLength": 1, "maxLength": 100 },
+              "receivedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              "status": { "type": "string", "const": "queued" },
+              "lastErrorCode": { "type": "null" }
+            },
+            "required": [
+              "id",
+              "rawContent",
+              "source",
+              "deviceId",
+              "privacy",
+              "explicitDestinationNoteId",
+              "expansionDisabled",
+              "clientCreatedAt",
+              "clientTimezone",
+              "receivedAt",
+              "status",
+              "lastErrorCode"
+            ],
+            "additionalProperties": false
+          },
+          "jobId": { "type": "string", "pattern": "^job_[0-9A-HJKMNP-TV-Z]{26}$" },
+          "replayed": { "type": "boolean" }
+        },
+        "required": ["capture", "jobId", "replayed"],
+        "additionalProperties": false
+      },
+      "CaptureContentRemovalMutation": {
+        "type": "object",
+        "properties": {
+          "mutationId": { "type": "string", "pattern": "^mut_[0-9A-HJKMNP-TV-Z]{26}$" },
+          "noteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+          "expectedRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": ["mutationId", "noteId", "expectedRevision"],
+        "additionalProperties": false
+      },
+      "CaptureSummary": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" },
+          "jobId": { "type": "string", "pattern": "^job_[0-9A-HJKMNP-TV-Z]{26}$" },
+          "rawContentPreview": { "type": "string", "minLength": 1, "maxLength": 280 },
+          "source": {
+            "type": "string",
+            "enum": ["mobile", "web", "ios_lock_screen_widget", "share_sheet", "import"]
+          },
+          "privacy": { "type": "string", "enum": ["ai_assisted", "private_manual"] },
+          "clientCreatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["queued", "processing", "done", "needs_review", "failed", "inbox"]
+          },
+          "lastErrorCode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "account_deletion_failed",
+                  "budget_exhausted",
+                  "capture_too_long",
+                  "conflict_requires_review",
+                  "forbidden",
+                  "invalid_capture",
+                  "invalid_idempotency_key",
+                  "invalid_plan",
+                  "not_found",
+                  "offline",
+                  "provider_key_invalid",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "stale_revision",
+                  "structure_conflict",
+                  "unauthorized",
+                  "validation_failed"
+                ]
+              },
+              { "type": "null" }
+            ]
+          },
+          "receiptAvailable": { "type": "boolean" }
+        },
+        "required": [
+          "id",
+          "jobId",
+          "rawContentPreview",
+          "source",
+          "privacy",
+          "clientCreatedAt",
+          "receivedAt",
+          "status",
+          "lastErrorCode",
+          "receiptAvailable"
+        ],
+        "additionalProperties": false
+      },
+      "CaptureListQuery": {
+        "type": "object",
+        "properties": {
+          "cursor": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "limit": { "default": 30, "type": "integer", "minimum": 1, "maximum": 100 },
+          "status": {
+            "type": "string",
+            "enum": ["queued", "processing", "done", "needs_review", "failed", "inbox"]
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          }
+        },
+        "required": ["limit"],
+        "additionalProperties": false
+      },
+      "CaptureListResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "jobId": { "type": "string", "pattern": "^job_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "rawContentPreview": { "type": "string", "minLength": 1, "maxLength": 280 },
+                "source": {
+                  "type": "string",
+                  "enum": ["mobile", "web", "ios_lock_screen_widget", "share_sheet", "import"]
+                },
+                "privacy": { "type": "string", "enum": ["ai_assisted", "private_manual"] },
+                "clientCreatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                },
+                "receivedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": ["queued", "processing", "done", "needs_review", "failed", "inbox"]
+                },
+                "lastErrorCode": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "account_deletion_failed",
+                        "budget_exhausted",
+                        "capture_too_long",
+                        "conflict_requires_review",
+                        "forbidden",
+                        "invalid_capture",
+                        "invalid_idempotency_key",
+                        "invalid_plan",
+                        "not_found",
+                        "offline",
+                        "provider_key_invalid",
+                        "provider_unavailable",
+                        "rate_limited",
+                        "stale_revision",
+                        "structure_conflict",
+                        "unauthorized",
+                        "validation_failed"
+                      ]
+                    },
+                    { "type": "null" }
+                  ]
+                },
+                "receiptAvailable": { "type": "boolean" }
+              },
+              "required": [
+                "id",
+                "jobId",
+                "rawContentPreview",
+                "source",
+                "privacy",
+                "clientCreatedAt",
+                "receivedAt",
+                "status",
+                "lastErrorCode",
+                "receiptAvailable"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "pageInfo": {
+            "type": "object",
+            "properties": {
+              "hasMore": { "type": "boolean" },
+              "nextCursor": {
+                "anyOf": [
+                  { "type": "string", "minLength": 1, "maxLength": 512 },
+                  { "type": "null" }
+                ]
+              }
+            },
+            "required": ["hasMore", "nextCursor"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["items", "pageInfo"],
+        "additionalProperties": false
+      },
+      "CaptureDetailResponse": {
+        "type": "object",
+        "properties": {
+          "capture": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" },
+              "rawContent": { "type": "string", "minLength": 1, "maxLength": 10000 },
+              "source": {
+                "type": "string",
+                "enum": ["mobile", "web", "ios_lock_screen_widget", "share_sheet", "import"]
+              },
+              "deviceId": { "type": "string", "maxLength": 120 },
+              "privacy": { "type": "string", "enum": ["ai_assisted", "private_manual"] },
+              "explicitDestinationNoteId": {
+                "anyOf": [
+                  { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                  { "type": "null" }
+                ]
+              },
+              "expansionDisabled": { "type": "boolean" },
+              "clientCreatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              "clientTimezone": { "type": "string", "minLength": 1, "maxLength": 100 },
+              "receivedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              "status": {
+                "type": "string",
+                "enum": ["queued", "processing", "done", "needs_review", "failed", "inbox"]
+              },
+              "lastErrorCode": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "account_deletion_failed",
+                      "budget_exhausted",
+                      "capture_too_long",
+                      "conflict_requires_review",
+                      "forbidden",
+                      "invalid_capture",
+                      "invalid_idempotency_key",
+                      "invalid_plan",
+                      "not_found",
+                      "offline",
+                      "provider_key_invalid",
+                      "provider_unavailable",
+                      "rate_limited",
+                      "stale_revision",
+                      "structure_conflict",
+                      "unauthorized",
+                      "validation_failed"
+                    ]
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "jobId": { "type": "string", "pattern": "^job_[0-9A-HJKMNP-TV-Z]{26}$" },
+              "receipt": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "schemaVersion": { "type": "number", "const": 1 },
+                      "captureId": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" },
+                      "jobId": { "type": "string", "pattern": "^job_[0-9A-HJKMNP-TV-Z]{26}$" },
+                      "decisionId": {
+                        "anyOf": [
+                          { "type": "string", "pattern": "^dec_[0-9A-HJKMNP-TV-Z]{26}$" },
+                          { "type": "null" }
+                        ]
+                      },
+                      "reviewItemId": {
+                        "anyOf": [
+                          { "type": "string", "pattern": "^rvw_[0-9A-HJKMNP-TV-Z]{26}$" },
+                          { "type": "null" }
+                        ]
+                      },
+                      "mutationId": {
+                        "anyOf": [
+                          { "type": "string", "pattern": "^mut_[0-9A-HJKMNP-TV-Z]{26}$" },
+                          { "type": "null" }
+                        ]
+                      },
+                      "outcome": {
+                        "type": "string",
+                        "enum": [
+                          "created_note",
+                          "added_to_note",
+                          "kept_in_inbox",
+                          "needs_review",
+                          "failed"
+                        ]
+                      },
+                      "headline": { "type": "string", "minLength": 1, "maxLength": 240 },
+                      "destination": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "noteId": {
+                                "type": "string",
+                                "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$"
+                              },
+                              "title": { "type": "string", "minLength": 1, "maxLength": 200 }
+                            },
+                            "required": ["noteId", "title"],
+                            "additionalProperties": false
+                          },
+                          { "type": "null" }
+                        ]
+                      },
+                      "insertedContent": {
+                        "maxItems": 500,
+                        "type": "array",
+                        "items": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": { "type": "string", "const": "captured" },
+                                "itemId": {
+                                  "anyOf": [
+                                    {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "pattern": "^itm_[0-9A-HJKMNP-TV-Z]{26}$"
+                                        },
+                                        {
+                                          "type": "string",
+                                          "pattern": "^ent_[0-9A-HJKMNP-TV-Z]{26}$"
+                                        }
+                                      ]
+                                    },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "content": { "type": "string", "minLength": 1, "maxLength": 10000 }
+                              },
+                              "required": ["type", "itemId", "content"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": { "type": "string", "const": "ai_generated" },
+                                "blockId": {
+                                  "type": "string",
+                                  "pattern": "^blk_[0-9A-HJKMNP-TV-Z]{26}$"
+                                },
+                                "content": { "type": "string", "minLength": 1, "maxLength": 600 }
+                              },
+                              "required": ["type", "blockId", "content"],
+                              "additionalProperties": false
+                            }
+                          ]
+                        }
+                      },
+                      "actions": {
+                        "maxItems": 3,
+                        "type": "array",
+                        "items": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": { "type": "string", "const": "open" },
+                                "noteId": {
+                                  "type": "string",
+                                  "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$"
+                                }
+                              },
+                              "required": ["type", "noteId"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": { "type": "string", "const": "move" },
+                                "noteId": {
+                                  "type": "string",
+                                  "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$"
+                                },
+                                "decisionId": {
+                                  "type": "string",
+                                  "pattern": "^dec_[0-9A-HJKMNP-TV-Z]{26}$"
+                                }
+                              },
+                              "required": ["type", "noteId", "decisionId"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": { "type": "string", "const": "undo" },
+                                "mutationId": {
+                                  "type": "string",
+                                  "pattern": "^mut_[0-9A-HJKMNP-TV-Z]{26}$"
+                                },
+                                "expectedRevision": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": ["type", "mutationId", "expectedRevision"],
+                              "additionalProperties": false
+                            }
+                          ]
+                        }
+                      },
+                      "reasonCodes": {
+                        "maxItems": 20,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
+                        }
+                      },
+                      "createdAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "captureId",
+                      "jobId",
+                      "decisionId",
+                      "reviewItemId",
+                      "mutationId",
+                      "outcome",
+                      "headline",
+                      "destination",
+                      "insertedContent",
+                      "actions",
+                      "reasonCodes",
+                      "createdAt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  { "type": "null" }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "rawContent",
+              "source",
+              "deviceId",
+              "privacy",
+              "explicitDestinationNoteId",
+              "expansionDisabled",
+              "clientCreatedAt",
+              "clientTimezone",
+              "receivedAt",
+              "status",
+              "lastErrorCode",
+              "jobId",
+              "receipt"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": ["capture"],
+        "additionalProperties": false
+      },
+      "CaptureReceipt": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": { "type": "number", "const": 1 },
+          "captureId": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" },
+          "jobId": { "type": "string", "pattern": "^job_[0-9A-HJKMNP-TV-Z]{26}$" },
+          "decisionId": {
+            "anyOf": [
+              { "type": "string", "pattern": "^dec_[0-9A-HJKMNP-TV-Z]{26}$" },
+              { "type": "null" }
+            ]
+          },
+          "reviewItemId": {
+            "anyOf": [
+              { "type": "string", "pattern": "^rvw_[0-9A-HJKMNP-TV-Z]{26}$" },
+              { "type": "null" }
+            ]
+          },
+          "mutationId": {
+            "anyOf": [
+              { "type": "string", "pattern": "^mut_[0-9A-HJKMNP-TV-Z]{26}$" },
+              { "type": "null" }
+            ]
+          },
+          "outcome": {
+            "type": "string",
+            "enum": ["created_note", "added_to_note", "kept_in_inbox", "needs_review", "failed"]
+          },
+          "headline": { "type": "string", "minLength": 1, "maxLength": 240 },
+          "destination": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "noteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                  "title": { "type": "string", "minLength": 1, "maxLength": 200 }
+                },
+                "required": ["noteId", "title"],
+                "additionalProperties": false
+              },
+              { "type": "null" }
+            ]
+          },
+          "insertedContent": {
+            "maxItems": 500,
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": { "type": "string", "const": "captured" },
+                    "itemId": {
+                      "anyOf": [
+                        {
+                          "anyOf": [
+                            { "type": "string", "pattern": "^itm_[0-9A-HJKMNP-TV-Z]{26}$" },
+                            { "type": "string", "pattern": "^ent_[0-9A-HJKMNP-TV-Z]{26}$" }
+                          ]
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "content": { "type": "string", "minLength": 1, "maxLength": 10000 }
+                  },
+                  "required": ["type", "itemId", "content"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": { "type": "string", "const": "ai_generated" },
+                    "blockId": { "type": "string", "pattern": "^blk_[0-9A-HJKMNP-TV-Z]{26}$" },
+                    "content": { "type": "string", "minLength": 1, "maxLength": 600 }
+                  },
+                  "required": ["type", "blockId", "content"],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "actions": {
+            "maxItems": 3,
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": { "type": "string", "const": "open" },
+                    "noteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" }
+                  },
+                  "required": ["type", "noteId"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": { "type": "string", "const": "move" },
+                    "noteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                    "decisionId": { "type": "string", "pattern": "^dec_[0-9A-HJKMNP-TV-Z]{26}$" }
+                  },
+                  "required": ["type", "noteId", "decisionId"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": { "type": "string", "const": "undo" },
+                    "mutationId": { "type": "string", "pattern": "^mut_[0-9A-HJKMNP-TV-Z]{26}$" },
+                    "expectedRevision": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": ["type", "mutationId", "expectedRevision"],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "reasonCodes": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9_]*$"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "captureId",
+          "jobId",
+          "decisionId",
+          "reviewItemId",
+          "mutationId",
+          "outcome",
+          "headline",
+          "destination",
+          "insertedContent",
+          "actions",
+          "reasonCodes",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "CaptureReceiptResponse": {
+        "type": "object",
+        "properties": {
+          "receipt": {
+            "type": "object",
+            "properties": {
+              "schemaVersion": { "type": "number", "const": 1 },
+              "captureId": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" },
+              "jobId": { "type": "string", "pattern": "^job_[0-9A-HJKMNP-TV-Z]{26}$" },
+              "decisionId": {
+                "anyOf": [
+                  { "type": "string", "pattern": "^dec_[0-9A-HJKMNP-TV-Z]{26}$" },
+                  { "type": "null" }
+                ]
+              },
+              "reviewItemId": {
+                "anyOf": [
+                  { "type": "string", "pattern": "^rvw_[0-9A-HJKMNP-TV-Z]{26}$" },
+                  { "type": "null" }
+                ]
+              },
+              "mutationId": {
+                "anyOf": [
+                  { "type": "string", "pattern": "^mut_[0-9A-HJKMNP-TV-Z]{26}$" },
+                  { "type": "null" }
+                ]
+              },
+              "outcome": {
+                "type": "string",
+                "enum": ["created_note", "added_to_note", "kept_in_inbox", "needs_review", "failed"]
+              },
+              "headline": { "type": "string", "minLength": 1, "maxLength": 240 },
+              "destination": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "noteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                      "title": { "type": "string", "minLength": 1, "maxLength": 200 }
+                    },
+                    "required": ["noteId", "title"],
+                    "additionalProperties": false
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "insertedContent": {
+                "maxItems": 500,
+                "type": "array",
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": { "type": "string", "const": "captured" },
+                        "itemId": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                { "type": "string", "pattern": "^itm_[0-9A-HJKMNP-TV-Z]{26}$" },
+                                { "type": "string", "pattern": "^ent_[0-9A-HJKMNP-TV-Z]{26}$" }
+                              ]
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "content": { "type": "string", "minLength": 1, "maxLength": 10000 }
+                      },
+                      "required": ["type", "itemId", "content"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": { "type": "string", "const": "ai_generated" },
+                        "blockId": { "type": "string", "pattern": "^blk_[0-9A-HJKMNP-TV-Z]{26}$" },
+                        "content": { "type": "string", "minLength": 1, "maxLength": 600 }
+                      },
+                      "required": ["type", "blockId", "content"],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "actions": {
+                "maxItems": 3,
+                "type": "array",
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": { "type": "string", "const": "open" },
+                        "noteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" }
+                      },
+                      "required": ["type", "noteId"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": { "type": "string", "const": "move" },
+                        "noteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                        "decisionId": {
+                          "type": "string",
+                          "pattern": "^dec_[0-9A-HJKMNP-TV-Z]{26}$"
+                        }
+                      },
+                      "required": ["type", "noteId", "decisionId"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": { "type": "string", "const": "undo" },
+                        "mutationId": {
+                          "type": "string",
+                          "pattern": "^mut_[0-9A-HJKMNP-TV-Z]{26}$"
+                        },
+                        "expectedRevision": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": ["type", "mutationId", "expectedRevision"],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "reasonCodes": {
+                "maxItems": 20,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64,
+                  "pattern": "^[a-z][a-z0-9_]*$"
+                }
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "captureId",
+              "jobId",
+              "decisionId",
+              "reviewItemId",
+              "mutationId",
+              "outcome",
+              "headline",
+              "destination",
+              "insertedContent",
+              "actions",
+              "reasonCodes",
+              "createdAt"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": ["receipt"],
+        "additionalProperties": false
+      },
+      "CaptureRetryRequest": {
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          }
+        },
+        "required": ["idempotencyKey"],
+        "additionalProperties": false
+      },
+      "CaptureRetryResponse": {
+        "type": "object",
+        "properties": {
+          "capture": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" },
+              "rawContent": { "type": "string", "minLength": 1, "maxLength": 10000 },
+              "source": {
+                "type": "string",
+                "enum": ["mobile", "web", "ios_lock_screen_widget", "share_sheet", "import"]
+              },
+              "deviceId": { "type": "string", "maxLength": 120 },
+              "privacy": { "type": "string", "enum": ["ai_assisted", "private_manual"] },
+              "explicitDestinationNoteId": {
+                "anyOf": [
+                  { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                  { "type": "null" }
+                ]
+              },
+              "expansionDisabled": { "type": "boolean" },
+              "clientCreatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              "clientTimezone": { "type": "string", "minLength": 1, "maxLength": 100 },
+              "receivedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              "status": { "type": "string", "const": "queued" },
+              "lastErrorCode": { "type": "null" }
+            },
+            "required": [
+              "id",
+              "rawContent",
+              "source",
+              "deviceId",
+              "privacy",
+              "explicitDestinationNoteId",
+              "expansionDisabled",
+              "clientCreatedAt",
+              "clientTimezone",
+              "receivedAt",
+              "status",
+              "lastErrorCode"
+            ],
+            "additionalProperties": false
+          },
+          "jobId": { "type": "string", "pattern": "^job_[0-9A-HJKMNP-TV-Z]{26}$" },
+          "replayed": { "type": "boolean" }
+        },
+        "required": ["capture", "jobId", "replayed"],
+        "additionalProperties": false
+      },
+      "CaptureDeleteRequest": {
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "removeInsertedContent": { "default": false, "type": "boolean" },
+          "expectedNoteRevisions": {
+            "default": [],
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "noteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "expectedRevision": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": ["noteId", "expectedRevision"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["idempotencyKey", "removeInsertedContent", "expectedNoteRevisions"],
+        "additionalProperties": false
+      },
+      "CaptureDeleteResponse": {
+        "type": "object",
+        "properties": {
+          "captureId": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" },
+          "deletedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "sourceRemovedFromNoteIds": {
+            "maxItems": 100,
+            "type": "array",
+            "items": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          "removedInsertedContent": { "type": "boolean" },
+          "contentRemovalMutations": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "mutationId": { "type": "string", "pattern": "^mut_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "noteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "expectedRevision": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": ["mutationId", "noteId", "expectedRevision"],
+              "additionalProperties": false
+            }
+          },
+          "replayed": { "type": "boolean" }
+        },
+        "required": [
+          "captureId",
+          "deletedAt",
+          "sourceRemovedFromNoteIds",
+          "removedInsertedContent",
+          "contentRemovalMutations",
+          "replayed"
+        ],
         "additionalProperties": false
       },
       "NoteCreateRequest": {

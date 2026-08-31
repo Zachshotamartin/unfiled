@@ -46,7 +46,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
     plugins: [
       "expo-router",
-      "expo-sqlite",
+      ["expo-sqlite", { useSQLCipher: true }],
       ["expo-secure-store", { configureAndroidBackup: true, faceIDPermission: false }],
       ["expo-build-properties", { ios: { deploymentTarget: "17.0" } }],
       [

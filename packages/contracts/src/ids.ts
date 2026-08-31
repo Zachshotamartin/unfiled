@@ -51,5 +51,8 @@ export function parseEntityId<K extends EntityKind>(
 
 export function entityIdSchema<K extends EntityKind>(kind: K) {
   const pattern = new RegExp(`^${entityPrefixes[kind]}_[0-9A-HJKMNP-TV-Z]{26}$`, "u");
-  return z.string().regex(pattern, `Expected a ${kind} identifier`) as z.ZodType<EntityId<K>>;
+  return z.string().regex(pattern, `Expected a ${kind} identifier`) as z.ZodType<
+    EntityId<K>,
+    string
+  >;
 }

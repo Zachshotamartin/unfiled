@@ -1,5 +1,11 @@
 import type { AuthSession } from "./auth.js";
-import type { CaptureCreateRequest, CaptureCreateResponse } from "./captures.js";
+import type {
+  CaptureCreateRequest,
+  CaptureCreateResponse,
+  CaptureDetailResponse,
+  CaptureListResponse,
+  CaptureReceipt
+} from "./captures.js";
 import type { MutationResult } from "./mutations.js";
 import type { NoteDto, NoteSummary } from "./notes.js";
 import type { UserOperation } from "./operations.js";
@@ -23,8 +29,12 @@ export const captureV1ResponseFixture = Object.freeze({
     id: captureV1Fixture.clientCaptureId,
     rawContent: captureV1Fixture.rawContent,
     source: captureV1Fixture.source,
+    deviceId: "iphone-15-pro",
     privacy: captureV1Fixture.privacy,
+    explicitDestinationNoteId: null,
+    expansionDisabled: captureV1Fixture.expansionDisabled,
     clientCreatedAt: captureV1Fixture.clientCreatedAt,
+    clientTimezone: captureV1Fixture.clientTimezone,
     receivedAt: "2026-08-30T18:30:01.000Z",
     status: "queued",
     lastErrorCode: null
@@ -32,6 +42,78 @@ export const captureV1ResponseFixture = Object.freeze({
   jobId: "job_01J6M9Q7G4BMKB33GSG3NJ6D1Y",
   replayed: false
 }) satisfies CaptureCreateResponse;
+
+export const captureV1ReceiptFixture = Object.freeze({
+  schemaVersion: 1,
+  captureId: captureV1Fixture.clientCaptureId,
+  jobId: captureV1ResponseFixture.jobId,
+  decisionId: "dec_01J6M9Q7G4BMKB33GSG3NJ6D1X",
+  reviewItemId: null,
+  mutationId: "mut_01J6M9Q7G4BMKB33GSG3NJ6D1X",
+  outcome: "added_to_note",
+  headline: "Added 2 items to Shopping / Aug 30",
+  destination: Object.freeze({
+    noteId: "note_01J6M9Q7G4BMKB33GSG3NJ6D1X",
+    title: "Shopping"
+  }),
+  insertedContent: [
+    Object.freeze({
+      type: "captured",
+      itemId: "itm_01J6M9Q7G4BMKB33GSG3NJ6D1X",
+      content: "milk"
+    }),
+    Object.freeze({
+      type: "captured",
+      itemId: "itm_01J6M9Q7G4BMKB33GSG3NJ6D1Y",
+      content: "batteries"
+    })
+  ],
+  actions: [
+    Object.freeze({
+      type: "open",
+      noteId: "note_01J6M9Q7G4BMKB33GSG3NJ6D1X"
+    }),
+    Object.freeze({
+      type: "move",
+      noteId: "note_01J6M9Q7G4BMKB33GSG3NJ6D1X",
+      decisionId: "dec_01J6M9Q7G4BMKB33GSG3NJ6D1X"
+    }),
+    Object.freeze({
+      type: "undo",
+      mutationId: "mut_01J6M9Q7G4BMKB33GSG3NJ6D1X",
+      expectedRevision: 2
+    })
+  ],
+  reasonCodes: ["high_confidence"],
+  createdAt: "2026-08-30T18:30:03.000Z"
+}) satisfies CaptureReceipt;
+
+export const captureV1DetailFixture = Object.freeze({
+  capture: Object.freeze({
+    ...captureV1ResponseFixture.capture,
+    status: "done",
+    jobId: captureV1ResponseFixture.jobId,
+    receipt: captureV1ReceiptFixture
+  })
+}) satisfies CaptureDetailResponse;
+
+export const captureV1ListFixture = Object.freeze({
+  items: [
+    Object.freeze({
+      id: captureV1Fixture.clientCaptureId,
+      jobId: captureV1ResponseFixture.jobId,
+      rawContentPreview: captureV1Fixture.rawContent,
+      source: captureV1Fixture.source,
+      privacy: captureV1Fixture.privacy,
+      clientCreatedAt: captureV1Fixture.clientCreatedAt,
+      receivedAt: captureV1ResponseFixture.capture.receivedAt,
+      status: "done",
+      lastErrorCode: null,
+      receiptAvailable: true
+    })
+  ],
+  pageInfo: Object.freeze({ hasMore: false, nextCursor: null })
+}) satisfies CaptureListResponse;
 
 const note = {
   id: "note_01J6M9Q7G4BMKB33GSG3NJ6D1X",

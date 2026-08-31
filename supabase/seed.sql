@@ -411,7 +411,8 @@ insert into public.captures (
   client_created_at,
   client_timezone,
   received_at,
-  status
+  status,
+  deleted_at
 )
 values
   (
@@ -419,24 +420,26 @@ values
     '11111111-1111-4111-8111-111111111111',
     'mobile',
     'synthetic-ios-device',
-    'add spinach to the shopping list',
+    '[deleted]',
     'ai_assisted',
     '2026-08-30 16:20:00+00',
     'America/Los_Angeles',
     '2026-08-30 16:20:01+00',
-    'organized'
+    'deleted',
+    '2026-08-30 17:20:00+00'
   ),
   (
     'cap_00000000000000000000000002',
     '11111111-1111-4111-8111-111111111111',
     'ios_lock_screen_widget',
     'synthetic-ios-device',
-    'Roosevelt method: tell people you can do it, then figure out how.',
+    '[deleted]',
     'ai_assisted',
     '2026-08-30 16:25:00+00',
     'America/Los_Angeles',
     '2026-08-30 16:25:01+00',
-    'needs_review'
+    'deleted',
+    '2026-08-30 17:25:00+00'
   )
 on conflict (id) do nothing;
 
@@ -622,7 +625,7 @@ on conflict (capture_id, note_id, mutation_id) do nothing;
 insert into public.review_items (
   id,
   user_id,
-  capture_id,
+  note_id,
   type,
   choices,
   state,
@@ -631,7 +634,7 @@ insert into public.review_items (
 values (
   'rvw_00000000000000000000000001',
   '11111111-1111-4111-8111-111111111111',
-  'cap_00000000000000000000000002',
+  'note_00000000000000000000000003',
   'low_confidence',
   '[{"noteId":"note_00000000000000000000000003","label":"Mindset"},{"noteId":"note_00000000000000000000000004","label":"Unfiled app"}]'::jsonb,
   'open',

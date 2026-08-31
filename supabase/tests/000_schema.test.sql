@@ -3,7 +3,7 @@ create extension if not exists pgtap with schema extensions;
 begin;
 set local search_path = public, extensions;
 
-select plan(24);
+select plan(27);
 
 select has_table('public', 'profiles', 'profiles exists after applying migrations from zero');
 select has_table('public', 'captures', 'captures exists after applying migrations from zero');
@@ -37,8 +37,20 @@ select is(
   'safe_error_code exactly matches the shared ApiErrorCode contract'
 );
 select ok(
-  to_regprocedure('public.create_capture_with_job(jsonb)') is not null,
-  'atomic capture function exists'
+  to_regprocedure('public.create_capture_with_job(uuid,jsonb)') is not null,
+  'owner-bound atomic capture function exists'
+);
+select ok(
+  to_regprocedure(
+    'public.apply_delayed_organization_mutation(text,text,integer,jsonb,text)'
+  ) is null,
+  'the unfenced delayed organization signature is absent'
+);
+select ok(
+  to_regprocedure(
+    'public.apply_delayed_organization_mutation(text,uuid,text,integer,jsonb,text)'
+  ) is not null,
+  'the lease-token delayed organization signature exists'
 );
 select is(
   (
@@ -53,19 +65,19 @@ select is(
           'note_mutations', 'generated_blocks', 'capture_note_links',
           'routing_rules', 'review_items', 'note_chunks', 'tags', 'note_tags',
           'note_links', 'feedback_events', 'user_events',
-          'api_idempotency_records', 'organization_mutation_attempts',
+          'api_idempotency_records', 'organization_mutation_attempts', 'capture_receipts',
           'auth_otp_quota_events'
         ]
       )
       and relation.relrowsecurity
   ),
-  22::bigint,
+  23::bigint,
   'RLS is enabled on every exposed or service-owned table'
 );
 select is(
   (select count(*) from pg_policies where schemaname = 'public'),
-  22::bigint,
-  'the complete baseline policy set is installed'
+  20::bigint,
+  'the complete RPC-only capture, queue, and owner-scoped policy set is installed'
 );
 select ok(
   has_table_privilege('authenticated', 'public.notes', 'SELECT'),
@@ -96,12 +108,20 @@ select ok(
   'revision history rejects direct client deletes'
 );
 select ok(
-  has_function_privilege(
+  not has_function_privilege(
     'authenticated',
-    'public.create_capture_with_job(jsonb)',
+    'public.create_capture_with_job(uuid,jsonb)',
     'EXECUTE'
   ),
-  'authenticated users may execute the reviewed capture function'
+  'authenticated clients cannot bypass the owner-bound capture service'
+);
+select ok(
+  has_function_privilege(
+    'service_role',
+    'public.create_capture_with_job(uuid,jsonb)',
+    'EXECUTE'
+  ),
+  'the server service may execute the owner-bound capture function'
 );
 select ok(
   to_regprocedure('public.apply_user_note_mutation(text,integer,jsonb,text)') is not null,

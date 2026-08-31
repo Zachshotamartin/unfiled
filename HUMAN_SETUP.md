@@ -78,6 +78,44 @@ Complete these human validation items before treating Milestone 0 as approved:
 10. Run the recorded smoke checks against the preview URL before promoting.
 11. Add a custom domain only after name clearance.
 
+### Capture encryption and durable workflow
+
+1. Generate independent local or Preview-only content keys in a trusted terminal. Run the command twice and place each result directly into a password manager; do not paste either value into an issue, chat, commit, or shell argument:
+
+   ```bash
+   openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
+   ```
+
+2. For local development, add these server-only values to `apps/web/.env.local`:
+
+   ```dotenv
+   UNFILED_CONTENT_KEK_ID=local-content-kek-v1
+   UNFILED_CONTENT_KEK=<first-independent-base64url-value>
+   UNFILED_CONTENT_FINGERPRINT_KEY=<second-independent-base64url-value>
+   CRON_SECRET=<at-least-32-random-characters>
+   ```
+
+   The fingerprint key must remain stable through ordinary wrapping-key rotations. Never reuse it as the KEK. `UNFILED_CONTENT_RETIRED_KEKS` is only for a bounded, audited rewrap window and must not become an indefinite archive of old keys.
+
+3. Add independent Preview values interactively with `vercel env add UNFILED_CONTENT_KEK_ID preview`, `vercel env add UNFILED_CONTENT_KEK preview`, `vercel env add UNFILED_CONTENT_FINGERPRINT_KEY preview`, and `vercel env add CRON_SECRET preview`. Interactive entry keeps values out of shell history. The environment-backed resolver is restricted to local and isolated Preview data.
+4. Do not launch Production capture storage with a root KEK in Vercel environment variables. Production remains blocked until the checked-in managed KMS/HSM resolver, least-privilege decrypt identity, key-use audit trail, rotation runbook, and restore drill are complete. The final setup steps will identify the selected provider and exact commands when that adapter lands.
+5. Migration `20260830000012_durable_capture_workflow.sql` deliberately aborts with `legacy_capture_encryption_backfill_required` if an older environment contains capture text. For disposable Preview data, recreate the project. For data that must be retained, stop writes and use the audited backfill/verification tool delivered with the production key adapter; never edit the migration to discard or relabel plaintext.
+6. The checked-in Vercel Hobby schedule calls `/api/internal/captures/drain` daily at 03:07 UTC. `after()` and active clients provide normal prompt processing; the daily call is dormant-work recovery. On Vercel Pro or Enterprise, change only that capture schedule in `apps/web/vercel.json` to `* * * * *`, deploy, and confirm authenticated one-minute invocations. Hobby deployments reject schedules more frequent than daily.
+7. After deploying Preview, create one synthetic canary capture, wait for its Inbox receipt, and inspect the `captures` row with an authorized administrative session. `raw_text` must equal `[encrypted]`, the canary must not appear anywhere in the row or logs, `content_envelope.version` must equal `1`, and `content_fingerprint` must be a 64-character keyed digest. Public API responses must contain the authenticated plaintext only after owner authorization and must never contain the envelope, fingerprint, or key identifier.
+
+### Production managed KMS and isolated worker — wait for C.5 code
+
+These are account-bound steps for the repository owner. Do not perform them until the C.5a implementation supplies the exact generated policy files, environment names, and verification command; placeholder IAM policies are not safe enough for production.
+
+1. Create two Vercel projects from this repository: the interactive `apps/web` deployment and the separately deployed `apps/worker` organization/index runtime. Record their exact team, project, and Production environment OIDC subjects.
+2. In the selected AWS region, create independent customer-managed KMS keys/aliases for `ai_assisted` and `private_manual`. Enable rotation and CloudTrail data-event auditing.
+3. Create distinct AWS roles for the web API and worker. Bind each trust policy to its exact Vercel OIDC subject. The worker role receives only AI-assisted key permissions; the web role receives the owner-authorized key classes required by the interactive API. Neither role receives a static AWS access key.
+4. Configure the checked-in `@vercel/oidc-aws-credentials-provider` adapter in each Vercel project, then run the supplied role-separation probe. A direct private-manual decrypt attempt from the worker must be denied and logged.
+5. Configure alarms for denied/unusual KMS use, disable/deletion scheduling, and worker attempts against the private alias. Keep KMS key administrators separate from runtime decrypt principals.
+6. Complete the recorded outage, rotation/rewrap, restored-backup, and pre-cutover-backup-expiry drills before enabling `encrypted_only` or `contracted` in Production.
+
+Until those steps and C.5 pass, Unfiled may be shown as a portfolio work in progress but must not claim that the complete note library is encrypted or that private-manual mode is end-to-end encrypted.
+
 ### Preview release evidence
 
 These checks are intentionally human-owned until preview project credentials and a stable Vercel preview alias exist. The credential-free CI still runs the built-app/local-Supabase HTTP E2E; it does not claim browser, cloud-log, or performance coverage.
@@ -101,7 +139,7 @@ These checks are intentionally human-owned until preview project credentials and
 
 1. Use a production-mode preview with synthetic data and a cold browser profile. Record at least three runs each at desktop and mobile viewport sizes.
 2. Capture LCP, INP, CLS, route-transition timing, and the manual note create/update/search API p95. Keep cold-start samples visible rather than discarding them.
-3. When Milestone C adds `/captures`, add a 10 rps sustained smoke that asserts zero lost captures and records p95 acceptance latency. Do not report this capture target before the route exists.
+3. Run a 10 rps sustained `/api/v1/captures` smoke that asserts zero lost or duplicated captures and records p95 durable-acceptance latency. Use only synthetic content and verify the service-only Supabase capture RPCs are not callable with the test user's token.
 4. Attach traces or HAR files to the release evidence without authorization headers, cookies, note bodies, or provider keys.
 
 ## Apple and EAS
@@ -119,6 +157,15 @@ These checks are intentionally human-owned until preview project credentials and
 4. Create an EAS development build; the widget cannot run in Expo Go.
 5. Install on a physical iPhone running iOS 17 or newer and execute the full device matrix in `docs/BUILD_PLAN.md` section 0.11.
 6. Confirm each Release archive embeds and signs exactly one `QuickCaptureWidget.appex` with the same environment-specific App Group as its containing app.
+7. Expo Go is not a valid encryption test environment. SQLCipher is compiled through the native Expo SQLite plugin, so use a fresh development or Preview build after every encryption-plugin change.
+8. On a physical iPhone, complete this durable-capture matrix with a synthetic non-sensitive canary:
+   - submit in airplane mode, force-quit immediately after `Saved`, relaunch while still offline, then reconnect and verify one server capture and one receipt;
+   - lose the network response after server acceptance, force-quit, relaunch, and verify replay returns the original capture/job rather than duplicating either;
+   - expire the session, capture offline, verify `Waiting for sign-in`, sign in once, and verify automatic one-time sync;
+   - begin a widget draft, lock or terminate the app, reopen within 30 minutes, and verify the labeled unsaved draft returns;
+   - inspect the App Group container and widget snapshot. They may contain the schema version and pending count only, never capture text, note text, tokens, destinations, or receipts;
+   - delete a synced capture, relaunch offline and online, and verify no local ghost row or plaintext artifact reappears.
+9. Record `PRAGMA cipher_version`, the app build identifier, device/iOS version, and pass/fail evidence without recording the canary text or database key. A missing cipher version, readable database without the Keychain key, duplicate capture, lost draft, or Lock Screen content exposure blocks release.
 
 ## Android and store delivery
 
