@@ -10,29 +10,55 @@ type BoundaryRule = Readonly<{
   sourceRoots: readonly string[];
 }>;
 
+// Keep retired client runtimes forbidden even after their source tree is deleted. This prevents
+// server/domain packages from quietly reintroducing the superseded dependency boundary.
+const retiredClientDependencies = ["expo", "react-native", "@unfiled/mobile"] as const;
+
 const rules: Readonly<Record<string, BoundaryRule>> = Object.freeze({
   "packages/domain": {
-    forbidden: ["next", "expo", "react", "@supabase", "@vercel", "openai", "@anthropic-ai"],
+    forbidden: [
+      "next",
+      "react",
+      ...retiredClientDependencies,
+      "@supabase",
+      "@vercel",
+      "openai",
+      "@anthropic-ai"
+    ],
     sourceRoots: ["src"]
   },
   "packages/contracts": {
-    forbidden: ["next", "expo", "react", "@supabase", "@vercel", "openai", "@anthropic-ai"],
+    forbidden: [
+      "next",
+      "react",
+      ...retiredClientDependencies,
+      "@supabase",
+      "@vercel",
+      "openai",
+      "@anthropic-ai"
+    ],
     sourceRoots: ["src"]
   },
   "packages/ai-routing": {
-    forbidden: ["next", "expo", "react", "@supabase", "@vercel"],
+    forbidden: ["next", "react", ...retiredClientDependencies, "@supabase", "@vercel"],
     sourceRoots: ["src"]
   },
   "packages/key-management": {
-    forbidden: ["next", "expo", "react", "react-native", "@supabase", "openai", "@anthropic-ai"],
+    forbidden: [
+      "next",
+      "react",
+      ...retiredClientDependencies,
+      "@supabase",
+      "openai",
+      "@anthropic-ai"
+    ],
     sourceRoots: ["src"]
   },
   "packages/encrypted-aggregate": {
     forbidden: [
       "next",
-      "expo",
       "react",
-      "react-native",
+      ...retiredClientDependencies,
       "@supabase",
       "@vercel",
       "openai",
@@ -41,7 +67,7 @@ const rules: Readonly<Record<string, BoundaryRule>> = Object.freeze({
     sourceRoots: ["src"]
   },
   "apps/worker": {
-    forbidden: ["next", "expo", "react", "react-native", "@unfiled/web", "@unfiled/mobile"],
+    forbidden: ["next", "react", ...retiredClientDependencies, "@unfiled/web"],
     sourceRoots: ["src", "api"]
   }
 });

@@ -60,14 +60,14 @@ The milestone owner recorded the credential-free aggregate Gate 3 decision as gr
 | AES-256-GCM capture envelopes with owner/resource/version/kind binding and ciphertext-only active database persistence | implemented                                                    |
 | capture tables and storage RPCs denied to clients; verified Next API uses service-only owner-scoped RPCs               | implemented                                                    |
 | leased workflow claims, heartbeats, retry/recovery, dead-letter handling, receipts, and deletion scrubbing             | implemented                                                    |
-| Web Crypto-encrypted IndexedDB intents/outbox and SQLCipher mobile drafts/outbox                                       | pass; web 119 tests and mobile 86 tests                        |
+| Web Crypto-encrypted IndexedDB intents/outbox and native GRDB/SQLCipher drafts/outbox                                  | pass; covered by the web and native test suites                |
 | complete local pgTAP suite                                                                                             | pass; 18 files / 822 assertions                                |
-| aggregate format, lint, typecheck, coverage, build, OpenAPI, Expo/prebuild, database, and routing gates                | pass                                                           |
+| aggregate format, lint, typecheck, coverage, build, OpenAPI, native Xcode, database, and routing gates                 | pass                                                           |
 | frozen-lockfile install, production dependency audit, and built-app/local-Supabase HTTP E2E                            | pass; zero known production vulnerabilities                    |
 | responsive production UI and static assets                                                                             | pass at desktop and 390 px; no failed images                   |
-| focused widget tests, mobile typecheck/lint, and generated-project inspect gate                                        | pass                                                           |
-| CocoaPods/Swift bridge `UnfiledQuickCaptureBridge`; WidgetKit target `QuickCaptureWidget`                              | pass; distinct module names avoid the prior collision          |
-| unsigned `QuickCaptureWidget` target and full `UnfiledDev` workspace builds with selected Xcode 26.6                   | pass for the iPhone 17 Pro simulator only                      |
+| focused WidgetKit tests, Swift 6 checks, and generated-project/resource inspect gate                                   | pass                                                           |
+| GRDB with SQLCipher plus the WidgetKit/App Intents target `QuickCaptureWidget`                                         | pass; native dependencies and target boundaries are explicit   |
+| unsigned SwiftUI application and `QuickCaptureWidget` extension builds with selected Xcode 26.6                        | pass for the iPhone 17 Pro simulator only                      |
 | Apple signing/archive, physical iPhone SQLCipher/widget matrix, cloud canary/log audit, and preview performance        | pending human evidence in `HUMAN_SETUP.md`                     |
 | C.5a custody/expansion code                                                                                            | pass; 989 pgTAP + 12 Terraform tests; account evidence pending |
 | C.5b encrypted aggregate and managed adapters                                                                          | implemented; focused evidence recorded below                   |

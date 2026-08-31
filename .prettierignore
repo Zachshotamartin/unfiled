@@ -3,7 +3,5 @@ coverage
 dist
 node_modules
 pnpm-lock.yaml
-apps/mobile/ios
-apps/mobile/android
 design/brand
 results.sarif

@@ -56,9 +56,6 @@ jobs:
       - name: Check package boundaries and OpenAPI
         run: pnpm check:boundaries && pnpm check:openapi
 
-      - name: Check Expo dependency compatibility
-        run: pnpm check:expo
-
       - name: Typecheck
         run: pnpm typecheck
 
@@ -68,7 +65,7 @@ jobs:
       - name: Deterministic routing evaluation
         run: pnpm eval:routing
 
-      - name: Build web, mobile, and packages
+      - name: Build web, worker, and shared packages
         run: pnpm build
 
       - name: Install Supabase CLI
@@ -96,10 +93,10 @@ jobs:
         if: ${{ always() && steps.supabase-cli.outcome == 'success' }}
         run: supabase stop --no-backup
 
-  native-widget:
-    name: Native widget prebuild
+  native-ios:
+    name: iOS app and widget (unsigned simulator)
     runs-on: macos-15
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -113,28 +110,58 @@ jobs:
       - name: Use Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
-          cache: pnpm
+          node-version: 22.18.0
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Install XcodeGen
+        env:
+          XCODEGEN_VERSION: 2.46.0
+          XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
+        run: |
+          XCODEGEN_ARCHIVE="${RUNNER_TEMP}/xcodegen.zip"
+          XCODEGEN_INSTALL_ROOT="${RUNNER_TEMP}/xcodegen-${XCODEGEN_VERSION}"
+          curl --fail --location --retry 3 \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip" \
+            --output "${XCODEGEN_ARCHIVE}"
+          printf '%s  %s\n' "${XCODEGEN_SHA256}" "${XCODEGEN_ARCHIVE}" | shasum -a 256 --check -
+          unzip -q "${XCODEGEN_ARCHIVE}" -d "${XCODEGEN_INSTALL_ROOT}"
+          printf '%s\n' "${XCODEGEN_INSTALL_ROOT}/xcodegen/bin" >> "${GITHUB_PATH}"
 
-      - name: Verify Expo dependency compatibility
-        run: pnpm check:expo
+      - name: Report native toolchain
+        run: |
+          xcodebuild -version
+          xcodegen --version
+          swift --version
 
-      - name: Regenerate and inspect WidgetKit target twice
-        run: pnpm --filter @unfiled/mobile verify:widget-prebuild
-
-      - name: Compile WidgetKit target for the iOS simulator
+      - name: Declare credential and signing boundary
         run: >-
-          xcodebuild
-          -project apps/mobile/ios/UnfiledDev.xcodeproj
-          -target QuickCaptureWidget
-          -configuration Debug
-          -sdk iphonesimulator
-          CODE_SIGNING_ALLOWED=NO
-          CODE_SIGNING_REQUIRED=NO
-          build
+          echo "::notice::This lane validates an unsigned iOS Simulator build only.
+          It does not use Apple credentials, validate provisioning or App Groups on-device,
+          create an archive, or deploy to TestFlight or the App Store."
+
+      - name: Generate the Xcode project twice from the canonical manifest
+        run: |
+          pnpm ios:generate
+          pnpm ios:generate
+
+      - name: Inspect generated targets and capability wiring
+        run: pnpm ios:inspect
+
+      - name: Resolve the SQLCipher GRDB package graph
+        run: pnpm ios:resolve
+
+      - name: Require every generated project file to be current
+        run: |
+          UNFILED_GENERATED_STATUS="$(git status --porcelain --untracked-files=all -- apps/ios/Unfiled.xcodeproj)"
+          if [[ -n "${UNFILED_GENERATED_STATUS}" ]]; then
+            printf '%s\n' "${UNFILED_GENERATED_STATUS}"
+            exit 1
+          fi
+
+      - name: Build the SwiftUI app and WidgetKit App Intents extension
+        run: pnpm ios:build
+
+      - name: Run iOS unit tests in a simulator
+        run: pnpm ios:test
 
   infrastructure:
     name: KMS and workload policy
@@ -168,14 +195,14 @@ jobs:
   ci:
     name: CI
     if: always()
-    needs: [quality, native-widget, infrastructure]
+    needs: [quality, native-ios, infrastructure]
     runs-on: ubuntu-latest
     steps:
       - name: Require every CI lane
         env:
           INFRASTRUCTURE_RESULT: ${{ needs.infrastructure.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
-          NATIVE_RESULT: ${{ needs.native-widget.result }}
+          NATIVE_RESULT: ${{ needs.native-ios.result }}
         run: >-
           test "$QUALITY_RESULT" = success &&
           test "$NATIVE_RESULT" = success &&

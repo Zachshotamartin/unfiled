@@ -12,16 +12,14 @@ This file contains only steps that require a human account, physical device, pai
 
 ## Local prerequisites
 
-1. Install Node.js 22.18 or newer. Expo config imports the checked TypeScript native-identity source directly, which requires Node's stable type stripping.
+1. Install Node.js 22.18 or newer for the web, worker, shared packages, and repository checks.
 2. Install pnpm 10.14.0: `npm install --global pnpm@10.14.0`.
 3. Install Docker Desktop and start it before database commands.
-4. Install full Xcode from the Mac App Store. This machine has Xcode 26.6 installed and selected at `/Applications/Xcode.app/Contents/Developer`; on a new Mac, open Xcode once and select it with `sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`.
-5. Treat local unsigned simulator builds as code evidence only. They do not prove Apple signing, archive contents, App Group provisioning, installation, or behavior on a physical iPhone.
-6. Install an Android SDK through Android Studio for Android device builds.
-7. Copy `apps/mobile/.env.example` to `apps/mobile/.env.local`. Keep
-   `EXPO_PUBLIC_API_BASE_URL=http://localhost:3000` for the iOS Simulator; use
-   `http://10.0.2.2:3000` for the Android emulator, or an HTTPS LAN/tunnel URL reachable by
-   a physical phone. This value is a public origin, never a Supabase service key.
+4. Install full Xcode from the Mac App Store, open it once to accept its license and install an iOS Simulator runtime, then select it with `sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`. The current project targets iOS 17 and newer and is verified with Xcode 26.6.
+5. Install the repository-pinned XcodeGen 2.46.0 release. Generate `apps/ios/Unfiled.xcodeproj` from the checked-in `apps/ios/project.yml`; do not treat hand-edited generated project settings as source of truth. The generation script rejects other versions so a tool upgrade cannot silently rewrite the checked-in project.
+6. The Development scheme reads `http://127.0.0.1:3000/api/v1` from `apps/ios/Config/Development.xcconfig`; that loopback reaches the host only from the Simulator. Signed physical-device network tests use the Preview scheme and its reachable HTTPS `/api/v1` origin. Production uses its matching checked configuration. Never place a Supabase service key or another server secret in app configuration.
+7. Treat local and CI unsigned simulator builds as code evidence only. They do not prove Apple signing, archive contents, App Group provisioning, installation, Keychain/SQLCipher behavior, or widget behavior on a physical iPhone.
+8. Android is not part of this milestone. No Android SDK, application ID, credential, build, or store setup is required.
 
 ## Design-sprint evidence
 
@@ -219,7 +217,7 @@ production index jobs:
 3. Build the server-only pooler URI from Supabase's displayed transaction-pooler template using the
    exact custom role `unfiled_index_worker` and its prompted password. Do not improvise the hostname,
    project suffix, port, or CA. Add only that URI to the worker Production project as
-   `UNFILED_WORKER_DATABASE_URL`. It must not use an `EXPO_PUBLIC_`/`NEXT_PUBLIC_` name and must not
+   `UNFILED_WORKER_DATABASE_URL`. It must not use a client-exposed environment-variable prefix and must not
    be copied to the web project, Preview, logs, CI, Terraform, or source control. Do not add
    `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_SECRET_KEY`, any framework-prefixed equivalent, or an
    RLS-bypassing database URL to the worker.
@@ -307,9 +305,11 @@ These checks are intentionally human-owned until preview project credentials and
 3. Run a 10 rps sustained `/api/v1/captures` smoke that asserts zero lost or duplicated captures and records p95 durable-acceptance latency. Use only synthetic content and verify the service-only Supabase capture RPCs are not callable with the test user's token.
 4. Attach traces or HAR files to the release evidence without authorization headers, cookies, note bodies, or provider keys.
 
-## Apple and EAS
+## Apple signing, archive, and physical-device evidence
 
-1. Enroll in the Apple Developer Program and create an Expo/EAS account.
+The canonical phone implementation is `apps/ios`: a SwiftUI application plus a WidgetKit Lock Screen extension whose button invokes an App Intent. XcodeGen owns the generated project, and GRDB links its SQLCipher build through Swift Package Manager. Simulator compilation and tests do not require an Apple Developer account; every remaining step in this section is human-owned release evidence.
+
+1. Enroll in the Apple Developer Program before attempting a signed device build or archive.
 2. Register the explicit main and widget-extension App IDs, then register and attach the matching App Group to both IDs for every build environment:
 
    | Environment | Main App ID                           | Widget extension App ID                            | App Group                                   | URL scheme        |
@@ -318,25 +318,56 @@ These checks are intentionally human-owned until preview project credentials and
    | Preview     | `com.zachshotamartin.unfiled.preview` | `com.zachshotamartin.unfiled.preview.quickcapture` | `group.com.zachshotamartin.unfiled.preview` | `unfiled-preview` |
    | Production  | `com.zachshotamartin.unfiled`         | `com.zachshotamartin.unfiled.quickcapture`         | `group.com.zachshotamartin.unfiled`         | `unfiled`         |
 
-3. Run `eas credentials` only after all six App IDs and three App Groups exist so every main-app and extension provisioning profile contains its matching entitlement.
-4. Create an EAS development build; the widget cannot run in Expo Go.
-5. Install on a physical iPhone running iOS 17 or newer and execute the full device matrix in `docs/BUILD_PLAN.md` section 0.11.
-6. Confirm each Release archive embeds and signs exactly one `QuickCaptureWidget.appex` with the same environment-specific App Group as its containing app.
-7. Expo Go is not a valid encryption test environment. SQLCipher is compiled through the native Expo SQLite plugin, so use a fresh development or Preview build after every encryption-plugin change.
+3. Keep `DEVELOPMENT_TEAM` empty in the shared base configuration. For local signing, select the registered team in Xcode or pass the team identifier only in the trusted build invocation. Xcode's automatic signing must produce profiles whose main-app and widget entitlements both contain the exact App Group for that environment.
+4. Regenerate and verify the unsigned simulator project from the repository root. CI must run this same class of build with code signing disabled; it is not signing evidence:
+
+   ```bash
+   pnpm ios:ci
+   ```
+
+   The script selects an available iPhone Simulator. To pin one, set `UNFILED_IOS_TEST_DESTINATION` to an iOS 17-or-newer destination and record it with the evidence. A generated-project diff after clean generation must be reviewed like any other source change.
+
+5. After the identifiers, App Groups, and stable HTTPS preview deployment exist, create a signed Preview build for a physical iPhone. Supplying a team ID and allowing Xcode to update provisioning is an explicit trusted-machine action. Do not use the Development build for online device evidence: its loopback origin points back to the phone.
+
+   ```bash
+   xcodebuild \
+     -project apps/ios/Unfiled.xcodeproj \
+     -scheme "Unfiled Preview" \
+     -configuration Preview \
+     -destination 'generic/platform=iOS' \
+     DEVELOPMENT_TEAM='<APPLE_TEAM_ID>' \
+     -allowProvisioningUpdates \
+     build
+   ```
+
+6. Install on a physical iPhone running iOS 17 or newer and execute the full device matrix in `docs/BUILD_PLAN.md` section 0.11. Repeat the relevant checks on the oldest supported iOS release and the current release before submission.
+7. Create the Production archive only on a trusted signing machine, then inspect the archive before upload:
+
+   ```bash
+   xcodebuild \
+     -project apps/ios/Unfiled.xcodeproj \
+     -scheme Unfiled \
+     -configuration Release \
+     -destination 'generic/platform=iOS' \
+     -archivePath "$PWD/build/Unfiled.xcarchive" \
+     DEVELOPMENT_TEAM='<APPLE_TEAM_ID>' \
+     -allowProvisioningUpdates \
+     archive
+   ```
+
+   Confirm the archive embeds and signs exactly one `QuickCaptureWidget.appex`; the containing app and extension must have the expected Production application identifiers and the same Production App Group entitlement. An unsigned simulator artifact cannot satisfy this gate.
+
 8. On a physical iPhone, complete this durable-capture matrix with a synthetic non-sensitive canary:
    - submit in airplane mode, force-quit immediately after `Saved`, relaunch while still offline, then reconnect and verify one server capture and one receipt;
    - lose the network response after server acceptance, force-quit, relaunch, and verify replay returns the original capture/job rather than duplicating either;
    - expire the session, capture offline, verify `Waiting for sign-in`, sign in once, and verify automatic one-time sync;
-   - begin a widget draft, lock or terminate the app, reopen within 30 minutes, and verify the labeled unsaved draft returns;
-   - inspect the App Group container and widget snapshot. They may contain the schema version and pending count only, never capture text, note text, tokens, destinations, or receipts;
+   - tap both supported Lock Screen widget families and verify the App Intent opens a blank capture in Unfiled with the keyboard ready; the widget itself must never claim to accept free-form text in place;
+   - inspect the App Group container and widget snapshot. They may contain the schema version, pending count, and transient random intent nonce only—never capture text, note text, tokens, destinations, or receipts;
+   - queue a retry, background and lock the phone, and verify the foreground retry lifecycle stops; after unlocking and making the app active, verify it resumes and syncs exactly once;
+   - while locked, verify the session/database Keychain items and completely protected database file are unavailable to the app; after unlocking, verify the same database opens without replacement or data loss;
    - delete a synced capture, relaunch offline and online, and verify no local ghost row or plaintext artifact reappears.
-9. Record `PRAGMA cipher_version`, the app build identifier, device/iOS version, and pass/fail evidence without recording the canary text or database key. A missing cipher version, readable database without the Keychain key, duplicate capture, lost draft, or Lock Screen content exposure blocks release.
-
-## Android and store delivery
-
-1. Create the Android application ID `com.zachshotamartin.unfiled` in Google Play Console.
-2. Create EAS preview and production credentials.
-3. Complete privacy manifests, store disclosures, screenshots, support URL, deletion URL, and release notes before submission.
+9. Verify the local database is actually using SQLCipher through GRDB. Record `PRAGMA cipher_version`, the app build identifier, device/iOS version, and pass/fail evidence without recording the canary text or database key. Confirm the database is unreadable without its device Keychain key. Uninstall intentionally deletes the application container, SQLCipher database, drafts, and unsynced outbox; Keychain survival is an OS behavior and is not a recovery mechanism. After reinstall and sign-in, synced server content may rehydrate into a new local database, but an unsynced capture is not recoverable. Verify that exact model and that no stale/phantom outbox row returns. A missing cipher version, readable database without the Keychain key, duplicate capture, or Lock Screen content exposure blocks release.
+10. Create the App Store Connect record and complete the privacy manifest review, privacy and encryption/export-compliance disclosures, screenshots, support URL, deletion URL, TestFlight checks, and release notes before submission. No Android store work is in scope for this milestone.
 
 ## GitHub protection
 
