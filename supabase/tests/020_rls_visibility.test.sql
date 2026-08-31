@@ -262,7 +262,7 @@ values
     'accepted',
     null,
     'note_00000000000000000000000001',
-    'visibility-fixture',
+    'visibility_fixture',
     '2026-08-30 22:08:00+00'
   ),
   (
@@ -272,7 +272,7 @@ values
     'accepted',
     null,
     'note_00000000000000000000000009',
-    'visibility-fixture',
+    'visibility_fixture',
     '2026-08-30 22:08:00+00'
   );
 

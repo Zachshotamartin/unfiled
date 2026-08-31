@@ -146,6 +146,21 @@ describe("Quick Capture config plugin invariants", () => {
     expect(entitlements).toContain("__UNFILED_APP_GROUP_IDENTIFIER__");
   });
 
+  it("keeps the Expo bridge module distinct from the WidgetKit extension", async () => {
+    const bridgePodspec = await readFile(
+      path.join(
+        mobileRoot,
+        "modules",
+        "quick-capture-widget",
+        "ios",
+        "UnfiledQuickCaptureBridge.podspec"
+      ),
+      "utf8"
+    );
+    expect(bridgePodspec).toContain('spec.name = "UnfiledQuickCaptureBridge"');
+    expect(bridgePodspec).not.toContain(`spec.name = "${validOptions.targetName}"`);
+  });
+
   it("checks in a clean-prebuild-twice structural gate", async () => {
     const packageJson = JSON.parse(
       await readFile(path.join(mobileRoot, "package.json"), "utf8")
@@ -160,6 +175,7 @@ describe("Quick Capture config plugin invariants", () => {
     expect(verifier).toContain('"--clean"');
     expect(verifier).toContain('"--no-install"');
     expect(verifier.match(/runPrebuild\(\);/gu)).toHaveLength(2);
+    expect(verifier).toContain("Copy Files|Embed App Extensions");
     expect(verifier).toContain("the second clean prebuild changed the structural inventory");
   });
 });

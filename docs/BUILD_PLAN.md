@@ -2,7 +2,7 @@
 
 Product and repository name: **Unfiled**. Trademark, App Store, package-name, social-handle, and domain review remain required before public launch.
 
-Implementation status: **Milestones A, B, and the Milestone C credential-free Gate 3 are complete; C.5a custody/expansion is implemented in the current change set.** C.5a adds managed-key custody contracts, four AWS KMS root families and separate OIDC roles, an isolated AI-only worker, a dedicated non-bypass database identity with a six-RPC allowlist, an atomic service-only root-rewrap RPC, expand-only content envelopes, and content-free encrypted-RAG lifecycle tables. Account-bound Vercel/AWS/database, CloudTrail, rotation, and restore evidence remains a human gate and is not implied by the code. C.5b–d still have to dual-write/backfill, connect encrypted retrieval, cut over every read/write/search/export path, and remove plaintext contracts; the current manual-note library is therefore not fully encrypted.
+Implementation status: **Milestones A, B, and the Milestone C credential-free Gate 3 are complete; C.5a custody/expansion and the C.5b encrypted-aggregate code slice are implemented.** C.5b adds typed encrypted note/capture aggregates, reservation-bound envelope operations, request-MAC replay, service-only CAS/read/backfill capabilities, database-controlled rollout through `encrypted_read`, and managed adapters. Private-manual encrypted capture is executable, while a fresh AI-assisted write deliberately fails closed until C.5c supplies the organizer's atomic encrypted writer. The production repository factory has not switched to the new adapters. Account-bound Vercel/AWS/database, CloudTrail, rotation, restore, Apple signing, and physical-device evidence remains a human gate. C.5c retrieval/organizer integration and C.5d plaintext contraction remain launch-blocking, so the current product is not yet eligible for a complete encrypted-at-rest claim.
 
 This plan is the spine of a full documentation set; see [docs/README.md](./README.md) for reading order. Companion documents:
 
@@ -10,7 +10,7 @@ This plan is the spine of a full documentation set; see [docs/README.md](./READM
 - [AI_ROUTING_SPEC.md](./AI_ROUTING_SPEC.md): pipeline contracts, prompt, schemas, scoring, provider/effort settings, and evaluation corpus
 - [DATA_MODEL.md](./DATA_MODEL.md): full DDL, RLS policies, transactional functions, structured-data schemas, retention
 - [SECURITY_AND_PRIVACY.md](./SECURITY_AND_PRIVACY.md): threat model, BYOK key custody, disclosure, deletion pipeline, incident handling
-- [ENCRYPTION_ARCHITECTURE.md](./ENCRYPTION_ARCHITECTURE.md): implemented capture and C.5a custody/expansion foundations plus the remaining C.5b–d boundary
+- [ENCRYPTION_ARCHITECTURE.md](./ENCRYPTION_ARCHITECTURE.md): implemented capture, C.5a custody, and C.5b aggregate foundations plus the remaining C.5c/d boundary
 - [OPERATIONS_TEST_PLAN.md](./OPERATIONS_TEST_PLAN.md): environments, CI, enumerated test inventory, release checklists, backups, monitoring
 - [DESIGN_SYSTEM.md](./DESIGN_SYSTEM.md): tokens, components, states, accessibility rules (skeleton; completed during Milestone 0)
 - [BRAND_SYSTEM_UNFILED.md](./BRAND_SYSTEM_UNFILED.md): identity, voice, in-app, Lock Screen, signed-in web, and marketing-site application
@@ -140,7 +140,9 @@ apps/mobile/
       QuickCaptureWidget.entitlements
   modules/
     quick-capture-widget/
-      ios/QuickCaptureWidgetModule.swift
+      ios/
+        QuickCaptureWidgetModule.swift
+        UnfiledQuickCaptureBridge.podspec
       src/index.ts
   src/app/
     capture.tsx
@@ -309,7 +311,7 @@ Implementation rules:
 
 ### 0.8 App Group bridge and widget refresh
 
-Create a tiny Expo native module named `QuickCaptureWidgetModule`. Its public JavaScript API is deliberately narrow:
+Create a tiny Expo native bridge. Its CocoaPods pod and Swift module are named `UnfiledQuickCaptureBridge` so they cannot collide with the `QuickCaptureWidget` extension target. The Expo entry class remains `QuickCaptureWidgetModule` and registers the JavaScript module as `QuickCaptureWidget`. Its public JavaScript API is deliberately narrow:
 
 ```ts
 type WidgetSnapshot = {
@@ -2027,7 +2029,7 @@ Gate:
 
 ### Milestone C: Durable capture, Lock Screen entry, and receipt, 2-3 weeks
 
-**Implementation status (2026-08-30):** the credential-free Gate 3 is recorded green. The final local database gate applied every migration from zero with zero lint findings and passed 18 pgTAP files / 822 assertions; the aggregate code, coverage, build, dependency, HTTP E2E, static-asset, and responsive visual checks also passed. The generated widget target and application code do not substitute for Apple signing, a physical-device SQLCipher/widget matrix, an extension archive inspection, or cloud-preview canary/performance evidence; those remain pending in [HUMAN_SETUP.md](../HUMAN_SETUP.md).
+**Implementation status (2026-08-31):** the credential-free Gate 3 is recorded green. Its final local database gate applied every migration from zero with zero lint findings and passed 18 pgTAP files / 822 assertions; the aggregate code, coverage, build, dependency, HTTP E2E, static-asset, and responsive visual checks also passed. Focused widget tests, mobile typecheck/lint, and the generated-project inspect gate passed. With Xcode 26.6 selected, unsigned builds of both the `QuickCaptureWidget` target and the full `UnfiledDev` workspace passed for the iPhone 17 Pro simulator. Renaming the Expo bridge pod/Swift module to `UnfiledQuickCaptureBridge` fixed its CocoaPods module collision while preserving `QuickCaptureWidget` as the WidgetKit target. This local simulator evidence does not substitute for Apple signing, a physical-device SQLCipher/widget matrix, an extension archive inspection, or cloud-preview canary/performance evidence; those remain pending in [HUMAN_SETUP.md](../HUMAN_SETUP.md).
 
 Deliver:
 
@@ -2053,15 +2055,15 @@ Gate:
 
 ### Milestone C.5: Encrypted Library + Private RAG, 2-3 weeks
 
-This security milestone is a hard prerequisite for Milestone D. It implements [ADR-0006](./decisions/ADR-0006-application-encrypted-library-and-private-rag.md) and [ADR-0007](./decisions/ADR-0007-dedicated-worker-database-capability-and-root-rewrap.md); until the complete C.5 gate is green, documentation and product copy must not claim that the note library is fully encrypted.
+This security milestone is a hard prerequisite for Milestone D. It implements [ADR-0006](./decisions/ADR-0006-application-encrypted-library-and-private-rag.md), [ADR-0007](./decisions/ADR-0007-dedicated-worker-database-capability-and-root-rewrap.md), and [ADR-0008](./decisions/ADR-0008-encrypted-aggregate-rollout-and-replay.md); until the complete C.5 gate is green, documentation and product copy must not claim that the note library is fully encrypted.
 
-Current status: C.5a's credential-free custody/expansion implementation is present. The production account evidence in `HUMAN_SETUP.md` is still pending, and C.5b, C.5c, and C.5d remain open and launch-blocking. The expand-only migration deliberately preserves the legacy plaintext columns and existing read paths.
+Current status: C.5a's credential-free custody/expansion boundary and the C.5b encrypted aggregate/managed-adapter implementation are present. C.5b has local focused evidence for the aggregate contracts, note security boundary, adversarial repository mapping, and full database suite. The production factory is still on the legacy repository; the new rollout has not been enabled for a production owner. A private-manual encrypted capture is executable, but a fresh AI-assisted capture intentionally fails closed with `encrypted_organizer_write_unavailable` until C.5c adds the organizer's atomic encrypted writer. C.5c and C.5d, plus the production account evidence in `HUMAN_SETUP.md`, remain open and launch-blocking. Legacy plaintext columns and read/search paths are deliberately preserved for C.5d contraction.
 
 Deliver:
 
 - **C.5a custody/expansion — implemented in code, account evidence pending:** a production managed-KMS resolver using short-lived workload identity; independent object-wrap/content-MAC purposes; per-user intermediate keys; owner/class/purpose/key-bound resolution; and separate AI-assisted/private key classes
 - a separately deployed `apps/worker` Vercel project with an exact OIDC subject and AI-only AWS role; a dedicated `unfiled_index_worker` database role that starts `NOLOGIN`/`NOBYPASSRLS` with exactly six RAG RPCs and no table or administrative capability; and a distinct interactive web/API subject, role, and service-only root-rewrap CAS path. The current same-deployment `after()`/cron organizer is retired before production isolation is claimed
-- **C.5b encrypted aggregate:** server-side domain operations plus service-only envelope/CAS RPCs and a database rollout state `expanded → dual_write → encrypted_read → encrypted_only → contracted`
+- **C.5b encrypted aggregate — implemented in code, production wiring pending:** server-side domain operations plus service-only envelope/CAS RPCs and a database rollout state `expanded → dual_write → encrypted_read → encrypted_only → contracted`; this slice implements only the safe transitions through `encrypted_read`, while C.5d owns `encrypted_only` and `contracted`
 - versioned AES-256-GCM envelopes for note title/body/structured data, revisions, generated blocks, organization/review payloads, mutation and idempotency snapshots, and routing-rule content
 - server-side typed mutation/CAS/idempotency RPCs that atomically persist encrypted current state, history, receipts, and a content-free index job
 - a resumable expand/backfill/verify/cutover/contract migration that removes legacy plaintext columns, functions, indexes, and `note_chunks`
@@ -2072,6 +2074,8 @@ Deliver:
 - **C.5d cutover/contract:** encrypted read/write/search/export/retention paths, authenticated `POST` search bodies, `no-store` responses, plaintext contract removal, and canary verification
 - owner-authorized streaming export, live-data deletion, backup-expiry handling, rotation/rewrap, restore, and reindex runbooks
 - client note caches that preserve the existing mobile SQLCipher and encrypted IndexedDB boundaries
+
+C.5b's established local evidence is 93/93 `@unfiled/encrypted-aggregate` tests, 38/38 focused note read/write/coordinator security tests, 14/14 adversarial note aggregate repository tests, and 20 database files / 1,091 assertions, including 101/101 assertions for `073_encrypted_aggregate_dual_write.test.sql`. These are code and local-database results, not production KMS, CloudTrail, database-login, Apple-signing, physical-device, or backup-restore evidence.
 
 Gate:
 

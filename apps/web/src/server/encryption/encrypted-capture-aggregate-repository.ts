@@ -1,0 +1,725 @@
+import {
+  CaptureCreateRequestSchema,
+  CaptureCreateResponseSchema,
+  CaptureDetailResponseSchema,
+  CaptureListQuerySchema,
+  CaptureListResponseSchema,
+  CaptureReceiptResponseSchema,
+  CaptureReceiptSchema,
+  createEntityId,
+  parseEntityId,
+  type Capture,
+  type CaptureCreateResponse,
+  type CaptureDetailResponse,
+  type CaptureListQuery,
+  type CaptureListResponse,
+  type CaptureReceipt,
+  type CaptureReceiptContent,
+  type CaptureReceiptResponse,
+  type CaptureSummary,
+  type EntityId
+} from "@unfiled/contracts";
+import {
+  CapturePayloadSchema,
+  CaptureReceiptPayloadSchema,
+  encryptedFieldForRpc,
+  keyedMacForRpc,
+  type AuthorizedOwnerAccess,
+  type CaptureReceiptPayload,
+  type EncryptedAggregateService,
+  type EncryptedFieldRpcValue,
+  type KeyedMacRpcValue
+} from "@unfiled/encrypted-aggregate";
+
+import type {
+  CaptureRepository,
+  CaptureRepositoryContext,
+  NormalizedCaptureCreateInput,
+  NormalizedCaptureDeleteInput
+} from "@/server/captures/repository";
+
+import {
+  encryptedCaptureTimestampMicros,
+  type EncryptedCaptureDetailRead,
+  type EncryptedCaptureRead,
+  type EncryptedCaptureReceiptRead,
+  type EncryptedCaptureRpcAdapter
+} from "./encrypted-capture-rpc-adapter";
+import { ServiceRpcError, ServiceRpcErrorCode } from "./service-rpc-client";
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const DEVICE_ID_PATTERN = /^(?:|[A-Za-z0-9][A-Za-z0-9._:-]{0,119})$/u;
+const TIMEZONE_PATTERN = /^(?:UTC|[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+){1,3})$/u;
+const MAX_CAPTURE_SCAN = 10_000;
+const READ_BATCH_SIZE = 100;
+const GENERATED_BLOCK_BATCH_SIZE = 100;
+
+export const EncryptedCaptureUnavailableOperation = Object.freeze({
+  DELETE: "delete",
+  RETRY: "retry"
+} as const);
+
+export type EncryptedCaptureUnavailableOperationValue =
+  (typeof EncryptedCaptureUnavailableOperation)[keyof typeof EncryptedCaptureUnavailableOperation];
+
+export class EncryptedCaptureOperationUnavailableError extends Error {
+  public readonly code = "encrypted_capture_operation_unavailable" as const;
+
+  public constructor(public readonly operation: EncryptedCaptureUnavailableOperationValue) {
+    super("That encrypted capture operation is not available yet");
+    this.name = "EncryptedCaptureOperationUnavailableError";
+  }
+}
+
+export type EncryptedCaptureAggregateRepositoryDependencies = Readonly<{
+  ownerId: string;
+  access: AuthorizedOwnerAccess;
+  aggregate: EncryptedAggregateService;
+  adapter: EncryptedCaptureRpcAdapter;
+  createJobId?: () => EntityId<"job">;
+  now?: () => Date;
+}>;
+
+type OpenedCapture = Readonly<{
+  row: EncryptedCaptureRead;
+  rawContent: string;
+}>;
+
+type ContractSchema<Value> = Readonly<{
+  safeParse(
+    value: unknown
+  ): Readonly<{ success: true; data: Value }> | Readonly<{ success: false }>;
+}>;
+
+function unavailable(): never {
+  throw new ServiceRpcError(ServiceRpcErrorCode.PROVIDER_UNAVAILABLE);
+}
+
+function invalidInput(): never {
+  throw new ServiceRpcError(ServiceRpcErrorCode.VALIDATION_FAILED);
+}
+
+function invalidIdempotency(): never {
+  throw new ServiceRpcError(ServiceRpcErrorCode.INVALID_IDEMPOTENCY_KEY);
+}
+
+function contract<Value>(schema: ContractSchema<Value>, value: unknown): Value {
+  const parsed = schema.safeParse(value);
+  return parsed.success ? parsed.data : unavailable();
+}
+
+function exactOwnerId(value: string, failure: () => never): string {
+  if (!UUID_PATTERN.test(value)) return failure();
+  return value.toLowerCase();
+}
+
+function assertEntity<Kind extends "cap" | "job">(
+  value: string,
+  kind: Kind,
+  failure: () => never
+): EntityId<Kind> {
+  try {
+    parseEntityId(value, kind);
+  } catch {
+    return failure();
+  }
+  return value as EntityId<Kind>;
+}
+
+function sameInstant(left: string, right: string): boolean {
+  return (
+    encryptedCaptureTimestampMicros(left, invalidInput) ===
+    encryptedCaptureTimestampMicros(right, invalidInput)
+  );
+}
+
+function sameStringArray(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function parseCreateInput(input: NormalizedCaptureCreateInput): NormalizedCaptureCreateInput {
+  const parsed = CaptureCreateRequestSchema.safeParse(input);
+  if (!parsed.success) return invalidInput();
+  const deviceId = parsed.data.deviceId ?? "";
+  if (
+    !DEVICE_ID_PATTERN.test(deviceId) ||
+    parsed.data.clientTimezone.length > 64 ||
+    !TIMEZONE_PATTERN.test(parsed.data.clientTimezone)
+  )
+    return invalidInput();
+  encryptedCaptureTimestampMicros(parsed.data.clientCreatedAt, invalidInput);
+  return Object.freeze({
+    clientCaptureId: parsed.data.clientCaptureId,
+    rawContent: parsed.data.rawContent,
+    source: parsed.data.source,
+    ...(parsed.data.deviceId === undefined ? {} : { deviceId: parsed.data.deviceId }),
+    clientCreatedAt: parsed.data.clientCreatedAt,
+    clientTimezone: parsed.data.clientTimezone,
+    privacy: parsed.data.privacy,
+    ...(parsed.data.explicitDestinationNoteId === undefined
+      ? {}
+      : { explicitDestinationNoteId: parsed.data.explicitDestinationNoteId }),
+    expansionDisabled: parsed.data.expansionDisabled
+  });
+}
+
+function decodeCursor(value: string | undefined): Readonly<{
+  receivedAt: string;
+  captureId: EntityId<"cap">;
+}> | null {
+  if (value === undefined) return null;
+  if (value.length < 1 || value.length > 512) return invalidInput();
+  let decoded: string;
+  try {
+    const buffer = Buffer.from(value, "base64");
+    if (buffer.toString("base64") !== value) return invalidInput();
+    decoded = buffer.toString("utf8");
+  } catch {
+    return invalidInput();
+  }
+  let candidate: unknown;
+  try {
+    candidate = JSON.parse(decoded) as unknown;
+  } catch {
+    return invalidInput();
+  }
+  if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
+    return invalidInput();
+  }
+  const record = candidate as Readonly<Record<string, unknown>>;
+  const keys = Object.keys(record).sort();
+  if (
+    keys.length !== 2 ||
+    keys[0] !== "id" ||
+    keys[1] !== "receivedAt" ||
+    typeof record.receivedAt !== "string" ||
+    typeof record.id !== "string"
+  ) {
+    return invalidInput();
+  }
+  encryptedCaptureTimestampMicros(record.receivedAt, invalidInput);
+  return Object.freeze({
+    receivedAt: record.receivedAt,
+    captureId: assertEntity(record.id, "cap", invalidInput)
+  });
+}
+
+function encodeCursor(capture: EncryptedCaptureRead): string {
+  const value = Buffer.from(
+    JSON.stringify({
+      receivedAt: capture.receivedAt,
+      id: capture.captureId
+    }),
+    "utf8"
+  ).toString("base64");
+  if (value.length > 512) return unavailable();
+  return value;
+}
+
+function matchesQuery(row: EncryptedCaptureRead, query: CaptureListQuery): boolean {
+  const createdAt = encryptedCaptureTimestampMicros(row.clientCreatedAt, unavailable);
+  return (
+    (query.status === undefined || row.status === query.status) &&
+    (query.from === undefined ||
+      createdAt >= encryptedCaptureTimestampMicros(query.from, invalidInput)) &&
+    (query.to === undefined || createdAt < encryptedCaptureTimestampMicros(query.to, invalidInput))
+  );
+}
+
+function publicCapture(row: EncryptedCaptureRead, rawContent: string): Capture {
+  return Object.freeze({
+    id: row.captureId,
+    rawContent,
+    source: row.source,
+    deviceId: row.deviceId,
+    privacy: row.privacy,
+    explicitDestinationNoteId: row.explicitDestinationNoteId,
+    expansionDisabled: row.expansionDisabled,
+    clientCreatedAt: row.clientCreatedAt,
+    clientTimezone: row.clientTimezone,
+    receivedAt: row.receivedAt,
+    status: row.status,
+    lastErrorCode: row.lastErrorCode
+  });
+}
+
+function acceptedCapture(opened: OpenedCapture): CaptureCreateResponse["capture"] {
+  return Object.freeze({
+    ...publicCapture(opened.row, opened.rawContent),
+    status: "queued" as const,
+    lastErrorCode: null
+  });
+}
+
+function sameCreateIntent(opened: OpenedCapture, input: NormalizedCaptureCreateInput): boolean {
+  return (
+    opened.row.captureId === input.clientCaptureId &&
+    opened.rawContent === input.rawContent &&
+    opened.row.contentLength === input.rawContent.length &&
+    opened.row.source === input.source &&
+    opened.row.deviceId === (input.deviceId ?? "") &&
+    sameInstant(opened.row.clientCreatedAt, input.clientCreatedAt) &&
+    opened.row.clientTimezone === input.clientTimezone &&
+    opened.row.privacy === input.privacy &&
+    opened.row.explicitDestinationNoteId === (input.explicitDestinationNoteId ?? null) &&
+    opened.row.expansionDisabled === input.expansionDisabled
+  );
+}
+
+function receiptMatchesProjection(
+  payload: CaptureReceiptPayload,
+  row: EncryptedCaptureReceiptRead
+): boolean {
+  return (
+    payload.captureId === row.captureId &&
+    payload.jobId === row.jobId &&
+    payload.decisionId === row.decisionId &&
+    payload.reviewItemId === row.reviewItemId &&
+    payload.mutationId === row.mutationId &&
+    payload.outcome === row.outcome &&
+    payload.destination?.noteId === (row.destinationNoteId ?? undefined) &&
+    sameStringArray(payload.reasonCodes, row.reasonCodes) &&
+    sameInstant(payload.createdAt, row.createdAt)
+  );
+}
+
+export class EncryptedCaptureAggregateRepository implements CaptureRepository {
+  private readonly ownerId: string;
+  private readonly createJobId: () => EntityId<"job">;
+  private readonly now: () => Date;
+
+  public constructor(
+    private readonly dependencies: EncryptedCaptureAggregateRepositoryDependencies
+  ) {
+    this.ownerId = exactOwnerId(dependencies.ownerId, invalidInput);
+    this.createJobId = dependencies.createJobId ?? (() => createEntityId("job"));
+    this.now = dependencies.now ?? (() => new Date());
+  }
+
+  private assertContext(context: CaptureRepositoryContext): void {
+    if (exactOwnerId(context.userId, invalidInput) !== this.ownerId) {
+      throw new ServiceRpcError(ServiceRpcErrorCode.FORBIDDEN);
+    }
+  }
+
+  private async openCapture(row: EncryptedCaptureRead): Promise<OpenedCapture> {
+    const payload = await this.dependencies.aggregate.openCapture(
+      this.dependencies.access,
+      Object.freeze({ encrypted: row.contentCipher, contentMac: row.contentMac }),
+      { captureId: row.captureId, recordVersion: row.recordVersion, privacy: row.privacy }
+    );
+    if (payload.rawContent.length !== row.contentLength) return unavailable();
+    return Object.freeze({ row, rawContent: payload.rawContent });
+  }
+
+  private async findExisting(captureId: EntityId<"cap">): Promise<OpenedCapture | null> {
+    try {
+      const detail = await this.dependencies.adapter.getCaptureDetail({
+        ownerId: this.ownerId,
+        captureId
+      });
+      return await this.openCapture(detail);
+    } catch (error: unknown) {
+      if (error instanceof ServiceRpcError && error.code === ServiceRpcErrorCode.NOT_FOUND) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  private replayResponse(
+    opened: OpenedCapture,
+    input: NormalizedCaptureCreateInput
+  ): CaptureCreateResponse {
+    if (!sameCreateIntent(opened, input)) return invalidIdempotency();
+    return contract(CaptureCreateResponseSchema, {
+      capture: acceptedCapture(opened),
+      jobId: opened.row.jobId,
+      replayed: true
+    });
+  }
+
+  public async createCapture(
+    context: CaptureRepositoryContext,
+    inputValue: NormalizedCaptureCreateInput
+  ): Promise<CaptureCreateResponse> {
+    this.assertContext(context);
+    const input = parseCreateInput(inputValue);
+    const existing = await this.findExisting(input.clientCaptureId);
+    if (existing !== null) return this.replayResponse(existing, input);
+
+    const occurredDate = this.now();
+    if (!(occurredDate instanceof Date) || !Number.isFinite(occurredDate.valueOf())) {
+      return unavailable();
+    }
+    const occurredAt = occurredDate.toISOString();
+    const jobId = assertEntity(this.createJobId(), "job", unavailable);
+    const capturePayload = CapturePayloadSchema.parse({
+      schemaVersion: 1,
+      rawContent: input.rawContent
+    });
+    const sealedCapture = await this.dependencies.aggregate.sealCapture(this.dependencies.access, {
+      captureId: input.clientCaptureId,
+      recordVersion: 1,
+      privacy: input.privacy,
+      payload: capturePayload
+    });
+    const openedCapture = await this.dependencies.aggregate.openCapture(
+      this.dependencies.access,
+      sealedCapture,
+      { captureId: input.clientCaptureId, recordVersion: 1, privacy: input.privacy }
+    );
+    if (openedCapture.rawContent !== input.rawContent) return unavailable();
+
+    let privateReceiptCipher: EncryptedFieldRpcValue<"capture_receipt"> | null = null;
+    let privateReceiptVerificationMac: KeyedMacRpcValue | null = null;
+    if (input.privacy === "private_manual") {
+      const receiptPayload = CaptureReceiptPayloadSchema.parse({
+        schemaVersion: 1,
+        captureId: input.clientCaptureId,
+        jobId,
+        decisionId: null,
+        reviewItemId: null,
+        mutationId: null,
+        outcome: "kept_in_inbox",
+        headline: "Kept private in Inbox",
+        destination: null,
+        insertedContentReferences: [],
+        actions: [],
+        reasonCodes: ["private_manual"],
+        createdAt: occurredAt
+      });
+      const receiptInput = Object.freeze({
+        captureId: input.clientCaptureId,
+        recordVersion: 1,
+        sourcePrivacy: input.privacy,
+        payload: receiptPayload
+      });
+      const sealedReceipt = await this.dependencies.aggregate.sealCaptureReceipt(
+        this.dependencies.access,
+        receiptInput
+      );
+      const [openedReceipt, receiptVerificationMac] = await Promise.all([
+        this.dependencies.aggregate.openCaptureReceipt(
+          this.dependencies.access,
+          sealedReceipt,
+          receiptInput
+        ),
+        this.dependencies.aggregate.createAggregateVerificationMac(this.dependencies.access, {
+          surface: "capture_receipt",
+          ...receiptInput
+        })
+      ]);
+      const verificationValid = await this.dependencies.aggregate.verifyAggregateVerificationMac(
+        this.dependencies.access,
+        receiptVerificationMac,
+        { surface: "capture_receipt", ...receiptInput }
+      );
+      if (
+        !verificationValid ||
+        !receiptMatchesProjection(openedReceipt, {
+          captureId: input.clientCaptureId,
+          recordVersion: 1,
+          privacy: input.privacy,
+          jobId,
+          decisionId: null,
+          reviewItemId: null,
+          mutationId: null,
+          outcome: "kept_in_inbox",
+          destinationNoteId: null,
+          reasonCodes: ["private_manual"],
+          createdAt: occurredAt,
+          receiptCipher: sealedReceipt
+        })
+      )
+        return unavailable();
+      privateReceiptCipher = encryptedFieldForRpc(sealedReceipt);
+      privateReceiptVerificationMac = keyedMacForRpc(receiptVerificationMac);
+    }
+
+    try {
+      const result = await this.dependencies.adapter.createCapture({
+        ownerId: this.ownerId,
+        capture: {
+          clientCaptureId: input.clientCaptureId,
+          jobId,
+          occurredAt,
+          contentCipher: encryptedFieldForRpc(sealedCapture.encrypted),
+          contentMac: keyedMacForRpc(sealedCapture.contentMac),
+          contentLength: input.rawContent.length,
+          source: input.source,
+          deviceId: input.deviceId ?? "",
+          clientCreatedAt: input.clientCreatedAt,
+          clientTimezone: input.clientTimezone,
+          privacy: input.privacy,
+          explicitDestinationNoteId: input.explicitDestinationNoteId ?? null,
+          expansionDisabled: input.expansionDisabled,
+          privateReceiptCipher,
+          privateReceiptVerificationMac
+        }
+      });
+      if (result.replayed) {
+        const replay = await this.findExisting(input.clientCaptureId);
+        return replay === null ? unavailable() : this.replayResponse(replay, input);
+      }
+      const accepted: OpenedCapture = Object.freeze({
+        row: Object.freeze({
+          captureId: input.clientCaptureId,
+          recordVersion: 1,
+          jobId,
+          source: input.source,
+          deviceId: input.deviceId ?? "",
+          contentLength: input.rawContent.length,
+          privacy: input.privacy,
+          explicitDestinationNoteId: input.explicitDestinationNoteId ?? null,
+          expansionDisabled: input.expansionDisabled,
+          clientCreatedAt: input.clientCreatedAt,
+          clientTimezone: input.clientTimezone,
+          receivedAt: occurredAt,
+          status: "queued",
+          lastErrorCode: null,
+          contentCipher: sealedCapture.encrypted,
+          contentMac: sealedCapture.contentMac,
+          receiptAvailable: false
+        }),
+        rawContent: input.rawContent
+      });
+      return contract(CaptureCreateResponseSchema, {
+        capture: acceptedCapture(accepted),
+        jobId,
+        replayed: false
+      });
+    } catch (error: unknown) {
+      if (
+        !(error instanceof ServiceRpcError) ||
+        error.code !== ServiceRpcErrorCode.INVALID_IDEMPOTENCY_KEY
+      )
+        throw error;
+      const raced = await this.findExisting(input.clientCaptureId);
+      return raced === null ? Promise.reject(error) : this.replayResponse(raced, input);
+    }
+  }
+
+  public async listCaptures(
+    context: CaptureRepositoryContext,
+    queryValue: CaptureListQuery
+  ): Promise<CaptureListResponse> {
+    this.assertContext(context);
+    const parsed = CaptureListQuerySchema.safeParse(queryValue);
+    if (!parsed.success) return invalidInput();
+    const query = parsed.data;
+    let cursor = decodeCursor(query.cursor);
+    const matching: EncryptedCaptureRead[] = [];
+    let scanned = 0;
+    let exhausted = false;
+    while (matching.length < query.limit + 1 && !exhausted) {
+      const page = await this.dependencies.adapter.listCaptures({
+        ownerId: this.ownerId,
+        cursor,
+        limit: READ_BATCH_SIZE
+      });
+      scanned += page.captures.length;
+      if (scanned > MAX_CAPTURE_SCAN) return unavailable();
+      for (const row of page.captures) {
+        if (matchesQuery(row, query)) matching.push(row);
+        if (matching.length >= query.limit + 1) break;
+      }
+      exhausted = page.captures.length < READ_BATCH_SIZE;
+      if (!exhausted) {
+        if (page.nextCursor === null) return unavailable();
+        cursor = page.nextCursor;
+      }
+    }
+    const hasMore = matching.length > query.limit;
+    const visibleRows = matching.slice(0, query.limit);
+    const opened = await Promise.all(visibleRows.map((row) => this.openCapture(row)));
+    const items: CaptureSummary[] = opened.map(({ row, rawContent }) => ({
+      id: row.captureId,
+      jobId: row.jobId,
+      rawContentPreview: rawContent.trim().slice(0, 280),
+      source: row.source,
+      privacy: row.privacy,
+      clientCreatedAt: row.clientCreatedAt,
+      receivedAt: row.receivedAt,
+      status: row.status,
+      lastErrorCode: row.lastErrorCode,
+      receiptAvailable: row.receiptAvailable
+    }));
+    let nextCursor: string | null = null;
+    if (hasMore) {
+      const lastVisible = visibleRows.at(-1);
+      if (lastVisible === undefined) return unavailable();
+      nextCursor = encodeCursor(lastVisible);
+    }
+    return contract(CaptureListResponseSchema, {
+      items,
+      pageInfo: { hasMore, nextCursor }
+    });
+  }
+
+  private async openReceipt(
+    row: EncryptedCaptureReceiptRead,
+    knownCapture?: OpenedCapture
+  ): Promise<CaptureReceipt> {
+    const payload = await this.dependencies.aggregate.openCaptureReceipt(
+      this.dependencies.access,
+      row.receiptCipher,
+      { captureId: row.captureId, recordVersion: row.recordVersion, sourcePrivacy: row.privacy }
+    );
+    if (!receiptMatchesProjection(payload, row)) return unavailable();
+
+    let capture = knownCapture;
+    if (
+      payload.insertedContentReferences.some((reference) => reference.type === "captured") &&
+      capture === undefined
+    ) {
+      const detail = await this.dependencies.adapter.getCaptureDetail({
+        ownerId: this.ownerId,
+        captureId: row.captureId
+      });
+      capture = await this.openCapture(detail);
+    }
+    if (
+      capture !== undefined &&
+      (capture.row.captureId !== row.captureId ||
+        capture.row.jobId !== row.jobId ||
+        capture.row.privacy !== row.privacy)
+    )
+      return unavailable();
+
+    const blockIds = [
+      ...new Set(
+        payload.insertedContentReferences.flatMap((reference) =>
+          reference.type === "ai_generated" ? [reference.blockId] : []
+        )
+      )
+    ];
+    const blocks = new Map<EntityId<"blk">, string>();
+    for (let offset = 0; offset < blockIds.length; offset += GENERATED_BLOCK_BATCH_SIZE) {
+      const batch = blockIds.slice(offset, offset + GENERATED_BLOCK_BATCH_SIZE);
+      const rows = await this.dependencies.adapter.getGeneratedBlocks({
+        ownerId: this.ownerId,
+        blockIds: batch
+      });
+      const opened = await Promise.all(
+        rows.map(async (block) => {
+          if (
+            payload.decisionId === null ||
+            block.decisionId !== payload.decisionId ||
+            block.noteId !== payload.destination?.noteId
+          ) {
+            return unavailable();
+          }
+          const value = await this.dependencies.aggregate.openGeneratedBlock(
+            this.dependencies.access,
+            block.contentCipher,
+            { blockId: block.blockId }
+          );
+          return Object.freeze({ blockId: block.blockId, content: value.content });
+        })
+      );
+      for (const block of opened) blocks.set(block.blockId, block.content);
+    }
+
+    const insertedContent: CaptureReceiptContent[] = payload.insertedContentReferences.map(
+      (reference) => {
+        if (reference.type === "captured") {
+          if (capture === undefined) return unavailable();
+          return Object.freeze({
+            type: "captured" as const,
+            itemId: reference.itemId,
+            content: capture.rawContent
+          });
+        }
+        const content = blocks.get(reference.blockId);
+        if (content === undefined) return unavailable();
+        return Object.freeze({
+          type: "ai_generated" as const,
+          blockId: reference.blockId,
+          content
+        });
+      }
+    );
+    return contract(CaptureReceiptSchema, {
+      schemaVersion: payload.schemaVersion,
+      captureId: payload.captureId,
+      jobId: payload.jobId,
+      decisionId: payload.decisionId,
+      reviewItemId: payload.reviewItemId,
+      mutationId: payload.mutationId,
+      outcome: payload.outcome,
+      headline: payload.headline,
+      destination: payload.destination,
+      insertedContent,
+      actions: payload.actions,
+      reasonCodes: payload.reasonCodes,
+      createdAt: payload.createdAt
+    });
+  }
+
+  public async getCapture(
+    context: CaptureRepositoryContext,
+    captureId: EntityId<"cap">
+  ): Promise<CaptureDetailResponse> {
+    this.assertContext(context);
+    assertEntity(captureId, "cap", invalidInput);
+    const detail: EncryptedCaptureDetailRead = await this.dependencies.adapter.getCaptureDetail({
+      ownerId: this.ownerId,
+      captureId
+    });
+    const opened = await this.openCapture(detail);
+    const receipt = detail.receipt === null ? null : await this.openReceipt(detail.receipt, opened);
+    return contract(CaptureDetailResponseSchema, {
+      capture: { ...publicCapture(detail, opened.rawContent), jobId: detail.jobId, receipt }
+    });
+  }
+
+  public async getReceipt(
+    context: CaptureRepositoryContext,
+    captureId: EntityId<"cap">
+  ): Promise<CaptureReceiptResponse> {
+    this.assertContext(context);
+    assertEntity(captureId, "cap", invalidInput);
+    const row = await this.dependencies.adapter.getCaptureReceipt({
+      ownerId: this.ownerId,
+      captureId
+    });
+    return contract(CaptureReceiptResponseSchema, { receipt: await this.openReceipt(row) });
+  }
+
+  public retryCapture(
+    context: CaptureRepositoryContext,
+    captureId: EntityId<"cap">,
+    idempotencyKey: string
+  ): Promise<never> {
+    // No encrypted retry RPC exists yet. Calling the legacy retry path would
+    // reintroduce a plaintext read/write dependency, so this is deliberately
+    // unavailable until retry has an atomic encrypted command.
+    return Promise.resolve().then(() => {
+      void idempotencyKey;
+      this.assertContext(context);
+      assertEntity(captureId, "cap", invalidInput);
+      throw new EncryptedCaptureOperationUnavailableError(
+        EncryptedCaptureUnavailableOperation.RETRY
+      );
+    });
+  }
+
+  public deleteCapture(
+    context: CaptureRepositoryContext,
+    captureId: EntityId<"cap">,
+    input: NormalizedCaptureDeleteInput
+  ): Promise<never> {
+    // Deleting inserted content is a multi-note mutation. It must remain
+    // unavailable until the database can commit encrypted note mutations and
+    // capture deletion atomically under one owner-scoped command.
+    return Promise.resolve().then(() => {
+      void input;
+      this.assertContext(context);
+      assertEntity(captureId, "cap", invalidInput);
+      throw new EncryptedCaptureOperationUnavailableError(
+        EncryptedCaptureUnavailableOperation.DELETE
+      );
+    });
+  }
+}

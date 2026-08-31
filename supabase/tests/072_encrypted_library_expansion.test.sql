@@ -617,6 +617,10 @@ select throws_ok(
   'a revoked key can never become active again'
 );
 
+-- C.5b intentionally removes service-role direct table access. These are
+-- fixture-only constraint probes; capability assertions above remain under
+-- service_role and all application behavior continues to use RPCs.
+reset role;
 update public.notes
 set
   content_envelope = pg_temp.content_envelope(
@@ -716,6 +720,8 @@ select is(
   'a keyed MAC field cannot reuse an object-wrapping key purpose'
 );
 
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select public.register_user_content_key(
   '11111111-1111-4111-8111-111111111111',
   'ai.object.v2', 'ai_assisted', 'object_wrap', 2,

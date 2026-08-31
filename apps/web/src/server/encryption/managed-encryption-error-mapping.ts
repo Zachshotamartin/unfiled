@@ -1,0 +1,148 @@
+import { ApiErrorCode, type ApiErrorCodeValue } from "@unfiled/contracts";
+import {
+  type EncryptedAggregateError,
+  EncryptedAggregateErrorCode,
+  type EncryptedAggregateErrorCodeValue
+} from "@unfiled/encrypted-aggregate";
+
+import { HttpError } from "@/server/api/errors";
+
+import {
+  type ServiceRpcError,
+  ServiceRpcErrorCode,
+  type ServiceRpcErrorCodeValue
+} from "./service-rpc-client";
+
+type HttpMapping = Readonly<{
+  code: ApiErrorCodeValue;
+  message: string;
+  status: number;
+}>;
+
+const SERVICE_RPC_HTTP_MAPPING = {
+  [ServiceRpcErrorCode.FORBIDDEN]: {
+    status: 403,
+    code: ApiErrorCode.FORBIDDEN,
+    message: "You do not have access to that item."
+  },
+  [ServiceRpcErrorCode.INVALID_IDEMPOTENCY_KEY]: {
+    status: 409,
+    code: ApiErrorCode.INVALID_IDEMPOTENCY_KEY,
+    message: "That action key was already used for something different."
+  },
+  [ServiceRpcErrorCode.KEY_UNAVAILABLE]: {
+    status: 503,
+    code: ApiErrorCode.PROVIDER_UNAVAILABLE,
+    message: "Encrypted storage is temporarily unavailable. Try again."
+  },
+  [ServiceRpcErrorCode.NOT_FOUND]: {
+    status: 404,
+    code: ApiErrorCode.NOT_FOUND,
+    message: "That item was not found."
+  },
+  [ServiceRpcErrorCode.PROVIDER_UNAVAILABLE]: {
+    status: 503,
+    code: ApiErrorCode.PROVIDER_UNAVAILABLE,
+    message: "Encrypted storage could not complete that action. Try again."
+  },
+  [ServiceRpcErrorCode.STALE_REVISION]: {
+    status: 409,
+    code: ApiErrorCode.STALE_REVISION,
+    message: ""
+  },
+  [ServiceRpcErrorCode.UNAUTHORIZED]: {
+    status: 401,
+    code: ApiErrorCode.UNAUTHORIZED,
+    message: "Sign in to continue."
+  },
+  [ServiceRpcErrorCode.VALIDATION_FAILED]: {
+    status: 400,
+    code: ApiErrorCode.VALIDATION_FAILED,
+    message: "Check this request and try again."
+  }
+} as const satisfies Record<ServiceRpcErrorCodeValue, HttpMapping>;
+
+const AGGREGATE_HTTP_MAPPING = {
+  [EncryptedAggregateErrorCode.AUTHORIZATION_FAILED]: {
+    status: 403,
+    code: ApiErrorCode.FORBIDDEN,
+    message: "You do not have access to that item."
+  },
+  [EncryptedAggregateErrorCode.INVALID_INPUT]: {
+    status: 400,
+    code: ApiErrorCode.VALIDATION_FAILED,
+    message: "Check this request and try again."
+  },
+  [EncryptedAggregateErrorCode.PAYLOAD_INVALID]: {
+    status: 400,
+    code: ApiErrorCode.VALIDATION_FAILED,
+    message: "Check this request and try again."
+  },
+  [EncryptedAggregateErrorCode.REPLAY_MISMATCH]: {
+    status: 409,
+    code: ApiErrorCode.INVALID_IDEMPOTENCY_KEY,
+    message: "That action key was already used for something different."
+  },
+  [EncryptedAggregateErrorCode.DECRYPTION_FAILED]: {
+    status: 503,
+    code: ApiErrorCode.PROVIDER_UNAVAILABLE,
+    message: "Encrypted storage could not complete that action. Try again."
+  },
+  [EncryptedAggregateErrorCode.ENCRYPTION_FAILED]: {
+    status: 503,
+    code: ApiErrorCode.PROVIDER_UNAVAILABLE,
+    message: "Encrypted storage could not complete that action. Try again."
+  },
+  [EncryptedAggregateErrorCode.INTEGRITY_CHECK_FAILED]: {
+    status: 503,
+    code: ApiErrorCode.PROVIDER_UNAVAILABLE,
+    message: "Encrypted storage could not complete that action. Try again."
+  },
+  [EncryptedAggregateErrorCode.INVALID_RECORD]: {
+    status: 503,
+    code: ApiErrorCode.PROVIDER_UNAVAILABLE,
+    message: "Encrypted storage could not complete that action. Try again."
+  },
+  [EncryptedAggregateErrorCode.KEY_CLASS_MISMATCH]: {
+    status: 503,
+    code: ApiErrorCode.PROVIDER_UNAVAILABLE,
+    message: "Encrypted storage could not complete that action. Try again."
+  },
+  [EncryptedAggregateErrorCode.KEY_UNAVAILABLE]: {
+    status: 503,
+    code: ApiErrorCode.PROVIDER_UNAVAILABLE,
+    message: "Encrypted storage is temporarily unavailable. Try again."
+  },
+  [EncryptedAggregateErrorCode.RESERVATION_INVALID]: {
+    status: 503,
+    code: ApiErrorCode.PROVIDER_UNAVAILABLE,
+    message: "Encrypted storage could not complete that action. Try again."
+  },
+  [EncryptedAggregateErrorCode.UNSUPPORTED_RUNTIME]: {
+    status: 503,
+    code: ApiErrorCode.PROVIDER_UNAVAILABLE,
+    message: "Encrypted storage could not complete that action. Try again."
+  }
+} as const satisfies Record<EncryptedAggregateErrorCodeValue, HttpMapping>;
+
+function httpError(mapping: HttpMapping): HttpError {
+  return new HttpError(mapping.status, mapping.code, mapping.message);
+}
+
+export function mappedServiceRpcHttpError(
+  error: ServiceRpcError,
+  subject: "capture" | "note"
+): HttpError {
+  if (error.code === ServiceRpcErrorCode.STALE_REVISION) {
+    return new HttpError(
+      409,
+      ApiErrorCode.STALE_REVISION,
+      `This ${subject} changed somewhere else. Review the latest version.`
+    );
+  }
+  return httpError(SERVICE_RPC_HTTP_MAPPING[error.code]);
+}
+
+export function mappedEncryptedAggregateHttpError(error: EncryptedAggregateError): HttpError {
+  return httpError(AGGREGATE_HTTP_MAPPING[error.code]);
+}

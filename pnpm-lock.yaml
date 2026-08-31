@@ -156,6 +156,12 @@ importers:
       '@unfiled/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@unfiled/encrypted-aggregate':
+        specifier: workspace:*
+        version: link:../../packages/encrypted-aggregate
+      '@unfiled/key-management':
+        specifier: workspace:*
+        version: link:../../packages/key-management
       '@unfiled/sync':
         specifier: workspace:*
         version: link:../../packages/sync
@@ -168,6 +174,9 @@ importers:
       react-dom:
         specifier: 19.2.8
         version: 19.2.8(react@19.2.8)
+      zod:
+        specifier: 4.5.4
+        version: 4.5.4
     devDependencies:
       '@tailwindcss/postcss':
         specifier: 4.1.14
@@ -258,6 +267,21 @@ importers:
       fast-check:
         specifier: 4.9.0
         version: 4.9.0
+
+  packages/encrypted-aggregate:
+    dependencies:
+      '@unfiled/content-crypto':
+        specifier: workspace:*
+        version: link:../content-crypto
+      '@unfiled/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@unfiled/key-management':
+        specifier: workspace:*
+        version: link:../key-management
+      zod:
+        specifier: 4.5.4
+        version: 4.5.4
 
   packages/key-management:
     dependencies:

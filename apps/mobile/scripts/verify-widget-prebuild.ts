@@ -106,14 +106,14 @@ async function inventory(): Promise<StructuralInventory> {
     bundleIdentifierSettings: occurrences(
       pbxProject,
       new RegExp(
-        `PRODUCT_BUNDLE_IDENTIFIER = "${widgetBundleIdentifier.replaceAll(".", "\\.")}";`,
+        `PRODUCT_BUNDLE_IDENTIFIER = "?${widgetBundleIdentifier.replaceAll(".", "\\.")}"?;`,
         "gu"
       )
     ),
     embedPhases: occurrences(pbxProject, /name = "Embed App Extensions";/gu),
     embeddedProducts: occurrences(
       pbxProject,
-      /\/\* QuickCaptureWidget\.appex in Copy Files \*\/ = \{isa = PBXBuildFile;/gu
+      /\/\* QuickCaptureWidget\.appex in (?:Copy Files|Embed App Extensions) \*\/ = \{isa = PBXBuildFile;/gu
     ),
     productReferences: occurrences(
       pbxProject,

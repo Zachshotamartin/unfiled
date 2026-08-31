@@ -55,6 +55,7 @@ select is(
   'cap_70000000000000000000000001',
   'the RPC returns the inserted capture'
 );
+reset role;
 select is(
   (
     select source::text
@@ -73,6 +74,8 @@ select is(
   1::bigint,
   'capture and organization job are created together'
 );
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select throws_ok(
   $$
     select public.create_capture_with_job(
@@ -97,6 +100,7 @@ select throws_ok(
   'invalid_idempotency_key',
   'a reused capture ID must have the exact same normalized request fingerprint'
 );
+reset role;
 select is(
   (
     select count(*)
@@ -122,6 +126,8 @@ select is(
   2::bigint,
   'the first call emits one capture event and one job event only'
 );
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select throws_ok(
   $$
     select public.create_capture_with_job(
@@ -147,6 +153,7 @@ select throws_ok(
   'explicit_destination_not_owned',
   'an explicit destination must belong to the caller'
 );
+reset role;
 select is(
   (
     select count(*)
@@ -157,6 +164,8 @@ select is(
   'a rejected capture leaves no partial capture row behind'
 );
 
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select throws_ok(
   $$
     select public.create_capture_with_job(
