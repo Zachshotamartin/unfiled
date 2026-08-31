@@ -1,0 +1,42 @@
+aws_region          = "us-west-2"
+vercel_team_slug    = "replace-with-exact-team-slug"
+web_project_name    = "unfiled-web"
+worker_project_name = "unfiled-worker"
+
+key_administrator_arns = [
+  "arn:aws:iam::123456789012:role/replace-with-dedicated-kms-admin",
+]
+
+# This registry is append-only after the first apply. Never rename or remove an
+# applied entry. Add a newer generation as `staged`, verify it, then promote it
+# to `active` while changing the previous active generation to `retired`.
+root_key_generations = {
+  ai_assisted_object_wrap_v1 = {
+    key_class  = "ai_assisted"
+    purpose    = "object_wrap"
+    generation = 1
+    status     = "active"
+  }
+  ai_assisted_content_mac_v1 = {
+    key_class  = "ai_assisted"
+    purpose    = "content_mac"
+    generation = 1
+    status     = "active"
+  }
+  private_manual_object_wrap_v1 = {
+    key_class  = "private_manual"
+    purpose    = "object_wrap"
+    generation = 1
+    status     = "active"
+  }
+  private_manual_content_mac_v1 = {
+    key_class  = "private_manual"
+    purpose    = "content_mac"
+    generation = 1
+    status     = "active"
+  }
+}
+
+tags = {
+  Owner = "replace-with-owner"
+}

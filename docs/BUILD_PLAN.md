@@ -2,7 +2,7 @@
 
 Product and repository name: **Unfiled**. Trademark, App Store, package-name, social-handle, and domain review remain required before public launch.
 
-Implementation status: **Milestones A, B, and the Milestone C credential-free Gate 3 are complete.** The capture path includes shared contracts and OpenAPI, application-encrypted AES-256-GCM capture envelopes, service-only owner-scoped storage RPCs, leased workers with heartbeats/retry/dead-letter behavior, durable receipts and deletion, a Web Crypto-encrypted IndexedDB queue, and a SQLCipher-backed mobile draft/outbox. Gate 3 passed a clean database rebuild with zero lint findings and 18 pgTAP files / 822 assertions, plus all aggregate code, build, dependency, HTTP, static-asset, and responsive visual checks. Apple signing, physical-device and extension-archive testing, cloud-preview checks, and Milestone 0 usability evidence remain human gates and are not implied by the credential-free code status. Milestone C.5 is the next launch-blocking implementation milestone: it must encrypt the entire note/library data path under managed KMS custody and add the encrypted per-user RAG index before Milestone D.
+Implementation status: **Milestones A, B, and the Milestone C credential-free Gate 3 are complete; C.5a custody/expansion is implemented in the current change set.** C.5a adds managed-key custody contracts, four AWS KMS root families and separate OIDC roles, an isolated AI-only worker, a dedicated non-bypass database identity with a six-RPC allowlist, an atomic service-only root-rewrap RPC, expand-only content envelopes, and content-free encrypted-RAG lifecycle tables. Account-bound Vercel/AWS/database, CloudTrail, rotation, and restore evidence remains a human gate and is not implied by the code. C.5b–d still have to dual-write/backfill, connect encrypted retrieval, cut over every read/write/search/export path, and remove plaintext contracts; the current manual-note library is therefore not fully encrypted.
 
 This plan is the spine of a full documentation set; see [docs/README.md](./README.md) for reading order. Companion documents:
 
@@ -10,7 +10,7 @@ This plan is the spine of a full documentation set; see [docs/README.md](./READM
 - [AI_ROUTING_SPEC.md](./AI_ROUTING_SPEC.md): pipeline contracts, prompt, schemas, scoring, provider/effort settings, and evaluation corpus
 - [DATA_MODEL.md](./DATA_MODEL.md): full DDL, RLS policies, transactional functions, structured-data schemas, retention
 - [SECURITY_AND_PRIVACY.md](./SECURITY_AND_PRIVACY.md): threat model, BYOK key custody, disclosure, deletion pipeline, incident handling
-- [ENCRYPTION_ARCHITECTURE.md](./ENCRYPTION_ARCHITECTURE.md): implemented capture-crypto foundation and the remaining encrypted-library boundary
+- [ENCRYPTION_ARCHITECTURE.md](./ENCRYPTION_ARCHITECTURE.md): implemented capture and C.5a custody/expansion foundations plus the remaining C.5b–d boundary
 - [OPERATIONS_TEST_PLAN.md](./OPERATIONS_TEST_PLAN.md): environments, CI, enumerated test inventory, release checklists, backups, monitoring
 - [DESIGN_SYSTEM.md](./DESIGN_SYSTEM.md): tokens, components, states, accessibility rules (skeleton; completed during Milestone 0)
 - [BRAND_SYSTEM_UNFILED.md](./BRAND_SYSTEM_UNFILED.md): identity, voice, in-app, Lock Screen, signed-in web, and marketing-site application
@@ -2053,12 +2053,14 @@ Gate:
 
 ### Milestone C.5: Encrypted Library + Private RAG, 2-3 weeks
 
-This security milestone is a hard prerequisite for Milestone D. It implements [ADR-0006](./decisions/ADR-0006-application-encrypted-library-and-private-rag.md); until its gate is green, documentation and product copy must not claim that the note library is fully encrypted.
+This security milestone is a hard prerequisite for Milestone D. It implements [ADR-0006](./decisions/ADR-0006-application-encrypted-library-and-private-rag.md) and [ADR-0007](./decisions/ADR-0007-dedicated-worker-database-capability-and-root-rewrap.md); until the complete C.5 gate is green, documentation and product copy must not claim that the note library is fully encrypted.
+
+Current status: C.5a's credential-free custody/expansion implementation is present. The production account evidence in `HUMAN_SETUP.md` is still pending, and C.5b, C.5c, and C.5d remain open and launch-blocking. The expand-only migration deliberately preserves the legacy plaintext columns and existing read paths.
 
 Deliver:
 
-- **C.5a custody/expansion:** a production managed-KMS resolver using short-lived workload identity; independent object-wrap/content-MAC purposes; per-user intermediate keys; owner/class/purpose/key-bound resolution; and separate AI-assisted/private key classes
-- a separately deployed `apps/worker` Vercel project with an exact OIDC subject and AI-only AWS role; the interactive web/API project uses a different subject/role and the current same-deployment `after()`/cron organizer is retired before production isolation is claimed
+- **C.5a custody/expansion — implemented in code, account evidence pending:** a production managed-KMS resolver using short-lived workload identity; independent object-wrap/content-MAC purposes; per-user intermediate keys; owner/class/purpose/key-bound resolution; and separate AI-assisted/private key classes
+- a separately deployed `apps/worker` Vercel project with an exact OIDC subject and AI-only AWS role; a dedicated `unfiled_index_worker` database role that starts `NOLOGIN`/`NOBYPASSRLS` with exactly six RAG RPCs and no table or administrative capability; and a distinct interactive web/API subject, role, and service-only root-rewrap CAS path. The current same-deployment `after()`/cron organizer is retired before production isolation is claimed
 - **C.5b encrypted aggregate:** server-side domain operations plus service-only envelope/CAS RPCs and a database rollout state `expanded → dual_write → encrypted_read → encrypted_only → contracted`
 - versioned AES-256-GCM envelopes for note title/body/structured data, revisions, generated blocks, organization/review payloads, mutation and idempotency snapshots, and routing-rule content
 - server-side typed mutation/CAS/idempotency RPCs that atomically persist encrypted current state, history, receipts, and a content-free index job

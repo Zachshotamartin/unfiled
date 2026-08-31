@@ -11,7 +11,7 @@ const MAX_IDENTIFIER_LENGTH = 128;
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/u;
 
-const CONTENT_KINDS = [
+export const encryptedContentKinds = Object.freeze([
   "capture",
   "note",
   "note_revision",
@@ -21,10 +21,20 @@ const CONTENT_KINDS = [
   "organization_job",
   "draft",
   "outbox",
-  "widget_handoff"
-] as const;
+  "widget_handoff",
+  "space_display",
+  "tag_display",
+  "note_content",
+  "organization_decision",
+  "note_mutation",
+  "routing_rule",
+  "organization_mutation_attempt",
+  "idempotency_response",
+  "capture_receipt",
+  "note_rag_index"
+] as const);
 
-export type EncryptedContentKind = (typeof CONTENT_KINDS)[number];
+export type EncryptedContentKind = (typeof encryptedContentKinds)[number];
 
 export type EncryptionContext = Readonly<{
   tenantId: string;
@@ -114,7 +124,7 @@ function isIdentifier(value: unknown): value is string {
 }
 
 function isContentKind(value: unknown): value is EncryptedContentKind {
-  return typeof value === "string" && (CONTENT_KINDS as readonly string[]).includes(value);
+  return typeof value === "string" && (encryptedContentKinds as readonly string[]).includes(value);
 }
 
 function isRecordVersion(value: unknown): value is number {
@@ -316,13 +326,24 @@ function randomBytes(length: number, implementation: Crypto): Uint8Array {
 }
 
 async function importDataKey(raw: Uint8Array, implementation: Crypto): Promise<CryptoKey> {
-  return implementation.subtle.importKey(
-    "raw",
-    copiedBuffer(raw),
-    { name: "AES-GCM", length: AES_KEY_BITS },
-    false,
-    ["encrypt", "decrypt"]
-  );
+  return importRawKey(raw, implementation, { name: "AES-GCM", length: AES_KEY_BITS }, [
+    "encrypt",
+    "decrypt"
+  ]);
+}
+
+async function importRawKey(
+  raw: Uint8Array,
+  implementation: Crypto,
+  algorithm: AesKeyAlgorithm,
+  usages: readonly KeyUsage[]
+): Promise<CryptoKey> {
+  const importBytes = Uint8Array.from(raw);
+  try {
+    return await implementation.subtle.importKey("raw", importBytes, algorithm, false, usages);
+  } finally {
+    importBytes.fill(0);
+  }
 }
 
 async function decryptDataKey(
@@ -372,11 +393,10 @@ export async function importKeyEncryptionKey(
     fail(ContentCryptoErrorCode.INVALID_KEY, "A 32-byte key-encryption key is required");
   }
   const implementation = runtimeCrypto(cryptoImplementation);
-  const key = await implementation.subtle.importKey(
-    "raw",
-    copiedBuffer(rawKey),
+  const key = await importRawKey(
+    rawKey,
+    implementation,
     { name: "AES-GCM", length: AES_KEY_BITS },
-    false,
     ["encrypt", "decrypt"]
   );
   return Object.freeze({ keyId, key });
