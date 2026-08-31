@@ -40,6 +40,7 @@ const trustedSource: VercelTrustedSource = {
 
 function config(overrides: Partial<WorkerConfig> = {}): WorkerConfig {
   return {
+    indexing: { kind: "disabled" },
     invocationAuth: { kind: "bearer", secret: SECRET },
     keyBoundary: { kind: "local-synthetic", keyClass: "ai_assisted" },
     maxRequestBytes: 1_024,

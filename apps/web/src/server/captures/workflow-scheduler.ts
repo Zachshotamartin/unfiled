@@ -1,5 +1,7 @@
 import { after } from "next/server";
 
+import { runIndexDrainWakeup } from "@/server/indexing/index-worker-scheduler";
+
 import { drainCaptureJobs } from "./workflow";
 
 export function scheduleCaptureDrain(): void {
@@ -7,6 +9,7 @@ export function scheduleCaptureDrain(): void {
     after(async () => {
       try {
         await drainCaptureJobs();
+        await runIndexDrainWakeup();
       } catch {
         // The durable queued job and lease recovery cron are authoritative.
         // Prompt processing is deliberately best-effort and content-free.

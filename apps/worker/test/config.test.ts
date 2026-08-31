@@ -3,6 +3,13 @@ import { describe, expect, it } from "vitest";
 import { loadWorkerConfig, WORKER_CAPABILITIES, type WorkerEnvironment } from "../src/config";
 
 const SECRET = "worker-only-drain-secret-with-adequate-length";
+const PROJECT_REF = "abcdefghijklmnopqrst";
+const DATABASE_HOST = "aws-0-us-west-2.pooler.supabase.com";
+const DATABASE_CA = `-----BEGIN CERTIFICATE-----
+VGhpcyBpcyBhIHN0cmljdCB0ZXN0LW9ubHkgQ0EgZml4dHVyZSB0aGF0IGlzIG5vdCBhIHJlYWwg
+Y2VydGlmaWNhdGUu
+-----END CERTIFICATE-----
+`;
 
 function local(overrides: WorkerEnvironment = {}): WorkerEnvironment {
   return {
@@ -26,6 +33,13 @@ function production(overrides: WorkerEnvironment = {}): WorkerEnvironment {
     UNFILED_TRUSTED_SOURCE_TEAM_SLUG: "team-example",
     UNFILED_TRUSTED_SOURCE_WEB_PROJECT_ID: "prj_webexample",
     UNFILED_TRUSTED_SOURCE_WEB_PROJECT_NAME: "unfiled-web",
+    UNFILED_EMBEDDING_DIMENSIONS: "1536",
+    UNFILED_EMBEDDING_MODEL_ID: "text-embedding-3-small",
+    UNFILED_OPENAI_EMBEDDING_API_KEY: "sk-test-production-key-with-sufficient-length",
+    UNFILED_WORKER_DATABASE_CA_PEM_BASE64: Buffer.from(DATABASE_CA).toString("base64"),
+    UNFILED_WORKER_DATABASE_EXPECTED_HOST: DATABASE_HOST,
+    UNFILED_WORKER_DATABASE_PROJECT_REF: PROJECT_REF,
+    UNFILED_WORKER_DATABASE_URL: `postgresql://unfiled_index_worker.${PROJECT_REF}:dedicated-capability@${DATABASE_HOST}:6543/postgres?sslmode=verify-full`,
     UNFILED_WORKER_ENV: "production",
     UNFILED_WORKER_EXPECTED_OIDC_SUBJECT:
       "owner:team-example:project:unfiled-worker:environment:production",
@@ -39,11 +53,12 @@ function production(overrides: WorkerEnvironment = {}): WorkerEnvironment {
 describe("worker environment validation", () => {
   it("loads a bounded local configuration with an AI-only capability", () => {
     expect(loadWorkerConfig(local())).toEqual({
+      indexing: { kind: "disabled" },
       invocationAuth: { kind: "bearer", secret: SECRET },
       keyBoundary: { kind: "local-synthetic", keyClass: "ai_assisted" },
       maxRequestBytes: 1_024,
       port: 8_788,
-      requestTimeoutMs: 25_000,
+      requestTimeoutMs: 45_000,
       runtime: "local"
     });
     expect(WORKER_CAPABILITIES).toEqual({
@@ -57,6 +72,24 @@ describe("worker environment validation", () => {
     const config = loadWorkerConfig(production());
 
     expect(config.runtime).toBe("production");
+    expect(config.indexing).toMatchObject({
+      claimLimit: 2,
+      concurrency: 2,
+      database: {
+        connectTimeoutMs: 3_000,
+        expectedHost: DATABASE_HOST,
+        projectRef: PROJECT_REF,
+        statementTimeoutMs: 500
+      },
+      embedding: {
+        dimensions: 1536,
+        modelId: "text-embedding-3-small",
+        timeoutMs: 10_000
+      },
+      kind: "enabled",
+      leaseSeconds: 120,
+      recoveryLimit: 100
+    });
     expect(config.invocationAuth).toEqual({
       kind: "production-verifier",
       trustedSource: {
@@ -135,13 +168,72 @@ describe("worker environment validation", () => {
     }
   });
 
-  it("allows only a future dedicated non-bypass worker database capability name", () => {
-    const dedicatedDatabase = {
-      UNFILED_WORKER_DATABASE_URL:
-        "postgresql://unfiled_organization_worker:dedicated-capability@db.invalid/unfiled"
-    };
-    expect(loadWorkerConfig(local(dedicatedDatabase)).runtime).toBe("local");
-    expect(loadWorkerConfig(production(dedicatedDatabase)).runtime).toBe("production");
+  it("enables indexing only with the complete dedicated database and provider boundary", () => {
+    expect(() =>
+      loadWorkerConfig(
+        local({
+          UNFILED_WORKER_DATABASE_URL:
+            "postgresql://unfiled_organization_worker:capability@db.invalid/unfiled"
+        })
+      )
+    ).toThrow("UNFILED_WORKER_DATABASE_URL");
+    expect(loadWorkerConfig(production()).indexing).toMatchObject({ kind: "enabled" });
+  });
+
+  it("requires an exact lowercase Supabase project reference for database tenant binding", () => {
+    for (const projectRef of ["", "too-short", "ABCDEFGHIJKLMNOPQRST", "abcdefghijklmnopqrs-"]) {
+      expect(() =>
+        loadWorkerConfig(production({ UNFILED_WORKER_DATABASE_PROJECT_REF: projectRef }))
+      ).toThrow("UNFILED_WORKER_DATABASE_PROJECT_REF");
+    }
+  });
+
+  it("rejects unsafe index tuning and redacts database/provider secrets", () => {
+    expect(() => loadWorkerConfig(production({ UNFILED_INDEX_CONCURRENCY: "5" }))).toThrow(
+      "UNFILED_INDEX_CONCURRENCY"
+    );
+    expect(() =>
+      loadWorkerConfig(
+        production({ UNFILED_INDEX_CLAIM_LIMIT: "1", UNFILED_INDEX_CONCURRENCY: "2" })
+      )
+    ).toThrow("UNFILED_INDEX_CLAIM_LIMIT");
+    expect(() =>
+      loadWorkerConfig(
+        production({
+          UNFILED_WORKER_DATABASE_STATEMENT_TIMEOUT_MS: "1000"
+        })
+      )
+    ).toThrow("UNFILED_WORKER_TIMEOUT_MS");
+    expect(() => loadWorkerConfig(production({ UNFILED_WORKER_TIMEOUT_MS: "43249" }))).toThrow(
+      "UNFILED_WORKER_TIMEOUT_MS"
+    );
+    expect(
+      loadWorkerConfig(production({ UNFILED_WORKER_TIMEOUT_MS: "43250" })).requestTimeoutMs
+    ).toBe(43_250);
+    expect(
+      loadWorkerConfig(
+        production({
+          UNFILED_EMBEDDING_TIMEOUT_MS: "8000",
+          UNFILED_INDEX_CLAIM_LIMIT: "4",
+          UNFILED_INDEX_CONCURRENCY: "4",
+          UNFILED_WORKER_DATABASE_CONNECT_TIMEOUT_MS: "500",
+          UNFILED_WORKER_DATABASE_STATEMENT_TIMEOUT_MS: "250",
+          UNFILED_WORKER_TIMEOUT_MS: "45000"
+        })
+      ).indexing
+    ).toMatchObject({ claimLimit: 4, concurrency: 4 });
+    expect(() => loadWorkerConfig(production({ UNFILED_INDEX_LEASE_SECONDS: "30" }))).toThrow(
+      "UNFILED_INDEX_LEASE_SECONDS"
+    );
+    expect(
+      loadWorkerConfig(production({ UNFILED_INDEX_LEASE_SECONDS: "50" })).indexing
+    ).toMatchObject({ leaseSeconds: 50 });
+    const secretCanary = "private-provider-secret-canary";
+    try {
+      loadWorkerConfig(production({ UNFILED_OPENAI_EMBEDDING_API_KEY: secretCanary }));
+    } catch (error: unknown) {
+      expect(String(error)).not.toContain(secretCanary);
+    }
   });
 
   it("requires environment-specific secrets and a matching Vercel environment", () => {
@@ -151,6 +243,17 @@ describe("worker environment validation", () => {
     );
     expect(() => loadWorkerConfig(production({ VERCEL_ENV: "preview" }))).toThrow("VERCEL_ENV");
     expect(() => loadWorkerConfig({ UNFILED_WORKER_ENV: "staging" })).toThrow("UNFILED_WORKER_ENV");
+  });
+
+  it("rejects database/provider indexing capabilities outside production", () => {
+    const productionIndexing = production();
+    const localIndexing: Record<string, string | undefined> = { ...productionIndexing };
+    delete localIndexing.VERCEL_ENV;
+    delete localIndexing.VERCEL_PROJECT_ID;
+    localIndexing.UNFILED_WORKER_ENV = "local";
+    localIndexing.UNFILED_WORKER_DRAIN_SECRET = SECRET;
+
+    expect(() => loadWorkerConfig(localIndexing)).toThrow("UNFILED_WORKER_DATABASE_URL");
   });
 
   it("rejects weak or out-of-range local controls", () => {

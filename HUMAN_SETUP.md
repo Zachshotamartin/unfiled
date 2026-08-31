@@ -145,12 +145,35 @@ The checked-in C.5a module at `infra/aws-kms` now defines the exact production i
    secret, `CRON_SECRET`, the local drain bearer, `SUPABASE_SERVICE_ROLE_KEY`,
    `SUPABASE_SECRET_KEY`, or another global Supabase service/secret variant in the worker project.
 
-6. Deploy both projects and call the protected worker only from web Production. Before cutover,
-   prove that Vercel preserves `x-vercel-trusted-oidc-idp-token` for the handler and exposes the
+6. Deploy the worker first, but do not make any OIDC-bearing call to it yet. The runtime cannot
+   cryptographically derive a Vercel project ID from a `*.vercel.app` alias, so the exact origin is a
+   sensitive bearer-token egress trust boundary. In Vercel's authenticated dashboard or REST API,
+   select the worker by the recorded `prj_...` ID and prove that the intended exact Production alias
+   is attached to that project and its current Production deployment. Cross-check the alias through
+   the authenticated alias/deployment view, and record only the team ID, worker project ID, exact
+   alias, Production deployment ID, and commit—not an access token or OIDC token. Public DNS, TLS,
+   or an unauthenticated HTTP response does not prove the Vercel project mapping. Alias drift,
+   project transfer, or alias reassignment invalidates this evidence and requires the caller to be
+   disabled until the proof is repeated.
+
+   Only after that proof, set this one target value in the web Production project and deploy web:
+
+   ```dotenv
+   UNFILED_INDEX_WORKER_ORIGIN=https://<proved-worker-production-alias>.vercel.app
+   ```
+
+   Do not configure `UNFILED_INDEX_WORKER_PROJECT_ID`: an unverified project-ID string beside an
+   alias does not bind them. The web client obtains its short-lived OIDC token at invocation time;
+   do not add a shared caller secret, worker bearer, bypass secret, user token, or worker workload
+   token to the web project.
+
+   Call the protected worker only from web Production. Before cutover, prove that Vercel preserves
+   `x-vercel-trusted-oidc-idp-token` for the handler and exposes the
    workload token through the request context used by `@vercel/oidc-aws-credentials-provider`.
    The probe must exchange the real short-lived identity through STS and complete GenerateDataKey
    plus Decrypt on both active AI roots. Never print or return either raw token. Header presence,
    local JWT parsing, or constructing a KMS client without successful calls is not evidence.
+
 7. Configure a CloudTrail trail that retains read and write **management events** and does not
    exclude KMS events. KMS cryptographic operations are management events, not CloudTrail data
    events. Encryption-context values are logged, so they must remain the four non-secret
@@ -180,9 +203,9 @@ PostgreSQL role `unfiled_index_worker`, but deliberately leave it `NOLOGIN`, `NO
 `NOBYPASSRLS`, and without a password. It has no relation or sequence privileges, no access to the
 `private` schema, no workload-usable role membership, and no executable public functions except the six RAG capabilities listed in
 [ADR-0007](./docs/decisions/ADR-0007-dedicated-worker-database-capability-and-root-rewrap.md).
-Do not provision this credential while the worker drain adapter still returns its intentional
-`503`. Complete these steps only after C.5c's reviewed database adapter is merged and before enabling
-production index jobs:
+The C.5c adapter is implemented and remains disabled unless its complete dedicated configuration is
+present. Complete these steps only after its pull request is merged and before enabling production
+index jobs:
 
 1. In the Supabase dashboard, enable database SSL enforcement and download/record the current CA
    chain and the serverless **transaction pooler** connection information for the production
@@ -214,31 +237,53 @@ production index jobs:
    `service_role`, `authenticator`, another parent role, `INHERIT`, `BYPASSRLS`, `SUPERUSER`,
    `CREATEDB`, `CREATEROLE`, or `REPLICATION`.
 
-3. Build the server-only pooler URI from Supabase's displayed transaction-pooler template using the
-   exact custom role `unfiled_index_worker` and its prompted password. Do not improvise the hostname,
-   project suffix, port, or CA. Add only that URI to the worker Production project as
-   `UNFILED_WORKER_DATABASE_URL`. It must not use a client-exposed environment-variable prefix and must not
-   be copied to the web project, Preview, logs, CI, Terraform, or source control. Do not add
+3. Build the server-only URI from Supabase's displayed transaction-pooler template. For the shared
+   Supavisor pooler, retain its required transport username shape
+   `unfiled_index_worker.<project-ref>`; the suffix selects the Supabase tenant and does not change
+   the PostgreSQL role reported after connection. Use the prompted custom-role password. Do not
+   improvise the hostname, 20-character project ref, port, or CA. Add only that URI to the worker
+   Production project as `UNFILED_WORKER_DATABASE_URL`, set the same canonical hostname as
+   `UNFILED_WORKER_DATABASE_EXPECTED_HOST`, set the exact suffix separately as
+   `UNFILED_WORKER_DATABASE_PROJECT_REF`, and base64-encode the downloaded canonical PEM chain into
+   `UNFILED_WORKER_DATABASE_CA_PEM_BASE64`. The URI must contain `sslmode=verify-full`. A direct or
+   dedicated-pooler `db.<project-ref>.supabase.co` URI uses the unsuffixed custom role; the worker
+   derives and enforces the correct transport username for either endpoint class. These values
+   must not use a client-exposed prefix and must not be copied to the web project, Preview, logs, CI,
+   Terraform, or source control. Do not add
    `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_SECRET_KEY`, any framework-prefixed equivalent, or an
    RLS-bypassing database URL to the worker.
-4. From the deployed C.5c adapter's database session, record a content-free readiness result proving
+4. Create a server-only OpenAI project key restricted to the embedding workload and add it only to
+   the worker Production project as `UNFILED_OPENAI_EMBEDDING_API_KEY`. Set the reviewed generation's
+   exact model and dimensions as `UNFILED_EMBEDDING_MODEL_ID` and
+   `UNFILED_EMBEDDING_DIMENSIONS`; the initial planned pair is `text-embedding-3-small` and `1536`.
+   The worker rejects a job whose generation differs. Do not place this key in web, iOS, Preview,
+   logs, source control, or a user preference. Confirm provider data controls and retention for the
+   production project before allowing AI-assisted notes; private-manual notes remain categorically
+   ineligible and must produce zero provider calls.
+5. From the deployed C.5c adapter's database session, record a content-free readiness result proving
    `session_user = 'unfiled_index_worker'`. `SET ROLE unfiled_index_worker` is not acceptable:
    security-definer RPCs check the original connection identity. Confirm again that the role is not
    superuser, cannot bypass RLS, cannot inherit, and has no membership except the exact inert
    platform-management edge above. A connection for which the pooler reports another `session_user`
    fails closed and blocks rollout.
-5. Run the deployed privilege probe. It must prove zero direct SELECT/INSERT/UPDATE/DELETE or sequence
+6. Run the deployed privilege probe. It must prove zero direct SELECT/INSERT/UPDATE/DELETE or sequence
    access across `public` and `private`, no `private` schema use, no public create, and EXECUTE on
    exactly: `claim_note_index_jobs`, `heartbeat_note_index_job`, `commit_note_rag_index`,
    `fail_note_index_job`, `recover_stale_note_index_jobs`, and `list_active_note_rag_index`. Direct
    note/key/RAG-table reads, key registration/activation/rewrap, generation creation/activation, and
    every other function must return permission denied. Record identifiers, SQLSTATE/outcome, and
    timestamps only—never rows, ciphertext, credentials, tokens, or note content.
-6. Exercise lease loss, worker timeout, database outage, pooler reconnect, and credential revocation.
+7. Exercise lease loss, worker timeout, database/provider/KMS outage, pooler reconnect, response-loss
+   replay, and credential revocation.
    Jobs must remain queued or recover through the bounded RPCs; no code may fall back to a global
    Supabase credential, direct table access, plaintext job payload, or private-manual key. Enable the
    drain only after these checks and the Vercel/AWS evidence above are green.
-7. Rotate this credential independently of Supabase service keys. Drain/pause the worker, use the
+8. Confirm the web post-commit wake-up and `/api/internal/indexing/drain` recovery cron reach only the
+   protected worker Production deployment. The Hobby schedule runs daily at 03:27 UTC; on Pro or
+   Enterprise it may be increased after cost/load review. A wake-up may be lost or rejected without
+   losing work because the encrypted database queue is authoritative. Record only aggregate job
+   counts and deployment/request IDs, never note IDs or content.
+9. Rotate this credential independently of Supabase service keys. Drain/pause the worker, use the
    same trusted `psql` `\password unfiled_index_worker` prompt, update the Vercel Production secret,
    redeploy/recycle pooled connections, prove the old credential is rejected and the new session has
    the same exact allowlist, then resume. A database rebuild or replay of the role-creating migration

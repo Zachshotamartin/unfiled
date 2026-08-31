@@ -8,6 +8,10 @@
     {
       "path": "/api/internal/retention/notes",
       "schedule": "17 3 * * *"
+    },
+    {
+      "path": "/api/internal/indexing/drain",
+      "schedule": "27 3 * * *"
     }
   ]
 }

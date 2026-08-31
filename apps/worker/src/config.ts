@@ -2,14 +2,26 @@ import { WorkerConfigurationError } from "./errors";
 
 const DEFAULT_MAX_REQUEST_BYTES = 1_024;
 const DEFAULT_PORT = 8_788;
-const DEFAULT_TIMEOUT_MS = 25_000;
+const DEFAULT_TIMEOUT_MS = 45_000;
 const MAX_AUTH_SECRET_LENGTH = 512;
 const MAX_REQUEST_BYTES = 16_384;
-const MAX_TIMEOUT_MS = 55_000;
+const MAX_TIMEOUT_MS = 45_000;
 const MIN_AUTH_SECRET_LENGTH = 32;
 const MIN_TIMEOUT_MS = 1_000;
+const MIN_PIPELINE_SLACK_MS = 4_000;
+const MIN_LEASE_MARGIN_MS = 5_000;
+const INDEX_DATABASE_POOL_LIMIT = 2;
+const INDEX_COLD_SETUP_QUERY_SLOTS = 6;
+const INDEX_TERMINAL_QUERY_SLOTS_PER_JOB = 8;
+const INDEX_KMS_READINESS_CALLS = 4;
+const INDEX_KMS_CALLS_PER_PROVIDER_ROUND = 2;
+const INDEX_KMS_CALL_BUDGET_MS = 2_000;
+export const INDEX_DATABASE_QUERY_CANCEL_GRACE_MS = 250;
 const MAX_RETIRED_AI_ROOTS_PER_PURPOSE = 20;
 const MAX_RETIRED_ROOT_REGISTRY_BYTES = 32_768;
+const MAX_DATABASE_CA_BYTES = 32_768;
+const MAX_DATABASE_URL_LENGTH = 4_096;
+const MAX_PROVIDER_KEY_LENGTH = 512;
 const RETIRED_ROOT_REGISTRY_VARIABLE = "UNFILED_RETIRED_AI_ROOT_REGISTRY_JSON";
 const KMS_KEY_ARN_PATTERN =
   /^arn:(aws(?:-us-gov|-cn)?):kms:([a-z0-9-]+):(\d{12}):key\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
@@ -96,7 +108,33 @@ export type WorkerInvocationAuth =
   | Readonly<{ kind: "bearer"; secret: string }>
   | Readonly<{ kind: "production-verifier"; trustedSource: VercelTrustedSource }>;
 
+export type WorkerIndexingConfig =
+  | Readonly<{ kind: "disabled" }>
+  | Readonly<{
+      claimLimit: number;
+      concurrency: number;
+      database: Readonly<{
+        caPem: string;
+        connectTimeoutMs: number;
+        expectedHost: string;
+        projectRef: string;
+        statementTimeoutMs: number;
+        url: string;
+      }>;
+      embedding: Readonly<{
+        apiKey: string;
+        dimensions: number;
+        maxInputBytes: number;
+        modelId: string;
+        timeoutMs: number;
+      }>;
+      kind: "enabled";
+      leaseSeconds: number;
+      recoveryLimit: number;
+    }>;
+
 export type WorkerConfig = Readonly<{
+  indexing: WorkerIndexingConfig;
   invocationAuth: WorkerInvocationAuth;
   keyBoundary: LocalWorkerKeyBoundary | AwsWorkerKeyBoundary;
   maxRequestBytes: number;
@@ -113,6 +151,29 @@ export const WORKER_CAPABILITIES = Object.freeze({
 
 function hasValue(environment: WorkerEnvironment, name: string): boolean {
   return (environment[name]?.trim().length ?? 0) > 0;
+}
+
+function hasAsciiControlOrSpace(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit <= 0x20 || codeUnit === 0x7f) return true;
+  }
+  return false;
+}
+
+function hasInvalidPemCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (
+      codeUnit !== 0x09 &&
+      codeUnit !== 0x0a &&
+      codeUnit !== 0x0d &&
+      (codeUnit < 0x20 || codeUnit > 0x7e)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function rejectCapabilities(environment: WorkerEnvironment, names: readonly string[]): void {
@@ -150,6 +211,186 @@ function parseInteger(
     throw new WorkerConfigurationError([name]);
   }
   return value;
+}
+
+function decodeDatabaseCa(environment: WorkerEnvironment): string {
+  const name = "UNFILED_WORKER_DATABASE_CA_PEM_BASE64";
+  const encoded = required(environment, name);
+  if (
+    encoded.length > Math.ceil((MAX_DATABASE_CA_BYTES * 4) / 3) + 4 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/u.test(encoded)
+  ) {
+    throw new WorkerConfigurationError([name]);
+  }
+  let decoded: Buffer;
+  try {
+    decoded = Buffer.from(encoded, "base64");
+  } catch {
+    throw new WorkerConfigurationError([name]);
+  }
+  const canonical = decoded.toString("base64");
+  const normalizedInput = encoded.replace(/=+$/u, "");
+  if (
+    decoded.byteLength < 64 ||
+    decoded.byteLength > MAX_DATABASE_CA_BYTES ||
+    canonical.replace(/=+$/u, "") !== normalizedInput
+  ) {
+    decoded.fill(0);
+    throw new WorkerConfigurationError([name]);
+  }
+  const pem = decoded.toString("utf8");
+  decoded.fill(0);
+  if (
+    !pem.startsWith("-----BEGIN CERTIFICATE-----\n") ||
+    !pem.endsWith("-----END CERTIFICATE-----\n") ||
+    hasInvalidPemCharacter(pem)
+  ) {
+    throw new WorkerConfigurationError([name]);
+  }
+  return pem;
+}
+
+function parseIndexingConfig(
+  environment: WorkerEnvironment,
+  runtime: WorkerRuntime,
+  requestTimeoutMs: number
+): WorkerIndexingConfig {
+  const requiredNames = [
+    "UNFILED_WORKER_DATABASE_URL",
+    "UNFILED_WORKER_DATABASE_EXPECTED_HOST",
+    "UNFILED_WORKER_DATABASE_PROJECT_REF",
+    "UNFILED_WORKER_DATABASE_CA_PEM_BASE64",
+    "UNFILED_OPENAI_EMBEDDING_API_KEY",
+    "UNFILED_EMBEDDING_MODEL_ID",
+    "UNFILED_EMBEDDING_DIMENSIONS"
+  ] as const;
+  const present = requiredNames.filter((name) => hasValue(environment, name));
+  if (runtime !== "production") {
+    if (present.length > 0) throw new WorkerConfigurationError(present);
+    return { kind: "disabled" };
+  }
+  if (present.length !== requiredNames.length) {
+    throw new WorkerConfigurationError(
+      requiredNames.filter((name) => !hasValue(environment, name))
+    );
+  }
+
+  const url = required(environment, "UNFILED_WORKER_DATABASE_URL");
+  const expectedHost = required(environment, "UNFILED_WORKER_DATABASE_EXPECTED_HOST").toLowerCase();
+  const projectRef = required(environment, "UNFILED_WORKER_DATABASE_PROJECT_REF");
+  const apiKey = required(environment, "UNFILED_OPENAI_EMBEDDING_API_KEY");
+  const modelId = required(environment, "UNFILED_EMBEDDING_MODEL_ID");
+  const invalid: string[] = [];
+  if (url.length > MAX_DATABASE_URL_LENGTH) invalid.push("UNFILED_WORKER_DATABASE_URL");
+  if (
+    expectedHost.length > 253 ||
+    !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/u.test(expectedHost)
+  ) {
+    invalid.push("UNFILED_WORKER_DATABASE_EXPECTED_HOST");
+  }
+  if (!/^[a-z0-9]{20}$/u.test(projectRef)) {
+    invalid.push("UNFILED_WORKER_DATABASE_PROJECT_REF");
+  }
+  if (
+    apiKey.length < 20 ||
+    apiKey.length > MAX_PROVIDER_KEY_LENGTH ||
+    apiKey.trim() !== apiKey ||
+    hasAsciiControlOrSpace(apiKey)
+  ) {
+    invalid.push("UNFILED_OPENAI_EMBEDDING_API_KEY");
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(modelId)) {
+    invalid.push("UNFILED_EMBEDDING_MODEL_ID");
+  }
+  if (invalid.length > 0) throw new WorkerConfigurationError(invalid);
+
+  const claimLimit = parseInteger(environment, "UNFILED_INDEX_CLAIM_LIMIT", 2, 1, 4);
+  const concurrency = parseInteger(environment, "UNFILED_INDEX_CONCURRENCY", 2, 1, 4);
+  if (concurrency > claimLimit) {
+    throw new WorkerConfigurationError(["UNFILED_INDEX_CONCURRENCY", "UNFILED_INDEX_CLAIM_LIMIT"]);
+  }
+  const connectTimeoutMs = parseInteger(
+    environment,
+    "UNFILED_WORKER_DATABASE_CONNECT_TIMEOUT_MS",
+    3_000,
+    500,
+    15_000
+  );
+  const statementTimeoutMs = parseInteger(
+    environment,
+    "UNFILED_WORKER_DATABASE_STATEMENT_TIMEOUT_MS",
+    500,
+    250,
+    30_000
+  );
+  const embeddingTimeoutMs = parseInteger(
+    environment,
+    "UNFILED_EMBEDDING_TIMEOUT_MS",
+    10_000,
+    1_000,
+    30_000
+  );
+  const leaseSeconds = parseInteger(environment, "UNFILED_INDEX_LEASE_SECONDS", 120, 30, 900);
+  const processingRounds = Math.ceil(claimLimit / concurrency);
+  const databaseConcurrency = Math.min(concurrency, INDEX_DATABASE_POOL_LIMIT);
+  const querySlots =
+    INDEX_COLD_SETUP_QUERY_SLOTS +
+    Math.ceil(
+      (INDEX_TERMINAL_QUERY_SLOTS_PER_JOB * claimLimit + (databaseConcurrency - 1)) /
+        databaseConcurrency
+    );
+  const kmsCallCount =
+    INDEX_KMS_READINESS_CALLS + INDEX_KMS_CALLS_PER_PROVIDER_ROUND * processingRounds;
+  const minimumRequestBudget =
+    querySlots * (statementTimeoutMs + INDEX_DATABASE_QUERY_CANCEL_GRACE_MS) +
+    databaseConcurrency * connectTimeoutMs +
+    processingRounds * embeddingTimeoutMs +
+    kmsCallCount * INDEX_KMS_CALL_BUDGET_MS +
+    MIN_PIPELINE_SLACK_MS;
+  if (requestTimeoutMs < minimumRequestBudget) {
+    throw new WorkerConfigurationError([
+      "UNFILED_WORKER_TIMEOUT_MS",
+      "UNFILED_INDEX_CLAIM_LIMIT",
+      "UNFILED_INDEX_CONCURRENCY",
+      "UNFILED_EMBEDDING_TIMEOUT_MS",
+      "UNFILED_WORKER_DATABASE_CONNECT_TIMEOUT_MS",
+      "UNFILED_WORKER_DATABASE_STATEMENT_TIMEOUT_MS"
+    ]);
+  }
+  if (leaseSeconds * 1_000 < requestTimeoutMs + MIN_LEASE_MARGIN_MS) {
+    throw new WorkerConfigurationError([
+      "UNFILED_INDEX_LEASE_SECONDS",
+      "UNFILED_WORKER_TIMEOUT_MS"
+    ]);
+  }
+  return Object.freeze({
+    claimLimit,
+    concurrency,
+    database: Object.freeze({
+      caPem: decodeDatabaseCa(environment),
+      connectTimeoutMs,
+      expectedHost,
+      projectRef,
+      statementTimeoutMs,
+      url
+    }),
+    embedding: Object.freeze({
+      apiKey,
+      dimensions: parseInteger(environment, "UNFILED_EMBEDDING_DIMENSIONS", 1_536, 1, 4_096),
+      maxInputBytes: parseInteger(
+        environment,
+        "UNFILED_EMBEDDING_MAX_INPUT_BYTES",
+        24_576,
+        1_024,
+        100_000
+      ),
+      modelId,
+      timeoutMs: embeddingTimeoutMs
+    }),
+    kind: "enabled",
+    leaseSeconds,
+    recoveryLimit: parseInteger(environment, "UNFILED_INDEX_RECOVERY_LIMIT", 100, 1, 100)
+  });
 }
 
 function parseRuntime(environment: WorkerEnvironment): WorkerRuntime {
@@ -412,7 +653,15 @@ export function loadWorkerConfig(environment: WorkerEnvironment = process.env): 
     runtime === "production"
       ? awsKeyBoundary(environment)
       : ({ kind: "local-synthetic", keyClass: "ai_assisted" } as const);
+  const requestTimeoutMs = parseInteger(
+    environment,
+    "UNFILED_WORKER_TIMEOUT_MS",
+    DEFAULT_TIMEOUT_MS,
+    MIN_TIMEOUT_MS,
+    MAX_TIMEOUT_MS
+  );
   return {
+    indexing: parseIndexingConfig(environment, runtime, requestTimeoutMs),
     invocationAuth: parseInvocationAuth(environment, runtime, keyBoundary),
     keyBoundary,
     maxRequestBytes: parseInteger(
@@ -423,13 +672,7 @@ export function loadWorkerConfig(environment: WorkerEnvironment = process.env): 
       MAX_REQUEST_BYTES
     ),
     port: parseInteger(environment, "PORT", DEFAULT_PORT, 1, 65_535),
-    requestTimeoutMs: parseInteger(
-      environment,
-      "UNFILED_WORKER_TIMEOUT_MS",
-      DEFAULT_TIMEOUT_MS,
-      MIN_TIMEOUT_MS,
-      MAX_TIMEOUT_MS
-    ),
+    requestTimeoutMs,
     runtime
   };
 }

@@ -31,7 +31,12 @@ describe("capture workflow handler", () => {
       failed: 0,
       retryScheduled: 1
     });
-    const handler = createCaptureWorkflowHandler({ getSecret: () => SECRET, drain });
+    const scheduleIndexDrain = vi.fn();
+    const handler = createCaptureWorkflowHandler({
+      getSecret: () => SECRET,
+      drain,
+      scheduleIndexDrain
+    });
 
     const response = await handler(request(`Bearer ${SECRET}`));
 
@@ -44,12 +49,31 @@ describe("capture workflow handler", () => {
       retryScheduled: 1
     });
     expect(drain).toHaveBeenCalledOnce();
+    expect(scheduleIndexDrain).toHaveBeenCalledOnce();
+    expect(scheduleIndexDrain).toHaveBeenCalledWith();
+  });
+
+  it("does not wake indexing when capture processing completed no durable jobs", async () => {
+    const scheduleIndexDrain = vi.fn();
+    const handler = createCaptureWorkflowHandler({
+      getSecret: () => SECRET,
+      drain: vi.fn().mockResolvedValue({
+        claimed: 0,
+        completed: 0,
+        failed: 0,
+        retryScheduled: 0
+      }),
+      scheduleIndexDrain
+    });
+    expect((await handler(request(`Bearer ${SECRET}`))).status).toBe(200);
+    expect(scheduleIndexDrain).not.toHaveBeenCalled();
   });
 
   it("redacts unexpected drain failures", async () => {
     const handler = createCaptureWorkflowHandler({
       getSecret: () => SECRET,
-      drain: vi.fn().mockRejectedValue(new Error("plaintext should never appear"))
+      drain: vi.fn().mockRejectedValue(new Error("plaintext should never appear")),
+      scheduleIndexDrain: vi.fn()
     });
 
     const response = await handler(request(`Bearer ${SECRET}`));
