@@ -22,5 +22,8 @@
     "@unfiled/contracts": "workspace:*",
     "@unfiled/key-management": "workspace:*",
     "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@unfiled/search": "workspace:*"
   }
 }

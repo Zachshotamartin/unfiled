@@ -30,4 +30,18 @@ describe("search ranking", () => {
       })
     ).toBe(0);
   });
+
+  it("treats every non-finite signal as zero instead of returning NaN", () => {
+    expect(
+      rankSearchResult({
+        fullText: Number.NaN,
+        trigram: Number.POSITIVE_INFINITY,
+        vector: Number.NEGATIVE_INFINITY,
+        recency: 1,
+        titleExact: 0,
+        pinned: false,
+        privateManual: false
+      })
+    ).toBe(0.1);
+  });
 });

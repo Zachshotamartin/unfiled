@@ -26,6 +26,7 @@ export type AggregateContentKind =
   | "idempotency_response"
   | "note_content"
   | "note_mutation"
+  | "note_rag_index"
   | "note_revision"
   | "organization_decision"
   | "organization_mutation_attempt"
@@ -128,6 +129,17 @@ export type SealNoteContentInput = Readonly<{
 }>;
 
 export type OpenNoteContentInput = Omit<SealNoteContentInput, "payload">;
+
+export type NoteRagIndexId = `irw_${string}`;
+
+export type SealNoteRagIndexInput<Payload> = Readonly<{
+  indexId: NoteRagIndexId;
+  indexedRevision: number;
+  payload: Payload;
+  payloadCodec: PayloadCodec<Payload>;
+}>;
+
+export type OpenNoteRagIndexInput<Payload> = Omit<SealNoteRagIndexInput<Payload>, "payload">;
 
 export type SealSpaceDisplayInput = Readonly<{
   spaceId: EntityId<"spc">;
@@ -419,6 +431,15 @@ export type EncryptedAggregateService = Readonly<{
     record: unknown,
     expected: OpenNoteContentInput
   ): Promise<NoteContentPayload>;
+  sealNoteRagIndex<Payload>(
+    access: AuthorizedOwnerAccess,
+    input: SealNoteRagIndexInput<Payload>
+  ): Promise<SealedEncryptedAggregateRecord<"note_rag_index">>;
+  openNoteRagIndex<Payload>(
+    access: AuthorizedOwnerAccess,
+    record: unknown,
+    expected: OpenNoteRagIndexInput<Payload>
+  ): Promise<Payload>;
   sealSpaceDisplay(
     access: AuthorizedOwnerAccess,
     input: SealSpaceDisplayInput

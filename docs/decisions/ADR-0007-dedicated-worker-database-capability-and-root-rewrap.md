@@ -15,7 +15,7 @@ Root rotation creates a second boundary. The interactive/admin service may use A
 
 ### 1. Give the worker one exact non-bypass database identity
 
-Migration `20260830000015_encrypted_library_expansion.sql` owns the PostgreSQL role `unfiled_index_worker`. The checked-in role is deliberately `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS`, `NOSUPERUSER`, `NOCREATEDB`, `NOCREATEROLE`, and `NOREPLICATION`, with no role membership. The migration revokes any accidental `service_role` membership, all direct public/private table and sequence privileges, public-schema `CREATE`, private-schema access, and every function grant before rebuilding the allowlist.
+`supabase/roles.sql` and migration `20260830000015_encrypted_library_expansion.sql` own the PostgreSQL role `unfiled_index_worker`. The checked-in role is deliberately `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS`, `NOSUPERUSER`, `NOCREATEDB`, `NOCREATEROLE`, and `NOREPLICATION`, with no workload-usable role membership. The guards reject every inbound or outbound membership except PostgreSQL 17's automatic, inert platform-management edge from trusted schema owner `postgres` (`supabase_admin` grantor, `ADMIN=true`, `INHERIT=false`, `SET=false`), or zero rows after a real superuser removes it. The migration revokes all direct public/private table and sequence privileges, public-schema `CREATE`, private-schema access, and every function grant before rebuilding the allowlist.
 
 The only runtime grants are `USAGE` on `public` plus `EXECUTE` on these six `SECURITY DEFINER` functions:
 
