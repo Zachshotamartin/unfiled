@@ -177,10 +177,10 @@ The checked-in C.5a module at `infra/aws-kms` now defines the exact production i
 
 ### Dedicated production worker database login — provision with C.5c, not before
 
-Migration `20260830000015_encrypted_library_expansion.sql` creates the exact PostgreSQL role
-`unfiled_index_worker`, but deliberately leaves it `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS`, and
-without a password. It has no relation or sequence privileges, no access to the `private` schema,
-no role membership, and no executable public functions except the six RAG capabilities listed in
+`supabase/roles.sql` and migration `20260830000015_encrypted_library_expansion.sql` create the exact
+PostgreSQL role `unfiled_index_worker`, but deliberately leave it `NOLOGIN`, `NOINHERIT`,
+`NOBYPASSRLS`, and without a password. It has no relation or sequence privileges, no access to the
+`private` schema, no workload-usable role membership, and no executable public functions except the six RAG capabilities listed in
 [ADR-0007](./docs/decisions/ADR-0007-dedicated-worker-database-capability-and-root-rewrap.md).
 Do not provision this credential while the worker drain adapter still returns its intentional
 `503`. Complete these steps only after C.5c's reviewed database adapter is merged and before enabling
@@ -192,9 +192,19 @@ production index jobs:
    for transaction pooling. It must perform certificate and hostname verification equivalent to
    `sslmode=verify-full`; `sslmode=disable`, `rejectUnauthorized: false`, and encryption without
    certificate/hostname verification are release blockers.
-2. Open `psql` from a trusted administrator session over that verified TLS connection. Apply every
-   migration first. Then enable login and set a generated password without placing it in SQL text,
-   shell history, a ticket, or this file:
+2. Apply `supabase/roles.sql` with the migrations (`supabase db push --include-roles` for the
+   reviewed CLI release). The role guards accept either zero membership rows or PostgreSQL 17's
+   single automatic platform-management edge: granted role `unfiled_index_worker`, member
+   `postgres`, grantor `supabase_admin`, `ADMIN=true`, `INHERIT=false`, `SET=false`. Reject any other
+   inbound or outbound row. If Supabase support or another actual bootstrap-superuser path is
+   available, remove that automatic edge and record the resulting zero-row proof; ordinary project
+   `postgres` cannot remove a grant recorded by `supabase_admin`. Do not weaken the exact-shape guard
+   or treat the edge as a workload login—`postgres` already owns and can replace the migrations and
+   security-definer functions.
+
+   Then open `psql` from a trusted administrator session over that verified TLS connection. Enable
+   login and set a generated password without placing it in SQL text, shell history, a ticket, or
+   this file:
 
    ```psql
    ALTER ROLE unfiled_index_worker LOGIN;
@@ -216,8 +226,9 @@ production index jobs:
 4. From the deployed C.5c adapter's database session, record a content-free readiness result proving
    `session_user = 'unfiled_index_worker'`. `SET ROLE unfiled_index_worker` is not acceptable:
    security-definer RPCs check the original connection identity. Confirm again that the role is not
-   superuser, cannot bypass RLS, cannot inherit, and has no membership. A connection for which the
-   pooler reports another `session_user` fails closed and blocks rollout.
+   superuser, cannot bypass RLS, cannot inherit, and has no membership except the exact inert
+   platform-management edge above. A connection for which the pooler reports another `session_user`
+   fails closed and blocks rollout.
 5. Run the deployed privilege probe. It must prove zero direct SELECT/INSERT/UPDATE/DELETE or sequence
    access across `public` and `private`, no `private` schema use, no public create, and EXECUTE on
    exactly: `claim_note_index_jobs`, `heartbeat_note_index_job`, `commit_note_rag_index`,
@@ -234,6 +245,39 @@ production index jobs:
    redeploy/recycle pooled connections, prove the old credential is rejected and the new session has
    the same exact allowlist, then resume. A database rebuild or replay of the role-creating migration
    returns it to `NOLOGIN`; repeat the explicit provisioning/probe instead of weakening the migration.
+
+### Dedicated generation-verifier database login — provision separately
+
+`supabase/roles.sql` and migration `20260830000017_private_rag_runtime.sql` also create
+`unfiled_rag_verifier` as `NOLOGIN`, `NOINHERIT`, and `NOBYPASSRLS`. It has no table, sequence, or
+private-schema access and can execute only `verify_rag_index_generation`. The separately
+authenticated verifier role is the attestation authority; the database recomputes the canonical
+manifest digest, while activation independently revalidates that evidence. This is not a stored
+signature or MAC.
+
+1. Apply the same membership-shape gate as the index worker: zero rows after a real superuser
+   cleanup is preferred; otherwise the only permitted row is the automatic `supabase_admin`-granted
+   ADMIN-only edge to `postgres` for `unfiled_rag_verifier`, with both `INHERIT` and `SET` false.
+2. From the trusted verified-TLS administrator session, provision the role itself as the exact
+   login; do not grant it to a controller parent role:
+
+   ```psql
+   ALTER ROLE unfiled_rag_verifier LOGIN;
+   \password unfiled_rag_verifier
+   ```
+
+3. Store its separately generated pooler credential only in the verifier controller's Production
+   secret scope. It must not be shared with the index worker, organizer, web project, Preview, CI,
+   `service_role`, or any Supabase API key. Require an exact
+   `session_user = 'unfiled_rag_verifier'` readiness proof over `sslmode=verify-full`.
+4. Prove the login can execute only
+   `verify_rag_index_generation(uuid,text,bigint,jsonb)`, cannot read any relation or use the
+   `private` schema, and cannot activate a generation. Prove a service-role session cannot verify,
+   a bogus extra `verificationMac` field is rejected, an arbitrary digest is rejected, and
+   activation rejects mutated or stale canonical evidence. Record only identifiers, SQLSTATEs,
+   role/grant metadata, and timestamps—never ciphertext, note content, or credentials.
+5. Rotate and revoke this credential independently. A rebuild returns the role to `NOLOGIN`; repeat
+   this provisioning and privilege proof before the verifier controller resumes.
 
 Until those steps and C.5 pass, Unfiled may be shown as a portfolio work in progress but must not claim that the complete note library is encrypted or that private-manual mode is end-to-end encrypted.
 

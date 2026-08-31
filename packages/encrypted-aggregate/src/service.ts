@@ -78,6 +78,7 @@ const LOGICAL_REQUEST_KEYS = [
   "expectedRevision",
   "payload"
 ] as const;
+const NOTE_RAG_INDEX_ID_PATTERN = /^irw_[0-9A-HJKMNP-TV-Z]{26}$/u;
 const SCOPE_PATTERN = /^[a-z][a-z0-9_.:-]{0,99}$/u;
 
 type ExpectedAggregate<Kind extends AggregateContentKind> = Readonly<{
@@ -278,6 +279,15 @@ function operationTouchesPrivate(value: Readonly<{ type: string; privacy?: unkno
     (value.type === "set_privacy" || value.type === "restore_snapshot") &&
     value.privacy === "private_manual"
   );
+}
+
+function assertNoteRagIndexId(value: unknown): asserts value is `irw_${string}` {
+  if (typeof value !== "string" || !NOTE_RAG_INDEX_ID_PATTERN.test(value)) {
+    aggregateFailure(
+      EncryptedAggregateErrorCode.INVALID_INPUT,
+      "Index resource identifier is invalid"
+    );
+  }
 }
 
 export function createEncryptedAggregateService(
@@ -975,6 +985,42 @@ export function createEncryptedAggregateService(
             keyClass
           ),
           NoteContentPayloadSchema
+        )
+      ).payload;
+    },
+
+    async sealNoteRagIndex(access, input) {
+      const ownerId = ownerIdFromAccess(access);
+      assertNoteRagIndexId(input.indexId);
+      assertRecordVersion(input.indexedRevision);
+      return sealPayload(
+        expectedAggregate(
+          ownerId,
+          input.indexId,
+          input.indexedRevision,
+          "note_rag_index",
+          "ai_assisted"
+        ),
+        input.payload,
+        input.payloadCodec
+      );
+    },
+
+    async openNoteRagIndex(access, record, expected) {
+      const ownerId = ownerIdFromAccess(access);
+      assertNoteRagIndexId(expected.indexId);
+      assertRecordVersion(expected.indexedRevision);
+      return (
+        await openPayload(
+          record,
+          expectedAggregate(
+            ownerId,
+            expected.indexId,
+            expected.indexedRevision,
+            "note_rag_index",
+            "ai_assisted"
+          ),
+          expected.payloadCodec
         )
       ).payload;
     },

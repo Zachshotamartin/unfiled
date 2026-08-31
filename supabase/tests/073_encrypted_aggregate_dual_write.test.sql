@@ -309,7 +309,7 @@ select is(
         'public.commit_note_rag_index(text,uuid,text,jsonb,text,public.content_key_class,public.content_key_purpose,integer,integer)'::regprocedure,
         'public.fail_note_index_job(text,uuid,public.safe_error_code,boolean,integer)'::regprocedure,
         'public.recover_stale_note_index_jobs(integer)'::regprocedure,
-        'public.list_active_note_rag_index(uuid,text,integer)'::regprocedure
+        'public.list_active_note_rag_index(uuid,jsonb,integer,integer)'::regprocedure
       ])
   ),
   6::bigint,

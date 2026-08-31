@@ -33,22 +33,59 @@ begin
       || 'nosuperuser nocreatedb nocreaterole noinherit nologin '
       || 'noreplication nobypassrls';
   else
-    execute 'alter role unfiled_index_worker '
-      || 'nosuperuser nocreatedb nocreaterole noinherit nologin '
-      || 'noreplication nobypassrls';
+    if exists (
+      select 1
+      from pg_catalog.pg_roles
+      where rolname = 'unfiled_index_worker'
+        and not rolsuper
+        and (
+          rolcreatedb or rolcreaterole or rolinherit or rolcanlogin
+          or rolreplication or rolbypassrls
+        )
+    ) then
+      execute 'alter role unfiled_index_worker '
+        || 'nocreatedb nocreaterole noinherit nologin '
+        || 'noreplication nobypassrls';
+    end if;
+  end if;
+
+  if exists (
+    select 1
+    from pg_catalog.pg_roles
+    where rolname = 'unfiled_index_worker'
+      and (
+        rolsuper or rolcreatedb or rolcreaterole or rolinherit or rolcanlogin
+        or rolreplication or rolbypassrls
+      )
+  ) then
+    raise exception using
+      errcode = '42501', message = 'index_worker_role_attributes_not_reconciled';
   end if;
 
   if exists (
     select 1
     from pg_catalog.pg_auth_members as membership
-    join pg_catalog.pg_roles as granted_role
-      on granted_role.oid = membership.roleid
-    join pg_catalog.pg_roles as member_role
-      on member_role.oid = membership.member
-    where granted_role.rolname = 'service_role'
-      and member_role.rolname = 'unfiled_index_worker'
+    join pg_catalog.pg_roles as granted
+      on granted.oid = membership.roleid
+    join pg_catalog.pg_roles as member
+      on member.oid = membership.member
+    join pg_catalog.pg_roles as grantor
+      on grantor.oid = membership.grantor
+    where (
+      granted.rolname = 'unfiled_index_worker'
+      or member.rolname = 'unfiled_index_worker'
+    )
+      and not (
+        granted.rolname = 'unfiled_index_worker'
+        and member.rolname = 'postgres'
+        and grantor.rolname = 'supabase_admin'
+        and membership.admin_option
+        and not membership.inherit_option
+        and not membership.set_option
+      )
   ) then
-    execute 'revoke service_role from unfiled_index_worker';
+    raise exception using
+      errcode = '42501', message = 'index_worker_role_membership_not_reconciled';
   end if;
 end;
 $dedicated_index_worker$;

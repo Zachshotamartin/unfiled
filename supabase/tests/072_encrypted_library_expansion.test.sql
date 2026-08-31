@@ -49,11 +49,37 @@ exception when others then
 end;
 $$;
 
+create function pg_temp.generation_attestation(
+  p_owner_id uuid,
+  p_generation_id text,
+  p_revision_token bigint
+)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  attestation_value jsonb;
+  attestation_digest_value text;
+begin
+  attestation_value := private.rag_generation_attestation(
+    p_owner_id, p_generation_id, p_revision_token
+  );
+  attestation_digest_value := private.request_hash(attestation_value);
+  return jsonb_build_object(
+    'domain', 'unfiled.rag-generation-verification.v1',
+    'attestationDigest', attestation_digest_value
+  );
+end;
+$$;
+
 create temporary table c5_values (
   key text primary key,
   value jsonb not null
 ) on commit drop;
-grant all on table c5_values to service_role;
+grant all on table c5_values to service_role, unfiled_rag_verifier;
 grant select, insert, update on table c5_values to unfiled_index_worker;
 
 select ok(
@@ -128,10 +154,23 @@ select ok(
     and not exists (
       select 1
       from pg_auth_members as membership
-      join pg_roles as member_role on member_role.oid = membership.member
-      where member_role.rolname = 'unfiled_index_worker'
+      join pg_roles as granted on granted.oid = membership.roleid
+      join pg_roles as member on member.oid = membership.member
+      join pg_roles as grantor on grantor.oid = membership.grantor
+      where (
+        granted.rolname = 'unfiled_index_worker'
+        or member.rolname = 'unfiled_index_worker'
+      )
+        and not (
+          granted.rolname = 'unfiled_index_worker'
+          and member.rolname = 'postgres'
+          and grantor.rolname = 'supabase_admin'
+          and membership.admin_option
+          and not membership.inherit_option
+          and not membership.set_option
+        )
     ),
-  'the index worker has no service_role or other inherited role membership'
+  'the index worker has no workload membership beyond the inert platform admin edge'
 );
 select ok(
   has_schema_privilege('unfiled_index_worker', 'public', 'USAGE')
@@ -341,7 +380,7 @@ from unnest(array[
   'public.fail_note_index_job(text,uuid,public.safe_error_code,boolean,integer)',
   'public.recover_stale_note_index_jobs(integer)',
   'public.activate_rag_index_generation(uuid,text,bigint)',
-  'public.list_active_note_rag_index(uuid,text,integer)'
+  'public.list_active_note_rag_index(uuid,jsonb,integer,integer)'
 ]) as protected(signature);
 
 select ok(
@@ -360,7 +399,7 @@ from unnest(array[
   'public.fail_note_index_job(text,uuid,public.safe_error_code,boolean,integer)',
   'public.recover_stale_note_index_jobs(integer)',
   'public.activate_rag_index_generation(uuid,text,bigint)',
-  'public.list_active_note_rag_index(uuid,text,integer)'
+  'public.list_active_note_rag_index(uuid,jsonb,integer,integer)'
 ]) as service_capability(signature);
 
 select ok(
@@ -373,7 +412,7 @@ from unnest(array[
   'public.commit_note_rag_index(text,uuid,text,jsonb,text,public.content_key_class,public.content_key_purpose,integer,integer)',
   'public.fail_note_index_job(text,uuid,public.safe_error_code,boolean,integer)',
   'public.recover_stale_note_index_jobs(integer)',
-  'public.list_active_note_rag_index(uuid,text,integer)'
+  'public.list_active_note_rag_index(uuid,jsonb,integer,integer)'
 ]) as worker_capability(signature);
 select ok(
   not exists (
@@ -391,7 +430,7 @@ select ok(
         'public.commit_note_rag_index(text,uuid,text,jsonb,text,public.content_key_class,public.content_key_purpose,integer,integer)'::regprocedure::oid,
         'public.fail_note_index_job(text,uuid,public.safe_error_code,boolean,integer)'::regprocedure::oid,
         'public.recover_stale_note_index_jobs(integer)'::regprocedure::oid,
-        'public.list_active_note_rag_index(uuid,text,integer)'::regprocedure::oid
+        'public.list_active_note_rag_index(uuid,jsonb,integer,integer)'::regprocedure::oid
       ])
   ),
   'the dedicated worker has no executable public function outside its six-RPC allowlist'
@@ -422,7 +461,7 @@ from unnest(array[
   'public.commit_note_rag_index(text,uuid,text,jsonb,text,public.content_key_class,public.content_key_purpose,integer,integer)',
   'public.fail_note_index_job(text,uuid,public.safe_error_code,boolean,integer)',
   'public.recover_stale_note_index_jobs(integer)',
-  'public.list_active_note_rag_index(uuid,text,integer)'
+  'public.list_active_note_rag_index(uuid,jsonb,integer,integer)'
 ]) as worker_connection_guard(signature);
 
 -- SET ROLE is deliberately insufficient: SECURITY DEFINER checks the original
@@ -1085,13 +1124,21 @@ select is(
 
 insert into public.notes (
   id, user_id, space_id, type, title, body_markdown, structured_data,
-  current_revision, privacy, created_at, updated_at
+  current_revision, privacy, created_at, updated_at,
+  content_envelope, content_key_id, content_key_class,
+  content_key_purpose, content_key_version
 ) values (
   'note_72000000000000000000000009',
   '22222222-2222-4222-8222-222222222222',
   'spc_00000000000000000000000009',
   'generic', 'C.5 encrypted index fixture', 'synthetic index body', '{}',
-  1, 'ai_assisted', '2026-08-30 23:30:00+00', '2026-08-30 23:30:00+00'
+  1, 'ai_assisted', '2026-08-30 23:30:00+00', '2026-08-30 23:30:00+00',
+  pg_temp.content_envelope(
+    'note_72000000000000000000000009',
+    '22222222-2222-4222-8222-222222222222', 1,
+    'note_content', 'other.ai.object.v1', 80
+  ),
+  'other.ai.object.v1', 'ai_assisted', 'object_wrap', 1
 );
 
 set local role service_role;
@@ -1163,8 +1210,8 @@ select throws_ok(
     'igen_72000000000000000000000001', 1
   )$$,
   'P0001',
-  'incomplete_index_coverage',
-  'a generation cannot activate before exact current-revision coverage'
+  'generation_not_verified',
+  'a generation cannot activate before strict decryption verification'
 );
 
 insert into c5_values (key, value)
@@ -1270,13 +1317,10 @@ select is(
   'terminal index commit replay is deterministic for the same lease request'
 );
 select is(
-  (
-    select count(*)
-    from public.list_active_note_rag_index(
-      '22222222-2222-4222-8222-222222222222', null, 50
-    )
-  ),
-  0::bigint,
+  jsonb_array_length(public.list_active_note_rag_index(
+    '22222222-2222-4222-8222-222222222222', null, 50
+  ) -> 'items'),
+  0,
   'a complete shadow generation remains unreadable until atomic activation'
 );
 
@@ -1287,6 +1331,26 @@ select
   jsonb_build_object('revisionToken', revision_token)
 from public.rag_index_generations
 where id = 'igen_72000000000000000000000001';
+grant unfiled_rag_verifier to postgres;
+set local role unfiled_rag_verifier;
+select public.verify_rag_index_generation(
+  '22222222-2222-4222-8222-222222222222',
+  'igen_72000000000000000000000001',
+  (
+    select (value ->> 'revisionToken')::bigint
+    from c5_values where key = 'activation-token'
+  ),
+  pg_temp.generation_attestation(
+    '22222222-2222-4222-8222-222222222222',
+    'igen_72000000000000000000000001',
+    (
+      select (value ->> 'revisionToken')::bigint
+      from c5_values where key = 'activation-token'
+    )
+  )
+);
+reset role;
+revoke unfiled_rag_verifier from postgres;
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 insert into c5_values (key, value)
@@ -1302,13 +1366,10 @@ values (
   )
 );
 select is(
-  (
-    select count(*)
-    from public.list_active_note_rag_index(
-      '22222222-2222-4222-8222-222222222222', null, 50
-    )
-  ),
-  1::bigint,
+  jsonb_array_length(public.list_active_note_rag_index(
+    '22222222-2222-4222-8222-222222222222', null, 50
+  ) -> 'items'),
+  1,
   'active-generation retrieval returns exact current-revision owner rows only'
 );
 select throws_ok(
@@ -1363,20 +1424,21 @@ select is(
 );
 
 update public.notes
-set current_revision = 2
+set
+  current_revision = 2,
+  content_envelope = pg_temp.content_envelope(
+    id, user_id, 2, 'note_content', 'other.ai.object.v1', 80
+  )
 where id = 'note_72000000000000000000000009'
   and user_id = '22222222-2222-4222-8222-222222222222';
 
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select is(
-  (
-    select count(*)
-    from public.list_active_note_rag_index(
-      '22222222-2222-4222-8222-222222222222', null, 50
-    )
-  ),
-  0::bigint,
+  jsonb_array_length(public.list_active_note_rag_index(
+    '22222222-2222-4222-8222-222222222222', null, 50
+  ) -> 'items'),
+  0,
   'stale indexed revisions disappear from retrieval immediately'
 );
 
@@ -1413,13 +1475,9 @@ values (
 );
 select ok(
   (select value ->> 'committed' from c5_values where key = 'commit-v2') = 'true'
-    and (
-      select indexed_revision = 2
-      from public.list_active_note_rag_index(
-        '22222222-2222-4222-8222-222222222222', null, 50
-      )
-      limit 1
-    ),
+    and public.list_active_note_rag_index(
+      '22222222-2222-4222-8222-222222222222', null, 50
+    ) #>> '{items,0,indexedRevision}' = '2',
   'revision N+1 atomically replaces the encrypted document and becomes retrievable'
 );
 select is(
@@ -1440,7 +1498,13 @@ select is(
 
 reset role;
 update public.notes
-set privacy = 'private_manual'
+set
+  privacy = 'private_manual',
+  content_envelope = null,
+  content_key_id = null,
+  content_key_class = null,
+  content_key_purpose = null,
+  content_key_version = null
 where id = 'note_72000000000000000000000009'
   and user_id = '22222222-2222-4222-8222-222222222222';
 select is(
@@ -1469,13 +1533,21 @@ select throws_ok(
 reset role;
 insert into public.notes (
   id, user_id, space_id, type, title, body_markdown, structured_data,
-  current_revision, privacy, created_at, updated_at
+  current_revision, privacy, created_at, updated_at,
+  content_envelope, content_key_id, content_key_class,
+  content_key_purpose, content_key_version
 ) values (
   'note_72000000000000000000000008',
   '22222222-2222-4222-8222-222222222222',
   'spc_00000000000000000000000009',
   'generic', 'C.5 lease recovery fixture', 'synthetic lease body', '{}',
-  1, 'ai_assisted', '2026-08-30 23:31:00+00', '2026-08-30 23:31:00+00'
+  1, 'ai_assisted', '2026-08-30 23:31:00+00', '2026-08-30 23:31:00+00',
+  pg_temp.content_envelope(
+    'note_72000000000000000000000008',
+    '22222222-2222-4222-8222-222222222222', 1,
+    'note_content', 'other.ai.object.v1', 80
+  ),
+  'other.ai.object.v1', 'ai_assisted', 'object_wrap', 1
 );
 
 set local role service_role;
@@ -1545,7 +1617,11 @@ select is(
 
 reset role;
 update public.notes
-set current_revision = 2
+set
+  current_revision = 2,
+  content_envelope = pg_temp.content_envelope(
+    id, user_id, 2, 'note_content', 'other.ai.object.v1', 80
+  )
 where id = 'note_72000000000000000000000008'
   and user_id = '22222222-2222-4222-8222-222222222222';
 select is(
@@ -1594,13 +1670,21 @@ from (
 reset role;
 insert into public.notes (
   id, user_id, space_id, type, title, body_markdown, structured_data,
-  current_revision, privacy, created_at, updated_at
+  current_revision, privacy, created_at, updated_at,
+  content_envelope, content_key_id, content_key_class,
+  content_key_purpose, content_key_version
 ) values (
   'note_72000000000000000000000007',
   '22222222-2222-4222-8222-222222222222',
   'spc_00000000000000000000000009',
   'generic', 'C.5 privacy race fixture', 'synthetic privacy race body', '{}',
-  1, 'ai_assisted', '2026-08-30 23:32:00+00', '2026-08-30 23:32:00+00'
+  1, 'ai_assisted', '2026-08-30 23:32:00+00', '2026-08-30 23:32:00+00',
+  pg_temp.content_envelope(
+    'note_72000000000000000000000007',
+    '22222222-2222-4222-8222-222222222222', 1,
+    'note_content', 'other.ai.object.v1', 80
+  ),
+  'other.ai.object.v1', 'ai_assisted', 'object_wrap', 1
 );
 
 set local role service_role;
@@ -1619,7 +1703,13 @@ values ('claim-private-race', public.claim_note_index_jobs('privacy-race-worker'
 
 reset role;
 update public.notes
-set privacy = 'private_manual'
+set
+  privacy = 'private_manual',
+  content_envelope = null,
+  content_key_id = null,
+  content_key_class = null,
+  content_key_purpose = null,
+  content_key_version = null
 where id = 'note_72000000000000000000000007'
   and user_id = '22222222-2222-4222-8222-222222222222';
 
@@ -1667,13 +1757,21 @@ select is(
 
 insert into public.notes (
   id, user_id, space_id, type, title, body_markdown, structured_data,
-  current_revision, privacy, created_at, updated_at
+  current_revision, privacy, created_at, updated_at,
+  content_envelope, content_key_id, content_key_class,
+  content_key_purpose, content_key_version
 ) values (
   'note_72000000000000000000000006',
   '22222222-2222-4222-8222-222222222222',
   'spc_00000000000000000000000009',
   'generic', 'C.5 revision race fixture', 'synthetic revision race body', '{}',
-  1, 'ai_assisted', '2026-08-30 23:33:00+00', '2026-08-30 23:33:00+00'
+  1, 'ai_assisted', '2026-08-30 23:33:00+00', '2026-08-30 23:33:00+00',
+  pg_temp.content_envelope(
+    'note_72000000000000000000000006',
+    '22222222-2222-4222-8222-222222222222', 1,
+    'note_content', 'other.ai.object.v1', 80
+  ),
+  'other.ai.object.v1', 'ai_assisted', 'object_wrap', 1
 );
 
 set local role service_role;
@@ -1692,7 +1790,11 @@ values ('claim-revision-race', public.claim_note_index_jobs('revision-race-worke
 
 reset role;
 update public.notes
-set current_revision = 2
+set
+  current_revision = 2,
+  content_envelope = pg_temp.content_envelope(
+    id, user_id, 2, 'note_content', 'other.ai.object.v1', 80
+  )
 where id = 'note_72000000000000000000000006'
   and user_id = '22222222-2222-4222-8222-222222222222';
 
