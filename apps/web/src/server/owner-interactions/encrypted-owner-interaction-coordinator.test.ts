@@ -812,21 +812,29 @@ describe("encrypted owner-interaction coordinator", () => {
       destination: { type: "note", noteId: NOTE_B }
     });
 
-    const stalledObservation = vi.fn(
-      () =>
-        new Promise<void>(() => {
-          // Deliberately never settles; the bounded failure deadline must win.
-        })
-    );
-    await expectServiceError(
-      coordinator(adapter, crypto, stalledObservation, Date.now() + 25).correctDecision(
-        DECISION,
-        correctionRequest()
-      ),
-      ServiceRpcErrorCode.PROVIDER_UNAVAILABLE
-    );
-    expect(commit).toHaveBeenCalledTimes(2);
-    expect(stalledObservation).toHaveBeenCalledOnce();
+    const observationDeadlineBase = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(observationDeadlineBase);
+    try {
+      const stalledObservation = vi.fn(
+        () =>
+          new Promise<void>(() => {
+            // Deliberately never settles; the bounded failure deadline must win.
+          })
+      );
+      await expectServiceError(
+        coordinator(
+          adapter,
+          crypto,
+          stalledObservation,
+          observationDeadlineBase + 25
+        ).correctDecision(DECISION, correctionRequest()),
+        ServiceRpcErrorCode.PROVIDER_UNAVAILABLE
+      );
+      expect(commit).toHaveBeenCalledTimes(2);
+      expect(stalledObservation).toHaveBeenCalledOnce();
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("persists the zero-note Review branch when an applied correction lacks its source capture", async () => {
