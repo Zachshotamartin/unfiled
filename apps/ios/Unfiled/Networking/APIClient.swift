@@ -60,6 +60,31 @@ public final class APIClient: Sendable {
                               authentication: auth, response: Response.self)
     }
 
+    func authenticatedArchiveStream(_ path: String) async throws -> AsyncThrowingStream<Data, any Error> {
+        guard let tokenProvider else { throw APIClientError.authenticationRequired }
+        let firstCredential: AccessTokenCredential
+        do { firstCredential = try await tokenProvider.accessTokenCredential() }
+        catch { throw sanitized(error) }
+
+        let first = try await performArchiveStream(path, token: firstCredential.token)
+        if first.http.statusCode == 401 {
+            first.cancel()
+            let refreshed: AccessTokenCredential
+            do {
+                refreshed = try await tokenProvider.refreshAfterUnauthorized(
+                    rejectedCredential: firstCredential
+                )
+            } catch { throw sanitized(error) }
+            guard refreshed.userID == firstCredential.userID,
+                  refreshed.sessionGeneration == firstCredential.sessionGeneration else {
+                throw APIClientError.authenticationRequired
+            }
+            let retry = try await performArchiveStream(path, token: refreshed.token)
+            return try await validatedArchiveStream(retry)
+        }
+        return try await validatedArchiveStream(first)
+    }
+
     func postEmpty<Response: Decodable>(_ path: String, authenticated: Bool = true,
                                          explicitToken: String? = nil,
                                          as: Response.Type = Response.self) async throws -> Response {
@@ -92,6 +117,23 @@ public final class APIClient: Sendable {
                                                        as: Response.Type = Response.self) async throws -> Response {
         try await send("DELETE", path: path, body: body, idempotencyKey: idempotencyKey,
                        authentication: .required, response: Response.self)
+    }
+
+    /// Account-deletion capabilities stay in the encrypted HTTP body. Unlike
+    /// ordinary mutation IDs, they must never be copied into an edge-loggable
+    /// custom header.
+    func deleteBodyOnly<Response: Decodable, Body: Encodable>(
+        _ path: String,
+        body: Body,
+        as: Response.Type = Response.self
+    ) async throws -> Response {
+        try await send(
+            "DELETE",
+            path: path,
+            body: body,
+            authentication: .required,
+            response: Response.self
+        )
     }
 
     private func send<Response: Decodable, Body: Encodable>(
@@ -174,6 +216,69 @@ public final class APIClient: Sendable {
         }
         do { return try await transport.data(for: request, maxResponseBytes: limits.responseBodyBytes) }
         catch let error as APIClientError { throw error }
+        catch { throw APIClientError.transportFailure }
+    }
+
+    private func performArchiveStream(_ path: String, token: String) async throws -> HTTPStreamResponse {
+        guard !path.contains(".."), !token.isEmpty, !token.contains(where: { $0.isNewline }),
+              var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+            throw APIClientError.invalidRequest
+        }
+        let root = components.path.hasSuffix("/") ? String(components.path.dropLast()) : components.path
+        components.path = root + (path.hasPrefix("/") ? path : "/\(path)")
+        components.query = nil
+        guard let url = components.url else { throw APIClientError.invalidRequest }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 300)
+        request.httpMethod = "GET"
+        request.setValue("application/gzip", forHTTPHeaderField: "Accept")
+        request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+        request.setValue("no-cache", forHTTPHeaderField: "Pragma")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        do { return try await transport.stream(for: request, chunkBytes: 65_536) }
+        catch let error as APIClientError { throw error }
+        catch { throw APIClientError.transportFailure }
+    }
+
+    private func validatedArchiveStream(
+        _ response: HTTPStreamResponse
+    ) async throws -> AsyncThrowingStream<Data, any Error> {
+        guard (200 ... 299).contains(response.http.statusCode) else {
+            let status = response.http.statusCode
+            let data = try await boundedFailureBody(response)
+            let payload = try? APIJSON.makeDecoder().decode(APIErrorPayload.self, from: data)
+            throw APIClientError.http(
+                status: status,
+                code: payload?.code,
+                requestId: payload?.requestId,
+                retryAfterSeconds: payload?.retryAfterSeconds
+            )
+        }
+        let mediaType = response.http.value(forHTTPHeaderField: "Content-Type")?
+            .split(separator: ";", maxSplits: 1).first.map(String.init)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard mediaType == "application/gzip",
+              response.http.value(forHTTPHeaderField: "Cache-Control") == "private, no-store",
+              response.http.value(forHTTPHeaderField: "Pragma") == "no-cache",
+              response.http.value(forHTTPHeaderField: "Content-Disposition")?
+              .hasPrefix("attachment;") == true else {
+            response.cancel()
+            throw APIClientError.malformedResponse(status: response.http.statusCode)
+        }
+        return response.body
+    }
+
+    private func boundedFailureBody(_ response: HTTPStreamResponse) async throws -> Data {
+        var data = Data()
+        do {
+            for try await chunk in response.body {
+                guard data.count <= limits.responseBodyBytes - chunk.count else {
+                    response.cancel()
+                    throw APIClientError.responseBodyTooLarge(limit: limits.responseBodyBytes)
+                }
+                data.append(chunk)
+            }
+            return data
+        } catch let error as APIClientError { throw error }
         catch { throw APIClientError.transportFailure }
     }
 

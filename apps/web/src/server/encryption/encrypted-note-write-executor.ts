@@ -23,6 +23,10 @@ import type {
   IncompleteEncryptedNoteWriteClaim
 } from "./encrypted-note-rpc-adapter";
 import {
+  encryptedOnlyMutationProjection,
+  encryptedOnlyNoteState
+} from "./encrypted-note-command-projection";
+import {
   prepareEncryptedNoteWrite,
   type EncryptedNoteWriteCoordinates
 } from "./encrypted-note-write-coordinator";
@@ -351,9 +355,19 @@ export async function executeEncryptedNoteWrite<RequestPayload, ResponsePayload>
     )
   ]);
 
+  const mutationProjection =
+    claim.commandProjection === "encrypted_only"
+      ? encryptedOnlyMutationProjection(claim.targetPrivacy)
+      : Object.freeze({
+          operations: mutationPayload.operations,
+          inverse: mutationPayload.inverse
+        });
   const command = Object.freeze({
     occurredAt: claim.occurredAt,
-    noteState: material.noteState,
+    noteState:
+      claim.commandProjection === "encrypted_only"
+        ? encryptedOnlyNoteState(claim.noteId, material.noteState)
+        : material.noteState,
     noteCipher: encryptedFieldForRpc(noteCipher),
     revision: Object.freeze({
       id: claim.revisionId,
@@ -366,8 +380,8 @@ export async function executeEncryptedNoteWrite<RequestPayload, ResponsePayload>
       id: claim.mutationId,
       decisionId: material.mutation.decisionId,
       undoTargetMutationId: material.mutation.undoTargetMutationId,
-      operations: mutationPayload.operations,
-      inverse: mutationPayload.inverse,
+      operations: mutationProjection.operations,
+      inverse: mutationProjection.inverse,
       cipher: encryptedFieldForRpc(mutationCipher)
     }),
     requestMac: keyedMacForRpc(requestMac),

@@ -79,12 +79,20 @@ describe("allowlisted encrypted service RPC client", () => {
   });
 
   it.each([
+    ["conflict_requires_review", ServiceRpcErrorCode.CONFLICT_REQUIRES_REVIEW],
     ["capture_id_conflict", ServiceRpcErrorCode.INVALID_IDEMPOTENCY_KEY],
     ["stale_maintenance_cursor", ServiceRpcErrorCode.STALE_MAINTENANCE_CURSOR],
+    ["stale_scrub_cursor", ServiceRpcErrorCode.STALE_MAINTENANCE_CURSOR],
     ["explicit_destination_not_owned", ServiceRpcErrorCode.FORBIDDEN],
     ["invalid_rollout_state", ServiceRpcErrorCode.PROVIDER_UNAVAILABLE],
+    ["invalid_scrub_state", ServiceRpcErrorCode.PROVIDER_UNAVAILABLE],
     ["encrypted_organizer_write_unavailable", ServiceRpcErrorCode.PROVIDER_UNAVAILABLE],
-    ["incomplete_encryption_backfill", ServiceRpcErrorCode.PROVIDER_UNAVAILABLE]
+    ["incomplete_encryption_backfill", ServiceRpcErrorCode.PROVIDER_UNAVAILABLE],
+    ["incomplete_index_coverage", ServiceRpcErrorCode.PROVIDER_UNAVAILABLE],
+    ["cutover_work_in_flight", ServiceRpcErrorCode.PROVIDER_UNAVAILABLE],
+    ["plaintext_scrub_complete", ServiceRpcErrorCode.PROVIDER_UNAVAILABLE],
+    ["plaintext_scrub_incomplete", ServiceRpcErrorCode.PROVIDER_UNAVAILABLE],
+    ["scrub_attestation_stale", ServiceRpcErrorCode.PROVIDER_UNAVAILABLE]
   ] as const)("maps %s before the provider's generic HTTP status", async (message, code) => {
     const client = createServiceRpcClient({
       allowedFunctions: ["create_encrypted_capture_with_job"],
@@ -127,6 +135,32 @@ describe("allowlisted encrypted service RPC client", () => {
         allowedFunctions: ["safe"],
         environment: {
           ...environment,
+          NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:54321",
+          NODE_ENV: "production"
+        },
+        fetch: vi.fn()
+      })
+    ).toThrow(ConfigurationError);
+    expect(() =>
+      createServiceRpcClient({
+        allowedFunctions: ["safe"],
+        environment: {
+          ...environment,
+          CI: "true",
+          NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:54321",
+          NODE_ENV: "production",
+          UNFILED_ALLOW_INSECURE_LOCAL_SUPABASE_E2E: "1",
+          VERCEL: "1",
+          VERCEL_ENV: "production"
+        },
+        fetch: vi.fn()
+      })
+    ).toThrow(ConfigurationError);
+    expect(() =>
+      createServiceRpcClient({
+        allowedFunctions: ["safe"],
+        environment: {
+          ...environment,
           NEXT_PUBLIC_SUPABASE_URL: "https://project.supabase.co/path"
         },
         fetch: vi.fn()
@@ -151,6 +185,27 @@ describe("allowlisted encrypted service RPC client", () => {
     await expect(unavailable.rpc("safe", {})).rejects.toMatchObject({
       code: ServiceRpcErrorCode.PROVIDER_UNAVAILABLE
     });
+  });
+
+  it("permits only the explicit non-Vercel built-CI loopback transport", async () => {
+    const request = vi.fn(() => Promise.resolve(Response.json({ state: "expanded" })));
+    const client = createServiceRpcClient({
+      allowedFunctions: ["safe"],
+      environment: {
+        ...environment,
+        CI: "true",
+        NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:54321",
+        NODE_ENV: "production",
+        UNFILED_ALLOW_INSECURE_LOCAL_SUPABASE_E2E: "1"
+      },
+      fetch: request
+    });
+
+    await expect(client.rpc("safe", {})).resolves.toEqual({ state: "expanded" });
+    expect(request).toHaveBeenCalledWith(
+      "http://127.0.0.1:54321/rest/v1/rpc/safe",
+      expect.objectContaining({ method: "POST", redirect: "error" })
+    );
   });
 
   it("forwards capability-scope revocation to the network request", async () => {

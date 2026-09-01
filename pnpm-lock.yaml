@@ -130,6 +130,9 @@ importers:
       '@unfiled/key-management':
         specifier: workspace:*
         version: link:../../packages/key-management
+      '@unfiled/search':
+        specifier: workspace:*
+        version: link:../../packages/search
       '@unfiled/sync':
         specifier: workspace:*
         version: link:../../packages/sync

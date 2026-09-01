@@ -1,6 +1,16 @@
 import { z, type ZodType } from "zod";
 
 import {
+  AccountDeleteRequestSchema,
+  AccountDeletionReceiptSchema,
+  AccountDeletionReceiptReplayRequestSchema,
+  AccountExportManifestSchema,
+  AccountExportNoteSchema,
+  AccountExportRoutingRuleSchema,
+  AccountExportSpaceSchema,
+  AccountExportTagSchema
+} from "./account.js";
+import {
   AuthOtpAcceptedResponseSchema,
   AuthOtpRequestSchema,
   AuthOtpVerifyRequestSchema,
@@ -58,7 +68,7 @@ import {
   NoteRevisionListQuerySchema,
   NoteRevisionListResponseSchema
 } from "./revisions.js";
-import { SearchNotesQuerySchema, SearchNotesResponseSchema } from "./search.js";
+import { SearchNotesRequestSchema, SearchNotesResponseSchema } from "./search.js";
 import {
   SpaceArchiveRequestSchema,
   SpaceCreateRequestSchema,
@@ -105,6 +115,52 @@ function jsonResponse(description: string, name: string) {
   } as const;
 }
 
+function privateJsonResponse(description: string, name: string) {
+  return {
+    ...jsonResponse(description, name),
+    headers: {
+      "Cache-Control": {
+        description: "Prevents storage of owner-authorized plaintext search data.",
+        required: true,
+        schema: { type: "string", const: "private, no-store" }
+      },
+      Pragma: {
+        description: "Prevents legacy intermediary caching.",
+        required: true,
+        schema: { type: "string", const: "no-cache" }
+      }
+    }
+  } as const;
+}
+
+function privateArchiveResponse(description: string) {
+  return {
+    description,
+    content: {
+      "application/gzip": {
+        schema: { type: "string", contentEncoding: "binary" }
+      }
+    },
+    headers: {
+      "Cache-Control": {
+        description: "Prevents storage of the owner-authorized plaintext export.",
+        required: true,
+        schema: { type: "string", const: "private, no-store" }
+      },
+      "Content-Disposition": {
+        description: "Attachment filename for the streamed tar.gz archive.",
+        required: true,
+        schema: { type: "string" }
+      },
+      Pragma: {
+        description: "Prevents legacy intermediary caching.",
+        required: true,
+        schema: { type: "string", const: "no-cache" }
+      }
+    }
+  } as const;
+}
+
 const errorResponse = jsonResponse("Stable API error", "ApiError");
 const authenticated = [{ bearerAuth: [] }] as const;
 const idempotencyHeader = {
@@ -130,7 +186,6 @@ const captureIdempotencyHeader = {
     maxLength: 30
   }
 } as const;
-
 function pathId(name: string, pattern: string) {
   return {
     name,
@@ -194,12 +249,6 @@ const includeArchivedQuery = {
   in: "query",
   required: false,
   schema: { type: "boolean", default: false }
-} as const;
-const searchTextQuery = {
-  name: "q",
-  in: "query",
-  required: true,
-  schema: { type: "string", minLength: 1, maxLength: 200 }
 } as const;
 const reviewStateQuery = {
   name: "state",
@@ -694,14 +743,70 @@ export const openApiDocument = {
       }
     },
     "/search": {
-      get: {
+      post: {
         operationId: "searchNotes",
         summary: "Search title and body text",
         security: authenticated,
-        parameters: [searchTextQuery, archiveQuery, limitQuery, cursorQuery],
+        requestBody: jsonBody("SearchNotesRequest"),
         responses: {
-          "200": jsonResponse("Paginated search results", "SearchNotesResponse"),
-          ...commonErrors
+          "200": privateJsonResponse("Paginated search results", "SearchNotesResponse"),
+          "400": privateJsonResponse("Stable API error", "ApiError"),
+          "401": privateJsonResponse("Stable API error", "ApiError"),
+          "429": privateJsonResponse("Stable API error", "ApiError"),
+          "413": privateJsonResponse("Stable API error", "ApiError")
+        }
+      }
+    },
+    "/me/export": {
+      get: {
+        operationId: "exportAccountData",
+        summary: "Stream an owner-authorized Markdown and JSON account export",
+        security: authenticated,
+        responses: {
+          "200": privateArchiveResponse("Streamed tar.gz account export"),
+          "401": privateJsonResponse("Stable API error", "ApiError"),
+          "503": privateJsonResponse("Stable API error", "ApiError")
+        }
+      }
+    },
+    "/me": {
+      delete: {
+        operationId: "deleteAccount",
+        summary: "Delete live account data and revoke every session",
+        description:
+          "Deletes live data immediately. Encrypted copies in provider backups may remain until the stated 30-day backup window expires.",
+        security: authenticated,
+        requestBody: jsonBody("AccountDeleteRequest"),
+        responses: {
+          "200": privateJsonResponse(
+            "Content-free account deletion receipt",
+            "AccountDeletionReceipt"
+          ),
+          "400": privateJsonResponse("Stable API error", "ApiError"),
+          "401": privateJsonResponse("Stable API error", "ApiError"),
+          "429": privateJsonResponse("Stable API error", "ApiError"),
+          "409": privateJsonResponse("Stable API error", "ApiError"),
+          "503": privateJsonResponse("Stable API error", "ApiError")
+        }
+      }
+    },
+    "/me/deletion-receipt": {
+      post: {
+        operationId: "replayAccountDeletionReceipt",
+        summary: "Recover a content-free account deletion receipt after response loss",
+        description:
+          "Uses the original high-entropy deletion capability after the auth principal no longer exists. Missing and expired capabilities are indistinguishable.",
+        security: [],
+        requestBody: jsonBody("AccountDeletionReceiptReplayRequest"),
+        responses: {
+          "200": privateJsonResponse(
+            "Content-free account deletion receipt",
+            "AccountDeletionReceipt"
+          ),
+          "400": privateJsonResponse("Stable API error", "ApiError"),
+          "404": privateJsonResponse("Stable API error", "ApiError"),
+          "429": privateJsonResponse("Stable API error", "ApiError"),
+          "503": privateJsonResponse("Stable API error", "ApiError")
         }
       }
     }
@@ -711,6 +816,14 @@ export const openApiDocument = {
       bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" }
     },
     schemas: {
+      AccountDeleteRequest: openApiSchema(AccountDeleteRequestSchema),
+      AccountDeletionReceipt: openApiSchema(AccountDeletionReceiptSchema),
+      AccountDeletionReceiptReplayRequest: openApiSchema(AccountDeletionReceiptReplayRequestSchema),
+      AccountExportManifest: openApiSchema(AccountExportManifestSchema),
+      AccountExportNote: openApiSchema(AccountExportNoteSchema),
+      AccountExportRoutingRule: openApiSchema(AccountExportRoutingRuleSchema),
+      AccountExportSpace: openApiSchema(AccountExportSpaceSchema),
+      AccountExportTag: openApiSchema(AccountExportTagSchema),
       ApiError: openApiSchema(ApiErrorSchema),
       AuthOtpRequest: openApiSchema(AuthOtpRequestSchema),
       AuthOtpAcceptedResponse: openApiSchema(AuthOtpAcceptedResponseSchema),
@@ -772,7 +885,7 @@ export const openApiDocument = {
       ReviewItemDto: openApiSchema(ReviewItemDtoSchema),
       ReviewItemListQuery: openApiSchema(ReviewItemListQuerySchema),
       ListReviewItemsResponse: openApiSchema(ListReviewItemsResponseSchema),
-      SearchNotesQuery: openApiSchema(SearchNotesQuerySchema),
+      SearchNotesRequest: openApiSchema(SearchNotesRequestSchema),
       SearchNotesResponse: openApiSchema(SearchNotesResponseSchema)
     }
   }

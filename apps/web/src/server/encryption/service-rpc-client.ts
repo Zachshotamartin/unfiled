@@ -3,11 +3,13 @@ import { ConfigurationError } from "@/server/api/errors";
 const FUNCTION_NAME_PATTERN = /^[a-z][a-z0-9_]{0,99}$/u;
 
 export const ServiceRpcErrorCode = Object.freeze({
+  CONFLICT_REQUIRES_REVIEW: "conflict_requires_review",
   FORBIDDEN: "forbidden",
   INVALID_IDEMPOTENCY_KEY: "invalid_idempotency_key",
   KEY_UNAVAILABLE: "key_unavailable",
   NOT_FOUND: "not_found",
   PROVIDER_UNAVAILABLE: "provider_unavailable",
+  RATE_LIMITED: "rate_limited",
   STALE_MAINTENANCE_CURSOR: "stale_maintenance_cursor",
   STALE_REVISION: "stale_revision",
   UNAUTHORIZED: "unauthorized",
@@ -100,10 +102,17 @@ function configuration(environment: Readonly<Record<string, string | undefined>>
   } catch {
     throw new ConfigurationError();
   }
-  const localHttp =
-    environment.NODE_ENV !== "production" &&
-    url.protocol === "http:" &&
-    (url.hostname === "127.0.0.1" || url.hostname === "localhost");
+  const loopbackHttp =
+    url.protocol === "http:" && (url.hostname === "127.0.0.1" || url.hostname === "localhost");
+  const builtCiLoopback =
+    loopbackHttp &&
+    environment.NODE_ENV === "production" &&
+    environment.CI === "true" &&
+    environment.UNFILED_ALLOW_INSECURE_LOCAL_SUPABASE_E2E === "1" &&
+    environment.VERCEL === undefined &&
+    environment.VERCEL_ENV === undefined &&
+    environment.VERCEL_PROJECT_ID === undefined;
+  const localHttp = loopbackHttp && (environment.NODE_ENV !== "production" || builtCiLoopback);
   if (
     (url.protocol !== "https:" && !localHttp) ||
     url.username !== "" ||
@@ -134,7 +143,10 @@ function databaseError(status: number, body: unknown): ServiceRpcError {
   if (message.includes("stale_revision")) {
     return new ServiceRpcError(ServiceRpcErrorCode.STALE_REVISION);
   }
-  if (message.includes("stale_maintenance_cursor")) {
+  if (message.includes("conflict_requires_review")) {
+    return new ServiceRpcError(ServiceRpcErrorCode.CONFLICT_REQUIRES_REVIEW);
+  }
+  if (message.includes("stale_maintenance_cursor") || message.includes("stale_scrub_cursor")) {
     return new ServiceRpcError(ServiceRpcErrorCode.STALE_MAINTENANCE_CURSOR);
   }
   if (
@@ -149,9 +161,15 @@ function databaseError(status: number, body: unknown): ServiceRpcError {
   }
   if (
     message.includes("invalid_rollout_state") ||
+    message.includes("invalid_scrub_state") ||
     message.includes("encrypted_organizer_write_unavailable") ||
     message.includes("incomplete_encryption_backfill") ||
+    message.includes("incomplete_index_coverage") ||
+    message.includes("cutover_work_in_flight") ||
     message.includes("organizer_jobs_in_flight") ||
+    message.includes("plaintext_scrub_complete") ||
+    message.includes("plaintext_scrub_incomplete") ||
+    message.includes("scrub_attestation_stale") ||
     message.includes("stale_backfill_cursor") ||
     message.includes("stale_rollout_state")
   ) {
@@ -159,6 +177,9 @@ function databaseError(status: number, body: unknown): ServiceRpcError {
   }
   if (message.includes("not_found") || status === 404) {
     return new ServiceRpcError(ServiceRpcErrorCode.NOT_FOUND);
+  }
+  if (message.includes("rate_limited") || status === 429) {
+    return new ServiceRpcError(ServiceRpcErrorCode.RATE_LIMITED);
   }
   if (message.includes("validation_failed") || status === 400) {
     return new ServiceRpcError(ServiceRpcErrorCode.VALIDATION_FAILED);

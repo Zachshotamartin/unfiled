@@ -1,35 +1,67 @@
 import {
   CaptureCreateRequestSchema,
   CaptureCreateResponseSchema,
+  CaptureDeleteRequestSchema,
+  CaptureDeleteResponseSchema,
   CaptureDetailResponseSchema,
   CaptureListQuerySchema,
   CaptureListResponseSchema,
   CaptureReceiptResponseSchema,
   CaptureReceiptSchema,
+  CaptureRetryRequestSchema,
+  CaptureRetryResponseSchema,
+  NoteSnapshotSchema,
   createEntityId,
+  entityIdSchema,
   parseEntityId,
   type Capture,
   type CaptureCreateResponse,
+  type CaptureDeleteResponse,
   type CaptureDetailResponse,
   type CaptureListQuery,
   type CaptureListResponse,
   type CaptureReceipt,
   type CaptureReceiptContent,
   type CaptureReceiptResponse,
+  type CaptureRetryResponse,
   type CaptureSummary,
-  type EntityId
+  type EntityId,
+  type NoteSnapshot
 } from "@unfiled/contracts";
+import {
+  applyNoteOperations,
+  undoNoteMutation,
+  type EntityIdFactory,
+  type Note,
+  type NoteMutation
+} from "@unfiled/domain";
 import {
   CapturePayloadSchema,
   CaptureReceiptPayloadSchema,
+  MAX_CAPTURE_RECEIPT_UNDO_TARGETS,
+  NoteContentPayloadSchema,
+  NoteMutationPayloadSchema,
+  NoteRevisionPayloadSchema,
   encryptedFieldForRpc,
   keyedMacForRpc,
+  type AggregateContentKind,
   type AuthorizedOwnerAccess,
   type CaptureReceiptPayload,
   type EncryptedAggregateService,
+  type EncryptedIdempotencyRecord,
+  type EncryptedAggregateRecord,
   type EncryptedFieldRpcValue,
-  type KeyedMacRpcValue
+  type KeyedMacRecord,
+  type KeyedMacRpcValue,
+  type LogicalApiRequest,
+  type NoteContentPayload,
+  type NoteMutationPayload,
+  type PayloadCodec,
+  type PrivacyTransition,
+  type CaptureReceiptUndoTarget
 } from "@unfiled/encrypted-aggregate";
+import { isDeepStrictEqual } from "node:util";
+import { z } from "zod";
 
 import type {
   CaptureRepository,
@@ -41,11 +73,26 @@ import type {
 import {
   encryptedCaptureTimestampMicros,
   type EncryptedCaptureDetailRead,
+  type EncryptedCaptureCommandScope,
   type EncryptedCaptureRead,
   type EncryptedCaptureReceiptRead,
-  type EncryptedCaptureRpcAdapter
+  type EncryptedCaptureRpcAdapter,
+  type EncryptedCaptureUndoWriteCommand,
+  type StoredEncryptedFieldRpcValue
 } from "./encrypted-capture-rpc-adapter";
-import { ServiceRpcError, ServiceRpcErrorCode } from "./service-rpc-client";
+import type {
+  EncryptedNoteMutationRead,
+  EncryptedNoteReadRpcAdapter
+} from "./encrypted-note-read-rpc-adapter";
+import {
+  encryptedOnlyMutationProjection,
+  encryptedOnlyNoteState
+} from "./encrypted-note-command-projection";
+import {
+  ServiceRpcError,
+  ServiceRpcErrorCode,
+  throwIfServiceOperationAborted
+} from "./service-rpc-client";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const DEVICE_ID_PATTERN = /^(?:|[A-Za-z0-9][A-Za-z0-9._:-]{0,119})$/u;
@@ -53,6 +100,32 @@ const TIMEZONE_PATTERN = /^(?:UTC|[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+){1
 const MAX_CAPTURE_SCAN = 10_000;
 const READ_BATCH_SIZE = 100;
 const GENERATED_BLOCK_BATCH_SIZE = 100;
+const MAX_CAPTURE_UNDO_PLAINTEXT_BYTES = 1_000_000;
+
+const RetryIntentSchema = z.strictObject({ action: z.literal("retry") });
+const DeleteExpectedNoteRevisionsSchema = z
+  .array(
+    z.strictObject({
+      noteId: entityIdSchema("note"),
+      expectedRevision: z.number().int().positive()
+    })
+  )
+  .max(MAX_CAPTURE_RECEIPT_UNDO_TARGETS);
+const DeleteIntentSchema = z.discriminatedUnion("removeInsertedContent", [
+  z.strictObject({
+    action: z.literal("delete"),
+    removeInsertedContent: z.literal(false),
+    expectedNoteRevisions: z.tuple([])
+  }),
+  z.strictObject({
+    action: z.literal("delete"),
+    removeInsertedContent: z.literal(true),
+    expectedNoteRevisions: DeleteExpectedNoteRevisionsSchema.min(1)
+  })
+]);
+
+type RetryIntent = z.infer<typeof RetryIntentSchema>;
+type DeleteIntent = z.infer<typeof DeleteIntentSchema>;
 
 export const EncryptedCaptureUnavailableOperation = Object.freeze({
   DELETE: "delete",
@@ -76,6 +149,8 @@ export type EncryptedCaptureAggregateRepositoryDependencies = Readonly<{
   access: AuthorizedOwnerAccess;
   aggregate: EncryptedAggregateService;
   adapter: EncryptedCaptureRpcAdapter;
+  noteReads: EncryptedNoteReadRpcAdapter;
+  signal?: AbortSignal;
   createJobId?: () => EntityId<"job">;
   now?: () => Date;
 }>;
@@ -83,6 +158,17 @@ export type EncryptedCaptureAggregateRepositoryDependencies = Readonly<{
 type OpenedCapture = Readonly<{
   row: EncryptedCaptureRead;
   rawContent: string;
+}>;
+
+type EncryptedCaptureCommandCrypto = Readonly<{
+  requestMac: KeyedMacRecord;
+  responseCipher: Awaited<ReturnType<EncryptedAggregateService["sealIdempotencyResponse"]>>;
+  responseVerificationMac: KeyedMacRecord;
+}>;
+
+type PreparedCaptureUndoWrite = Readonly<{
+  command: EncryptedCaptureUndoWriteCommand;
+  plaintextBytes: number;
 }>;
 
 type ContractSchema<Value> = Readonly<{
@@ -283,6 +369,122 @@ function receiptMatchesProjection(
   );
 }
 
+function storedCipherForRpc<Kind extends AggregateContentKind>(
+  record: EncryptedAggregateRecord<Kind>
+): StoredEncryptedFieldRpcValue<Kind> {
+  return Object.freeze({
+    envelope: record.envelope,
+    keyId: record.keyId,
+    keyClass: record.keyClass,
+    keyPurpose: record.keyPurpose,
+    keyVersion: record.keyVersion
+  });
+}
+
+function payloadByteLength(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
+function revisionTransition(
+  record: EncryptedAggregateRecord<"note_revision">,
+  privacy: Capture["privacy"]
+): PrivacyTransition {
+  if (record.keyClass === privacy) return Object.freeze({ before: privacy, after: privacy });
+  if (record.keyClass === "private_manual" && privacy === "ai_assisted") {
+    return Object.freeze({ before: "private_manual", after: "ai_assisted" });
+  }
+  return unavailable();
+}
+
+function receiptUndoTargets(payload: CaptureReceiptPayload): readonly CaptureReceiptUndoTarget[] {
+  if (payload.schemaVersion === 2) return payload.undoTargets;
+  const undoActions = payload.actions.filter((action) => action.type === "undo");
+  const undo = undoActions[0];
+  if (
+    undoActions.length !== 1 ||
+    undo === undefined ||
+    payload.destination === null ||
+    payload.mutationId === null ||
+    undo.mutationId !== payload.mutationId
+  ) {
+    throw new EncryptedCaptureOperationUnavailableError(
+      EncryptedCaptureUnavailableOperation.DELETE
+    );
+  }
+  return Object.freeze([
+    Object.freeze({
+      noteId: payload.destination.noteId,
+      mutationId: payload.mutationId,
+      expectedRevision: undo.expectedRevision
+    })
+  ]);
+}
+
+function sameExpectedRevisions(
+  expected: readonly Readonly<{ noteId: EntityId<"note">; expectedRevision: number }>[],
+  targets: readonly CaptureReceiptUndoTarget[]
+): boolean {
+  return (
+    expected.length === targets.length &&
+    expected.every((value, index) => {
+      const target = targets[index];
+      if (target === undefined) return false;
+      return value.noteId === target.noteId && value.expectedRevision === target.expectedRevision;
+    })
+  );
+}
+
+function noteFromEncryptedRead(
+  ownerId: string,
+  row: EncryptedNoteMutationRead["currentNote"],
+  content: NoteContentPayload
+): Note {
+  return Object.freeze({
+    id: row.noteId,
+    userId: ownerId,
+    currentRevision: row.currentRevision,
+    spaceId: row.spaceId,
+    type: row.type,
+    title: content.title,
+    bodyMarkdown: content.bodyMarkdown,
+    structuredData: content.structuredData,
+    isOpen: row.isOpen,
+    pinnedAt: row.pinnedAt,
+    privacy: row.privacy,
+    archivedAt: row.archivedAt,
+    deletedAt: row.deletedAt,
+    tagIds: row.tags.map((tag) => tag.tagId),
+    links: row.links.map((link) => ({ toNoteId: link.toNoteId, linkType: link.linkType })),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt
+  });
+}
+
+function snapshotFromNote(note: Note): NoteSnapshot {
+  return NoteSnapshotSchema.parse({
+    spaceId: note.spaceId,
+    type: note.type,
+    title: note.title,
+    bodyMarkdown: note.bodyMarkdown,
+    structuredData: note.structuredData,
+    isOpen: note.isOpen,
+    pinnedAt: note.pinnedAt,
+    privacy: note.privacy,
+    archivedAt: note.archivedAt,
+    deletedAt: note.deletedAt,
+    tagIds: note.tagIds,
+    links: note.links
+  });
+}
+
+function undoIdFactory(revisionId: EntityId<"rev">, mutationId: EntityId<"mut">): EntityIdFactory {
+  return ((kind) => {
+    if (kind === "rev") return revisionId;
+    if (kind === "mut") return mutationId;
+    return createEntityId(kind);
+  }) as EntityIdFactory;
+}
+
 export class EncryptedCaptureAggregateRepository implements CaptureRepository {
   private readonly ownerId: string;
   private readonly createJobId: () => EntityId<"job">;
@@ -300,6 +502,313 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
     if (exactOwnerId(context.userId, invalidInput) !== this.ownerId) {
       throw new ServiceRpcError(ServiceRpcErrorCode.FORBIDDEN);
     }
+  }
+
+  private assertNotAborted(): void {
+    if (this.dependencies.signal !== undefined) {
+      throwIfServiceOperationAborted(this.dependencies.signal);
+    }
+  }
+
+  private async openReceiptPayload(
+    row: EncryptedCaptureReceiptRead
+  ): Promise<CaptureReceiptPayload> {
+    this.assertNotAborted();
+    const payload = await this.dependencies.aggregate.openCaptureReceipt(
+      this.dependencies.access,
+      row.receiptCipher,
+      { captureId: row.captureId, recordVersion: row.recordVersion, sourcePrivacy: row.privacy }
+    );
+    this.assertNotAborted();
+    if (!receiptMatchesProjection(payload, row)) return unavailable();
+    return payload;
+  }
+
+  private async prepareUndoWrite(
+    target: CaptureReceiptUndoTarget,
+    receipt: CaptureReceiptPayload,
+    occurredAt: string,
+    remainingPlaintextBytes: number
+  ): Promise<PreparedCaptureUndoWrite> {
+    this.assertNotAborted();
+    const row = await this.dependencies.noteReads.getMutation({
+      ownerId: this.ownerId,
+      mutationId: target.mutationId
+    });
+    this.assertNotAborted();
+    if (
+      row.mutationId !== target.mutationId ||
+      row.noteId !== target.noteId ||
+      row.decisionId !== receipt.decisionId ||
+      row.afterRevision !== target.expectedRevision ||
+      row.currentNote.noteId !== target.noteId ||
+      row.currentNote.currentRevision !== target.expectedRevision ||
+      row.undoneAt !== null
+    ) {
+      throw new ServiceRpcError(ServiceRpcErrorCode.STALE_REVISION);
+    }
+
+    const mutationTransition: PrivacyTransition = Object.freeze({
+      before: row.beforeSnapshot?.privacy ?? null,
+      after: row.afterSnapshot.privacy
+    });
+    const [currentContent, originalMutation, beforeRevision, afterRevision] = await Promise.all([
+      this.dependencies.aggregate.openNoteContent(
+        this.dependencies.access,
+        row.currentNote.contentCipher,
+        {
+          noteId: row.noteId,
+          currentRevision: row.currentNote.currentRevision,
+          privacy: row.currentNote.privacy
+        }
+      ),
+      this.dependencies.aggregate.openNoteMutation(this.dependencies.access, row.mutationCipher, {
+        mutationId: row.mutationId,
+        afterRevision: row.afterRevision,
+        transition: mutationTransition
+      }),
+      row.beforeSnapshot === null
+        ? Promise.resolve(null)
+        : this.dependencies.aggregate.openNoteRevision(
+            this.dependencies.access,
+            row.beforeSnapshot.snapshotCipher,
+            {
+              revisionId: row.beforeSnapshot.revisionId,
+              revision: row.beforeSnapshot.revision,
+              transition: revisionTransition(
+                row.beforeSnapshot.snapshotCipher,
+                row.beforeSnapshot.privacy
+              )
+            }
+          ),
+      this.dependencies.aggregate.openNoteRevision(
+        this.dependencies.access,
+        row.afterSnapshot.snapshotCipher,
+        {
+          revisionId: row.afterSnapshot.revisionId,
+          revision: row.afterSnapshot.revision,
+          transition: revisionTransition(
+            row.afterSnapshot.snapshotCipher,
+            row.afterSnapshot.privacy
+          )
+        }
+      )
+    ]);
+    this.assertNotAborted();
+    const currentNote = noteFromEncryptedRead(this.ownerId, row.currentNote, currentContent);
+    const currentSnapshot = snapshotFromNote(currentNote);
+    if (
+      originalMutation.beforeRevision !== row.beforeRevision ||
+      originalMutation.afterRevision !== row.afterRevision ||
+      originalMutation.afterRevision !== target.expectedRevision ||
+      originalMutation.afterSnapshot.privacy !== row.afterSnapshot.privacy ||
+      !isDeepStrictEqual(originalMutation.afterSnapshot, afterRevision.snapshot) ||
+      !isDeepStrictEqual(originalMutation.afterSnapshot, currentSnapshot) ||
+      (originalMutation.beforeSnapshot === null) !== (beforeRevision === null) ||
+      (beforeRevision !== null &&
+        !isDeepStrictEqual(originalMutation.beforeSnapshot, beforeRevision.snapshot))
+    ) {
+      return unavailable();
+    }
+
+    const revisionId = createEntityId("rev");
+    const mutationId = createEntityId("mut");
+    const idFactory = undoIdFactory(revisionId, mutationId);
+    const result =
+      originalMutation.action === "create"
+        ? applyNoteOperations(currentNote, {
+            expectedRevision: target.expectedRevision,
+            operations: [{ type: "set_deleted", deletedAt: occurredAt }],
+            now: occurredAt,
+            source: "undo",
+            actor: "capture:delete",
+            idFactory
+          })
+        : undoNoteMutation(
+            currentNote,
+            Object.freeze({
+              id: row.mutationId,
+              noteId: row.noteId,
+              beforeRevision: originalMutation.beforeRevision,
+              afterRevision: originalMutation.afterRevision,
+              operations: originalMutation.operations,
+              inverse: originalMutation.inverse,
+              beforeSnapshot: originalMutation.beforeSnapshot,
+              afterSnapshot: originalMutation.afterSnapshot,
+              createdAt: row.createdAt,
+              undoneAt: row.undoneAt
+            } satisfies NoteMutation),
+            { expectedRevision: target.expectedRevision, now: occurredAt, idFactory }
+          );
+    if (result.revision.id !== revisionId || result.mutation.id !== mutationId) {
+      return unavailable();
+    }
+    const noteContent = NoteContentPayloadSchema.parse({
+      schemaVersion: 1,
+      title: result.note.title,
+      bodyMarkdown: result.note.bodyMarkdown,
+      structuredData: result.note.structuredData
+    });
+    const revisionPayload = NoteRevisionPayloadSchema.parse({
+      schemaVersion: 1,
+      snapshot: result.mutation.afterSnapshot
+    });
+    const mutationPayload: NoteMutationPayload = NoteMutationPayloadSchema.parse({
+      schemaVersion: 1,
+      action: "update",
+      beforeRevision: result.mutation.beforeRevision,
+      afterRevision: result.mutation.afterRevision,
+      operations: result.mutation.operations,
+      inverse: result.mutation.inverse,
+      beforeSnapshot: result.mutation.beforeSnapshot,
+      afterSnapshot: result.mutation.afterSnapshot
+    });
+    const transition: PrivacyTransition = Object.freeze({
+      before: currentNote.privacy,
+      after: result.note.privacy
+    });
+    const plaintextBytes = payloadByteLength([
+      receipt,
+      currentSnapshot,
+      originalMutation,
+      noteContent,
+      revisionPayload,
+      mutationPayload
+    ]);
+    if (plaintextBytes > remainingPlaintextBytes) return invalidInput();
+    const [noteCipher, revision, mutationCipher] = await Promise.all([
+      this.dependencies.aggregate.sealNoteContent(this.dependencies.access, {
+        noteId: row.noteId,
+        currentRevision: result.note.currentRevision,
+        privacy: result.note.privacy,
+        payload: noteContent
+      }),
+      this.dependencies.aggregate.sealNoteRevision(this.dependencies.access, {
+        revisionId,
+        revision: result.note.currentRevision,
+        transition,
+        payload: revisionPayload
+      }),
+      this.dependencies.aggregate.sealNoteMutation(this.dependencies.access, {
+        mutationId,
+        afterRevision: result.note.currentRevision,
+        payload: mutationPayload
+      })
+    ]);
+    this.assertNotAborted();
+    const opened = await Promise.all([
+      this.dependencies.aggregate.openNoteContent(this.dependencies.access, noteCipher, {
+        noteId: row.noteId,
+        currentRevision: result.note.currentRevision,
+        privacy: result.note.privacy
+      }),
+      this.dependencies.aggregate.openNoteRevision(this.dependencies.access, revision.encrypted, {
+        revisionId,
+        revision: result.note.currentRevision,
+        transition
+      }),
+      this.dependencies.aggregate.openNoteMutation(this.dependencies.access, mutationCipher, {
+        mutationId,
+        afterRevision: result.note.currentRevision,
+        transition
+      })
+    ]);
+    this.assertNotAborted();
+    if (
+      !isDeepStrictEqual(opened[0], noteContent) ||
+      !isDeepStrictEqual(opened[1], revisionPayload) ||
+      !isDeepStrictEqual(opened[2], mutationPayload)
+    ) {
+      return unavailable();
+    }
+    const [noteVerification, mutationVerification] = await Promise.all([
+      this.dependencies.aggregate.createAggregateVerificationMac(this.dependencies.access, {
+        surface: "note_content",
+        noteId: row.noteId,
+        recordVersion: result.note.currentRevision,
+        privacy: result.note.privacy,
+        payload: noteContent
+      }),
+      this.dependencies.aggregate.createAggregateVerificationMac(this.dependencies.access, {
+        surface: "note_mutation",
+        mutationId,
+        recordVersion: result.note.currentRevision,
+        payload: mutationPayload
+      })
+    ]);
+    const verified = await Promise.all([
+      this.dependencies.aggregate.verifyAggregateVerificationMac(
+        this.dependencies.access,
+        noteVerification,
+        {
+          surface: "note_content",
+          noteId: row.noteId,
+          recordVersion: result.note.currentRevision,
+          privacy: result.note.privacy,
+          payload: noteContent
+        }
+      ),
+      this.dependencies.aggregate.verifyAggregateVerificationMac(
+        this.dependencies.access,
+        mutationVerification,
+        {
+          surface: "note_mutation",
+          mutationId,
+          recordVersion: result.note.currentRevision,
+          payload: mutationPayload
+        }
+      )
+    ]);
+    this.assertNotAborted();
+    if (!verified.every(Boolean)) return unavailable();
+    const noteState = encryptedOnlyNoteState(row.noteId, {
+      spaceId: result.note.spaceId,
+      type: result.note.type,
+      title: result.note.title,
+      bodyMarkdown: result.note.bodyMarkdown,
+      structuredData: result.note.structuredData,
+      dailyDate: row.currentNote.dailyDate,
+      isOpen: result.note.isOpen,
+      privacy: result.note.privacy,
+      pinnedAt: result.note.pinnedAt,
+      archivedAt: result.note.archivedAt,
+      deletedAt: result.note.deletedAt,
+      tagIds: result.note.tagIds,
+      links: result.note.links
+    });
+    const mutationProjection = encryptedOnlyMutationProjection(result.note.privacy);
+    return Object.freeze({
+      plaintextBytes,
+      command: Object.freeze({
+        noteId: row.noteId,
+        targetMutationId: row.mutationId,
+        expectedRevision: target.expectedRevision,
+        sourcePrivacy: currentNote.privacy,
+        expectedCurrentCipher: storedCipherForRpc(row.currentNote.contentCipher),
+        expectedMutationCipher: storedCipherForRpc(row.mutationCipher),
+        noteState,
+        noteCipher: encryptedFieldForRpc(noteCipher),
+        revision: Object.freeze({
+          id: revisionId,
+          source: "undo",
+          actor: result.revision.actor,
+          cipher: encryptedFieldForRpc(revision.encrypted),
+          mac: keyedMacForRpc(revision.contentMac)
+        }),
+        mutation: Object.freeze({
+          id: mutationId,
+          decisionId: null,
+          undoTargetMutationId: row.mutationId,
+          operations: mutationProjection.operations,
+          inverse: mutationProjection.inverse,
+          cipher: encryptedFieldForRpc(mutationCipher)
+        }),
+        verification: Object.freeze({
+          noteContent: keyedMacForRpc(noteVerification),
+          noteMutation: keyedMacForRpc(mutationVerification)
+        })
+      })
+    });
   }
 
   private async openCapture(row: EncryptedCaptureRead): Promise<OpenedCapture> {
@@ -325,6 +834,129 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
       }
       throw error;
     }
+  }
+
+  private async sealCommand<RequestPayload, ResponsePayload>(input: {
+    idempotencyKey: string;
+    transition: PrivacyTransition;
+    logicalRequest: LogicalApiRequest<RequestPayload>;
+    requestCodec: PayloadCodec<RequestPayload>;
+    response: ResponsePayload;
+    responseCodec: PayloadCodec<ResponsePayload>;
+    requestMacKey?: Parameters<
+      EncryptedAggregateService["createIdempotencyRequestMac"]
+    >[1]["keyReference"];
+  }): Promise<EncryptedCaptureCommandCrypto> {
+    this.assertNotAborted();
+    const requestMac = await this.dependencies.aggregate.createIdempotencyRequestMac(
+      this.dependencies.access,
+      {
+        idempotencyKey: input.idempotencyKey,
+        transition: input.transition,
+        logicalRequest: input.logicalRequest,
+        requestCodec: input.requestCodec,
+        ...(input.requestMacKey === undefined ? {} : { keyReference: input.requestMacKey })
+      }
+    );
+    this.assertNotAborted();
+    const responseCipher = await this.dependencies.aggregate.sealIdempotencyResponse(
+      this.dependencies.access,
+      {
+        idempotencyKey: input.idempotencyKey,
+        transition: input.transition,
+        response: input.response,
+        responseCodec: input.responseCodec
+      }
+    );
+    this.assertNotAborted();
+    const responseVerificationMac =
+      await this.dependencies.aggregate.createAggregateVerificationMac(this.dependencies.access, {
+        surface: "idempotency_response",
+        idempotencyKey: input.idempotencyKey,
+        transition: input.transition,
+        payload: input.response,
+        payloadCodec: input.responseCodec
+      });
+    this.assertNotAborted();
+    const verified = await this.dependencies.aggregate.verifyAggregateVerificationMac(
+      this.dependencies.access,
+      responseVerificationMac,
+      {
+        surface: "idempotency_response",
+        idempotencyKey: input.idempotencyKey,
+        transition: input.transition,
+        payload: input.response,
+        payloadCodec: input.responseCodec
+      }
+    );
+    this.assertNotAborted();
+    if (!verified) return unavailable();
+    const opened = await this.dependencies.aggregate.openIdempotencyResponse(
+      this.dependencies.access,
+      Object.freeze({
+        ownerId: this.ownerId,
+        idempotencyKey: input.idempotencyKey,
+        keyClass: input.transition.after,
+        requestMac,
+        response: responseCipher
+      }),
+      {
+        idempotencyKey: input.idempotencyKey,
+        transition: input.transition,
+        logicalRequest: input.logicalRequest,
+        requestCodec: input.requestCodec,
+        responseCodec: input.responseCodec
+      }
+    );
+    this.assertNotAborted();
+    if (!isDeepStrictEqual(opened, input.response)) return unavailable();
+    return Object.freeze({ requestMac, responseCipher, responseVerificationMac });
+  }
+
+  private async openCommandResponse<RequestPayload, ResponsePayload>(input: {
+    idempotencyKey: string;
+    transition: PrivacyTransition;
+    logicalRequest: LogicalApiRequest<RequestPayload>;
+    requestCodec: PayloadCodec<RequestPayload>;
+    responseCodec: PayloadCodec<ResponsePayload>;
+    requestMac: KeyedMacRecord;
+    response: EncryptedIdempotencyRecord["response"];
+  }): Promise<ResponsePayload> {
+    return this.dependencies.aggregate.openIdempotencyResponse(
+      this.dependencies.access,
+      Object.freeze({
+        ownerId: this.ownerId,
+        idempotencyKey: input.idempotencyKey,
+        keyClass: input.transition.after,
+        requestMac: input.requestMac,
+        response: input.response
+      }),
+      {
+        idempotencyKey: input.idempotencyKey,
+        transition: input.transition,
+        logicalRequest: input.logicalRequest,
+        requestCodec: input.requestCodec,
+        responseCodec: input.responseCodec
+      }
+    );
+  }
+
+  private async commandClaim(
+    scope: EncryptedCaptureCommandScope,
+    idempotencyKey: string,
+    captureId: EntityId<"cap">
+  ) {
+    this.assertNotAborted();
+    const claim = await this.dependencies.adapter.getCommandClaim({
+      ownerId: this.ownerId,
+      scope,
+      idempotencyKey
+    });
+    this.assertNotAborted();
+    if (claim !== null && (claim.scope !== scope || claim.captureId !== captureId)) {
+      return invalidIdempotency();
+    }
+    return claim;
   }
 
   private replayResponse(
@@ -375,7 +1007,7 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
     let privateReceiptVerificationMac: KeyedMacRpcValue | null = null;
     if (input.privacy === "private_manual") {
       const receiptPayload = CaptureReceiptPayloadSchema.parse({
-        schemaVersion: 1,
+        schemaVersion: 2,
         captureId: input.clientCaptureId,
         jobId,
         decisionId: null,
@@ -386,6 +1018,7 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
         destination: null,
         insertedContentReferences: [],
         actions: [],
+        undoTargets: [],
         reasonCodes: ["private_manual"],
         createdAt: occurredAt
       });
@@ -641,7 +1274,7 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
       }
     );
     return contract(CaptureReceiptSchema, {
-      schemaVersion: payload.schemaVersion,
+      schemaVersion: 1,
       captureId: payload.captureId,
       jobId: payload.jobId,
       decisionId: payload.decisionId,
@@ -687,39 +1320,295 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
     return contract(CaptureReceiptResponseSchema, { receipt: await this.openReceipt(row) });
   }
 
-  public retryCapture(
+  public async retryCapture(
     context: CaptureRepositoryContext,
     captureId: EntityId<"cap">,
     idempotencyKey: string
-  ): Promise<never> {
-    // No encrypted retry RPC exists yet. Calling the legacy retry path would
-    // reintroduce a plaintext read/write dependency, so this is deliberately
-    // unavailable until retry has an atomic encrypted command.
-    return Promise.resolve().then(() => {
-      void idempotencyKey;
-      this.assertContext(context);
-      assertEntity(captureId, "cap", invalidInput);
-      throw new EncryptedCaptureOperationUnavailableError(
-        EncryptedCaptureUnavailableOperation.RETRY
-      );
+  ): Promise<CaptureRetryResponse> {
+    this.assertContext(context);
+    assertEntity(captureId, "cap", invalidInput);
+    const parsedRequest = CaptureRetryRequestSchema.safeParse({ idempotencyKey });
+    if (!parsedRequest.success) return invalidInput();
+    const key = parsedRequest.data.idempotencyKey;
+    const intent: RetryIntent = RetryIntentSchema.parse({ action: "retry" });
+    const logicalRequest: LogicalApiRequest<RetryIntent> = Object.freeze({
+      schemaVersion: 1,
+      scope: "retry_capture",
+      targetResourceId: captureId,
+      expectedRevision: null,
+      payload: intent
     });
+    const claim = await this.commandClaim("retry_capture", key, captureId);
+    if (claim !== null) {
+      const transition: PrivacyTransition = Object.freeze({
+        before: claim.keyClass,
+        after: claim.keyClass
+      });
+      const requestMac = await this.dependencies.aggregate.createIdempotencyRequestMac(
+        this.dependencies.access,
+        {
+          idempotencyKey: key,
+          transition,
+          logicalRequest,
+          requestCodec: RetryIntentSchema,
+          keyReference: claim.requestMacKey
+        }
+      );
+      const result = await this.dependencies.adapter.retryCapture({
+        ownerId: this.ownerId,
+        captureId,
+        privacy: claim.keyClass,
+        idempotencyKey: key,
+        command: Object.freeze({ requestMac: keyedMacForRpc(requestMac) })
+      });
+      const response = await this.openCommandResponse({
+        idempotencyKey: key,
+        transition,
+        logicalRequest,
+        requestCodec: RetryIntentSchema,
+        responseCodec: CaptureRetryResponseSchema,
+        requestMac,
+        response: result.encryptedResponse
+      });
+      if (response.capture.id !== captureId || response.jobId !== result.jobId) {
+        return unavailable();
+      }
+      return contract(CaptureRetryResponseSchema, { ...response, replayed: true });
+    }
+
+    const detail = await this.dependencies.adapter.getCaptureDetail({
+      ownerId: this.ownerId,
+      captureId
+    });
+    const opened = await this.openCapture(detail);
+    const transition: PrivacyTransition = Object.freeze({
+      before: detail.privacy,
+      after: detail.privacy
+    });
+    const response = contract(CaptureRetryResponseSchema, {
+      capture: acceptedCapture(opened),
+      jobId: detail.jobId,
+      replayed: false
+    });
+    const crypto = await this.sealCommand({
+      idempotencyKey: key,
+      transition,
+      logicalRequest,
+      requestCodec: RetryIntentSchema,
+      response,
+      responseCodec: CaptureRetryResponseSchema
+    });
+    const occurredDate = this.now();
+    if (!(occurredDate instanceof Date) || !Number.isFinite(occurredDate.valueOf())) {
+      return unavailable();
+    }
+    const result = await this.dependencies.adapter.retryCapture({
+      ownerId: this.ownerId,
+      captureId,
+      privacy: detail.privacy,
+      idempotencyKey: key,
+      command: Object.freeze({
+        occurredAt: occurredDate.toISOString(),
+        requestMac: keyedMacForRpc(crypto.requestMac),
+        responseCipher: encryptedFieldForRpc(crypto.responseCipher),
+        responseVerificationMac: keyedMacForRpc(crypto.responseVerificationMac)
+      })
+    });
+    const committed = await this.openCommandResponse({
+      idempotencyKey: key,
+      transition,
+      logicalRequest,
+      requestCodec: RetryIntentSchema,
+      responseCodec: CaptureRetryResponseSchema,
+      requestMac: crypto.requestMac,
+      response: result.encryptedResponse
+    });
+    if (committed.capture.id !== captureId || committed.jobId !== result.jobId) {
+      return unavailable();
+    }
+    return contract(CaptureRetryResponseSchema, { ...committed, replayed: result.replayed });
   }
 
-  public deleteCapture(
+  public async deleteCapture(
     context: CaptureRepositoryContext,
     captureId: EntityId<"cap">,
     input: NormalizedCaptureDeleteInput
-  ): Promise<never> {
-    // Deleting inserted content is a multi-note mutation. It must remain
-    // unavailable until the database can commit encrypted note mutations and
-    // capture deletion atomically under one owner-scoped command.
-    return Promise.resolve().then(() => {
-      void input;
-      this.assertContext(context);
-      assertEntity(captureId, "cap", invalidInput);
-      throw new EncryptedCaptureOperationUnavailableError(
-        EncryptedCaptureUnavailableOperation.DELETE
-      );
+  ): Promise<CaptureDeleteResponse> {
+    this.assertContext(context);
+    assertEntity(captureId, "cap", invalidInput);
+    const parsedRequest = CaptureDeleteRequestSchema.safeParse(input);
+    if (!parsedRequest.success) return invalidInput();
+    const expectedNoteRevisions = Object.freeze(
+      [...parsedRequest.data.expectedNoteRevisions].sort((left, right) =>
+        left.noteId.localeCompare(right.noteId)
+      )
+    );
+    const key = parsedRequest.data.idempotencyKey;
+    const intent: DeleteIntent = DeleteIntentSchema.parse({
+      action: "delete",
+      removeInsertedContent: parsedRequest.data.removeInsertedContent,
+      expectedNoteRevisions
     });
+    const logicalRequest: LogicalApiRequest<DeleteIntent> = Object.freeze({
+      schemaVersion: 1,
+      scope: "delete_capture",
+      targetResourceId: captureId,
+      expectedRevision: null,
+      payload: intent
+    });
+    const needsUndo = parsedRequest.data.removeInsertedContent;
+    const claim = await this.commandClaim("delete_capture", key, captureId);
+    if (claim !== null) {
+      const transition: PrivacyTransition = Object.freeze({
+        before: claim.keyClass,
+        after: claim.keyClass
+      });
+      const requestMac = await this.dependencies.aggregate.createIdempotencyRequestMac(
+        this.dependencies.access,
+        {
+          idempotencyKey: key,
+          transition,
+          logicalRequest,
+          requestCodec: DeleteIntentSchema,
+          keyReference: claim.requestMacKey
+        }
+      );
+      this.assertNotAborted();
+      const replayCommand = {
+        ownerId: this.ownerId,
+        captureId,
+        privacy: claim.keyClass,
+        idempotencyKey: key,
+        command: Object.freeze({ requestMac: keyedMacForRpc(requestMac) })
+      };
+      const result = needsUndo
+        ? await this.dependencies.adapter.deleteCaptureWithUndo(replayCommand)
+        : await this.dependencies.adapter.deleteCapture(replayCommand);
+      const response = await this.openCommandResponse({
+        idempotencyKey: key,
+        transition,
+        logicalRequest,
+        requestCodec: DeleteIntentSchema,
+        responseCodec: CaptureDeleteResponseSchema,
+        requestMac,
+        response: result.encryptedResponse
+      });
+      if (response.captureId !== captureId) return unavailable();
+      return contract(CaptureDeleteResponseSchema, { ...response, replayed: true });
+    }
+
+    this.assertNotAborted();
+    const [detail, deletionContext, receiptRow] = await Promise.all([
+      this.dependencies.adapter.getCaptureDetail({ ownerId: this.ownerId, captureId }),
+      this.dependencies.adapter.getDeleteContext({ ownerId: this.ownerId, captureId }),
+      needsUndo
+        ? this.dependencies.adapter.getCaptureReceipt({ ownerId: this.ownerId, captureId })
+        : Promise.resolve(null)
+    ]);
+    await this.openCapture(detail);
+    this.assertNotAborted();
+    const occurredDate = this.now();
+    if (!(occurredDate instanceof Date) || !Number.isFinite(occurredDate.valueOf())) {
+      return unavailable();
+    }
+    const occurredAt = occurredDate.toISOString();
+    let receiptPayload: CaptureReceiptPayload | null = null;
+    const preparedUndoWrites: PreparedCaptureUndoWrite[] = [];
+    if (needsUndo) {
+      if (receiptRow === null) return unavailable();
+      receiptPayload = await this.openReceiptPayload(receiptRow);
+      const targets = receiptUndoTargets(receiptPayload);
+      if (
+        targets.length < 1 ||
+        targets.length > MAX_CAPTURE_RECEIPT_UNDO_TARGETS ||
+        !sameExpectedRevisions(expectedNoteRevisions, targets) ||
+        !sameStringArray(
+          deletionContext.sourceNoteIds,
+          targets.map((target) => target.noteId)
+        )
+      ) {
+        throw new ServiceRpcError(ServiceRpcErrorCode.STALE_REVISION);
+      }
+      let remainingBytes = MAX_CAPTURE_UNDO_PLAINTEXT_BYTES;
+      for (const target of targets) {
+        this.assertNotAborted();
+        const prepared = await this.prepareUndoWrite(
+          target,
+          receiptPayload,
+          occurredAt,
+          remainingBytes
+        );
+        preparedUndoWrites.push(prepared);
+        remainingBytes -= prepared.plaintextBytes;
+      }
+    }
+    const response = contract(CaptureDeleteResponseSchema, {
+      captureId,
+      deletedAt: occurredAt,
+      sourceRemovedFromNoteIds: deletionContext.sourceNoteIds,
+      removedInsertedContent: preparedUndoWrites.length > 0,
+      contentRemovalMutations: preparedUndoWrites.map(({ command }) => ({
+        mutationId: command.mutation.id,
+        noteId: command.noteId,
+        expectedRevision: command.expectedRevision + 1
+      })),
+      replayed: false
+    });
+    const transition: PrivacyTransition = Object.freeze({
+      before: detail.privacy,
+      after: detail.privacy
+    });
+    const crypto = await this.sealCommand({
+      idempotencyKey: key,
+      transition,
+      logicalRequest,
+      requestCodec: DeleteIntentSchema,
+      response,
+      responseCodec: CaptureDeleteResponseSchema
+    });
+    this.assertNotAborted();
+    const command = {
+      ownerId: this.ownerId,
+      captureId,
+      privacy: detail.privacy,
+      idempotencyKey: key,
+      command:
+        needsUndo && receiptRow !== null && receiptPayload !== null
+          ? Object.freeze({
+              occurredAt,
+              removeInsertedContent: true as const,
+              sourceNoteIds: deletionContext.sourceNoteIds,
+              receipt: Object.freeze({
+                recordVersion: receiptRow.recordVersion,
+                cipher: storedCipherForRpc(receiptRow.receiptCipher)
+              }),
+              undoWrites: Object.freeze(preparedUndoWrites.map(({ command }) => command)),
+              requestMac: keyedMacForRpc(crypto.requestMac),
+              responseCipher: encryptedFieldForRpc(crypto.responseCipher),
+              responseVerificationMac: keyedMacForRpc(crypto.responseVerificationMac)
+            })
+          : Object.freeze({
+              occurredAt,
+              removeInsertedContent: false as const,
+              sourceNoteIds: deletionContext.sourceNoteIds,
+              requestMac: keyedMacForRpc(crypto.requestMac),
+              responseCipher: encryptedFieldForRpc(crypto.responseCipher),
+              responseVerificationMac: keyedMacForRpc(crypto.responseVerificationMac)
+            })
+    };
+    const result = needsUndo
+      ? await this.dependencies.adapter.deleteCaptureWithUndo(command)
+      : await this.dependencies.adapter.deleteCapture(command);
+    const committed = await this.openCommandResponse({
+      idempotencyKey: key,
+      transition,
+      logicalRequest,
+      requestCodec: DeleteIntentSchema,
+      responseCodec: CaptureDeleteResponseSchema,
+      requestMac: crypto.requestMac,
+      response: result.encryptedResponse
+    });
+    if (committed.captureId !== captureId) return unavailable();
+    return contract(CaptureDeleteResponseSchema, { ...committed, replayed: result.replayed });
   }
 }

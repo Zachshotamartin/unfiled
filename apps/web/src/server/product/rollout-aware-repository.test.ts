@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { InMemoryManualNotesRepository } from "./in-memory-repository";
 import {
+  CapabilityGuardedEncryptionRolloutStateSource,
+  EncryptedRepositoryCapabilityUnavailableError,
   encryptedRepositoryReadMethods,
   encryptedRepositoryWriteMethods,
   encryptionRolloutStates,
@@ -128,5 +130,35 @@ describe("rollout-aware manual-notes repository", () => {
       "encrypted_only",
       "contracted"
     ]);
+  });
+
+  it("refuses irreversible rollout states while encrypted capabilities are incomplete", async () => {
+    let state: EncryptionRolloutState = "encrypted_read";
+    const stateForOwner = vi.fn(() => Promise.resolve(state));
+    const source = new CapabilityGuardedEncryptionRolloutStateSource(
+      { stateForOwner },
+      { unavailableMethods: ["listSpaces", "listReviewItems", "search"] }
+    );
+
+    await expect(source.stateForOwner(context)).resolves.toBe("encrypted_read");
+
+    for (const blockedState of ["encrypted_only", "contracted"] as const) {
+      state = blockedState;
+      await expect(source.stateForOwner(context)).rejects.toBeInstanceOf(
+        EncryptedRepositoryCapabilityUnavailableError
+      );
+    }
+    expect(stateForOwner).toHaveBeenCalledTimes(3);
+  });
+
+  it("allows later rollout states only after the complete capability set is ready", async () => {
+    const stateForOwner = vi.fn(() => Promise.resolve("contracted" as const));
+    const source = new CapabilityGuardedEncryptionRolloutStateSource(
+      { stateForOwner },
+      { unavailableMethods: [] }
+    );
+
+    await expect(source.stateForOwner(context)).resolves.toBe("contracted");
+    expect(stateForOwner).toHaveBeenCalledOnce();
   });
 });

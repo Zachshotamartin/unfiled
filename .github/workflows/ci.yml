@@ -95,7 +95,7 @@ jobs:
       - name: Run organizer lock-order concurrency regression
         run: pnpm test:db:concurrency
 
-      - name: Run deterministic local HTTP E2E
+      - name: Run local HTTP E2E
         run: bash .github/workflows/scripts/milestone-b-http-e2e.sh
 
       - name: Stop local Supabase

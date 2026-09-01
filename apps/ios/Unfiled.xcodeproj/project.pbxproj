@@ -40,6 +40,7 @@
 		6F6765EA7AF7EFCD98A215C4 /* OpenQuickCaptureIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3373B8B5F190E0D50489AEFE /* OpenQuickCaptureIntent.swift */; };
 		731268A09F8617D851355D56 /* APIJSON.swift in Sources */ = {isa = PBXBuildFile; fileRef = 744281D7945F22D5D021A97E /* APIJSON.swift */; };
 		76CF3BBF32A4A503D70B49E0 /* PresentationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6B6DE4D8584E7AF2DEB2418 /* PresentationModels.swift */; };
+		77EE1DB2308370E5D37826F6 /* APIClient+Account.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FE006B1109C29D03B30BAEA /* APIClient+Account.swift */; };
 		7C22FE156FA4A114D56A2E60 /* APIClient+Notes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1363C231718030C1DE2D9C3 /* APIClient+Notes.swift */; };
 		7FE54EA9B09621CCA722AAEF /* TaxonomyModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 398E6B86C40B0D1189F0CCEC /* TaxonomyModels.swift */; };
 		81220FD257810B9997EB300A /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC0176F454E973096BB8F720 /* SearchView.swift */; };
@@ -81,6 +82,7 @@
 		F435212B8A80107F372ACC75 /* RevisionHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65279A5FD21402CDD45AB25D /* RevisionHistoryView.swift */; };
 		FC82576EC34798434D2C0749 /* BrandMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = EABFCB0C02765738E113A3EC /* BrandMark.swift */; };
 		FE3D18F71C47A77FE5787F85 /* BrandMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = EABFCB0C02765738E113A3EC /* BrandMark.swift */; };
+		FF31922E10032D864AACE480 /* AccountModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C55D260842B595C45B6E5CB /* AccountModels.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -125,12 +127,14 @@
 		2A2BAAD4AA39B356A65578E6 /* AppGroupConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppGroupConfiguration.swift; sourceTree = "<group>"; };
 		2B1DC75544E9DD203F0BC4D7 /* QuickCaptureWidget.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = QuickCaptureWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		2F3735D0E852A9FC2D61A5C4 /* AuthModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthModels.swift; sourceTree = "<group>"; };
+		2FE006B1109C29D03B30BAEA /* APIClient+Account.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "APIClient+Account.swift"; sourceTree = "<group>"; };
 		30A1BCB9927E7C9935C945B4 /* Unfiled.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Unfiled.entitlements; sourceTree = "<group>"; };
 		31446238D2092F8639E300B9 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
 		3373B8B5F190E0D50489AEFE /* OpenQuickCaptureIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenQuickCaptureIntent.swift; sourceTree = "<group>"; };
 		398E6B86C40B0D1189F0CCEC /* TaxonomyModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaxonomyModels.swift; sourceTree = "<group>"; };
 		3B69A7011547E9727B64A92A /* AuthFormRulesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthFormRulesTests.swift; sourceTree = "<group>"; };
 		3C2F830005020F917E15ACAC /* APIClientError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClientError.swift; sourceTree = "<group>"; };
+		3C55D260842B595C45B6E5CB /* AccountModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountModels.swift; sourceTree = "<group>"; };
 		407BF5585AB169B255CF79B8 /* AuthSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthSessionManager.swift; sourceTree = "<group>"; };
 		438B91D0E3590D1867CC7B6C /* LocalModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalModels.swift; sourceTree = "<group>"; };
 		4B3944B0EEF2DB8DE1B03941 /* Preview.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Preview.xcconfig; sourceTree = "<group>"; };
@@ -237,6 +241,7 @@
 		038583A101DAAB9CE9D7E7B4 /* Domain */ = {
 			isa = PBXGroup;
 			children = (
+				3C55D260842B595C45B6E5CB /* AccountModels.swift */,
 				2F3735D0E852A9FC2D61A5C4 /* AuthModels.swift */,
 				032EEF3A7FAC4B1587A94616 /* CaptureModels.swift */,
 				1C1539C6E7A3360A61D252AE /* CommonModels.swift */,
@@ -383,6 +388,7 @@
 			isa = PBXGroup;
 			children = (
 				31446238D2092F8639E300B9 /* APIClient.swift */,
+				2FE006B1109C29D03B30BAEA /* APIClient+Account.swift */,
 				DDB4AE0A437AE3BE7C957527 /* APIClient+Auth.swift */,
 				9EF079A4A73790AAB2A2E1DB /* APIClient+Captures.swift */,
 				A1363C231718030C1DE2D9C3 /* APIClient+Notes.swift */,
@@ -634,6 +640,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				77EE1DB2308370E5D37826F6 /* APIClient+Account.swift in Sources */,
 				9799354853BF0BFF84088D5B /* APIClient+Auth.swift in Sources */,
 				037FB4D7CEC8D73E901D3B67 /* APIClient+Captures.swift in Sources */,
 				7C22FE156FA4A114D56A2E60 /* APIClient+Notes.swift in Sources */,
@@ -641,6 +648,7 @@
 				A72254C5DED028D0B4C7A13E /* APIClient.swift in Sources */,
 				AB56E0A298C8CE4CBC96D9D3 /* APIClientError.swift in Sources */,
 				731268A09F8617D851355D56 /* APIJSON.swift in Sources */,
+				FF31922E10032D864AACE480 /* AccountModels.swift in Sources */,
 				DE71E0739CB578495C9BC59E /* AppConfiguration.swift in Sources */,
 				943A70DACFF1E2D095DFA430 /* AppGroupConfiguration.swift in Sources */,
 				8A11ED8DDF47CE1CF6CCECB4 /* AppModel.swift in Sources */,

@@ -21,6 +21,7 @@
     "@unfiled/domain": "workspace:*",
     "@unfiled/encrypted-aggregate": "workspace:*",
     "@unfiled/key-management": "workspace:*",
+    "@unfiled/search": "workspace:*",
     "@unfiled/sync": "workspace:*",
     "@vercel/oidc": "3.8.5",
     "next": "16.3.3",

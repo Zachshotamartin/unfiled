@@ -23,13 +23,23 @@ export const RAG_GENERATION_VERIFICATION_NOTE_CAPACITY = 1_000 as const;
  */
 export const RAG_GENERATION_VERIFICATION_MAX_DISTINCT_KEYS = 4 as const;
 
-export const SearchNotesQuerySchema = z.strictObject({
-  q: z.string().trim().min(1).max(200),
+/**
+ * Private search transport payload.
+ *
+ * Search text belongs in an authenticated JSON body, never in an API URL where
+ * it can be copied into browser history, access logs, or intermediary traces.
+ * A continuation cursor is opaque and can be replayed only with the same
+ * normalized query and archive filter by the same authenticated owner.
+ * Keep this schema strict so query-string-era fields cannot be accepted by
+ * accident during the cutover.
+ */
+export const SearchNotesRequestSchema = z.strictObject({
+  query: z.string().trim().min(1).max(200),
   archive: ArchiveFilterSchema.default("exclude"),
   cursor: CursorSchema.optional(),
-  limit: z.coerce.number().int().min(1).max(100).default(30)
+  limit: z.number().int().min(1).max(100).default(30)
 });
-export type SearchNotesQuery = z.input<typeof SearchNotesQuerySchema>;
+export type SearchNotesRequest = z.input<typeof SearchNotesRequestSchema>;
 
 export const SearchNoteResultSchema = z.strictObject({
   noteId: entityIdSchema("note"),

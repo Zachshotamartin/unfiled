@@ -56,6 +56,7 @@ const CLAIM_KEYS = [
   "revisionId",
   "mutationId",
   "occurredAt",
+  "commandProjection",
   "requestMacKey",
   "completed",
   "encryptedResponse"
@@ -72,6 +73,7 @@ export const encryptedNoteWriteRpcFunctions = Object.freeze([
 
 export type EncryptedNoteWriteRpcFunction = (typeof encryptedNoteWriteRpcFunctions)[number];
 export type EncryptedNoteWriteScope = "create_encrypted_note" | "apply_encrypted_note_mutation";
+export type EncryptedNoteCommandProjection = "legacy" | "encrypted_only";
 
 export type EncryptedNoteContentMacKey = Readonly<{
   keyId: string;
@@ -100,6 +102,7 @@ type EncryptedNoteWriteClaimFields = Readonly<{
   revisionId: EntityId<"rev">;
   mutationId: EntityId<"mut">;
   occurredAt: string;
+  commandProjection: EncryptedNoteCommandProjection;
   requestMacKey: EncryptedNoteContentMacKey;
 }>;
 
@@ -544,6 +547,7 @@ function parseClaimProjection(
     value.scope !== expected.scope ||
     value.expectedRevision !== expected.expectedRevision ||
     value.targetPrivacy !== expected.targetPrivacy ||
+    (value.commandProjection !== "legacy" && value.commandProjection !== "encrypted_only") ||
     typeof value.completed !== "boolean"
   ) {
     return failure();
@@ -580,6 +584,7 @@ function parseClaimProjection(
     revisionId: entityId(value.revisionId, "rev", failure),
     mutationId: entityId(value.mutationId, "mut", failure),
     occurredAt: offsetDateTime(value.occurredAt, failure),
+    commandProjection: value.commandProjection,
     requestMacKey
   });
 
@@ -614,6 +619,9 @@ function parseNormalizedClaim(
   const sourcePrivacy = value.sourcePrivacy === null ? null : privacy(value.sourcePrivacy, failure);
   const targetPrivacy = privacy(value.targetPrivacy, failure);
   const historyKeyClass = keyClass(value.historyKeyClass, failure);
+  if (value.commandProjection !== "legacy" && value.commandProjection !== "encrypted_only") {
+    return failure();
+  }
   const requestMacKey = parseMacKey(value.requestMacKey, historyKeyClass, failure);
   const expectedRevision =
     requiredScope === "create_encrypted_note"
@@ -647,6 +655,7 @@ function parseNormalizedClaim(
     revisionId: entityId(value.revisionId, "rev", failure),
     mutationId: entityId(value.mutationId, "mut", failure),
     occurredAt: offsetDateTime(value.occurredAt, failure),
+    commandProjection: value.commandProjection,
     requestMacKey
   });
   if (!value.completed) {

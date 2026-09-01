@@ -24,6 +24,7 @@
     "test:built-server": "node dist/scripts/smoke-built-server.js",
     "test:coverage": "vitest run --coverage",
     "test:lock-order": "tsx scripts/test-lock-order.ts",
+    "test:storage-contract-concurrency": "tsx scripts/test-storage-contract-concurrency.ts",
     "typecheck": "tsc --noEmit"
   },
   "engines": {

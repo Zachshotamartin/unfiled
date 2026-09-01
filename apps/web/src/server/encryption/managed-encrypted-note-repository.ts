@@ -5,7 +5,11 @@ import {
   type UserOperation
 } from "@unfiled/contracts";
 import { DomainError } from "@unfiled/domain";
-import { EncryptedAggregateError } from "@unfiled/encrypted-aggregate";
+import {
+  EncryptedAggregateError,
+  type AuthorizedOwnerAccess,
+  type EncryptedAggregateService
+} from "@unfiled/encrypted-aggregate";
 
 import type {
   CreateNoteInput,
@@ -28,6 +32,8 @@ import {
   encryptedAggregateRuntimeRpcFunctions,
   withOwnerEncryptedAggregateRuntime
 } from "./encrypted-aggregate-runtime";
+import { createEncryptedLibraryRpcStore } from "./encrypted-library-rpc-store";
+import { EncryptedLexicalSearch } from "./encrypted-lexical-search";
 import { EncryptedNoteAggregateRepository } from "./encrypted-note-aggregate-repository";
 import {
   createEncryptedNoteReadRpcAdapter,
@@ -41,10 +47,17 @@ import {
   mappedEncryptedAggregateHttpError,
   mappedServiceRpcHttpError
 } from "./managed-encryption-error-mapping";
+import { EncryptedTaxonomyReadRepository } from "./encrypted-taxonomy-read-repository";
+import {
+  createEncryptedTaxonomyRpcAdapter,
+  encryptedTaxonomyWriteRpcFunctions
+} from "./encrypted-taxonomy-rpc-adapter";
+import { EncryptedTaxonomyWriteCoordinator } from "./encrypted-taxonomy-write-coordinator";
 import {
   createServiceRpcClient,
   settleServiceOperationBeforeAbort,
   ServiceRpcError,
+  type ServiceRpcClient,
   throwIfServiceOperationAborted
 } from "./service-rpc-client";
 import { createInteractiveWebKeyRuntime, type WebKeyRuntimeEnvironment } from "./web-key-runtime";
@@ -62,7 +75,9 @@ const MAX_OPERATION_SCOPE_MS = 60_000;
 export const managedEncryptedNoteRpcFunctions = Object.freeze([
   ...encryptedAggregateRuntimeRpcFunctions,
   ...encryptedNoteReadRpcFunctions,
-  ...encryptedNoteWriteRpcFunctions
+  ...encryptedNoteWriteRpcFunctions,
+  ...encryptedTaxonomyWriteRpcFunctions,
+  "list_encrypted_library_objects"
 ] as const);
 
 type HttpMapping = Readonly<{
@@ -119,6 +134,13 @@ export type ManagedEncryptedNoteRepositoryOptions = Readonly<{
 type ScopedSignal = Readonly<{
   close(): void;
   signal: AbortSignal;
+}>;
+
+type ScopedEncryptedOperation = Readonly<{
+  access: AuthorizedOwnerAccess;
+  aggregate: EncryptedAggregateService;
+  client: ServiceRpcClient;
+  ownerId: string;
 }>;
 
 /** Maps only the closed ServiceRpcError set; it never reflects provider text. */
@@ -191,11 +213,6 @@ function scopedSignal(parent: AbortSignal | undefined): ScopedSignal {
   });
 }
 
-function unsupported(context: RepositoryContext): Promise<never> {
-  authenticatedOwner(context);
-  return Promise.reject(new ManagedEncryptedNoteCapabilityUnavailableError());
-}
-
 /**
  * Manual-note facade whose managed key runtime, service-role RPC client,
  * strict adapters, and aggregate repository exist for exactly one authenticated
@@ -205,9 +222,28 @@ function unsupported(context: RepositoryContext): Promise<never> {
 export class ManagedEncryptedNoteRepository implements ManualNotesRepository {
   public constructor(private readonly options: ManagedEncryptedNoteRepositoryOptions = {}) {}
 
+  private taxonomy(operation: ScopedEncryptedOperation): EncryptedTaxonomyWriteCoordinator {
+    const reads = new EncryptedTaxonomyReadRepository({
+      access: operation.access,
+      aggregate: operation.aggregate,
+      ownerId: operation.ownerId,
+      store: createEncryptedLibraryRpcStore(operation.client)
+    });
+    return new EncryptedTaxonomyWriteCoordinator({
+      access: operation.access,
+      aggregate: operation.aggregate,
+      ownerId: operation.ownerId,
+      adapter: createEncryptedTaxonomyRpcAdapter(operation.client),
+      reads
+    });
+  }
+
   private async scoped<Result>(
     context: RepositoryContext,
-    use: (repository: EncryptedNoteAggregateRepository) => Promise<Result>
+    use: (
+      repository: EncryptedNoteAggregateRepository,
+      operation: ScopedEncryptedOperation
+    ) => Promise<Result>
   ): Promise<Result> {
     const ownerId = authenticatedOwner(context);
     const operationSignal = this.options.signalForOperation?.(context);
@@ -240,7 +276,7 @@ export class ManagedEncryptedNoteRepository implements ManualNotesRepository {
               reads: createEncryptedNoteReadRpcAdapter(client),
               writes: createEncryptedNoteRpcAdapter(client)
             });
-            return use(repository);
+            return use(repository, Object.freeze({ access, aggregate: service, client, ownerId }));
           }
         );
       })();
@@ -265,8 +301,15 @@ export class ManagedEncryptedNoteRepository implements ManualNotesRepository {
     return this.scoped(context, (repository) => repository.archiveNote(noteId, input));
   }
 
-  public archiveSpace(...parameters: Parameters<ManualNotesRepository["archiveSpace"]>) {
-    return unsupported(parameters[0]);
+  public async archiveSpace(...parameters: Parameters<ManualNotesRepository["archiveSpace"]>) {
+    return this.scoped(parameters[0], (_repository, operation) =>
+      this.taxonomy(operation).archiveSpace(
+        parameters[1],
+        parameters[2],
+        parameters[3],
+        parameters[4]
+      )
+    );
   }
 
   public async createLink(
@@ -288,12 +331,16 @@ export class ManagedEncryptedNoteRepository implements ManualNotesRepository {
     return this.scoped(context, (repository) => repository.createNote(input, idempotencyKey));
   }
 
-  public createSpace(...parameters: Parameters<ManualNotesRepository["createSpace"]>) {
-    return unsupported(parameters[0]);
+  public async createSpace(...parameters: Parameters<ManualNotesRepository["createSpace"]>) {
+    return this.scoped(parameters[0], (_repository, operation) =>
+      this.taxonomy(operation).createSpace(parameters[1], parameters[2])
+    );
   }
 
-  public createTag(...parameters: Parameters<ManualNotesRepository["createTag"]>) {
-    return unsupported(parameters[0]);
+  public async createTag(...parameters: Parameters<ManualNotesRepository["createTag"]>) {
+    return this.scoped(parameters[0], (_repository, operation) =>
+      this.taxonomy(operation).createTag(parameters[1], parameters[2])
+    );
   }
 
   public async deleteLink(
@@ -316,8 +363,10 @@ export class ManagedEncryptedNoteRepository implements ManualNotesRepository {
     return this.scoped(context, (repository) => repository.deleteNote(noteId, input));
   }
 
-  public deleteTag(...parameters: Parameters<ManualNotesRepository["deleteTag"]>) {
-    return unsupported(parameters[0]);
+  public async deleteTag(...parameters: Parameters<ManualNotesRepository["deleteTag"]>) {
+    return this.scoped(parameters[0], (_repository, operation) =>
+      this.taxonomy(operation).deleteTag(parameters[1], parameters[2], parameters[3])
+    );
   }
 
   public async getNote(context: RepositoryContext, noteId: EntityId<"note">): Promise<NoteRecord> {
@@ -355,16 +404,39 @@ export class ManagedEncryptedNoteRepository implements ManualNotesRepository {
     return this.scoped(context, (repository) => repository.listRevisions(noteId, page));
   }
 
-  public listReviewItems(...parameters: Parameters<ManualNotesRepository["listReviewItems"]>) {
-    return unsupported(parameters[0]);
+  public async listReviewItems(
+    ...parameters: Parameters<ManualNotesRepository["listReviewItems"]>
+  ) {
+    return this.scoped(parameters[0], (_repository, operation) =>
+      new EncryptedTaxonomyReadRepository({
+        access: operation.access,
+        aggregate: operation.aggregate,
+        ownerId: operation.ownerId,
+        store: createEncryptedLibraryRpcStore(operation.client)
+      }).listReviewItems(parameters[1], parameters[2])
+    );
   }
 
-  public listSpaces(...parameters: Parameters<ManualNotesRepository["listSpaces"]>) {
-    return unsupported(parameters[0]);
+  public async listSpaces(...parameters: Parameters<ManualNotesRepository["listSpaces"]>) {
+    return this.scoped(parameters[0], (_repository, operation) =>
+      new EncryptedTaxonomyReadRepository({
+        access: operation.access,
+        aggregate: operation.aggregate,
+        ownerId: operation.ownerId,
+        store: createEncryptedLibraryRpcStore(operation.client)
+      }).listSpaces(parameters[1], parameters[2])
+    );
   }
 
-  public listTags(...parameters: Parameters<ManualNotesRepository["listTags"]>) {
-    return unsupported(parameters[0]);
+  public async listTags(...parameters: Parameters<ManualNotesRepository["listTags"]>) {
+    return this.scoped(parameters[0], (_repository, operation) =>
+      new EncryptedTaxonomyReadRepository({
+        access: operation.access,
+        aggregate: operation.aggregate,
+        ownerId: operation.ownerId,
+        store: createEncryptedLibraryRpcStore(operation.client)
+      }).listTags(parameters[1])
+    );
   }
 
   public async moveNote(
@@ -394,8 +466,10 @@ export class ManagedEncryptedNoteRepository implements ManualNotesRepository {
     );
   }
 
-  public search(...parameters: Parameters<ManualNotesRepository["search"]>) {
-    return unsupported(parameters[0]);
+  public async search(...parameters: Parameters<ManualNotesRepository["search"]>) {
+    return this.scoped(parameters[0], (repository) =>
+      new EncryptedLexicalSearch(repository).search(parameters[1], parameters[2], parameters[3])
+    );
   }
 
   public async unlinkTag(
@@ -426,12 +500,21 @@ export class ManagedEncryptedNoteRepository implements ManualNotesRepository {
     );
   }
 
-  public updateSpace(...parameters: Parameters<ManualNotesRepository["updateSpace"]>) {
-    return unsupported(parameters[0]);
+  public async updateSpace(...parameters: Parameters<ManualNotesRepository["updateSpace"]>) {
+    return this.scoped(parameters[0], (_repository, operation) =>
+      this.taxonomy(operation).updateSpace(
+        parameters[1],
+        parameters[2],
+        parameters[3],
+        parameters[4]
+      )
+    );
   }
 
-  public updateTag(...parameters: Parameters<ManualNotesRepository["updateTag"]>) {
-    return unsupported(parameters[0]);
+  public async updateTag(...parameters: Parameters<ManualNotesRepository["updateTag"]>) {
+    return this.scoped(parameters[0], (_repository, operation) =>
+      this.taxonomy(operation).updateTag(parameters[1], parameters[2], parameters[3], parameters[4])
+    );
   }
 
   public async applyOperations(

@@ -1,5 +1,6 @@
 import type { EntityId } from "@unfiled/contracts";
 import {
+  CaptureReceiptPayloadSchema,
   type AuthorizedOwnerAccess,
   type BackfillVerificationMacInput,
   type EncryptedAggregateService,
@@ -8,6 +9,7 @@ import {
   type KeyedMacRecord,
   type PayloadCodec,
   type PrivacyTransition,
+  type CaptureReceiptPayload,
   type SealedEncryptedAggregateRecord
 } from "@unfiled/encrypted-aggregate";
 import { isDeepStrictEqual } from "node:util";
@@ -117,6 +119,42 @@ function invalidInput(): never {
 
 function failClosed(): never {
   throw new ServiceRpcError(ServiceRpcErrorCode.PROVIDER_UNAVAILABLE);
+}
+
+function captureReceiptV2(payload: CaptureReceiptPayload): CaptureReceiptPayload {
+  if (payload.schemaVersion === 2) return payload;
+  const routed = payload.outcome === "created_note" || payload.outcome === "added_to_note";
+  if (!routed) {
+    return CaptureReceiptPayloadSchema.parse({
+      ...payload,
+      schemaVersion: 2,
+      undoTargets: []
+    });
+  }
+  const undoActions = payload.actions.filter((action) => action.type === "undo");
+  const undo = undoActions[0];
+  if (
+    undoActions.length !== 1 ||
+    undo === undefined ||
+    payload.destination === null ||
+    payload.mutationId === null ||
+    undo.mutationId !== payload.mutationId
+  ) {
+    // A legacy routed receipt can remain readable as v1, but it cannot gain
+    // undo authority that its authenticated plaintext never contained.
+    return payload;
+  }
+  return CaptureReceiptPayloadSchema.parse({
+    ...payload,
+    schemaVersion: 2,
+    undoTargets: [
+      {
+        noteId: payload.destination.noteId,
+        mutationId: payload.mutationId,
+        expectedRevision: undo.expectedRevision
+      }
+    ]
+  });
 }
 
 function batchLimit(value: number | undefined): number {
@@ -492,7 +530,7 @@ async function prepareBackfillWrite(
         captureId: candidate.resourceId as EntityId<"cap">,
         recordVersion: candidate.recordVersion,
         sourcePrivacy: candidate.keyClass,
-        payload: candidate.expectedContent
+        payload: captureReceiptV2(candidate.expectedContent)
       });
       const sealed = await aggregate.sealCaptureReceipt(access, input);
       const opened = await aggregate.openCaptureReceipt(access, sealed, input);

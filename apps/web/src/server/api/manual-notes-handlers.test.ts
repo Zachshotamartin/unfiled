@@ -3,6 +3,7 @@ import {
   MutationResultSchema,
   NoteDetailResponseSchema,
   NoteListResponseSchema,
+  SearchNotesResponseSchema,
   SpaceMutationResultSchema,
   TagMutationResultSchema
 } from "@unfiled/contracts";
@@ -15,6 +16,7 @@ import { createManualNotesHandlers } from "./manual-notes-handlers";
 
 const USER_ID = "00000000-0000-4000-8000-000000000001";
 const NOTE_ID = "note_00000000000000000000000001";
+const PRIVATE_SEARCH_CURSOR_KEY = Buffer.alloc(32, 7).toString("base64url");
 
 function authenticated(userId = USER_ID): Promise<AuthenticatedRequest> {
   return Promise.resolve({
@@ -425,6 +427,173 @@ describe("manual note route handlers", () => {
         (item) => item.noteId === createdBody.note.id && item.type === "structure_conflict"
       )
     ).toHaveLength(1);
+  });
+
+  it("accepts private POST search bodies and gives the current request to repository factories", async () => {
+    let factoryRequest: Request | undefined;
+    const repository = new InMemoryManualNotesRepository();
+    const handlers = createManualNotesHandlers({
+      authenticate: () => authenticated(),
+      getPrivateSearchCursorKey: () => PRIVATE_SEARCH_CURSOR_KEY,
+      repository: (currentRequest) => {
+        factoryRequest = currentRequest;
+        return repository;
+      }
+    });
+    const incoming = request("/api/v1/search", "POST", {
+      query: " milk ",
+      archive: "exclude",
+      limit: 30
+    });
+    const response = await handlers.search(incoming);
+    const body: unknown = await response.json();
+
+    expect(factoryRequest).toBe(incoming);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("pragma")).toBe("no-cache");
+    expect(SearchNotesResponseSchema.safeParse(body).success).toBe(true);
+    expect((body as { items: { title: string }[] }).items).toEqual([
+      expect.objectContaining({ title: "Shopping" })
+    ]);
+  });
+
+  it("binds opaque randomized cursors to the normalized private query and archive filter", async () => {
+    const repository = new InMemoryManualNotesRepository();
+    const context = { accessToken: "test-access-token", userId: USER_ID };
+    const note = await repository.getNote(context, NOTE_ID);
+    const search = vi.spyOn(repository, "search").mockImplementation((_context, query) =>
+      Promise.resolve({
+        query,
+        results: [
+          { note, snippet: "" },
+          { note, snippet: "" }
+        ]
+      })
+    );
+    const handlers = createManualNotesHandlers({
+      authenticate: () => authenticated(),
+      getPrivateSearchCursorKey: () => PRIVATE_SEARCH_CURSOR_KEY,
+      repository
+    });
+
+    const first = await handlers.search(
+      request("/api/v1/search", "POST", {
+        query: " private alpha ",
+        archive: "exclude",
+        limit: 1
+      })
+    );
+    const repeated = await handlers.search(
+      request("/api/v1/search", "POST", {
+        query: "private alpha",
+        archive: "exclude",
+        limit: 1
+      })
+    );
+    const firstBody = (await first.json()) as {
+      pageInfo: { nextCursor: string | null };
+    };
+    const repeatedBody = (await repeated.json()) as {
+      pageInfo: { nextCursor: string | null };
+    };
+    const cursor = firstBody.pageInfo.nextCursor;
+    if (cursor === null) throw new Error("expected a private search cursor");
+
+    const continuation = await handlers.search(
+      request("/api/v1/search", "POST", {
+        query: "private alpha",
+        archive: "exclude",
+        cursor,
+        limit: 1
+      })
+    );
+    const crossQuery = await handlers.search(
+      request("/api/v1/search", "POST", {
+        query: "private beta",
+        archive: "exclude",
+        cursor,
+        limit: 1
+      })
+    );
+    const crossArchive = await handlers.search(
+      request("/api/v1/search", "POST", {
+        query: "private alpha",
+        archive: "include",
+        cursor,
+        limit: 1
+      })
+    );
+
+    expect(first.status).toBe(200);
+    expect(continuation.status).toBe(200);
+    expect(cursor).toMatch(/^[A-Za-z0-9_-]{71}$/u);
+    expect(Buffer.from(cursor, "base64url").toString("utf8")).not.toContain("private alpha");
+    expect(repeatedBody.pageInfo.nextCursor).not.toBe(cursor);
+    expect(crossQuery.status).toBe(400);
+    expect(crossArchive.status).toBe(400);
+    expect(await crossQuery.text()).not.toContain("private beta");
+    expect(await crossArchive.text()).not.toContain("private alpha");
+    expect(search).toHaveBeenCalledTimes(3);
+    expect(search.mock.calls[0]?.[1]).toBe("private alpha");
+    expect(search.mock.calls[2]?.[3]).toEqual({ limit: 2, offset: 1 });
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["malformed", "not-base64url-key-material"],
+    ["wrong length", Buffer.alloc(31, 7).toString("base64url")],
+    ["noncanonical", `${PRIVATE_SEARCH_CURSOR_KEY.slice(0, -1)}d`]
+  ])("fails private search closed for a %s cursor key", async (_name, cursorKey) => {
+    const repository = new InMemoryManualNotesRepository();
+    const search = vi.spyOn(repository, "search");
+    const handlers = createManualNotesHandlers({
+      authenticate: () => authenticated(),
+      getPrivateSearchCursorKey: () => cursorKey,
+      repository
+    });
+
+    const response = await handlers.search(
+      request("/api/v1/search", "POST", { query: "private key canary" })
+    );
+    const serialized = await response.text();
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(serialized).not.toContain("private key canary");
+    expect(serialized).not.toContain(cursorKey ?? "private key canary");
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it("rejects query-string, unknown-field, malformed, and oversized searches without echoing input", async () => {
+    const canary = "private-search-canary-keep-out-of-errors";
+    const handlers = createManualNotesHandlers({
+      authenticate: () => authenticated(),
+      repository: new InMemoryManualNotesRepository()
+    });
+    const requests = [
+      request(`/api/v1/search?q=${encodeURIComponent(canary)}`, "POST", { query: "milk" }),
+      request("/api/v1/search", "POST", { query: canary, unexpected: true }),
+      new Request("https://unfiled.test/api/v1/search", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{"
+      }),
+      new Request("https://unfiled.test/api/v1/search", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query: canary.repeat(200) })
+      })
+    ];
+
+    for (const [index, privateRequest] of requests.entries()) {
+      const response = await handlers.search(privateRequest);
+      const serialized = await response.text();
+      expect(response.status).toBe(index === requests.length - 1 ? 413 : 400);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(response.headers.get("pragma")).toBe("no-cache");
+      expect(serialized).not.toContain(canary);
+    }
   });
 
   it("does not reveal another user's note", async () => {

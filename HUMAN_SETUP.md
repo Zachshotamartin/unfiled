@@ -48,7 +48,12 @@ Complete these human validation items before treating Milestone 0 as approved:
    `openssl rand -hex 32`. Add it with `vercel env add AUTH_RATE_LIMIT_PEPPER preview` and
    `vercel env add AUTH_RATE_LIMIT_PEPPER production`; never reuse a provider, Supabase, or cron
    secret. Production OTP requests intentionally fail closed when either this pepper or the service
-   role key is absent.
+   role key is absent. Separately generate a private-search cursor key for each environment with
+   `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`, then add it with
+   `vercel env add UNFILED_PRIVATE_SEARCH_CURSOR_HMAC_KEY preview` and
+   `vercel env add UNFILED_PRIVATE_SEARCH_CURSOR_HMAC_KEY production`. Never prefix it with
+   `NEXT_PUBLIC_` or reuse any content, auth, provider, or cron key. Private search fails closed
+   when this exact 32-byte base64url key is absent or malformed.
 4. Set `NEXT_PUBLIC_SITE_URL` to the canonical origin for each scope, including `https://` and excluding a trailing slash. Use the stable preview alias for Preview and the cleared custom domain for Production; local development falls back to `http://localhost:3000`.
 5. Generate a dedicated cron secret with `openssl rand -base64 48`, then run
    `vercel env add CRON_SECRET production` and paste that value. Do not reuse a Supabase or provider
@@ -80,7 +85,7 @@ Complete these human validation items before treating Milestone 0 as approved:
 
 ### Capture encryption and durable workflow
 
-1. Generate independent local or Preview-only content keys in a trusted terminal. Run the command twice and place each result directly into a password manager; do not paste either value into an issue, chat, commit, or shell argument:
+1. Generate independent local or Preview-only content and private-search cursor keys in a trusted terminal. Run the command three times and place each result directly into a password manager; do not paste any value into an issue, chat, commit, or shell argument:
 
    ```bash
    openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
@@ -92,20 +97,21 @@ Complete these human validation items before treating Milestone 0 as approved:
    UNFILED_CONTENT_KEK_ID=local-content-kek-v1
    UNFILED_CONTENT_KEK=<first-independent-base64url-value>
    UNFILED_CONTENT_FINGERPRINT_KEY=<second-independent-base64url-value>
+   UNFILED_PRIVATE_SEARCH_CURSOR_HMAC_KEY=<third-independent-base64url-value>
    CRON_SECRET=<at-least-32-random-characters>
    ```
 
    The fingerprint key must remain stable through ordinary wrapping-key rotations. Never reuse it as the KEK. `UNFILED_CONTENT_RETIRED_KEKS` is only for a bounded, audited rewrap window and must not become an indefinite archive of old keys.
 
-3. Add independent Preview values interactively with `vercel env add UNFILED_CONTENT_KEK_ID preview`, `vercel env add UNFILED_CONTENT_KEK preview`, `vercel env add UNFILED_CONTENT_FINGERPRINT_KEY preview`, and `vercel env add CRON_SECRET preview`. Interactive entry keeps values out of shell history. The environment-backed resolver is restricted to local and isolated Preview data.
-4. Do not launch Production capture storage with a root KEK in Vercel environment variables. C.5a now checks in the AWS KMS resolver, least-privilege identities, Terraform policies, and rotation contract, but Production remains blocked until the account-bound setup and evidence below pass and C.5b–d cut over the complete note path.
+3. Add independent Preview values interactively with `vercel env add UNFILED_CONTENT_KEK_ID preview`, `vercel env add UNFILED_CONTENT_KEK preview`, `vercel env add UNFILED_CONTENT_FINGERPRINT_KEY preview`, `vercel env add UNFILED_PRIVATE_SEARCH_CURSOR_HMAC_KEY preview`, and `vercel env add CRON_SECRET preview`. Interactive entry keeps values out of shell history. The environment-backed resolver is restricted to local and isolated Preview data.
+4. Do not launch Production capture storage with a root KEK in Vercel environment variables. C.5a now checks in the AWS KMS resolver, least-privilege identities, Terraform policies, and rotation contract, and C.5b–d implement the complete encrypted note path. Production remains blocked until the account-bound evidence below passes and the explicit C.5d production contract is applied through its separate runbook.
 5. Migration `20260830000012_durable_capture_workflow.sql` deliberately aborts with `legacy_capture_encryption_backfill_required` if an older environment contains capture text. For disposable Preview data, recreate the project. For data that must be retained, stop writes and use the audited backfill/verification tool delivered with the production key adapter; never edit the migration to discard or relabel plaintext.
-6. The checked-in Vercel Hobby schedule calls `/api/internal/captures/drain` daily at 03:07 UTC. In Vercel Production, `after()` and this recovery route make one content-free Trusted Sources call to the isolated organizer; they never run the organizer inside `apps/web` and never chain the organizer's 49-second budget to the index worker's 55-second budget. The encrypted organizer and index queues plus their separate authenticated recovery crons are authoritative. Local and Preview fixtures retain deterministic in-process organization only for synthetic development data. On Vercel Pro or Enterprise, change only that capture schedule in `apps/web/vercel.json` to `* * * * *`, deploy, and confirm authenticated one-minute invocations. Hobby deployments reject schedules more frequent than daily.
-7. After deploying Preview, create one synthetic canary capture, wait for its Inbox receipt, and inspect the `captures` row with an authorized administrative session. `raw_text` must equal `[encrypted]`, the canary must not appear anywhere in the row or logs, `content_envelope.version` must equal `1`, and `content_fingerprint` must be a 64-character keyed digest. Public API responses must contain the authenticated plaintext only after owner authorization and must never contain the envelope, fingerprint, or key identifier.
+6. The checked-in Vercel Hobby schedule calls `/api/internal/captures/drain` daily at 03:07 UTC. In Production, Preview, and development, `after()` and this recovery route make one content-free Trusted Sources call to the isolated organizer; they never run the organizer inside `apps/web` and never chain the organizer's 49-second budget to the index worker's 55-second budget. The encrypted organizer and index queues plus their separate authenticated recovery crons are authoritative. Deterministic organization exists only as an explicitly injected test fixture. On Vercel Pro or Enterprise, change only that capture schedule in `apps/web/vercel.json` to `* * * * *`, deploy, and confirm authenticated one-minute invocations. Hobby deployments reject schedules more frequent than daily.
+7. After deploying Preview, create one synthetic canary capture and inspect it only through the owner-authorized encrypted projection. Before the global contract, any temporary rollback column must contain only its fixed non-content sentinel; after the contract, prove that column no longer exists. In both states the canary must have an authenticated version-1 ciphertext envelope and keyed verification metadata and must have zero hits in rows, indexes, logs, traces, analytics, or URLs. Public API responses may return plaintext only after owner authorization and must never return an envelope, MAC/fingerprint, reservation, or key identifier.
 
 ### Production managed KMS and four isolated workloads — C.5 account evidence pending
 
-The checked-in module at `infra/aws-kms` defines the exact production identities for web, index worker, verifier, and organizer plus four independently controlled KMS roots. These steps create billable, account-bound cloud resources. They do **not** authorize real note traffic yet: C.5d must still replace every plaintext aggregate/read path and the final cutover gate must pass.
+The checked-in module at `infra/aws-kms` defines the exact production identities for web, index worker, verifier, and organizer plus four independently controlled KMS roots. These steps create billable, account-bound cloud resources. They do **not** authorize real note traffic yet: the C.5d paths and contract are implemented locally, but the production account evidence, owner rollout, explicit contraction, and post-contract canary below must still pass.
 
 1. Record twelve exact values: AWS region; a dedicated non-runtime KMS administrator role/user ARN;
    Vercel team slug and `team_...` owner ID; and the distinct project **name** plus `prj_...` ID
@@ -567,9 +573,90 @@ but cannot establish a real create-or-append result yet.
     and KMS denials after a project transfer, alias change, role/policy change, CA rotation, database
     restore, or migration replay.
 
-Until the production planner/cipher, C.5d cutover, account canaries, rotation/restore evidence, and
+Until the production planner/cipher, explicit production C.5d contraction, account canaries, rotation/restore evidence, and
 backup-expiry gates pass, the organizer is an implemented fail-closed security substrate—not a
 production routing claim or proof that the complete note library is encrypted.
+
+### Global encrypted-storage contract — C.5d one-way production operation
+
+Migration `20260830000027_encrypted_storage_contract.sql` is safe to deploy before contraction: it
+installs the readiness, state, receipt, and operator apply functions without removing the rollback
+schema. Applying the contract is intentionally separate and irreversible in place. Do not run it
+from `service_role`, an application process, a migration bot using delegated `SET ROLE`, or the
+Supabase HTTP API. Use a verified database-owner session where `session_user = current_user`, keep
+`ON_ERROR_STOP` enabled, and retain the complete content-free transcript in the release evidence.
+
+1. Deploy the C.5d web/API code and migrations through 27 to Preview, then Production, while the
+   contract state remains `expand_compatible`. Prove every currently used manual CRUD, taxonomy,
+   history/undo, capture, authenticated body-only search, export, deletion, and retention operation
+   succeeds through its encrypted adapter. A rollout lookup, RPC, KMS, or projection failure must
+   fail closed; it must never invoke a legacy repository. Keep AI organization disabled until the
+   Milestone D planner/cipher gate passes.
+2. Pause signups, interactive writes, organizer drains, index maintenance, and retention. Record the
+   exact web/organizer/worker/verifier deployment IDs and migration checksum. Create the required
+   pre-cutover backup/PITR point, restore it to an isolated scratch project, attach only separately
+   restored authorized KMS access, and complete the ciphertext authentication/content-parity drill.
+   Record the backup identifier, restore result, retention expiry, and approver without content,
+   owner IDs, ciphertext, credentials, or key context. A backup that has not passed this drill blocks
+   contraction.
+3. Through the official rollout APIs, bring every owner to `encrypted_only`: four active key slots,
+   exact encrypted/verified object parity, completed backfill, completed version-1 plaintext scrub,
+   matching scrub attestation, safe RAG coverage, and no unfinished note/taxonomy claims, retention
+   run, organizer preparation, or wrap reservation. Never update rollout counters or scrub evidence
+   directly.
+4. In the verified database-owner session, inspect the exact readiness snapshot:
+
+   ```sql
+   select session_user, current_user;
+   select jsonb_pretty(private.encrypted_storage_contract_readiness());
+   ```
+
+   Require `ready=true`, `applied=false`, `uncoveredOwnerCount=0`, every open-work count equal to
+   zero, the expected owner/object counts, and a 64-character `readinessDigest`. Investigate any
+   mismatch. Do not copy a digest from another environment or an earlier snapshot.
+
+5. Start an explicit transaction, recompute the digest inside it, and apply the exact confirmation:
+
+   ```sql
+   begin;
+   select private.encrypted_storage_contract_readiness() ->> 'readinessDigest'
+     as readiness_digest \gset
+   select private.apply_encrypted_storage_contract(
+     'CONTRACT UNFILED ENCRYPTED STORAGE V1', :'readiness_digest'
+   );
+   ```
+
+   Require `state="contracted"`, `replayed=false`, the same digest/counts, and one `appliedAt`.
+   Before committing, inspect only content-free catalog/ACL evidence: legacy plaintext columns,
+   `note_chunks`, plaintext FTS/trigram indexes, legacy functions, and legacy triggers are absent;
+   the retained encrypted trigger set is exact; and PostgreSQL `PUBLIC`, `anon`, `authenticated`, `service_role`,
+   `unfiled_index_worker`, `unfiled_rag_verifier`, and `unfiled_organizer_worker` have no direct
+   content-table privileges. Any dependency, stale digest, owner-set change, postcondition failure,
+   or unexpected output requires `rollback;` and investigation.
+
+6. Commit only after the in-transaction catalog checks pass. A committed contract has no schema
+   downgrade. A concurrent caller fails with `contract_application_in_progress`; do not loop
+   blindly—obtain a fresh state/readiness snapshot after the first transaction finishes. An exact
+   replay with the recorded digest must return `replayed=true`; a different digest or a tampered
+   receipt must fail closed.
+7. Resume only a small canary cohort. Prove a fresh signup starts in `contracted`, four-key
+   registration/activation remains live, and owner-authorized encrypted note/capture create,
+   list/detail, manual edit/history/undo, private lexical search, export, retention dry run, and
+   account deletion work without any plaintext schema or direct table access. Confirm search uses
+   `POST /api/v1/search`, contains no query in URLs, and sends `Cache-Control: no-store`. Search the
+   database, backups created after contraction, application/provider logs, traces, analytics,
+   Realtime payloads, and error sinks for unique synthetic canaries; require zero plaintext hits.
+   Do not call a real AI organization canary until Milestone D is green.
+8. Re-enable traffic gradually and watch KMS denials, encrypted-read failures, queue age, search
+   errors, retention errors, and receipt latency. If a post-commit defect cannot be corrected
+   forward, recovery is a separately approved restore of the recorded pre-cutover backup plus its
+   authorized keys and the matching pre-contract application deployment—never hand-recreate dropped
+   columns or weaken the contract constraint. Treat that restore as a security incident because it
+   reintroduces the plaintext exposure window.
+9. Track every pre-contract backup through deletion/expiry and repeat the restore-denial check after
+   expiry. Until no retained copy contains the old plaintext contract, product and portfolio copy
+   may say only that the production live store is application-encrypted; it must not claim historical
+   cryptographic erasure or E2EE.
 
 ### Preview release evidence
 

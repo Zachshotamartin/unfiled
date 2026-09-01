@@ -70,7 +70,8 @@ export function createNoteRetentionHandler(
           batchSize: BATCH_SIZE,
           execute,
           now: runAt,
-          ownerId: null
+          ownerId: null,
+          signal: request.signal
         });
         if (result.executed !== execute) {
           throw new HttpError(

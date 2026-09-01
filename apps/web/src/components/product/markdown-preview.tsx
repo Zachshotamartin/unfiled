@@ -104,24 +104,26 @@ function inline(text: string): ReactNode {
     } else if (match[5] !== undefined) {
       const noteTitle = match[5].trim();
       parts.push(
-        <a
+        <button
           key={index}
+          type="button"
           className="markdown-note-link"
-          href={`/app/search?q=${encodeURIComponent(noteTitle)}`}
+          data-private-search-query={noteTitle}
         >
           {noteTitle}
-        </a>
+        </button>
       );
     } else if (match[7] !== undefined) {
       parts.push(match[6] ?? "");
       parts.push(
-        <a
+        <button
           key={`${index}-tag`}
+          type="button"
           className="markdown-tag"
-          href={`/app/search?q=${encodeURIComponent(match[7])}`}
+          data-private-search-query={match[7]}
         >
           {match[7]}
-        </a>
+        </button>
       );
     } else {
       parts.push(match[0]);

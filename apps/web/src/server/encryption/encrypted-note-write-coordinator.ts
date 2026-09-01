@@ -129,6 +129,7 @@ function assertClaimContinuity(
     existing.revisionId !== prepared.revisionId ||
     existing.mutationId !== prepared.mutationId ||
     existing.occurredAt !== prepared.occurredAt ||
+    existing.commandProjection !== prepared.commandProjection ||
     existing.requestMacKey.keyId !== prepared.requestMacKey.keyId ||
     existing.requestMacKey.keyClass !== prepared.requestMacKey.keyClass ||
     existing.requestMacKey.keyVersion !== prepared.requestMacKey.keyVersion ||

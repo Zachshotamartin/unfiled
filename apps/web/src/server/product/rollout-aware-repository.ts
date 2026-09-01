@@ -14,7 +14,7 @@ export type EncryptionRolloutStateSource = Readonly<{
   stateForOwner(context: RepositoryContext): Promise<EncryptionRolloutState>;
 }>;
 
-type RepositoryMethod = keyof ManualNotesRepository;
+export type RepositoryMethod = keyof ManualNotesRepository;
 
 export const encryptedRepositoryWriteMethods = Object.freeze([
   "applyOperations",
@@ -61,6 +61,55 @@ export const repositoryMethodClassificationIsExhaustive: Exclude<
   : never = true;
 
 const WRITE_METHODS = new Set<RepositoryMethod>(encryptedRepositoryWriteMethods);
+
+const POST_ENCRYPTED_READ_STATES = new Set<EncryptionRolloutState>([
+  "encrypted_only",
+  "contracted"
+]);
+
+export type EncryptedRepositoryCapabilityReadiness = Readonly<{
+  /**
+   * Methods that do not yet have a production encrypted implementation. An
+   * owner must not enter a no-rollback state while this set is non-empty.
+   */
+  unavailableMethods: readonly RepositoryMethod[];
+}>;
+
+/**
+ * A content-free failure used when database rollout state has advanced beyond
+ * the complete capability surface deployed by the web application.
+ */
+export class EncryptedRepositoryCapabilityUnavailableError extends Error {
+  public constructor() {
+    super("The encrypted repository capability set is not ready for this rollout state");
+    this.name = "EncryptedRepositoryCapabilityUnavailableError";
+  }
+}
+
+/**
+ * Keeps irreversible rollout states coupled to the application's complete
+ * encrypted capability surface. The authoritative database lookup still runs
+ * for every repository operation; lookup errors and readiness errors both
+ * propagate without selecting the legacy repository.
+ */
+export class CapabilityGuardedEncryptionRolloutStateSource implements EncryptionRolloutStateSource {
+  private readonly unavailableMethods: ReadonlySet<RepositoryMethod>;
+
+  public constructor(
+    private readonly source: EncryptionRolloutStateSource,
+    readiness: EncryptedRepositoryCapabilityReadiness
+  ) {
+    this.unavailableMethods = new Set(readiness.unavailableMethods);
+  }
+
+  public async stateForOwner(context: RepositoryContext): Promise<EncryptionRolloutState> {
+    const state = await this.source.stateForOwner(context);
+    if (POST_ENCRYPTED_READ_STATES.has(state) && this.unavailableMethods.size > 0) {
+      throw new EncryptedRepositoryCapabilityUnavailableError();
+    }
+    return state;
+  }
+}
 
 export function rolloutRepositoryTarget(
   state: EncryptionRolloutState,

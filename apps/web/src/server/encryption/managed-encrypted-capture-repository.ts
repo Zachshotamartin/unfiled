@@ -22,6 +22,10 @@ import {
   encryptedCaptureRpcFunctions
 } from "./encrypted-capture-rpc-adapter";
 import {
+  createEncryptedNoteReadRpcAdapter,
+  encryptedNoteReadRpcFunctions
+} from "./encrypted-note-read-rpc-adapter";
+import {
   mappedEncryptedAggregateHttpError,
   mappedServiceRpcHttpError
 } from "./managed-encryption-error-mapping";
@@ -45,7 +49,8 @@ const MAX_OPERATION_SCOPE_MS = 60_000;
  */
 export const managedEncryptedCaptureRpcFunctions = Object.freeze([
   ...encryptedAggregateRuntimeRpcFunctions,
-  ...encryptedCaptureRpcFunctions
+  ...encryptedCaptureRpcFunctions,
+  ...encryptedNoteReadRpcFunctions
 ] as const);
 
 export type ManagedEncryptedCaptureRepositoryOptions = Readonly<{
@@ -161,7 +166,9 @@ export class ManagedEncryptedCaptureRepository implements CaptureRepository {
               ownerId,
               access,
               aggregate: service,
-              adapter: createEncryptedCaptureRpcAdapter(client)
+              adapter: createEncryptedCaptureRpcAdapter(client),
+              noteReads: createEncryptedNoteReadRpcAdapter(client),
+              signal: scope.signal
             });
             return use(repository);
           }

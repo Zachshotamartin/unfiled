@@ -1,26 +1,109 @@
 "use client";
 
 import { ArrowRightIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
-import type { SearchNoteResult } from "@unfiled/contracts";
+import type { SearchNoteResult, SearchNotesResponse } from "@unfiled/contracts";
 import Link from "next/link";
-import { type SyntheticEvent, useState } from "react";
+import { type SyntheticEvent, useCallback, useEffect, useRef, useState } from "react";
 
-import { usePagedResource } from "@/lib/product/use-paged-resource";
+import { ProductApiError } from "@/lib/product/client";
+import { requestSearchPage } from "@/lib/product/search-client";
 
+import { usePrivateSearchNavigation } from "./private-search-navigation";
 import { EmptyState, ResourceError, ResourceSkeleton } from "./resource-states";
 
 function resultKey(result: SearchNoteResult): string {
   return result.noteId;
 }
 
+function usePrivateSearch(query: string, includeArchived: boolean) {
+  const operation = useRef(0);
+  const [data, setData] = useState<SearchNotesResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [offline, setOffline] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [pageError, setPageError] = useState<string | null>(null);
+
+  const run = useCallback(
+    async (cursor: string | undefined, append: boolean, signal: AbortSignal): Promise<void> => {
+      const currentOperation = ++operation.current;
+      if (append) {
+        setLoadingMore(true);
+        setPageError(null);
+      } else {
+        setLoading(true);
+        setError(null);
+        setOffline(false);
+        setPageError(null);
+      }
+      try {
+        const page = await requestSearchPage(
+          {
+            query,
+            archive: includeArchived ? "include" : "exclude",
+            limit: 50,
+            ...(cursor === undefined ? {} : { cursor })
+          },
+          signal
+        );
+        if (signal.aborted || currentOperation !== operation.current) return;
+        setData((previous) => {
+          if (!append || previous === null) return page;
+          const seen = new Set(previous.items.map(resultKey));
+          return {
+            items: [...previous.items, ...page.items.filter((item) => !seen.has(resultKey(item)))],
+            pageInfo: page.pageInfo
+          };
+        });
+        setError(null);
+        setOffline(false);
+        setPageError(null);
+      } catch (reason) {
+        if (signal.aborted || currentOperation !== operation.current) return;
+        const apiError = reason instanceof ProductApiError ? reason : null;
+        const message = apiError?.message ?? "Could not search your notes.";
+        if (append) setPageError(message);
+        else {
+          setData(null);
+          setError(message);
+          setOffline(apiError?.body.code === "offline");
+        }
+      } finally {
+        if (!signal.aborted && currentOperation === operation.current) {
+          if (append) setLoadingMore(false);
+          else setLoading(false);
+        }
+      }
+    },
+    [includeArchived, query]
+  );
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void run(undefined, false, controller.signal);
+    return () => {
+      controller.abort();
+      operation.current += 1;
+    };
+  }, [run]);
+
+  const refresh = useCallback(async (): Promise<void> => {
+    await run(undefined, false, new AbortController().signal);
+  }, [run]);
+  const loadMore = useCallback(async (): Promise<void> => {
+    const cursor = data?.pageInfo.nextCursor;
+    if (cursor === null || cursor === undefined || loadingMore) return;
+    await run(cursor, true, new AbortController().signal);
+  }, [data?.pageInfo.nextCursor, loadingMore, run]);
+
+  return { data, error, loadMore, loading, loadingMore, offline, pageError, refresh };
+}
+
 function Results({
   includeArchived,
   query
 }: Readonly<{ includeArchived: boolean; query: string }>) {
-  const resource = usePagedResource<SearchNoteResult>(
-    `/api/v1/search?q=${encodeURIComponent(query)}&archive=${includeArchived ? "include" : "exclude"}&limit=50`,
-    resultKey
-  );
+  const resource = usePrivateSearch(query, includeArchived);
   if (resource.loading && resource.data === null) return <ResourceSkeleton rows={3} />;
   if (resource.error !== null && resource.data === null)
     return (
@@ -86,12 +169,22 @@ function Results({
 }
 
 export function SearchView() {
+  const privateNavigation = usePrivateSearchNavigation();
   const [input, setInput] = useState("");
-  const [query, setQuery] = useState("");
+  const [search, setSearch] = useState({ query: "", sequence: 0 });
   const [includeArchived, setIncludeArchived] = useState(false);
+
+  useEffect(() => {
+    const pending = privateNavigation.pending;
+    if (pending === null) return;
+    setInput(pending.query);
+    setSearch((current) => ({ query: pending.query, sequence: current.sequence + 1 }));
+    privateNavigation.consume(pending.sequence);
+  }, [privateNavigation]);
+
   function submit(event: SyntheticEvent<HTMLFormElement>): void {
     event.preventDefault();
-    setQuery(input.trim());
+    setSearch((current) => ({ query: input.trim(), sequence: current.sequence + 1 }));
   }
   return (
     <div>
@@ -122,13 +215,13 @@ export function SearchView() {
         </button>
       </form>
       <section aria-label="Search results" className="mt-10">
-        {query.length === 0 ? (
+        {search.query.length === 0 ? (
           <EmptyState
             title="Find a line you remember."
             body="Search looks across note titles and Markdown. Archived notes stay out unless you include them."
           />
         ) : (
-          <Results query={query} includeArchived={includeArchived} />
+          <Results key={search.sequence} query={search.query} includeArchived={includeArchived} />
         )}
       </section>
     </div>

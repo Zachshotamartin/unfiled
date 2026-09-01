@@ -104,6 +104,7 @@ function incompleteCreateClaim(): IncompleteEncryptedNoteWriteClaim {
     revisionId: REVISION,
     mutationId: MUTATION,
     occurredAt: OCCURRED_AT,
+    commandProjection: "legacy",
     requestMacKey: Object.freeze({
       keyId: retiredMac.keyId,
       keyClass: retiredMac.keyClass,

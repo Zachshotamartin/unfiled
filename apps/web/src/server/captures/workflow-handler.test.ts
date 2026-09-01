@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { OrganizerInvocationError } from "./organizer-client";
 import { createCaptureWorkflowHandler } from "./workflow-handler";
@@ -12,6 +12,10 @@ function request(authorization?: string): Request {
 }
 
 describe("capture workflow handler", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("fails closed for missing configuration and unauthorized requests", async () => {
     const drain = vi.fn();
     const missing = createCaptureWorkflowHandler({ getSecret: () => undefined, drain });
@@ -32,11 +36,9 @@ describe("capture workflow handler", () => {
       failed: 0,
       retryScheduled: 1
     });
-    const scheduleIndexDrain = vi.fn();
     const handler = createCaptureWorkflowHandler({
       getSecret: () => SECRET,
-      drain,
-      scheduleIndexDrain
+      drain
     });
 
     const response = await handler(request(`Bearer ${SECRET}`));
@@ -50,27 +52,33 @@ describe("capture workflow handler", () => {
       retryScheduled: 1
     });
     expect(drain).toHaveBeenCalledOnce();
-    expect(scheduleIndexDrain).toHaveBeenCalledOnce();
-    expect(scheduleIndexDrain).toHaveBeenCalledWith();
   });
 
-  it("does not wake indexing when capture processing completed no durable jobs", async () => {
-    const scheduleIndexDrain = vi.fn();
-    const handler = createCaptureWorkflowHandler({
-      getSecret: () => SECRET,
-      drain: vi.fn().mockResolvedValue({
-        claimed: 0,
-        completed: 0,
-        failed: 0,
-        retryScheduled: 0
-      }),
-      scheduleIndexDrain
-    });
-    expect((await handler(request(`Bearer ${SECRET}`))).status).toBe(200);
-    expect(scheduleIndexDrain).not.toHaveBeenCalled();
-  });
+  it.each(["production", "preview", "development"])(
+    "uses only the isolated organizer in the %s environment",
+    async (vercelEnvironment) => {
+      vi.stubEnv("VERCEL", "1");
+      vi.stubEnv("VERCEL_ENV", vercelEnvironment);
+      const client = {
+        drain: vi.fn().mockResolvedValue({
+          claimed: 1,
+          completed: 1,
+          failed: 0,
+          retryScheduled: 0
+        })
+      };
+      const handler = createCaptureWorkflowHandler({
+        client,
+        getSecret: () => SECRET
+      });
 
-  it("uses only the isolated organizer in Vercel Production", async () => {
+      expect((await handler(request(`Bearer ${SECRET}`))).status).toBe(200);
+      expect(client.drain).toHaveBeenCalledWith("recovery", expect.any(AbortSignal));
+      expect(client.drain).toHaveBeenCalledOnce();
+    }
+  );
+
+  it("uses an explicit drain injection without adding another workflow", async () => {
     const client = {
       drain: vi.fn().mockResolvedValue({
         claimed: 1,
@@ -79,25 +87,7 @@ describe("capture workflow handler", () => {
         retryScheduled: 0
       })
     };
-    const localDrain = vi.fn();
-    const scheduleIndexDrain = vi.fn();
-    const handler = createCaptureWorkflowHandler({
-      client,
-      environment: { VERCEL: "1", VERCEL_ENV: "production" },
-      getSecret: () => SECRET,
-      localDrain,
-      scheduleIndexDrain
-    });
-
-    expect((await handler(request(`Bearer ${SECRET}`))).status).toBe(200);
-    expect(client.drain).toHaveBeenCalledWith("recovery", expect.any(AbortSignal));
-    expect(localDrain).not.toHaveBeenCalled();
-    expect(scheduleIndexDrain).not.toHaveBeenCalled();
-  });
-
-  it("retains deterministic fixture processing only outside Vercel Production", async () => {
-    const client = { drain: vi.fn() };
-    const localDrain = vi.fn().mockResolvedValue({
+    const drain = vi.fn().mockResolvedValue({
       claimed: 0,
       completed: 0,
       failed: 0,
@@ -105,22 +95,19 @@ describe("capture workflow handler", () => {
     });
     const handler = createCaptureWorkflowHandler({
       client,
-      environment: { VERCEL: "1", VERCEL_ENV: "preview" },
       getSecret: () => SECRET,
-      localDrain,
-      scheduleIndexDrain: vi.fn()
+      drain
     });
 
     expect((await handler(request(`Bearer ${SECRET}`))).status).toBe(200);
-    expect(localDrain).toHaveBeenCalledOnce();
+    expect(drain).toHaveBeenCalledOnce();
     expect(client.drain).not.toHaveBeenCalled();
   });
 
   it("redacts unexpected drain failures", async () => {
     const handler = createCaptureWorkflowHandler({
       getSecret: () => SECRET,
-      drain: vi.fn().mockRejectedValue(new Error("plaintext should never appear")),
-      scheduleIndexDrain: vi.fn()
+      drain: vi.fn().mockRejectedValue(new Error("plaintext should never appear"))
     });
 
     const response = await handler(request(`Bearer ${SECRET}`));
@@ -133,8 +120,7 @@ describe("capture workflow handler", () => {
   it("maps an isolated organizer outage to a retryable unavailable response", async () => {
     const handler = createCaptureWorkflowHandler({
       getSecret: () => SECRET,
-      drain: vi.fn().mockRejectedValue(new OrganizerInvocationError()),
-      scheduleIndexDrain: vi.fn()
+      drain: vi.fn().mockRejectedValue(new OrganizerInvocationError())
     });
 
     const response = await handler(request(`Bearer ${SECRET}`));

@@ -20,6 +20,11 @@ type HttpMapping = Readonly<{
 }>;
 
 const SERVICE_RPC_HTTP_MAPPING = {
+  [ServiceRpcErrorCode.CONFLICT_REQUIRES_REVIEW]: {
+    status: 409,
+    code: ApiErrorCode.CONFLICT_REQUIRES_REVIEW,
+    message: "That name is already in use."
+  },
   [ServiceRpcErrorCode.FORBIDDEN]: {
     status: 403,
     code: ApiErrorCode.FORBIDDEN,
@@ -44,6 +49,11 @@ const SERVICE_RPC_HTTP_MAPPING = {
     status: 503,
     code: ApiErrorCode.PROVIDER_UNAVAILABLE,
     message: "Encrypted storage could not complete that action. Try again."
+  },
+  [ServiceRpcErrorCode.RATE_LIMITED]: {
+    status: 429,
+    code: ApiErrorCode.RATE_LIMITED,
+    message: "Try again later."
   },
   [ServiceRpcErrorCode.STALE_MAINTENANCE_CURSOR]: {
     status: 503,

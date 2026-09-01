@@ -551,8 +551,14 @@
 
   .markdown-tag,
   .markdown-note-link {
+    appearance: none;
+    border: 0;
     border-bottom: 1px solid color-mix(in srgb, var(--color-accent) 48%, transparent);
+    padding: 0;
+    background: transparent;
     color: var(--color-accent);
+    cursor: pointer;
+    font: inherit;
     text-decoration: none !important;
   }
 

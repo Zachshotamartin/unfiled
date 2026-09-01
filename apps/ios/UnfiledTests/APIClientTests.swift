@@ -147,15 +147,23 @@ final class APIClientTests: XCTestCase {
         }
     }
 
-    func testPagedSearchEncodesQueryWithoutStringConcatenation() async throws {
+    func testPagedSearchKeepsPrivateQueryInAuthenticatedJSONBody() async throws {
         let provider = APITokenProviderStub()
         APIURLProtocolStub.install { request in
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
-            let values = Dictionary(uniqueKeysWithValues: components.queryItems!.map { ($0.name, $0.value) })
-            XCTAssertEqual(values["q"]!, "a & b")
-            XCTAssertEqual(values["archive"]!, "include")
-            XCTAssertEqual(values["cursor"]!, "next/cursor")
-            XCTAssertEqual(values["limit"]!, "17")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/api/v1/search")
+            XCTAssertNil(request.url?.query)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer old-token")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Cache-Control"), "no-store")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Pragma"), "no-cache")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            let object = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: apiRequestBody(request)) as? [String: Any]
+            )
+            XCTAssertEqual(object["query"] as? String, "a & b")
+            XCTAssertEqual(object["archive"] as? String, "include")
+            XCTAssertEqual(object["cursor"] as? String, "next/cursor")
+            XCTAssertEqual(object["limit"] as? Int, 17)
             return apiResponse(for: request, json: #"{"items":[],"pageInfo":{"hasMore":false,"nextCursor":null}}"#)
         }
         _ = try await makeStubbedAPIClient(tokenProvider: provider).searchNotes(
@@ -167,8 +175,11 @@ final class APIClientTests: XCTestCase {
         let provider = APITokenProviderStub()
         let valid = String(repeating: "é", count: 200)
         APIURLProtocolStub.install { request in
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
-            XCTAssertEqual(components.queryItems?.first(where: { $0.name == "q" })?.value, valid)
+            XCTAssertNil(request.url?.query)
+            let object = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: apiRequestBody(request)) as? [String: Any]
+            )
+            XCTAssertEqual(object["query"] as? String, valid)
             return apiResponse(
                 for: request,
                 json: #"{"items":[],"pageInfo":{"hasMore":false,"nextCursor":null}}"#
@@ -180,6 +191,203 @@ final class APIClientTests: XCTestCase {
         await XCTAssertThrowsErrorAsync(
             try await makeStubbedAPIClient(tokenProvider: provider).searchNotes(.init(query: oversized))
         ) { XCTAssertEqual($0 as? APIClientError, .invalidRequest) }
+    }
+
+    func testSearchRejectsInvalidPagingBeforeTransport() async throws {
+        let provider = APITokenProviderStub()
+        let lock = NSLock()
+        nonisolated(unsafe) var requestCount = 0
+        APIURLProtocolStub.install { request in
+            lock.withLock { requestCount += 1 }
+            return apiResponse(
+                for: request,
+                json: #"{"items":[],"pageInfo":{"hasMore":false,"nextCursor":null}}"#
+            )
+        }
+        let client = try makeStubbedAPIClient(tokenProvider: provider)
+
+        for invalid in [
+            SearchNotesRequest(query: "valid", cursor: "", limit: 30),
+            SearchNotesRequest(query: "valid", cursor: String(repeating: "c", count: 513), limit: 30),
+            SearchNotesRequest(query: "valid", limit: 0),
+            SearchNotesRequest(query: "valid", limit: 101)
+        ] {
+            await XCTAssertThrowsErrorAsync(try await client.searchNotes(invalid)) {
+                XCTAssertEqual($0 as? APIClientError, .invalidRequest)
+            }
+        }
+
+        XCTAssertEqual(lock.withLock { requestCount }, 0)
+    }
+
+    func testAccountDeletionCapabilityIsCanonicalAndAlwaysRedacted() throws {
+        let token = try AccountDeletionToken(validating: "delete_\(String(repeating: "A", count: 43))")
+        XCTAssertFalse(token.description.contains(token.rawValue))
+        XCTAssertFalse(token.debugDescription.contains(token.rawValue))
+        XCTAssertThrowsError(
+            try AccountDeletionToken(validating: "delete_\(String(repeating: "B", count: 43))")
+        )
+
+        let generated = try AccountDeletionToken.generate()
+        XCTAssertEqual(generated.rawValue.utf8.count, 50)
+        XCTAssertNoThrow(try AccountDeletionToken(validating: generated.rawValue))
+    }
+
+    func testAccountDeleteAndReplayKeepCapabilityInBodyOnly() async throws {
+        let provider = APITokenProviderStub()
+        let token = try AccountDeletionToken(
+            validating: "delete_\(String(repeating: "A", count: 43))"
+        )
+        let lock = NSLock()
+        nonisolated(unsafe) var requestCount = 0
+        APIURLProtocolStub.install { request in
+            let count = lock.withLock { requestCount += 1; return requestCount }
+            XCTAssertNil(request.url?.query)
+            XCTAssertFalse(request.url?.absoluteString.contains(token.rawValue) == true)
+            XCTAssertNil(request.value(forHTTPHeaderField: "Idempotency-Key"))
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Cache-Control"), "no-store")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Pragma"), "no-cache")
+            let object = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: apiRequestBody(request)) as? [String: String]
+            )
+            XCTAssertEqual(object["idempotencyKey"], token.rawValue)
+
+            if count == 1 {
+                XCTAssertEqual(request.httpMethod, "DELETE")
+                XCTAssertEqual(request.url?.path, "/api/v1/me")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer old-token")
+                XCTAssertEqual(object["confirmation"], "DELETE")
+            } else {
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/api/v1/me/deletion-receipt")
+                XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+                XCTAssertNil(object["confirmation"])
+            }
+            return apiResponse(
+                for: request,
+                json: Self.accountDeletionReceiptJSON(replayed: count == 2)
+            )
+        }
+
+        let client = try makeStubbedAPIClient(tokenProvider: provider)
+        let deleted = try await client.deleteAccount(.init(idempotencyKey: token))
+        let replayed = try await client.replayAccountDeletionReceipt(
+            .init(idempotencyKey: token)
+        )
+        XCTAssertFalse(deleted.replayed)
+        XCTAssertTrue(replayed.replayed)
+        XCTAssertEqual(deleted.backupRetentionDays, 30)
+        XCTAssertEqual(deleted.deletedRecordCounts["auth.sessions"], 2)
+        XCTAssertEqual(requestCount, 2)
+    }
+
+    func testAccountExportUsesAuthenticatedPrivateStreamingTransport() async throws {
+        let provider = APITokenProviderStub()
+        let archive = Data([0x1F, 0x8B, 0x08, 0x00, 0x01, 0x02, 0x03])
+        APIURLProtocolStub.install { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/api/v1/me/export")
+            XCTAssertNil(request.url?.query)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/gzip")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer old-token")
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: [
+                        "Cache-Control": "private, no-store",
+                        "Content-Disposition": "attachment; filename=\"unfiled-export.tar.gz\"",
+                        "Content-Type": "application/gzip",
+                        "Pragma": "no-cache"
+                    ]
+                )
+            )
+            return (response, archive)
+        }
+
+        let stream = try await makeStubbedAPIClient(tokenProvider: provider).streamAccountExport()
+        var received = Data()
+        for try await chunk in stream { received.append(chunk) }
+        XCTAssertEqual(received, archive)
+    }
+
+    func testTransportByteStreamPullsOnlyOneChunkPerConsumerDemandWithoutDataLoss() async throws {
+        let source = BytePullProbe(bytes: (0 ..< 10).map(UInt8.init))
+        let stream = makeDemandDrivenByteStream(
+            iterator: BytePullProbeIterator(source: source),
+            chunkBytes: 4,
+            isCancelled: { false },
+            onCancel: {}
+        )
+
+        var pullCount = await source.pullCount
+        XCTAssertEqual(pullCount, 0, "Constructing the stream must not eagerly drain its source")
+
+        var iterator = stream.makeAsyncIterator()
+        let first = try await iterator.next()
+        XCTAssertEqual(first, Data([0, 1, 2, 3]))
+        pullCount = await source.pullCount
+        XCTAssertEqual(pullCount, 4)
+
+        let second = try await iterator.next()
+        XCTAssertEqual(second, Data([4, 5, 6, 7]))
+        pullCount = await source.pullCount
+        XCTAssertEqual(pullCount, 8)
+
+        let remainder = try await iterator.next()
+        XCTAssertEqual(remainder, Data([8, 9]))
+        pullCount = await source.pullCount
+        XCTAssertEqual(pullCount, 11, "The final pull observes end-of-stream after two bytes")
+
+        let completion = try await iterator.next()
+        XCTAssertNil(completion)
+        let pullsAfterCompletion = await source.pullCount
+        XCTAssertEqual(pullsAfterCompletion, 11)
+    }
+
+    func testTransportByteStreamConsumerCancellationCancelsSourceAndSanitizesError() async {
+        let source = BlockingBytePullProbe()
+        let cancellation = LockedStreamCancellationProbe()
+        let stream = makeDemandDrivenByteStream(
+            iterator: BlockingBytePullProbeIterator(source: source),
+            chunkBytes: 4,
+            isCancelled: { cancellation.isCancelled },
+            onCancel: { cancellation.cancel() }
+        )
+        let consumer = Task {
+            var iterator = stream.makeAsyncIterator()
+            return try await iterator.next()
+        }
+
+        await source.waitUntilStarted()
+        consumer.cancel()
+
+        await XCTAssertThrowsErrorAsync(try await consumer.value) { error in
+            XCTAssertEqual(error as? APIClientError, .transportFailure)
+        }
+        XCTAssertTrue(cancellation.isCancelled)
+        XCTAssertEqual(cancellation.cancelCount, 1)
+    }
+
+    func testAccountReceiptFailsClosedOnDishonestFlagsOrUnknownKeys() async throws {
+        APIURLProtocolStub.install { request in
+            apiResponse(
+                for: request,
+                json: Self.accountDeletionReceiptJSON(replayed: true)
+                    .replacingOccurrences(of: #""sessionsRevoked":true"#, with: #""sessionsRevoked":false"#)
+            )
+        }
+        let token = try AccountDeletionToken(
+            validating: "delete_\(String(repeating: "A", count: 43))"
+        )
+        await XCTAssertThrowsErrorAsync(
+            try await makeStubbedAPIClient().replayAccountDeletionReceipt(
+                .init(idempotencyKey: token)
+            )
+        ) { error in
+            XCTAssertEqual(error as? APIClientError, .malformedResponse(status: 200))
+        }
     }
 
     func testCreateNoteValidatesExactUTF16AndCollectionBoundsBeforeTransport() async throws {
@@ -438,6 +646,12 @@ final class APIClientTests: XCTestCase {
         let client = try APIClient(baseURL: URL(string: "https://api.example.test/api/v1/")!)
         XCTAssertEqual(client.baseURL.absoluteString, "https://api.example.test/api/v1")
     }
+
+    private static func accountDeletionReceiptJSON(replayed: Bool) -> String {
+        """
+        {"backupExpiresAt":"2026-09-30T20:00:00.000Z","backupRetentionDays":30,"deletedAt":"2026-08-31T20:00:00.000Z","deletedRecordCounts":{"auth.sessions":2,"public.notes":17},"liveDataDeleted":true,"receiptExpiresAt":"2026-10-01T20:00:00.000Z","reRegistrationStartsFresh":true,"replayed":\(replayed),"schemaVersion":1,"sessionsRevoked":true}
+        """
+    }
 }
 
 private actor CrossAccountSwitchingTokenProviderStub: AccessTokenProviding {
@@ -468,6 +682,70 @@ private final class LockedRedirectResult: @unchecked Sendable {
 
     func set(_ request: URLRequest?) {
         lock.withLock { self.request = request }
+    }
+}
+
+private actor BytePullProbe {
+    private let bytes: [UInt8]
+    private var index = 0
+    private(set) var pullCount = 0
+
+    init(bytes: [UInt8]) { self.bytes = bytes }
+
+    func nextByte() -> UInt8? {
+        pullCount += 1
+        guard index < bytes.count else { return nil }
+        defer { index += 1 }
+        return bytes[index]
+    }
+}
+
+private struct BytePullProbeIterator: AsyncIteratorProtocol, Sendable {
+    let source: BytePullProbe
+
+    mutating func next() async throws -> UInt8? { await source.nextByte() }
+}
+
+private actor BlockingBytePullProbe {
+    private var started = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func waitUntilStarted() async {
+        guard !started else { return }
+        await withCheckedContinuation { startWaiters.append($0) }
+    }
+
+    func nextByte() async throws -> UInt8? {
+        if !started {
+            started = true
+            let waiters = startWaiters
+            startWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+        }
+        try await Task.sleep(nanoseconds: 60_000_000_000)
+        return nil
+    }
+}
+
+private struct BlockingBytePullProbeIterator: AsyncIteratorProtocol, Sendable {
+    let source: BlockingBytePullProbe
+
+    mutating func next() async throws -> UInt8? { try await source.nextByte() }
+}
+
+private final class LockedStreamCancellationProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    private var cancellations = 0
+
+    var isCancelled: Bool { lock.withLock { cancelled } }
+    var cancelCount: Int { lock.withLock { cancellations } }
+
+    func cancel() {
+        lock.withLock {
+            cancelled = true
+            cancellations += 1
+        }
     }
 }
 

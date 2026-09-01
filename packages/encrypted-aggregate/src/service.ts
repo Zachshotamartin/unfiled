@@ -188,6 +188,8 @@ type AggregateVerificationCoordinates = Readonly<{
     | "note_mutation"
     | "organization_decision"
     | "review_item"
+    | "space_display"
+    | "tag_display"
     | "idempotency_response";
   resourceId: string;
   recordVersion: number;
@@ -719,6 +721,28 @@ export function createEncryptedAggregateService(
         recordVersion: input.recordVersion,
         keyClass: parsePrivacy(input.sourcePrivacy),
         payload: parsePayload(ReviewPayloadSchema, input.payload)
+      });
+    }
+    if (input.surface === "space_display") {
+      assertEntityId(input.spaceId, "spc");
+      assertRecordVersion(input.currentRevision);
+      return Object.freeze({
+        surface: input.surface,
+        resourceId: input.spaceId,
+        recordVersion: input.currentRevision,
+        keyClass: "private_manual",
+        payload: parsePayload(SpaceDisplayPayloadSchema, input.payload)
+      });
+    }
+    if (input.surface === "tag_display") {
+      assertEntityId(input.tagId, "tag");
+      assertRecordVersion(input.currentRevision);
+      return Object.freeze({
+        surface: input.surface,
+        resourceId: input.tagId,
+        recordVersion: input.currentRevision,
+        keyClass: "private_manual",
+        payload: parsePayload(TagDisplayPayloadSchema, input.payload)
       });
     }
     return Object.freeze({

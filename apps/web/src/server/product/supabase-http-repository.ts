@@ -30,6 +30,7 @@ import type {
   RepositoryContext,
   RepositoryPage
 } from "./repository";
+import { createProductionManualNotesComposition } from "./production-repository-composition";
 import {
   asObject,
   field,
@@ -699,7 +700,7 @@ export class SupabaseHttpManualNotesRepository implements ManualNotesRepository 
   }
 }
 
-export function createProductionRepository(): ManualNotesRepository {
+export function createProductionRepository(request?: Request): ManualNotesRepository {
   if (process.env.UNFILED_WEB_DATA_ADAPTER === "memory") {
     if (process.env.NODE_ENV === "production") throw new ConfigurationError();
     const globalRepository = globalThis as typeof globalThis & {
@@ -708,5 +709,8 @@ export function createProductionRepository(): ManualNotesRepository {
     globalRepository.__unfiledDevelopmentRepository ??= new InMemoryManualNotesRepository();
     return globalRepository.__unfiledDevelopmentRepository;
   }
-  return new SupabaseHttpManualNotesRepository();
+  return createProductionManualNotesComposition({
+    legacy: new SupabaseHttpManualNotesRepository(),
+    ...(request === undefined ? {} : { signal: request.signal })
+  });
 }
