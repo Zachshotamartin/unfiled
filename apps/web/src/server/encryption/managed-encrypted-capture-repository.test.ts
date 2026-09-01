@@ -99,6 +99,7 @@ import {
   type createEncryptedCaptureRpcAdapter,
   encryptedCaptureRpcFunctions
 } from "./encrypted-capture-rpc-adapter";
+import { encryptedNoteReadRpcFunctions } from "./encrypted-note-read-rpc-adapter";
 import {
   captureServiceRpcErrorToHttpError,
   ManagedEncryptedCaptureCapabilityUnavailableError,
@@ -208,7 +209,8 @@ describe("managed encrypted capture repository", () => {
   it("uses the exact duplicate-free runtime/capture RPC capability composition", () => {
     expect(managedEncryptedCaptureRpcFunctions).toEqual([
       ...encryptedAggregateRuntimeRpcFunctions,
-      ...encryptedCaptureRpcFunctions
+      ...encryptedCaptureRpcFunctions,
+      ...encryptedNoteReadRpcFunctions
     ]);
     expect(new Set(managedEncryptedCaptureRpcFunctions).size).toBe(
       managedEncryptedCaptureRpcFunctions.length
@@ -248,7 +250,9 @@ describe("managed encrypted capture repository", () => {
         "access",
         "adapter",
         "aggregate",
-        "ownerId"
+        "noteReads",
+        "ownerId",
+        "signal"
       ]);
       expect(dependencies).toMatchObject({
         ownerId: OWNER_ID,

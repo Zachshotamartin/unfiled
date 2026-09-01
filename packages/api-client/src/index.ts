@@ -1,4 +1,8 @@
 import {
+  AccountDeleteRequestSchema,
+  AccountDeletionReceiptSchema,
+  AccountDeletionReceiptReplayRequestSchema,
+  AccountDeletionTokenSchema,
   ApiErrorSchema,
   AuthOtpAcceptedResponseSchema,
   AuthOtpRequestSchema,
@@ -42,7 +46,7 @@ import {
   NoteTagUnlinkRequestSchema,
   ListReviewItemsResponseSchema,
   ReviewItemListQuerySchema,
-  SearchNotesQuerySchema,
+  SearchNotesRequestSchema,
   SearchNotesResponseSchema,
   SpaceArchiveRequestSchema,
   SpaceCreateRequestSchema,
@@ -60,6 +64,8 @@ import {
   DeleteMutationResultSchema,
   entityIdSchema,
   type ApiError,
+  type AccountDeleteRequest,
+  type AccountDeletionReceiptReplayRequest,
   type AuthOtpRequest,
   type AuthOtpVerifyRequest,
   type AuthRefreshRequest,
@@ -84,7 +90,7 @@ import {
   type NoteTagLinkRequest,
   type NoteTagUnlinkRequest,
   type ReviewItemListQuery,
-  type SearchNotesQuery,
+  type SearchNotesRequest,
   type SpaceArchiveRequest,
   type SpaceCreateRequest,
   type SpaceListQuery,
@@ -95,6 +101,27 @@ import {
   type TagUpdateRequest
 } from "@unfiled/contracts";
 import type { ZodType } from "zod";
+
+const BASE64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+/** Creates the 256-bit bearer capability used for deletion and receipt replay. */
+export function createAccountDeletionToken(random: Crypto = globalThis.crypto): string {
+  const bytes = new Uint8Array(32);
+  random.getRandomValues(bytes);
+  let encoded = "";
+  for (let offset = 0; offset < bytes.length; offset += 3) {
+    const first = bytes[offset] ?? 0;
+    const second = bytes[offset + 1];
+    const third = bytes[offset + 2];
+    encoded += BASE64URL_ALPHABET[(first >>> 2) & 63] ?? "";
+    encoded += BASE64URL_ALPHABET[((first & 3) << 4) | ((second ?? 0) >>> 4)] ?? "";
+    if (second !== undefined) {
+      encoded += BASE64URL_ALPHABET[((second & 15) << 2) | ((third ?? 0) >>> 6)] ?? "";
+    }
+    if (third !== undefined) encoded += BASE64URL_ALPHABET[third & 63] ?? "";
+  }
+  return AccountDeletionTokenSchema.parse(`delete_${encoded}`);
+}
 
 export class ApiClientError extends Error {
   public readonly error: ApiError;
@@ -140,6 +167,7 @@ export function createApiClient(options: ApiClientOptions) {
     init: Readonly<{
       method?: "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
       body?: unknown;
+      cache?: RequestCache;
       idempotencyKey?: string;
       authenticated?: boolean;
     }>,
@@ -148,6 +176,7 @@ export function createApiClient(options: ApiClientOptions) {
     const authenticated = init.authenticated ?? true;
     const token = authenticated ? await options.getAccessToken() : null;
     const response = await fetcher(`${baseUrl}/api/v1${path}`, {
+      ...(init.cache === undefined ? {} : { cache: init.cache }),
       method: init.method ?? "GET",
       headers: {
         ...(init.body === undefined ? {} : { "content-type": "application/json" }),
@@ -157,6 +186,32 @@ export function createApiClient(options: ApiClientOptions) {
       ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) })
     });
     return decode(response, responseSchema);
+  }
+
+  async function authenticatedRawRequest(path: string): Promise<Response> {
+    const token = await options.getAccessToken();
+    const response = await fetcher(`${baseUrl}/api/v1${path}`, {
+      cache: "no-store",
+      method: "GET",
+      headers: {
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        "cache-control": "no-store",
+        pragma: "no-cache"
+      }
+    });
+    if (!response.ok) {
+      const body: unknown = await response.json().catch(() => null);
+      throw new ApiClientError(response.status, ApiErrorSchema.parse(body));
+    }
+    const mediaType = response.headers.get("content-type")?.split(";", 1)[0]?.trim();
+    if (
+      mediaType !== "application/gzip" ||
+      response.headers.get("cache-control") !== "private, no-store" ||
+      !response.headers.get("content-disposition")?.startsWith("attachment;")
+    ) {
+      throw new TypeError("Invalid account export response");
+    }
+    return response;
   }
 
   return Object.freeze({
@@ -507,15 +562,36 @@ export function createApiClient(options: ApiClientOptions) {
       return request(`/review-items${suffix}`, {}, ListReviewItemsResponseSchema);
     },
 
-    searchNotes(input: SearchNotesQuery) {
-      const query = SearchNotesQuerySchema.parse(input);
-      const suffix = queryString([
-        ["q", query.q],
-        ["archive", query.archive],
-        ["limit", query.limit],
-        ["cursor", query.cursor]
-      ]);
-      return request(`/search${suffix}`, {}, SearchNotesResponseSchema);
+    searchNotes(input: SearchNotesRequest) {
+      const body = SearchNotesRequestSchema.parse(input);
+      return request(
+        "/search",
+        { body, cache: "no-store", method: "POST" },
+        SearchNotesResponseSchema
+      );
+    },
+
+    /** Returns the unbuffered archive response so callers can stream it to their chosen sink. */
+    exportAccountData() {
+      return authenticatedRawRequest("/me/export");
+    },
+
+    deleteAccount(input: AccountDeleteRequest) {
+      const body = AccountDeleteRequestSchema.parse(input);
+      return request(
+        "/me",
+        { body, cache: "no-store", method: "DELETE" },
+        AccountDeletionReceiptSchema
+      );
+    },
+
+    replayAccountDeletionReceipt(input: AccountDeletionReceiptReplayRequest) {
+      const body = AccountDeletionReceiptReplayRequestSchema.parse(input);
+      return request(
+        "/me/deletion-receipt",
+        { authenticated: false, body, cache: "no-store", method: "POST" },
+        AccountDeletionReceiptSchema
+      );
     }
   });
 }

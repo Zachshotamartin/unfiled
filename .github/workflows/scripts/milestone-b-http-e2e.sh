@@ -32,7 +32,6 @@ set +a
 e2e_supabase_url="${API_URL:-http://127.0.0.1:54321}"
 e2e_app_url="http://127.0.0.1:3100"
 e2e_run_id="${E2E_RUN_ID:-$(date +%s)-$$}"
-e2e_cron_secret="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))')"
 e2e_standalone_dir="$e2e_tmp_dir/standalone"
 
 # Next's standalone output intentionally omits public/ and .next/static. Stage
@@ -46,10 +45,12 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY="$ANON_KEY" \
 SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY" \
 NEXT_PUBLIC_SITE_URL="$e2e_app_url" \
 AUTH_RATE_LIMIT_PEPPER="ci-auth-rate-limit-pepper-000000000001" \
+CI="true" \
+UNFILED_ALLOW_INSECURE_LOCAL_SUPABASE_E2E="1" \
 UNFILED_CONTENT_KEK_ID="ci-content-kek-v1" \
 UNFILED_CONTENT_KEK="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" \
 UNFILED_CONTENT_FINGERPRINT_KEY="AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE" \
-CRON_SECRET="$e2e_cron_secret" \
+UNFILED_PRIVATE_SEARCH_CURSOR_HMAC_KEY="AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI" \
 HOSTNAME="127.0.0.1" \
 PORT="3100" \
   node "$e2e_standalone_dir/apps/web/server.js" \
@@ -116,6 +117,64 @@ request_json() {
     arguments+=(--header "idempotency-key: $idempotency_key")
   fi
   curl "${arguments[@]}" "$e2e_app_url/api/v1$path"
+}
+
+private_search_json() {
+  local label="$1"
+  local body="$2"
+  local response_body="$e2e_tmp_dir/search-$label.json"
+  local response_headers="$e2e_tmp_dir/search-$label.headers"
+  local result
+  local status
+  local effective_url
+
+  result="$(
+    curl --silent --show-error \
+      --request POST \
+      --header "authorization: Bearer $e2e_access_token" \
+      --header "content-type: application/json" \
+      --header "cache-control: no-store" \
+      --data "$body" \
+      --dump-header "$response_headers" \
+      --output "$response_body" \
+      --write-out $'%{http_code}\n%{url_effective}' \
+      "$e2e_app_url/api/v1/search"
+  )"
+  status="$(printf '%s\n' "$result" | sed -n '1p')"
+  effective_url="$(printf '%s\n' "$result" | sed -n '2p')"
+  if [[ "$status" != "200" || "$effective_url" != "$e2e_app_url/api/v1/search" ]]; then
+    echo "Private search did not use the exact no-query POST endpoint." >&2
+    return 1
+  fi
+
+  node -e '
+    const fs = require("node:fs");
+    const headers = fs.readFileSync(process.argv[1], "utf8").replaceAll("\r", "");
+    const value = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+    const exactKeys = (input, expected) =>
+      JSON.stringify(Object.keys(input).sort()) === JSON.stringify([...expected].sort());
+    if (!/^cache-control:\s*private, no-store\s*$/imu.test(headers)) process.exit(1);
+    if (!/^pragma:\s*no-cache\s*$/imu.test(headers)) process.exit(1);
+    if (!/^content-type:\s*application\/json; charset=utf-8\s*$/imu.test(headers)) process.exit(1);
+    if (!exactKeys(value, ["items", "pageInfo"])) process.exit(1);
+    if (!Array.isArray(value.items) || !exactKeys(value.pageInfo, ["hasMore", "nextCursor"])) {
+      process.exit(1);
+    }
+    if (typeof value.pageInfo.hasMore !== "boolean") process.exit(1);
+    if (value.pageInfo.nextCursor !== null && typeof value.pageInfo.nextCursor !== "string") {
+      process.exit(1);
+    }
+    const itemKeys = [
+      "archivedAt",
+      "noteId",
+      "snippet",
+      "spacePath",
+      "title",
+      "type",
+      "updatedAt"
+    ];
+    if (value.items.some((item) => !exactKeys(item, itemKeys))) process.exit(1);
+  ' "$response_headers" "$response_body"
 }
 
 e2e_session="$(request_json GET /auth/session)"
@@ -350,32 +409,99 @@ request_json DELETE "/notes/$e2e_note_id/tags/$e2e_tag_id" \
   "{\"expectedRevision\":6,\"idempotencyKey\":\"$e2e_unlink_tag_key\"}" \
   "$e2e_unlink_tag_key" >/dev/null
 
-request_json GET '/search?q=HTTP%20gate&archive=exclude&limit=10' | E2E_NOTE_ID="$e2e_note_id" node -e '
-  let input = "";
-  process.stdin.on("data", (chunk) => (input += chunk));
-  process.stdin.on("end", () => {
-    const value = JSON.parse(input);
-    if (!value.items.some((item) => item.noteId === process.env.E2E_NOTE_ID)) process.exit(1);
-  });
-'
+e2e_private_search_canary="literal%$e2e_run_id"
+private_search_json \
+  title \
+  '{"query":"HTTP gate","archive":"exclude","limit":10}'
+E2E_NOTE_ID="$e2e_note_id" node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  if (!value.items.some((item) => item.noteId === process.env.E2E_NOTE_ID)) process.exit(1);
+' "$e2e_tmp_dir/search-title.json"
 
-request_json GET "/search?q=literal%25$e2e_run_id&archive=exclude&limit=10" | E2E_NOTE_ID="$e2e_note_id" node -e '
-  let input = "";
-  process.stdin.on("data", (chunk) => (input += chunk));
-  process.stdin.on("end", () => {
-    const value = JSON.parse(input);
-    if (value.items.length !== 1 || value.items[0]?.noteId !== process.env.E2E_NOTE_ID) process.exit(1);
-  });
-'
+private_search_json \
+  percent \
+  "{\"query\":\"$e2e_private_search_canary\",\"archive\":\"exclude\",\"limit\":10}"
+E2E_NOTE_ID="$e2e_note_id" node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  if (value.items.length !== 1 || value.items[0]?.noteId !== process.env.E2E_NOTE_ID) process.exit(1);
+' "$e2e_tmp_dir/search-percent.json"
 
-request_json GET "/search?q=literal_$e2e_run_id&archive=exclude&limit=10" | E2E_NOTE_ID="$e2e_note_id" node -e '
-  let input = "";
-  process.stdin.on("data", (chunk) => (input += chunk));
-  process.stdin.on("end", () => {
-    const value = JSON.parse(input);
-    if (value.items.length !== 1 || value.items[0]?.noteId !== process.env.E2E_NOTE_ID) process.exit(1);
-  });
-'
+private_search_json \
+  underscore \
+  "{\"query\":\"literal_$e2e_run_id\",\"archive\":\"exclude\",\"limit\":10}"
+E2E_NOTE_ID="$e2e_note_id" node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  if (value.items.length !== 1 || value.items[0]?.noteId !== process.env.E2E_NOTE_ID) process.exit(1);
+' "$e2e_tmp_dir/search-underscore.json"
+
+# Search accepts only strict JSON POST bodies. Query text must never enter the
+# URL, and even rejected requests retain the private no-store response policy.
+e2e_search_invalid_canary="private-search-invalid-$e2e_run_id"
+e2e_search_invalid_status="$(
+  curl --silent --show-error \
+    --request POST \
+    --header "authorization: Bearer $e2e_access_token" \
+    --header "content-type: application/json" \
+    --data "{\"query\":\"$e2e_search_invalid_canary\",\"unexpected\":true}" \
+    --dump-header "$e2e_tmp_dir/search-invalid.headers" \
+    --output "$e2e_tmp_dir/search-invalid.json" \
+    --write-out '%{http_code}' \
+    "$e2e_app_url/api/v1/search"
+)"
+[[ "$e2e_search_invalid_status" == "400" ]]
+E2E_SEARCH_CANARY="$e2e_search_invalid_canary" node -e '
+  const fs = require("node:fs");
+  const headers = fs.readFileSync(process.argv[1], "utf8").replaceAll("\r", "");
+  const serialized = fs.readFileSync(process.argv[2], "utf8");
+  const value = JSON.parse(serialized);
+  if (!/^cache-control:\s*private, no-store\s*$/imu.test(headers)) process.exit(1);
+  if (!/^pragma:\s*no-cache\s*$/imu.test(headers)) process.exit(1);
+  if (value.code !== "validation_failed") process.exit(1);
+  if (serialized.includes(process.env.E2E_SEARCH_CANARY)) process.exit(1);
+' "$e2e_tmp_dir/search-invalid.headers" "$e2e_tmp_dir/search-invalid.json"
+
+e2e_search_url_field_status="$(
+  curl --silent --show-error \
+    --request POST \
+    --header "authorization: Bearer $e2e_access_token" \
+    --header "content-type: application/json" \
+    --data '{"query":"HTTP gate","archive":"exclude","limit":10}' \
+    --dump-header "$e2e_tmp_dir/search-url-field.headers" \
+    --output "$e2e_tmp_dir/search-url-field.json" \
+    --write-out '%{http_code}' \
+    "$e2e_app_url/api/v1/search?limit=10"
+)"
+[[ "$e2e_search_url_field_status" == "400" ]]
+node -e '
+  const headers = require("node:fs")
+    .readFileSync(process.argv[1], "utf8")
+    .replaceAll("\r", "");
+  if (!/^cache-control:\s*private, no-store\s*$/imu.test(headers)) process.exit(1);
+  if (!/^pragma:\s*no-cache\s*$/imu.test(headers)) process.exit(1);
+' "$e2e_tmp_dir/search-url-field.headers"
+
+e2e_search_get_status="$(
+  curl --silent --show-error \
+    --request GET \
+    --header "authorization: Bearer $e2e_access_token" \
+    --dump-header "$e2e_tmp_dir/search-get.headers" \
+    --output /dev/null \
+    --write-out '%{http_code}' \
+    "$e2e_app_url/api/v1/search"
+)"
+[[ "$e2e_search_get_status" == "405" ]]
+node -e '
+  const headers = require("node:fs")
+    .readFileSync(process.argv[1], "utf8")
+    .replaceAll("\r", "");
+  if (!/^allow:\s*POST\s*$/imu.test(headers)) process.exit(1);
+  if (!/^cache-control:\s*private, no-store\s*$/imu.test(headers)) process.exit(1);
+' "$e2e_tmp_dir/search-get.headers"
+
+if grep --fixed-strings --quiet "$e2e_private_search_canary" "$e2e_tmp_dir/web.log"; then
+  echo "Private search text appeared in the web server log." >&2
+  exit 1
+fi
 
 request_json GET '/review-items?state=open&limit=30' | node -e '
   let input = "";
@@ -421,22 +547,24 @@ request_json POST /captures "$e2e_capture_body" "$e2e_capture_id" | \
     });
   '
 
-curl --fail --silent --show-error \
-  --header "authorization: Bearer $e2e_cron_secret" \
-  "$e2e_app_url/api/internal/captures/drain" >/dev/null
-
+# The web app durably queues encrypted work and only wakes the isolated
+# organizer. Milestone D's planner is intentionally unavailable in this lane,
+# so the HTTP gate must not expect an in-process deterministic organization.
 e2e_capture_detail="$(request_json GET "/captures/$e2e_capture_id")"
 printf '%s' "$e2e_capture_detail" | \
-  E2E_CAPTURE_ID="$e2e_capture_id" E2E_CAPTURE_CANARY="$e2e_capture_canary" node -e '
+  E2E_CAPTURE_ID="$e2e_capture_id" \
+  E2E_CAPTURE_JOB_ID="$e2e_capture_job_id" \
+  E2E_CAPTURE_CANARY="$e2e_capture_canary" \
+  node -e '
     let input = "";
     process.stdin.on("data", (chunk) => (input += chunk));
     process.stdin.on("end", () => {
       const value = JSON.parse(input);
       if (value.capture?.id !== process.env.E2E_CAPTURE_ID) process.exit(1);
       if (value.capture?.rawContent !== process.env.E2E_CAPTURE_CANARY) process.exit(1);
-      if (value.capture?.status !== "inbox") process.exit(1);
-      if (value.capture?.receipt?.outcome !== "kept_in_inbox") process.exit(1);
-      if (value.capture?.receipt?.captureId !== process.env.E2E_CAPTURE_ID) process.exit(1);
+      if (value.capture?.status !== "queued") process.exit(1);
+      if (value.capture?.jobId !== process.env.E2E_CAPTURE_JOB_ID) process.exit(1);
+      if (value.capture?.receipt !== null) process.exit(1);
     });
   '
 
@@ -480,6 +608,20 @@ request_json DELETE "/captures/$e2e_capture_id" \
       if (value.removedInsertedContent !== false || value.contentRemovalMutations?.length !== 0) process.exit(1);
     });
   '
+
+e2e_deleted_capture_status="$(
+  curl --silent --show-error \
+    --request GET \
+    --header "authorization: Bearer $e2e_access_token" \
+    --output "$e2e_tmp_dir/deleted-capture.json" \
+    --write-out '%{http_code}' \
+    "$e2e_app_url/api/v1/captures/$e2e_capture_id"
+)"
+[[ "$e2e_deleted_capture_status" == "404" ]]
+node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  if (value.code !== "not_found") process.exit(1);
+' "$e2e_tmp_dir/deleted-capture.json"
 
 # Leave the shared local database reusable for a subsequent test pass. The API
 # deliberately soft-deletes notes, which removes their searchable plaintext

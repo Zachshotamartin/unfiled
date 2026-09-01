@@ -51,7 +51,8 @@ describe("note retention cron handler", () => {
       runBatch
     });
 
-    const response = await handler(request("", `Bearer ${SECRET}`));
+    const cronRequest = request("", `Bearer ${SECRET}`);
+    const response = await handler(cronRequest);
 
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
@@ -66,7 +67,8 @@ describe("note retention cron handler", () => {
       batchSize: 500,
       execute: false,
       now: RUN_AT,
-      ownerId: null
+      ownerId: null,
+      signal: cronRequest.signal
     });
   });
 
@@ -94,7 +96,8 @@ describe("note retention cron handler", () => {
       runBatch
     });
 
-    const response = await handler(request("", `Bearer ${SECRET}`));
+    const cronRequest = request("", `Bearer ${SECRET}`);
+    const response = await handler(cronRequest);
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
@@ -111,7 +114,8 @@ describe("note retention cron handler", () => {
       batchSize: 500,
       execute: true,
       now: RUN_AT,
-      ownerId: null
+      ownerId: null,
+      signal: cronRequest.signal
     });
   });
 

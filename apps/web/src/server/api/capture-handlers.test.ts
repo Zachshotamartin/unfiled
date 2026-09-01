@@ -86,6 +86,17 @@ function repository(overrides: Partial<CaptureRepository> = {}): CaptureReposito
 }
 
 describe("capture route handlers", () => {
+  it("passes the request to a request-scoped repository factory", async () => {
+    const captureRepository = repository();
+    const factory = vi.fn(() => captureRepository);
+    const handlers = createCaptureHandlers({ authenticate: authenticated, repository: factory });
+    const incoming = request("/api/v1/captures?limit=1");
+
+    await handlers.listCaptures(incoming);
+
+    expect(factory).toHaveBeenCalledWith(incoming);
+  });
+
   it("accepts a validated capture with caller-owned idempotency and schedules prompt processing", async () => {
     const captureRepository = repository();
     const scheduleDrain = vi.fn();

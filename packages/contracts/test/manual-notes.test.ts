@@ -34,7 +34,7 @@ import {
   ReviewItemDtoSchema,
   ReviewItemListQuerySchema,
   LogEntrySchema,
-  SearchNotesQuerySchema,
+  SearchNotesRequestSchema,
   SearchNotesResponseSchema,
   SpaceArchiveRequestSchema,
   SpaceCreateRequestSchema,
@@ -349,11 +349,16 @@ describe("Milestone B manual-note contracts", () => {
     expect(MutationResultSchema.parse(manualNoteFixtures.mutationResult)).toEqual(
       manualNoteFixtures.mutationResult
     );
-    expect(SearchNotesQuerySchema.parse({ q: " milk " })).toMatchObject({
-      q: "milk",
+    expect(SearchNotesRequestSchema.parse({ query: " milk " })).toEqual({
+      query: "milk",
       archive: "exclude",
       limit: 30
     });
+    expect(SearchNotesRequestSchema.safeParse({ q: "milk" }).success).toBe(false);
+    expect(SearchNotesRequestSchema.safeParse({ query: "milk", limit: "30" }).success).toBe(false);
+    expect(SearchNotesRequestSchema.safeParse({ query: "milk", unexpected: true }).success).toBe(
+      false
+    );
     expect(
       SearchNotesResponseSchema.parse({
         items: [manualNoteFixtures.searchResult],
@@ -392,7 +397,10 @@ describe("Milestone B manual-note contracts", () => {
       "/tags/{tagId}",
       "/mutations/{mutationId}/undo",
       "/review-items",
-      "/search"
+      "/search",
+      "/me",
+      "/me/export",
+      "/me/deletion-receipt"
     ] as const;
 
     for (const path of expectedPaths) expect(openApiDocument.paths).toHaveProperty(path);
@@ -410,7 +418,12 @@ describe("Milestone B manual-note contracts", () => {
           continue;
         }
         const schemaReference = operation.requestBody.content["application/json"].schema.$ref;
-        if (!schemaReference.includes("Auth")) {
+        if (
+          !schemaReference.includes("Auth") &&
+          !schemaReference.endsWith("/SearchNotesRequest") &&
+          !schemaReference.endsWith("/AccountDeleteRequest") &&
+          !schemaReference.endsWith("/AccountDeletionReceiptReplayRequest")
+        ) {
           expect(operation.parameters).toContainEqual(
             expect.objectContaining({ name: "Idempotency-Key", required: true })
           );
@@ -423,9 +436,19 @@ describe("Milestone B manual-note contracts", () => {
         expect.objectContaining({ in: "query", name: "spaceId" })
       ])
     );
-    expect(openApiDocument.paths["/search"].get.parameters).toContainEqual(
-      expect.objectContaining({ in: "query", name: "q", required: true })
-    );
+    expect(openApiDocument.paths["/search"]).not.toHaveProperty("get");
+    expect(openApiDocument.paths["/search"].post.requestBody).toEqual({
+      required: true,
+      content: {
+        "application/json": { schema: { $ref: "#/components/schemas/SearchNotesRequest" } }
+      }
+    });
+    expect(openApiDocument.paths["/search"].post).not.toHaveProperty("parameters");
+    expect(openApiDocument.paths["/me/deletion-receipt"].post).not.toHaveProperty("parameters");
+    expect(openApiDocument.paths["/me"].delete).not.toHaveProperty("parameters");
+    expect(
+      openApiDocument.paths["/search"].post.responses["200"].headers["Cache-Control"].schema
+    ).toEqual({ type: "string", const: "private, no-store" });
     expect(openApiDocument.paths["/review-items"].get.parameters).toContainEqual(
       expect.objectContaining({ in: "query", name: "state" })
     );

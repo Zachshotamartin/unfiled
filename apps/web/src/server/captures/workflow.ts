@@ -1,18 +1,12 @@
 import { ContentCryptoError, ContentCryptoErrorCode } from "@unfiled/content-crypto";
 
-import {
-  environmentCaptureContentProtector,
-  type CaptureContentProtector
-} from "./content-protection";
-import { captureServiceRpc } from "./supabase-http-repository";
+import type { CaptureContentProtector } from "./content-protection";
 
 const DEFAULT_BATCH_SIZE = 20;
 const DEFAULT_LEASE_SECONDS = 120;
 const MIN_HEARTBEAT_INTERVAL_MS = 1_000;
 const MAX_HEARTBEAT_INTERVAL_MS = 30_000;
 const WORKER_ID = "unfiled-deterministic-capture-v1";
-
-type UnknownRecord = Record<string, unknown>;
 
 export type ClaimedCaptureJob = Readonly<{
   jobId: string;
@@ -56,101 +50,6 @@ export type CaptureDrainResult = Readonly<{
   failed: number;
   retryScheduled: number;
 }>;
-
-function asRecord(value: unknown): UnknownRecord {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError("invalid workflow response");
-  }
-  return value as UnknownRecord;
-}
-
-function stringField(row: UnknownRecord, key: string): string {
-  const value = row[key];
-  if (typeof value !== "string" || value.length === 0) {
-    throw new TypeError("invalid workflow response");
-  }
-  return value;
-}
-
-function claimedJob(value: unknown): ClaimedCaptureJob {
-  const row = asRecord(value);
-  const capture = asRecord(row.capture);
-  const captureId = stringField(row, "captureId");
-  if (
-    typeof row.attempt !== "number" ||
-    !Number.isInteger(row.attempt) ||
-    row.attempt < 1 ||
-    typeof capture.expansionDisabled !== "boolean" ||
-    !("encryptedContent" in capture) ||
-    stringField(capture, "id") !== captureId
-  ) {
-    throw new TypeError("invalid workflow response");
-  }
-  return {
-    jobId: stringField(row, "jobId"),
-    captureId,
-    userId: stringField(row, "userId"),
-    attempt: row.attempt,
-    leaseToken: stringField(row, "leaseToken"),
-    encryptedContent: capture.encryptedContent,
-    source: stringField(capture, "source"),
-    privacy: stringField(capture, "privacy"),
-    explicitDestinationNoteId:
-      typeof capture.explicitDestinationNoteId === "string"
-        ? capture.explicitDestinationNoteId
-        : null,
-    expansionDisabled: capture.expansionDisabled
-  };
-}
-
-export const supabaseCaptureWorkflowStore: CaptureWorkflowStore = Object.freeze({
-  async claim(workerId: string, limit: number, leaseSeconds: number) {
-    const response = asRecord(
-      await captureServiceRpc("claim_capture_jobs", {
-        p_worker_id: workerId,
-        p_limit: limit,
-        p_lease_seconds: leaseSeconds
-      })
-    );
-    if (!Array.isArray(response.jobs)) throw new TypeError("invalid workflow response");
-    return response.jobs.map(claimedJob);
-  },
-
-  async complete(jobId: string, leaseToken: string, status: "inbox") {
-    await captureServiceRpc("complete_capture_job", {
-      p_job_id: jobId,
-      p_lease_token: leaseToken,
-      p_terminal_status: status
-    });
-  },
-
-  async heartbeat(jobId: string, leaseToken: string, leaseSeconds: number) {
-    await captureServiceRpc("heartbeat_capture_job", {
-      p_job_id: jobId,
-      p_lease_token: leaseToken,
-      p_lease_seconds: leaseSeconds
-    });
-  },
-
-  async fail(
-    jobId: string,
-    leaseToken: string,
-    errorCode: "invalid_capture" | "provider_unavailable",
-    retryable: boolean
-  ) {
-    await captureServiceRpc("fail_capture_job", {
-      p_job_id: jobId,
-      p_lease_token: leaseToken,
-      p_error_code: errorCode,
-      p_retryable: retryable,
-      p_retry_after_seconds: null
-    });
-  },
-
-  async recover(limit: number) {
-    await captureServiceRpc("recover_stale_capture_jobs", { p_limit: limit });
-  }
-});
 
 export const deterministicCaptureOrganizer: DeterministicCaptureOrganizer = Object.freeze({
   organize({ content }) {
@@ -249,16 +148,16 @@ function startLeaseHeartbeat(
 export async function drainCaptureJobs(
   dependencies: Readonly<{
     organizer?: DeterministicCaptureOrganizer;
-    protector?: CaptureContentProtector;
-    store?: CaptureWorkflowStore;
+    protector: CaptureContentProtector;
+    store: CaptureWorkflowStore;
     batchSize?: number;
     leaseSeconds?: number;
     workerId?: string;
-  }> = {}
+  }>
 ): Promise<CaptureDrainResult> {
   const organizer = dependencies.organizer ?? deterministicCaptureOrganizer;
-  const protector = dependencies.protector ?? environmentCaptureContentProtector;
-  const store = dependencies.store ?? supabaseCaptureWorkflowStore;
+  const protector = dependencies.protector;
+  const store = dependencies.store;
   const batchSize = dependencies.batchSize ?? DEFAULT_BATCH_SIZE;
   const leaseSeconds = dependencies.leaseSeconds ?? DEFAULT_LEASE_SECONDS;
   const workerId = dependencies.workerId ?? WORKER_ID;

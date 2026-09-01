@@ -30,13 +30,13 @@ extension APIClient {
         try await delete("/tags/\(id.rawValue)", body: request, idempotencyKey: request.idempotencyKey)
     }
 
-    public func searchNotes(_ query: SearchNotesQuery) async throws -> SearchNotesResponse {
-        guard !query.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              query.query.utf16.count <= 200 else { throw APIClientError.invalidRequest }
-        var items = try pageItems(cursor: query.cursor, limit: query.limit)
-        items.append(.init(name: "q", value: query.query))
-        items.append(.init(name: "archive", value: query.archive.rawValue))
-        return try await get("/search", query: items)
+    public func searchNotes(_ request: SearchNotesRequest) async throws -> SearchNotesResponse {
+        guard (1 ... 200).contains(request.query.utf16.count),
+              (1 ... 100).contains(request.limit),
+              request.cursor.map({ (1 ... 512).contains($0.utf16.count) }) ?? true else {
+            throw APIClientError.invalidRequest
+        }
+        return try await post("/search", body: request)
     }
 
     public func listReviewItems(_ query: ReviewItemListQuery = .init()) async throws -> ListReviewItemsResponse {

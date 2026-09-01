@@ -170,6 +170,7 @@ function claimProjection(
     revisionId: REVISION_ID,
     mutationId: MUTATION_ID,
     occurredAt: OCCURRED_AT,
+    commandProjection: "legacy",
     requestMacKey: {
       keyId: request.requestMac.keyId,
       keyClass: request.requestMac.keyClass,
@@ -204,6 +205,7 @@ function incompleteClaim(
     revisionId: REVISION_ID,
     mutationId: MUTATION_ID,
     occurredAt: OCCURRED_AT,
+    commandProjection: "legacy",
     requestMacKey: {
       keyId: keyId(historyKeyClass, "content_mac"),
       keyClass: historyKeyClass,
@@ -355,6 +357,7 @@ describe("encrypted note write RPC adapter", () => {
         revisionId: REVISION_ID,
         mutationId: MUTATION_ID,
         occurredAt: OCCURRED_AT,
+        commandProjection: "legacy",
         requestMacKey: {
           keyId: keyId("ai_assisted", "content_mac"),
           keyClass: "ai_assisted",

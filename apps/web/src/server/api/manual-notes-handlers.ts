@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual, type Hmac } from "node:crypto";
 
 import {
   ApiErrorCode,
@@ -16,6 +16,7 @@ import {
   NoteTagUnlinkRequestSchema,
   NoteUpdateRequestSchema,
   ReviewItemListQuerySchema,
+  SearchNotesRequestSchema,
   SpaceArchiveRequestSchema,
   SpaceCreateRequestSchema,
   SpaceUpdateRequestSchema,
@@ -37,6 +38,7 @@ import { createProductionRepository } from "@/server/product/supabase-http-repos
 import type { ManualNotesRepository, RepositoryContext } from "@/server/product/repository";
 
 import {
+  ConfigurationError,
   errorResponse,
   HttpError,
   jsonResponse,
@@ -56,8 +58,27 @@ type Schema<T> = Readonly<{
 
 export type ManualNotesDependencies = Readonly<{
   authenticate?: (request: Request) => Promise<AuthenticatedRequest>;
-  repository: ManualNotesRepository | (() => ManualNotesRepository);
+  getPrivateSearchCursorKey?: () => string | undefined;
+  repository: ManualNotesRepository | ((request: Request) => ManualNotesRepository);
   scheduleIndexDrain?: () => void;
+}>;
+
+const MAX_PRIVATE_SEARCH_REQUEST_BYTES = 4_096;
+const PRIVATE_SEARCH_CACHE_CONTROL = "private, no-store";
+const PRIVATE_SEARCH_CURSOR_DOMAIN = "unfiled/private-search-cursor/hmac-sha256/v1";
+const PRIVATE_SEARCH_CURSOR_KEY_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
+const PRIVATE_SEARCH_CURSOR_NONCE_BYTES = 16;
+const PRIVATE_SEARCH_CURSOR_PAYLOAD_BYTES = 1 + 4 + PRIVATE_SEARCH_CURSOR_NONCE_BYTES;
+const PRIVATE_SEARCH_CURSOR_TAG_BYTES = 32;
+const PRIVATE_SEARCH_CURSOR_BYTES =
+  PRIVATE_SEARCH_CURSOR_PAYLOAD_BYTES + PRIVATE_SEARCH_CURSOR_TAG_BYTES;
+const PRIVATE_SEARCH_CURSOR_PATTERN = /^[A-Za-z0-9_-]{71}$/u;
+const MAX_CURSOR_OFFSET = 100_000;
+
+type PrivateSearchCursorScope = Readonly<{
+  archive: "exclude" | "include" | "only";
+  ownerId: string;
+  query: string;
 }>;
 
 function parse<T>(schema: Schema<T>, value: unknown): T {
@@ -192,6 +213,119 @@ function pageWindow<T>(
   };
 }
 
+function privateSearchCursorKey(value: string | undefined): Buffer {
+  if (value === undefined || !PRIVATE_SEARCH_CURSOR_KEY_PATTERN.test(value)) {
+    throw new ConfigurationError();
+  }
+  const key = Buffer.from(value, "base64url");
+  if (key.byteLength !== 32 || key.toString("base64url") !== value) {
+    key.fill(0);
+    throw new ConfigurationError();
+  }
+  return key;
+}
+
+function updatePrivateSearchCursorMacField(mac: Hmac, value: string): void {
+  const encoded = Buffer.from(value, "utf8");
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(encoded.byteLength);
+  mac.update(length);
+  mac.update(encoded);
+  length.fill(0);
+  encoded.fill(0);
+}
+
+function privateSearchCursorTag(
+  key: Buffer,
+  payload: Buffer,
+  scope: PrivateSearchCursorScope
+): Buffer {
+  const mac = createHmac("sha256", key);
+  mac.update(PRIVATE_SEARCH_CURSOR_DOMAIN, "utf8");
+  updatePrivateSearchCursorMacField(mac, scope.ownerId);
+  updatePrivateSearchCursorMacField(mac, scope.archive);
+  updatePrivateSearchCursorMacField(mac, scope.query);
+  mac.update(payload);
+  return mac.digest();
+}
+
+function encodePrivateSearchCursor(
+  offset: number,
+  scope: PrivateSearchCursorScope,
+  key: Buffer
+): string {
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > MAX_CURSOR_OFFSET) {
+    throw new TypeError("invalid cursor offset");
+  }
+  const payload = Buffer.alloc(PRIVATE_SEARCH_CURSOR_PAYLOAD_BYTES);
+  payload[0] = 1;
+  payload.writeUInt32BE(offset, 1);
+  randomBytes(PRIVATE_SEARCH_CURSOR_NONCE_BYTES).copy(payload, 5);
+  const tag = privateSearchCursorTag(key, payload, scope);
+  const encoded = Buffer.concat([payload, tag]).toString("base64url");
+  payload.fill(0);
+  tag.fill(0);
+  return encoded;
+}
+
+function privateSearchCursorOffset(
+  value: string | null,
+  scope: PrivateSearchCursorScope,
+  key: Buffer
+): number {
+  if (value === null) return 0;
+  try {
+    if (!PRIVATE_SEARCH_CURSOR_PATTERN.test(value)) throw new TypeError("invalid cursor");
+    const decoded = Buffer.from(value, "base64url");
+    if (
+      decoded.byteLength !== PRIVATE_SEARCH_CURSOR_BYTES ||
+      decoded.toString("base64url") !== value
+    ) {
+      decoded.fill(0);
+      throw new TypeError("invalid cursor");
+    }
+    const payload = decoded.subarray(0, PRIVATE_SEARCH_CURSOR_PAYLOAD_BYTES);
+    const suppliedTag = decoded.subarray(PRIVATE_SEARCH_CURSOR_PAYLOAD_BYTES);
+    const expectedTag = privateSearchCursorTag(key, payload, scope);
+    const offset = payload.readUInt32BE(1);
+    const valid =
+      payload[0] === 1 &&
+      offset <= MAX_CURSOR_OFFSET &&
+      suppliedTag.byteLength === expectedTag.byteLength &&
+      timingSafeEqual(suppliedTag, expectedTag);
+    expectedTag.fill(0);
+    decoded.fill(0);
+    if (!valid) throw new TypeError("invalid cursor");
+    return offset;
+  } catch {
+    throw new HttpError(
+      400,
+      ApiErrorCode.VALIDATION_FAILED,
+      "That page cursor is invalid or no longer matches this private search."
+    );
+  }
+}
+
+function privateSearchPageWindow<T>(
+  values: readonly T[],
+  limit: number,
+  offset: number,
+  scope: PrivateSearchCursorScope,
+  key: Buffer
+): Readonly<{
+  items: readonly T[];
+  pageInfo: Readonly<{ hasMore: boolean; nextCursor: string | null }>;
+}> {
+  const hasMore = values.length > limit;
+  return {
+    items: values.slice(0, limit),
+    pageInfo: {
+      hasMore,
+      nextCursor: hasMore ? encodePrivateSearchCursor(offset + limit, scope, key) : null
+    }
+  };
+}
+
 function enumQuery<T extends string>(value: string | null, values: readonly T[], fallback: T): T {
   if (value === null || value.length === 0) return fallback;
   if (values.includes(value as T)) return value as T;
@@ -207,8 +341,85 @@ function positiveLimit(value: string | null): number {
   return parsed;
 }
 
+function privateSearchResponse(response: Response): Response {
+  response.headers.set("cache-control", PRIVATE_SEARCH_CACHE_CONTROL);
+  response.headers.set("pragma", "no-cache");
+  return response;
+}
+
+function privateSearchRequestTooLarge(): HttpError {
+  return new HttpError(413, ApiErrorCode.VALIDATION_FAILED, "That search request is too large.");
+}
+
+async function readBoundedPrivateSearchBytes(request: Request): Promise<Uint8Array> {
+  const declaredLength = request.headers.get("content-length");
+  if (declaredLength !== null) {
+    const length = Number(declaredLength);
+    if (!Number.isSafeInteger(length) || length < 0) {
+      throw new HttpError(400, ApiErrorCode.VALIDATION_FAILED, "Send a valid JSON request.");
+    }
+    if (length > MAX_PRIVATE_SEARCH_REQUEST_BYTES) throw privateSearchRequestTooLarge();
+  }
+
+  if (request.body === null) return new Uint8Array();
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      length += chunk.value.byteLength;
+      if (length > MAX_PRIVATE_SEARCH_REQUEST_BYTES) {
+        void reader.cancel();
+        throw privateSearchRequestTooLarge();
+      }
+      chunks.push(chunk.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+async function readPrivateSearchRequest(request: Request) {
+  const url = new URL(request.url);
+  if (url.search.length > 0) {
+    throw new HttpError(
+      400,
+      ApiErrorCode.VALIDATION_FAILED,
+      "Send search fields in the private request body."
+    );
+  }
+  const mediaType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+  if (mediaType !== "application/json") {
+    throw new HttpError(400, ApiErrorCode.VALIDATION_FAILED, "Send search fields as JSON.");
+  }
+  const bytes = await readBoundedPrivateSearchBytes(request);
+  let value: unknown;
+  try {
+    const json = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    value = JSON.parse(json) as unknown;
+  } catch {
+    throw new HttpError(400, ApiErrorCode.VALIDATION_FAILED, "Send a valid JSON request.");
+  } finally {
+    bytes.fill(0);
+  }
+  return parse(SearchNotesRequestSchema, value);
+}
+
 export function createManualNotesHandlers(dependencies: ManualNotesDependencies) {
   const authenticate = dependencies.authenticate ?? authenticateRequest;
+  const getPrivateSearchCursorKey =
+    dependencies.getPrivateSearchCursorKey ??
+    (() => process.env.UNFILED_PRIVATE_SEARCH_CURSOR_HMAC_KEY);
   const scheduleIndexDrain = dependencies.scheduleIndexDrain ?? scheduleProductionIndexDrain;
 
   function noteMutationResponse(result: NoteMutationResult, status = 200): Response {
@@ -228,7 +439,7 @@ export function createManualNotesHandlers(dependencies: ManualNotesDependencies)
       const session = await authenticate(request);
       const repository =
         typeof dependencies.repository === "function"
-          ? dependencies.repository()
+          ? dependencies.repository(request)
           : dependencies.repository;
       const response = await action(repository, {
         accessToken: session.accessToken,
@@ -696,36 +907,38 @@ export function createManualNotesHandlers(dependencies: ManualNotesDependencies)
       });
     },
 
-    search(request: Request) {
-      return run(request, async (repository, context) => {
-        const url = new URL(request.url);
-        const query = url.searchParams.get("q")?.trim() ?? "";
-        if (query.length < 1 || query.length > 200) {
-          throw new HttpError(400, ApiErrorCode.VALIDATION_FAILED, "Enter a search term.");
+    async search(request: Request) {
+      const response = await run(request, async (repository, context) => {
+        const input = await readPrivateSearchRequest(request);
+        const scope: PrivateSearchCursorScope = {
+          archive: input.archive,
+          ownerId: context.userId,
+          query: input.query
+        };
+        const cursorKey = privateSearchCursorKey(getPrivateSearchCursorKey());
+        try {
+          const offset = privateSearchCursorOffset(input.cursor ?? null, scope, cursorKey);
+          const result = await repository.search(context, input.query, input.archive, {
+            limit: input.limit + 1,
+            offset
+          });
+          const items: SearchNoteResult[] = result.results.map(({ note, snippet }) => ({
+            noteId: note.id,
+            title: note.title,
+            type: note.type,
+            snippet,
+            spacePath: note.spacePath?.split(" / ") ?? [],
+            updatedAt: note.updatedAt,
+            archivedAt: note.archivedAt
+          }));
+          return jsonResponse(
+            privateSearchPageWindow(items, input.limit, offset, scope, cursorKey)
+          );
+        } finally {
+          cursorKey.fill(0);
         }
-        const archive = enumQuery(
-          url.searchParams.get("archive"),
-          ["exclude", "include", "only"] as const,
-          "exclude"
-        );
-        const limit = positiveLimit(url.searchParams.get("limit"));
-        const scope = JSON.stringify({ archive, query, route: "search" });
-        const offset = cursorOffset(url.searchParams.get("cursor"), scope);
-        const result = await repository.search(context, query, archive, {
-          limit: limit + 1,
-          offset
-        });
-        const items: SearchNoteResult[] = result.results.map(({ note, snippet }) => ({
-          noteId: note.id,
-          title: note.title,
-          type: note.type,
-          snippet,
-          spacePath: note.spacePath?.split(" / ") ?? [],
-          updatedAt: note.updatedAt,
-          archivedAt: note.archivedAt
-        }));
-        return jsonResponse(pageWindow(items, limit, offset, scope));
       });
+      return privateSearchResponse(response);
     }
   });
 }

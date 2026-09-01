@@ -28,12 +28,34 @@ const mocks = vi.hoisted(() => ({
     updateNote: vi.fn()
   },
   createKeyRuntime: vi.fn(),
+  createLibraryStore: vi.fn(),
   createReadAdapter: vi.fn(),
   createServiceClient: vi.fn(),
+  createTaxonomyWriteAdapter: vi.fn(),
   createWriteAdapter: vi.fn(),
+  lexical: {
+    search: vi.fn()
+  },
+  lexicalDependencies: [] as unknown[],
   leaseActive: false,
+  libraryStores: [] as unknown[],
   runtimes: [] as unknown[],
   signals: [] as AbortSignal[],
+  taxonomy: {
+    listReviewItems: vi.fn(),
+    listSpaces: vi.fn(),
+    listTags: vi.fn()
+  },
+  taxonomyDependencies: [] as unknown[],
+  taxonomyWriteDependencies: [] as unknown[],
+  taxonomyWrites: {
+    archiveSpace: vi.fn(),
+    createSpace: vi.fn(),
+    createTag: vi.fn(),
+    deleteTag: vi.fn(),
+    updateSpace: vi.fn(),
+    updateTag: vi.fn()
+  },
   withOwnerRuntime: vi.fn()
 }));
 
@@ -62,6 +84,11 @@ type NoteWriteAdapterModule = Readonly<{
   encryptedNoteWriteRpcFunctions: typeof encryptedNoteWriteRpcFunctions;
 }>;
 
+type TaxonomyWriteAdapterModule = Readonly<{
+  createEncryptedTaxonomyRpcAdapter: typeof createEncryptedTaxonomyRpcAdapter;
+  encryptedTaxonomyWriteRpcFunctions: typeof encryptedTaxonomyWriteRpcFunctions;
+}>;
+
 vi.mock("./service-rpc-client", async (importOriginal) => {
   const actual = await importOriginal<ServiceRpcClientModule>();
   return { ...actual, createServiceRpcClient: mocks.createServiceClient };
@@ -87,6 +114,40 @@ vi.mock("./encrypted-note-rpc-adapter", async (importOriginal) => {
   return { ...actual, createEncryptedNoteRpcAdapter: mocks.createWriteAdapter };
 });
 
+vi.mock("./encrypted-taxonomy-rpc-adapter", async (importOriginal) => {
+  const actual = await importOriginal<TaxonomyWriteAdapterModule>();
+  return { ...actual, createEncryptedTaxonomyRpcAdapter: mocks.createTaxonomyWriteAdapter };
+});
+
+vi.mock("./encrypted-taxonomy-write-coordinator", () => ({
+  EncryptedTaxonomyWriteCoordinator: function MockEncryptedTaxonomyWriteCoordinator(
+    dependencies: unknown
+  ) {
+    mocks.taxonomyWriteDependencies.push(dependencies);
+    return mocks.taxonomyWrites;
+  }
+}));
+
+vi.mock("./encrypted-library-rpc-store", () => ({
+  createEncryptedLibraryRpcStore: mocks.createLibraryStore
+}));
+
+vi.mock("./encrypted-taxonomy-read-repository", () => ({
+  EncryptedTaxonomyReadRepository: function MockEncryptedTaxonomyReadRepository(
+    dependencies: unknown
+  ) {
+    mocks.taxonomyDependencies.push(dependencies);
+    return mocks.taxonomy;
+  }
+}));
+
+vi.mock("./encrypted-lexical-search", () => ({
+  EncryptedLexicalSearch: function MockEncryptedLexicalSearch(dependencies: unknown) {
+    mocks.lexicalDependencies.push(dependencies);
+    return mocks.lexical;
+  }
+}));
+
 vi.mock("./encrypted-note-aggregate-repository", () => ({
   EncryptedNoteAggregateRepository: function MockEncryptedNoteAggregateRepository(
     dependencies: unknown
@@ -110,7 +171,10 @@ import {
   encryptedNoteWriteRpcFunctions
 } from "./encrypted-note-rpc-adapter";
 import {
-  ManagedEncryptedNoteCapabilityUnavailableError,
+  type createEncryptedTaxonomyRpcAdapter,
+  encryptedTaxonomyWriteRpcFunctions
+} from "./encrypted-taxonomy-rpc-adapter";
+import {
   ManagedEncryptedNoteRepository,
   managedEncryptedNoteRpcFunctions,
   serviceRpcErrorToHttpError
@@ -173,14 +237,32 @@ function resetCore(): void {
 beforeEach(() => {
   mocks.aggregateDependencies.length = 0;
   mocks.clients.length = 0;
+  mocks.lexicalDependencies.length = 0;
+  mocks.libraryStores.length = 0;
   mocks.runtimes.length = 0;
   mocks.signals.length = 0;
+  mocks.taxonomyDependencies.length = 0;
+  mocks.taxonomyWriteDependencies.length = 0;
   mocks.leaseActive = false;
   mocks.createKeyRuntime.mockReset();
+  mocks.createLibraryStore.mockReset();
   mocks.createReadAdapter.mockReset();
   mocks.createServiceClient.mockReset();
+  mocks.createTaxonomyWriteAdapter.mockReset();
   mocks.createWriteAdapter.mockReset();
   mocks.withOwnerRuntime.mockReset();
+  for (const operation of Object.values(mocks.lexical)) {
+    operation.mockReset();
+    operation.mockResolvedValue(RESULT);
+  }
+  for (const operation of Object.values(mocks.taxonomy)) {
+    operation.mockReset();
+    operation.mockResolvedValue(RESULT);
+  }
+  for (const operation of Object.values(mocks.taxonomyWrites)) {
+    operation.mockReset();
+    operation.mockResolvedValue(RESULT);
+  }
   resetCore();
 
   mocks.createServiceClient.mockImplementation(() => {
@@ -193,11 +275,19 @@ beforeEach(() => {
     mocks.runtimes.push(runtime);
     return Promise.resolve(runtime);
   });
+  mocks.createLibraryStore.mockImplementation((client: unknown) => {
+    const store = Object.freeze({ kind: "encrypted-library-read", client });
+    mocks.libraryStores.push(store);
+    return store;
+  });
   mocks.createReadAdapter.mockImplementation((client: unknown) =>
     Object.freeze({ kind: "strict-read", client })
   );
   mocks.createWriteAdapter.mockImplementation((client: unknown) =>
     Object.freeze({ kind: "strict-write", client })
+  );
+  mocks.createTaxonomyWriteAdapter.mockImplementation((client: unknown) =>
+    Object.freeze({ kind: "strict-taxonomy-write", client })
   );
   mocks.withOwnerRuntime.mockImplementation(async (...parameters: unknown[]) => {
     const runtime = parameters[0] as InteractiveWebKeyRuntime;
@@ -233,7 +323,9 @@ describe("managed encrypted note repository", () => {
     expect(managedEncryptedNoteRpcFunctions).toEqual([
       ...encryptedAggregateRuntimeRpcFunctions,
       ...encryptedNoteReadRpcFunctions,
-      ...encryptedNoteWriteRpcFunctions
+      ...encryptedNoteWriteRpcFunctions,
+      ...encryptedTaxonomyWriteRpcFunctions,
+      "list_encrypted_library_objects"
     ]);
     expect(new Set(managedEncryptedNoteRpcFunctions).size).toBe(
       managedEncryptedNoteRpcFunctions.length
@@ -484,43 +576,86 @@ describe("managed encrypted note repository", () => {
     expect(mocks.withOwnerRuntime).not.toHaveBeenCalled();
   });
 
-  it("fails every unsupported taxonomy, review, and search method closed without content reflection", async () => {
+  it("delegates encrypted taxonomy, review, and search reads inside complete custody scopes", async () => {
     const repository = new ManagedEncryptedNoteRepository();
-    const calls = [
-      () => repository.archiveSpace(CONTEXT, SPACE_ID, true, 1, IDEMPOTENCY_KEY),
-      () =>
-        repository.createSpace(
-          CONTEXT,
-          { name: CANARY, parentId: null, sortKey: CANARY },
-          IDEMPOTENCY_KEY
-        ),
-      () => repository.createTag(CONTEXT, CANARY, IDEMPOTENCY_KEY),
-      () => repository.deleteTag(CONTEXT, TAG_ID, 1, IDEMPOTENCY_KEY),
-      () => repository.listReviewItems(CONTEXT, "open", { limit: 10, offset: 0 }),
-      () => repository.listSpaces(CONTEXT, true, { limit: 10, offset: 0 }),
-      () => repository.listTags(CONTEXT, { limit: 10, offset: 0 }),
-      () => repository.search(CONTEXT, CANARY, "include", { limit: 10, offset: 0 }),
-      () => repository.updateSpace(CONTEXT, SPACE_ID, { name: CANARY }, 1, IDEMPOTENCY_KEY),
-      () => repository.updateTag(CONTEXT, TAG_ID, CANARY, 1, IDEMPOTENCY_KEY)
-    ] as const;
 
-    for (const call of calls) {
-      const error = await call().catch((reason: unknown) => reason);
-      expect(error).toBeInstanceOf(ManagedEncryptedNoteCapabilityUnavailableError);
-      expect(error).toMatchObject({
-        status: 503,
-        code: ApiErrorCode.PROVIDER_UNAVAILABLE
-      } satisfies Partial<HttpError>);
-      expect((error as Error).message).not.toContain(CANARY);
-    }
-    expect(mocks.createServiceClient).not.toHaveBeenCalled();
-    expect(mocks.createKeyRuntime).not.toHaveBeenCalled();
-    expect(mocks.withOwnerRuntime).not.toHaveBeenCalled();
-    expect(mocks.aggregateDependencies).toHaveLength(0);
+    await expect(
+      repository.listReviewItems(CONTEXT, "open", { limit: 10, offset: 1 })
+    ).resolves.toBe(RESULT);
+    await expect(repository.listSpaces(CONTEXT, true, { limit: 9, offset: 2 })).resolves.toBe(
+      RESULT
+    );
+    await expect(repository.listTags(CONTEXT, { limit: 8, offset: 3 })).resolves.toBe(RESULT);
+    await expect(
+      repository.search(CONTEXT, CANARY, "include", { limit: 7, offset: 4 })
+    ).resolves.toBe(RESULT);
+
+    expect(mocks.taxonomy.listReviewItems).toHaveBeenCalledWith("open", {
+      limit: 10,
+      offset: 1
+    });
+    expect(mocks.taxonomy.listSpaces).toHaveBeenCalledWith(true, { limit: 9, offset: 2 });
+    expect(mocks.taxonomy.listTags).toHaveBeenCalledWith({ limit: 8, offset: 3 });
+    expect(mocks.lexical.search).toHaveBeenCalledWith(CANARY, "include", {
+      limit: 7,
+      offset: 4
+    });
+    expect(mocks.taxonomyDependencies).toHaveLength(3);
+    expect(mocks.lexicalDependencies).toEqual([mocks.core]);
+    expect(mocks.libraryStores).toHaveLength(3);
+    expect(mocks.createServiceClient).toHaveBeenCalledTimes(4);
+    expect(mocks.signals.every(({ aborted }) => aborted)).toBe(true);
+  });
+
+  it("routes every taxonomy write through a fresh scoped encrypted coordinator", async () => {
+    const repository = new ManagedEncryptedNoteRepository();
+    const spaceInput = { name: CANARY, parentId: null, sortKey: "a0" } as const;
+
+    await expect(
+      repository.archiveSpace(CONTEXT, SPACE_ID, true, 1, IDEMPOTENCY_KEY)
+    ).resolves.toBe(RESULT);
+    await expect(repository.createSpace(CONTEXT, spaceInput, IDEMPOTENCY_KEY)).resolves.toBe(
+      RESULT
+    );
+    await expect(repository.createTag(CONTEXT, CANARY, IDEMPOTENCY_KEY)).resolves.toBe(RESULT);
+    await expect(repository.deleteTag(CONTEXT, TAG_ID, 1, IDEMPOTENCY_KEY)).resolves.toBe(RESULT);
+    await expect(
+      repository.updateSpace(CONTEXT, SPACE_ID, { name: CANARY }, 1, IDEMPOTENCY_KEY)
+    ).resolves.toBe(RESULT);
+    await expect(repository.updateTag(CONTEXT, TAG_ID, CANARY, 1, IDEMPOTENCY_KEY)).resolves.toBe(
+      RESULT
+    );
+
+    expect(mocks.taxonomyWrites.archiveSpace).toHaveBeenCalledWith(
+      SPACE_ID,
+      true,
+      1,
+      IDEMPOTENCY_KEY
+    );
+    expect(mocks.taxonomyWrites.createSpace).toHaveBeenCalledWith(spaceInput, IDEMPOTENCY_KEY);
+    expect(mocks.taxonomyWrites.createTag).toHaveBeenCalledWith(CANARY, IDEMPOTENCY_KEY);
+    expect(mocks.taxonomyWrites.deleteTag).toHaveBeenCalledWith(TAG_ID, 1, IDEMPOTENCY_KEY);
+    expect(mocks.taxonomyWrites.updateSpace).toHaveBeenCalledWith(
+      SPACE_ID,
+      { name: CANARY },
+      1,
+      IDEMPOTENCY_KEY
+    );
+    expect(mocks.taxonomyWrites.updateTag).toHaveBeenCalledWith(TAG_ID, CANARY, 1, IDEMPOTENCY_KEY);
+    expect(mocks.taxonomyWriteDependencies).toHaveLength(6);
+    expect(mocks.createTaxonomyWriteAdapter).toHaveBeenCalledTimes(6);
+    expect(mocks.createServiceClient).toHaveBeenCalledTimes(6);
+    expect(mocks.signals.every(({ aborted }) => aborted)).toBe(true);
   });
 
   it("maps the complete ServiceRpcError code set to stable content-free HTTP errors", () => {
     const cases = [
+      [
+        ServiceRpcErrorCode.CONFLICT_REQUIRES_REVIEW,
+        409,
+        ApiErrorCode.CONFLICT_REQUIRES_REVIEW,
+        "That name is already in use."
+      ],
       [
         ServiceRpcErrorCode.FORBIDDEN,
         403,

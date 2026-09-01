@@ -74,7 +74,7 @@ public typealias TagDeleteRequest = RevisionMutationRequest
 public struct TagMutationResult: Codable, Equatable, Sendable { public let tag: Tag; public let replayed: Bool }
 public struct DeleteMutationResult: Codable, Equatable, Sendable { public let deletedId: String; public let replayed: Bool }
 
-public struct SearchNotesQuery: Equatable, Sendable {
+public struct SearchNotesRequest: Encodable, Equatable, Sendable {
     public let query: String; public let archive: ArchiveFilter; public let cursor: String?; public let limit: Int
     public init(query: String, archive: ArchiveFilter = .exclude, cursor: String? = nil, limit: Int = 30) {
         self.query = query.trimmingCharacters(in: .whitespacesAndNewlines)

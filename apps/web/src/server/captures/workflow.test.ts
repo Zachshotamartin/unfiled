@@ -1,10 +1,11 @@
+import { readFile } from "node:fs/promises";
+
 import { ContentCryptoError, ContentCryptoErrorCode } from "@unfiled/content-crypto";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { CaptureContentProtector } from "./content-protection";
 import {
   drainCaptureJobs,
-  supabaseCaptureWorkflowStore,
   type CaptureWorkflowStore,
   type ClaimedCaptureJob,
   type DeterministicCaptureOrganizer
@@ -48,18 +49,8 @@ function store(
 }
 
 describe("durable capture workflow", () => {
-  beforeEach(() => {
-    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://project.supabase.test";
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test-anon-key";
-    process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role-key";
-  });
-
   afterEach(() => {
     vi.useRealTimers();
-    vi.unstubAllGlobals();
-    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
-    delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
   });
 
   it("preflights keys, recovers expired leases, claims, decrypts, and completes Inbox", async () => {
@@ -270,139 +261,25 @@ describe("durable capture workflow", () => {
     expect(result).toEqual({ claimed: 1, completed: 0, failed: 0, retryScheduled: 1 });
   });
 
-  it("uses the service-only RPC contract for claim, heartbeat, completion, failure, and recovery", async () => {
-    const claimResponse = {
-      jobs: [
-        {
-          jobId: job.jobId,
-          captureId: job.captureId,
-          userId: job.userId,
-          attempt: job.attempt,
-          leaseToken: job.leaseToken,
-          leaseExpiresAt: "2026-08-30T18:32:00.000Z",
-          promptVersion: "routing-v1",
-          schemaVersion: 1,
-          capture: {
-            id: job.captureId,
-            source: job.source,
-            privacy: job.privacy,
-            explicitDestinationNoteId: null,
-            expansionDisabled: false,
-            encryptedContent: job.encryptedContent
-          }
-        }
-      ]
-    };
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify(claimResponse), { status: 200 }))
-      .mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const claimed = await supabaseCaptureWorkflowStore.claim("worker", 3, 60);
-    await supabaseCaptureWorkflowStore.heartbeat(job.jobId, job.leaseToken, 90);
-    await supabaseCaptureWorkflowStore.complete(job.jobId, job.leaseToken, "inbox");
-    await supabaseCaptureWorkflowStore.fail(
-      job.jobId,
-      job.leaseToken,
-      "provider_unavailable",
-      true
-    );
-    await supabaseCaptureWorkflowStore.recover(15);
-
-    expect(claimed).toEqual([job]);
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "https://project.supabase.test/rest/v1/rpc/claim_capture_jobs",
-      expect.objectContaining({
-        body: JSON.stringify({
-          p_worker_id: "worker",
-          p_limit: 3,
-          p_lease_seconds: 60
-        }),
-        method: "POST"
-      })
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
-      "https://project.supabase.test/rest/v1/rpc/heartbeat_capture_job",
-      expect.objectContaining({
-        body: JSON.stringify({
-          p_job_id: job.jobId,
-          p_lease_token: job.leaseToken,
-          p_lease_seconds: 90
-        })
-      })
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      3,
-      "https://project.supabase.test/rest/v1/rpc/complete_capture_job",
-      expect.objectContaining({
-        body: JSON.stringify({
-          p_job_id: job.jobId,
-          p_lease_token: job.leaseToken,
-          p_terminal_status: "inbox"
-        })
-      })
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      4,
-      "https://project.supabase.test/rest/v1/rpc/fail_capture_job",
-      expect.objectContaining({
-        body: JSON.stringify({
-          p_job_id: job.jobId,
-          p_lease_token: job.leaseToken,
-          p_error_code: "provider_unavailable",
-          p_retryable: true,
-          p_retry_after_seconds: null
-        })
-      })
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      5,
-      "https://project.supabase.test/rest/v1/rpc/recover_stale_capture_jobs",
-      expect.objectContaining({ body: JSON.stringify({ p_limit: 15 }) })
-    );
-    const firstInit: unknown = fetchMock.mock.calls[0]?.[1];
-    if (firstInit === null || typeof firstInit !== "object") {
-      throw new TypeError("missing request init");
-    }
-    expect(new Headers((firstInit as RequestInit).headers).get("authorization")).toBe(
-      "Bearer test-service-role-key"
-    );
-  });
-
-  it("rejects a claim whose top-level and encrypted capture identifiers diverge", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            jobs: [
-              {
-                jobId: job.jobId,
-                captureId: job.captureId,
-                userId: job.userId,
-                attempt: 1,
-                leaseToken: job.leaseToken,
-                capture: {
-                  id: "cap_01J6M9Q7G4BMKB33GSG3NJ6D1Y",
-                  source: "web",
-                  privacy: "ai_assisted",
-                  explicitDestinationNoteId: null,
-                  expansionDisabled: false,
-                  encryptedContent: job.encryptedContent
-                }
-              }
-            ]
-          }),
-          { status: 200 }
-        )
+  it("keeps contracted workflow entry points free of legacy capture-job RPCs", async () => {
+    const sources = await Promise.all(
+      ["workflow.ts", "workflow-handler.ts", "workflow-scheduler.ts"].map((fileName) =>
+        readFile(new URL(fileName, import.meta.url), "utf8")
       )
     );
+    const combinedSource = sources.join("\n");
+    const legacyRpcNames = [
+      ["claim", "capture", "jobs"].join("_"),
+      ["heartbeat", "capture", "job"].join("_"),
+      ["complete", "capture", "job"].join("_"),
+      ["fail", "capture", "job"].join("_"),
+      ["recover", "stale", "capture", "jobs"].join("_")
+    ];
 
-    await expect(supabaseCaptureWorkflowStore.claim("worker", 1, 60)).rejects.toThrow(
-      "invalid workflow response"
-    );
+    for (const rpcName of legacyRpcNames) expect(combinedSource).not.toContain(rpcName);
+    expect(sources[1]).not.toContain(["drain", "Capture", "Jobs"].join(""));
+    expect(sources[2]).not.toContain(["drain", "Capture", "Jobs"].join(""));
+    expect(sources[1]).not.toContain(["index", "worker", "scheduler"].join("-"));
+    expect(sources[2]).not.toContain(["index", "worker", "scheduler"].join("-"));
   });
 });

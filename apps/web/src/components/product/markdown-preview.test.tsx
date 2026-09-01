@@ -51,6 +51,7 @@ describe("MarkdownPreview", () => {
     expect(html).toContain('href="https://example.com/read"');
     expect(html).toContain('class="markdown-tag"');
     expect(html).toContain('class="markdown-note-link"');
-    expect(html).toContain("/app/search?q=Weekly%20plan");
+    expect(html).toContain('data-private-search-query="Weekly plan"');
+    expect(html).not.toContain("/app/search?");
   });
 });

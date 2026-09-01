@@ -31,6 +31,7 @@ import type {
   NormalizedCaptureCreateInput,
   NormalizedCaptureDeleteInput
 } from "./repository";
+import { createProductionCaptureComposition } from "./production-repository-composition";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -438,8 +439,11 @@ export class SupabaseHttpCaptureRepository implements CaptureRepository {
   }
 }
 
-export function createProductionCaptureRepository(): CaptureRepository {
-  return new SupabaseHttpCaptureRepository();
+export function createProductionCaptureRepository(request?: Request): CaptureRepository {
+  return createProductionCaptureComposition({
+    legacy: new SupabaseHttpCaptureRepository(),
+    ...(request === undefined ? {} : { signal: request.signal })
+  });
 }
 
 export const captureSupabaseInternals = Object.freeze({

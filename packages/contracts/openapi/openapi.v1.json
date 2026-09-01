@@ -2292,40 +2292,16 @@
       }
     },
     "/search": {
-      "get": {
+      "post": {
         "operationId": "searchNotes",
         "summary": "Search title and body text",
         "security": [{ "bearerAuth": [] }],
-        "parameters": [
-          {
-            "name": "q",
-            "in": "query",
-            "required": true,
-            "schema": { "type": "string", "minLength": 1, "maxLength": 200 }
-          },
-          {
-            "name": "archive",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "enum": ["exclude", "include", "only"],
-              "default": "exclude"
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 30 }
-          },
-          {
-            "name": "cursor",
-            "in": "query",
-            "required": false,
-            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/SearchNotesRequest" } }
           }
-        ],
+        },
         "responses": {
           "200": {
             "description": "Paginated search results",
@@ -2333,30 +2309,396 @@
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/SearchNotesResponse" }
               }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized plaintext search data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           },
           "400": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized plaintext search data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           },
           "401": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized plaintext search data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           },
-          "404": {
+          "413": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized plaintext search data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "429": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized plaintext search data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/export": {
+      "get": {
+        "operationId": "exportAccountData",
+        "summary": "Stream an owner-authorized Markdown and JSON account export",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Streamed tar.gz account export",
+            "content": {
+              "application/gzip": { "schema": { "type": "string", "contentEncoding": "binary" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of the owner-authorized plaintext export.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Content-Disposition": {
+                "description": "Attachment filename for the streamed tar.gz archive.",
+                "required": true,
+                "schema": { "type": "string" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized plaintext search data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "503": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized plaintext search data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me": {
+      "delete": {
+        "operationId": "deleteAccount",
+        "summary": "Delete live account data and revoke every session",
+        "description": "Deletes live data immediately. Encrypted copies in provider backups may remain until the stated 30-day backup window expires.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AccountDeleteRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Content-free account deletion receipt",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AccountDeletionReceipt" }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized plaintext search data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized plaintext search data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized plaintext search data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           },
           "409": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized plaintext search data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "429": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized plaintext search data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "503": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized plaintext search data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/deletion-receipt": {
+      "post": {
+        "operationId": "replayAccountDeletionReceipt",
+        "summary": "Recover a content-free account deletion receipt after response loss",
+        "description": "Uses the original high-entropy deletion capability after the auth principal no longer exists. Missing and expired capabilities are indistinguishable.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AccountDeletionReceiptReplayRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Content-free account deletion receipt",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AccountDeletionReceipt" }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized plaintext search data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized plaintext search data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized plaintext search data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "429": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized plaintext search data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "503": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized plaintext search data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           }
         }
@@ -2368,6 +2710,528 @@
       "bearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "JWT" }
     },
     "schemas": {
+      "AccountDeleteRequest": {
+        "type": "object",
+        "properties": {
+          "confirmation": { "type": "string", "const": "DELETE" },
+          "idempotencyKey": {
+            "type": "string",
+            "pattern": "^delete_[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+          }
+        },
+        "required": ["confirmation", "idempotencyKey"],
+        "additionalProperties": false
+      },
+      "AccountDeletionReceipt": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": { "type": "number", "const": 1 },
+          "deletedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "backupExpiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "receiptExpiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "backupRetentionDays": { "type": "number", "const": 30 },
+          "liveDataDeleted": { "type": "boolean", "const": true },
+          "sessionsRevoked": { "type": "boolean", "const": true },
+          "reRegistrationStartsFresh": { "type": "boolean", "const": true },
+          "deletedRecordCounts": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*){1,2}$"
+            },
+            "additionalProperties": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+          },
+          "replayed": { "type": "boolean" }
+        },
+        "required": [
+          "schemaVersion",
+          "deletedAt",
+          "backupExpiresAt",
+          "receiptExpiresAt",
+          "backupRetentionDays",
+          "liveDataDeleted",
+          "sessionsRevoked",
+          "reRegistrationStartsFresh",
+          "deletedRecordCounts",
+          "replayed"
+        ],
+        "additionalProperties": false
+      },
+      "AccountDeletionReceiptReplayRequest": {
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "pattern": "^delete_[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+          }
+        },
+        "required": ["idempotencyKey"],
+        "additionalProperties": false
+      },
+      "AccountExportManifest": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": { "type": "number", "const": 1 },
+          "exportedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "spaces": {
+            "maxItems": 1000,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "parentId": {
+                  "anyOf": [
+                    { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+                    { "type": "null" }
+                  ]
+                },
+                "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+                "path": { "type": "string", "minLength": 1, "maxLength": 500 },
+                "archivedAt": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                    },
+                    { "type": "null" }
+                  ]
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                }
+              },
+              "required": [
+                "id",
+                "parentId",
+                "name",
+                "path",
+                "archivedAt",
+                "createdAt",
+                "updatedAt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "tags": {
+            "maxItems": 1000,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "pattern": "^tag_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                }
+              },
+              "required": ["id", "name", "createdAt", "updatedAt"],
+              "additionalProperties": false
+            }
+          },
+          "notes": {
+            "maxItems": 100000,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "markdownPath": { "type": "string", "minLength": 1, "maxLength": 255 },
+                "spaceId": {
+                  "anyOf": [
+                    { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+                    { "type": "null" }
+                  ]
+                },
+                "type": {
+                  "type": "string",
+                  "enum": ["generic", "list", "log", "principle", "project"]
+                },
+                "privacy": { "type": "string", "enum": ["ai_assisted", "private_manual"] },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                },
+                "archivedAt": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                    },
+                    { "type": "null" }
+                  ]
+                },
+                "deletedAt": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                    },
+                    { "type": "null" }
+                  ]
+                },
+                "tagIds": {
+                  "maxItems": 100,
+                  "type": "array",
+                  "items": { "type": "string", "pattern": "^tag_[0-9A-HJKMNP-TV-Z]{26}$" }
+                },
+                "links": {
+                  "maxItems": 100,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "toNoteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                      "linkType": { "type": "string", "enum": ["reference", "related"] }
+                    },
+                    "required": ["toNoteId", "linkType"],
+                    "additionalProperties": false
+                  }
+                },
+                "sourceCaptureIds": {
+                  "maxItems": 1000,
+                  "type": "array",
+                  "items": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" }
+                }
+              },
+              "required": [
+                "id",
+                "markdownPath",
+                "spaceId",
+                "type",
+                "privacy",
+                "createdAt",
+                "updatedAt",
+                "archivedAt",
+                "deletedAt",
+                "tagIds",
+                "links",
+                "sourceCaptureIds"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "routingRules": {
+            "maxItems": 10000,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "pattern": "^rule_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "enabled": { "type": "boolean" },
+                "ruleType": {
+                  "type": "string",
+                  "enum": ["prefix", "phrase", "alias", "destination_mention"]
+                },
+                "condition": { "type": "string", "minLength": 1, "maxLength": 500 },
+                "normalizedCondition": { "type": "string", "minLength": 1, "maxLength": 500 },
+                "aliases": {
+                  "maxItems": 100,
+                  "type": "array",
+                  "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+                },
+                "destinationNoteId": {
+                  "anyOf": [
+                    { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                    { "type": "null" }
+                  ]
+                },
+                "destinationSpaceId": {
+                  "anyOf": [
+                    { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+                    { "type": "null" }
+                  ]
+                },
+                "priority": { "type": "integer", "minimum": 0, "maximum": 10000 },
+                "source": { "type": "string", "enum": ["explicit", "correction_suggested"] },
+                "lastFiredAt": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                    },
+                    { "type": "null" }
+                  ]
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                }
+              },
+              "required": [
+                "id",
+                "enabled",
+                "ruleType",
+                "condition",
+                "normalizedCondition",
+                "aliases",
+                "destinationNoteId",
+                "destinationSpaceId",
+                "priority",
+                "source",
+                "lastFiredAt",
+                "createdAt",
+                "updatedAt"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["schemaVersion", "exportedAt", "spaces", "tags", "notes", "routingRules"],
+        "additionalProperties": false
+      },
+      "AccountExportNote": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+          "markdownPath": { "type": "string", "minLength": 1, "maxLength": 255 },
+          "spaceId": {
+            "anyOf": [
+              { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+              { "type": "null" }
+            ]
+          },
+          "type": { "type": "string", "enum": ["generic", "list", "log", "principle", "project"] },
+          "privacy": { "type": "string", "enum": ["ai_assisted", "private_manual"] },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "archivedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              { "type": "null" }
+            ]
+          },
+          "deletedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              { "type": "null" }
+            ]
+          },
+          "tagIds": {
+            "maxItems": 100,
+            "type": "array",
+            "items": { "type": "string", "pattern": "^tag_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          "links": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "toNoteId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "linkType": { "type": "string", "enum": ["reference", "related"] }
+              },
+              "required": ["toNoteId", "linkType"],
+              "additionalProperties": false
+            }
+          },
+          "sourceCaptureIds": {
+            "maxItems": 1000,
+            "type": "array",
+            "items": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" }
+          }
+        },
+        "required": [
+          "id",
+          "markdownPath",
+          "spaceId",
+          "type",
+          "privacy",
+          "createdAt",
+          "updatedAt",
+          "archivedAt",
+          "deletedAt",
+          "tagIds",
+          "links",
+          "sourceCaptureIds"
+        ],
+        "additionalProperties": false
+      },
+      "AccountExportRoutingRule": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^rule_[0-9A-HJKMNP-TV-Z]{26}$" },
+          "enabled": { "type": "boolean" },
+          "ruleType": {
+            "type": "string",
+            "enum": ["prefix", "phrase", "alias", "destination_mention"]
+          },
+          "condition": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "normalizedCondition": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "aliases": {
+            "maxItems": 100,
+            "type": "array",
+            "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+          },
+          "destinationNoteId": {
+            "anyOf": [
+              { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" },
+              { "type": "null" }
+            ]
+          },
+          "destinationSpaceId": {
+            "anyOf": [
+              { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+              { "type": "null" }
+            ]
+          },
+          "priority": { "type": "integer", "minimum": 0, "maximum": 10000 },
+          "source": { "type": "string", "enum": ["explicit", "correction_suggested"] },
+          "lastFiredAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              { "type": "null" }
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          }
+        },
+        "required": [
+          "id",
+          "enabled",
+          "ruleType",
+          "condition",
+          "normalizedCondition",
+          "aliases",
+          "destinationNoteId",
+          "destinationSpaceId",
+          "priority",
+          "source",
+          "lastFiredAt",
+          "createdAt",
+          "updatedAt"
+        ],
+        "additionalProperties": false
+      },
+      "AccountExportSpace": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+          "parentId": {
+            "anyOf": [
+              { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" },
+              { "type": "null" }
+            ]
+          },
+          "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "path": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "archivedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              { "type": "null" }
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          }
+        },
+        "required": ["id", "parentId", "name", "path", "archivedAt", "createdAt", "updatedAt"],
+        "additionalProperties": false
+      },
+      "AccountExportTag": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^tag_[0-9A-HJKMNP-TV-Z]{26}$" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          }
+        },
+        "required": ["id", "name", "createdAt", "updatedAt"],
+        "additionalProperties": false
+      },
       "ApiError": {
         "type": "object",
         "properties": {
@@ -6113,10 +6977,10 @@
           }
         }
       },
-      "SearchNotesQuery": {
+      "SearchNotesRequest": {
         "type": "object",
         "properties": {
-          "q": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "query": { "type": "string", "minLength": 1, "maxLength": 200 },
           "archive": {
             "default": "exclude",
             "type": "string",
@@ -6125,7 +6989,7 @@
           "cursor": { "type": "string", "minLength": 1, "maxLength": 512 },
           "limit": { "default": 30, "type": "integer", "minimum": 1, "maximum": 100 }
         },
-        "required": ["q", "archive", "limit"],
+        "required": ["query", "archive", "limit"],
         "additionalProperties": false
       },
       "SearchNotesResponse": {

@@ -9,7 +9,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createEncryptedCaptureRpcAdapter,
   encryptedCaptureRpcFunctions,
-  type CreateEncryptedCaptureCommand
+  type CreateEncryptedCaptureCommand,
+  type StoredEncryptedFieldRpcValue
 } from "./encrypted-capture-rpc-adapter";
 import { ServiceRpcError, ServiceRpcErrorCode, type ServiceRpcClient } from "./service-rpc-client";
 
@@ -20,6 +21,9 @@ const OTHER_CAPTURE = "cap_01J6M9Q7G4BMKB33GSG3NJ6D1Y" as const;
 const JOB = "job_01J6M9Q7G4BMKB33GSG3NJ6D1X" as const;
 const OTHER_JOB = "job_01J6M9Q7G4BMKB33GSG3NJ6D1Y" as const;
 const NOTE = "note_01J6M9Q7G4BMKB33GSG3NJ6D1X" as const;
+const MUTATION = "mut_01J6M9Q7G4BMKB33GSG3NJ6D1X" as const;
+const UNDO_MUTATION = "mut_01J6M9Q7G4BMKB33GSG3NJ6D1Y" as const;
+const UNDO_REVISION = "rev_01J6M9Q7G4BMKB33GSG3NJ6D1Y" as const;
 const DECISION = "dec_01J6M9Q7G4BMKB33GSG3NJ6D1X" as const;
 const BLOCK = "blk_01J6M9Q7G4BMKB33GSG3NJ6D1X" as const;
 const OCCURRED_AT = "2026-08-31T18:00:00.123Z";
@@ -51,32 +55,33 @@ function envelope(
   });
 }
 
-function storedCipher(
-  kind: AggregateContentKind,
+function storedCipher<Kind extends AggregateContentKind>(
+  kind: Kind,
   resourceId: string,
   recordVersion: number,
   keyClass: "ai_assisted" | "private_manual",
   ownerId = OWNER
-): Record<string, unknown> {
-  return {
+): StoredEncryptedFieldRpcValue<Kind> {
+  return Object.freeze({
     envelope: envelope(kind, resourceId, recordVersion, keyClass, ownerId),
     keyId: keyId(keyClass),
     keyClass,
     keyPurpose: "object_wrap",
     keyVersion: 1
-  };
+  });
 }
 
 function sealedCipher<Kind extends AggregateContentKind>(
   kind: Kind,
   resourceId: string,
   keyClass: "ai_assisted" | "private_manual",
-  reservationId: string
+  reservationId: string,
+  recordVersion = 1
 ): EncryptedFieldRpcValue<Kind> {
   return Object.freeze({
-    ...storedCipher(kind, resourceId, 1, keyClass),
+    ...storedCipher(kind, resourceId, recordVersion, keyClass),
     reservationId
-  }) as EncryptedFieldRpcValue<Kind>;
+  });
 }
 
 function mac(keyClass: "ai_assisted" | "private_manual"): KeyedMacRpcValue {
@@ -212,13 +217,18 @@ async function expectFailure(
 }
 
 describe("encrypted capture RPC adapter", () => {
-  it("exposes only the five encrypted service-role RPCs", () => {
+  it("exposes only the ten encrypted service-role RPCs", () => {
     expect(encryptedCaptureRpcFunctions).toEqual([
       "create_encrypted_capture_with_job",
       "list_encrypted_captures",
       "get_encrypted_capture_receipt",
       "get_encrypted_capture_detail",
-      "get_encrypted_generated_blocks"
+      "get_encrypted_generated_blocks",
+      "get_encrypted_capture_command_claim",
+      "get_encrypted_capture_delete_context",
+      "retry_encrypted_capture",
+      "delete_encrypted_capture",
+      "delete_encrypted_capture_with_undo"
     ]);
   });
 
@@ -460,6 +470,260 @@ describe("encrypted capture RPC adapter", () => {
       }),
       ServiceRpcErrorCode.VALIDATION_FAILED
     );
+  });
+
+  it("binds command claims and delete context to exact owner-scoped metadata", async () => {
+    const rpc = vi.fn<ServiceRpcClient["rpc"]>((name) => {
+      if (name === "get_encrypted_capture_command_claim") {
+        return Promise.resolve({
+          found: true,
+          claim: {
+            scope: "delete_capture",
+            captureId: CAPTURE,
+            keyClass: "private_manual",
+            requestMacKey: {
+              keyId: "private_manual-mac-v1",
+              keyClass: "private_manual",
+              keyPurpose: "content_mac",
+              keyVersion: 1
+            }
+          }
+        });
+      }
+      if (name === "get_encrypted_capture_delete_context") {
+        return Promise.resolve({ captureId: CAPTURE, sourceNoteIds: [NOTE] });
+      }
+      return Promise.reject(new Error("unexpected_rpc"));
+    });
+    const adapter = createEncryptedCaptureRpcAdapter(client(rpc));
+    await expect(
+      adapter.getCommandClaim({
+        ownerId: OWNER,
+        scope: "delete_capture",
+        idempotencyKey: "delete-1"
+      })
+    ).resolves.toMatchObject({
+      captureId: CAPTURE,
+      requestMacKey: { ownerId: OWNER, purpose: "content_mac" }
+    });
+    await expect(adapter.getDeleteContext({ ownerId: OWNER, captureId: CAPTURE })).resolves.toEqual(
+      { captureId: CAPTURE, sourceNoteIds: [NOTE] }
+    );
+
+    const unsorted = createEncryptedCaptureRpcAdapter(
+      client(
+        vi.fn().mockResolvedValue({
+          captureId: CAPTURE,
+          sourceNoteIds: ["note_01J6M9Q7G4BMKB33GSG3NJ6D1Y", NOTE]
+        })
+      )
+    );
+    await expectFailure(
+      unsorted.getDeleteContext({ ownerId: OWNER, captureId: CAPTURE }),
+      ServiceRpcErrorCode.PROVIDER_UNAVAILABLE
+    );
+  });
+
+  it("submits strict retry/delete ciphertext commands and parses only bound responses", async () => {
+    const retryKey = "retry-1";
+    const deleteKey = "delete-1";
+    const rpc = vi.fn<ServiceRpcClient["rpc"]>((name, parameters) => {
+      const key = (parameters as Record<string, unknown>).p_idempotency_key;
+      if (name === "retry_encrypted_capture") {
+        return Promise.resolve({
+          captureId: CAPTURE,
+          jobId: JOB,
+          encryptedResponse: storedCipher(
+            "idempotency_response",
+            `idempotency:${String(key)}`,
+            1,
+            "private_manual"
+          ),
+          replayed: false
+        });
+      }
+      if (name === "delete_encrypted_capture") {
+        return Promise.resolve({
+          captureId: CAPTURE,
+          encryptedResponse: storedCipher(
+            "idempotency_response",
+            `idempotency:${String(key)}`,
+            1,
+            "private_manual"
+          ),
+          replayed: true
+        });
+      }
+      return Promise.reject(new Error("unexpected_rpc"));
+    });
+    const adapter = createEncryptedCaptureRpcAdapter(client(rpc));
+    const material = {
+      occurredAt: OCCURRED_AT,
+      requestMac: mac("private_manual"),
+      responseCipher: sealedCipher(
+        "idempotency_response",
+        `idempotency:${retryKey}`,
+        "private_manual",
+        "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+      ),
+      responseVerificationMac: mac("private_manual")
+    } as const;
+    await expect(
+      adapter.retryCapture({
+        ownerId: OWNER,
+        captureId: CAPTURE,
+        privacy: "private_manual",
+        idempotencyKey: retryKey,
+        command: material
+      })
+    ).resolves.toMatchObject({ captureId: CAPTURE, jobId: JOB, replayed: false });
+    await expect(
+      adapter.deleteCapture({
+        ownerId: OWNER,
+        captureId: CAPTURE,
+        privacy: "private_manual",
+        idempotencyKey: deleteKey,
+        command: { requestMac: mac("private_manual") }
+      })
+    ).resolves.toMatchObject({ captureId: CAPTURE, replayed: true });
+    expect(JSON.stringify(rpc.mock.calls)).not.toContain(CANARY);
+
+    await expectFailure(
+      adapter.deleteCapture({
+        ownerId: OWNER,
+        captureId: CAPTURE,
+        privacy: "private_manual",
+        idempotencyKey: deleteKey,
+        command: {
+          ...material,
+          responseCipher: sealedCipher(
+            "idempotency_response",
+            `idempotency:${deleteKey}`,
+            "private_manual",
+            "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+          ),
+          removeInsertedContent: false,
+          sourceNoteIds: [NOTE, NOTE]
+        }
+      }),
+      ServiceRpcErrorCode.VALIDATION_FAILED
+    );
+  });
+
+  it("submits one exact encrypted multi-note undo command to its dedicated RPC", async () => {
+    const key = "delete-with-undo-1";
+    const rpc = vi.fn<ServiceRpcClient["rpc"]>((name, parameters) => {
+      expect(name).toBe("delete_encrypted_capture_with_undo");
+      expect(parameters).toMatchObject({
+        p_owner_id: OWNER,
+        p_capture_id: CAPTURE,
+        p_idempotency_key: key,
+        p_command: {
+          removeInsertedContent: true,
+          sourceNoteIds: [NOTE],
+          undoWrites: [{ noteId: NOTE, targetMutationId: MUTATION, expectedRevision: 2 }]
+        }
+      });
+      return Promise.resolve({
+        captureId: CAPTURE,
+        encryptedResponse: storedCipher(
+          "idempotency_response",
+          `idempotency:${key}`,
+          1,
+          "private_manual"
+        ),
+        replayed: false
+      });
+    });
+    const adapter = createEncryptedCaptureRpcAdapter(client(rpc));
+    const result = await adapter.deleteCaptureWithUndo({
+      ownerId: OWNER,
+      captureId: CAPTURE,
+      privacy: "private_manual",
+      idempotencyKey: key,
+      command: {
+        occurredAt: OCCURRED_AT,
+        removeInsertedContent: true,
+        sourceNoteIds: [NOTE],
+        receipt: {
+          recordVersion: 1,
+          cipher: storedCipher("capture_receipt", CAPTURE, 1, "private_manual")
+        },
+        undoWrites: [
+          {
+            noteId: NOTE,
+            targetMutationId: MUTATION,
+            expectedRevision: 2,
+            sourcePrivacy: "private_manual",
+            expectedCurrentCipher: storedCipher("note_content", NOTE, 2, "private_manual"),
+            expectedMutationCipher: storedCipher("note_mutation", MUTATION, 2, "private_manual"),
+            noteState: {
+              spaceId: null,
+              type: "generic",
+              title: `e-${NOTE.toLowerCase()}`,
+              bodyMarkdown: "",
+              structuredData: { schemaVersion: 1 },
+              dailyDate: null,
+              isOpen: true,
+              privacy: "private_manual",
+              pinnedAt: null,
+              archivedAt: null,
+              deletedAt: null,
+              tagIds: [],
+              links: []
+            },
+            noteCipher: sealedCipher(
+              "note_content",
+              NOTE,
+              "private_manual",
+              "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+              3
+            ),
+            revision: {
+              id: UNDO_REVISION,
+              source: "undo",
+              actor: "capture:delete",
+              cipher: sealedCipher(
+                "note_revision",
+                UNDO_REVISION,
+                "private_manual",
+                "ffffffff-ffff-4fff-8fff-ffffffffffff",
+                3
+              ),
+              mac: mac("private_manual")
+            },
+            mutation: {
+              id: UNDO_MUTATION,
+              decisionId: null,
+              undoTargetMutationId: MUTATION,
+              operations: [{ type: "set_privacy", privacy: "private_manual" }],
+              inverse: [{ type: "set_privacy", privacy: "private_manual" }],
+              cipher: sealedCipher(
+                "note_mutation",
+                UNDO_MUTATION,
+                "private_manual",
+                "99999999-9999-4999-8999-999999999999",
+                3
+              )
+            },
+            verification: {
+              noteContent: mac("private_manual"),
+              noteMutation: mac("private_manual")
+            }
+          }
+        ],
+        requestMac: mac("private_manual"),
+        responseCipher: sealedCipher(
+          "idempotency_response",
+          `idempotency:${key}`,
+          "private_manual",
+          "77777777-7777-4777-8777-777777777777"
+        ),
+        responseVerificationMac: mac("private_manual")
+      }
+    });
+    expect(result).toMatchObject({ captureId: CAPTURE, replayed: false });
+    expect(rpc).toHaveBeenCalledOnce();
   });
 
   it("never reflects a provider plaintext canary in typed failures", async () => {

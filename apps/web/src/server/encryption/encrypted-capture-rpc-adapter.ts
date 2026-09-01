@@ -2,7 +2,12 @@ import {
   ApiErrorCodeSchema,
   CaptureProcessingStateSchema,
   CaptureSourceSchema,
+  NoteLinkValueSchema,
+  NoteStructuredDataSchema,
+  NoteTypeSchema,
   PrivacyModeSchema,
+  UserOperationSchema,
+  entityIdSchema,
   parseEntityId,
   type ApiErrorCodeValue,
   type CaptureProcessingState,
@@ -11,6 +16,7 @@ import {
   type PrivacyMode
 } from "@unfiled/contracts";
 import { parseContentEnvelope, serializeContentEnvelope } from "@unfiled/content-crypto";
+import { stickyKeyClass } from "@unfiled/encrypted-aggregate";
 import type {
   AggregateContentKind,
   EncryptedAggregateRecord,
@@ -19,6 +25,18 @@ import type {
   KeyedMacRpcValue
 } from "@unfiled/encrypted-aggregate";
 import type { KeyClass } from "@unfiled/key-management";
+import { isDeepStrictEqual } from "node:util";
+import { z } from "zod";
+
+import type {
+  EncryptedNoteMutationCommand,
+  EncryptedNoteRevisionCommand,
+  EncryptedNoteState
+} from "./encrypted-note-rpc-adapter";
+import {
+  encryptedOnlyMutationProjection,
+  encryptedOnlyNoteState
+} from "./encrypted-note-command-projection";
 
 import { ServiceRpcError, ServiceRpcErrorCode, type ServiceRpcClient } from "./service-rpc-client";
 
@@ -28,11 +46,33 @@ const MAC_PATTERN = /^[0-9a-f]{64}$/u;
 const DEVICE_ID_PATTERN = /^(?:|[A-Za-z0-9][A-Za-z0-9._:-]{0,119})$/u;
 const TIMEZONE_PATTERN = /^(?:UTC|[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+){1,3})$/u;
 const REASON_CODE_PATTERN = /^[a-z][a-z0-9_]*$/u;
+const ACTOR_PATTERN = /^[a-z_]+:[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/u;
 const TIMESTAMP_PATTERN =
   /^(\d{4})-(0[1-9]|1[0-2])-([0-2]\d|3[01])T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.(\d{1,6}))?(Z|([+-])([01]\d|2[0-3]):([0-5]\d))$/u;
 const MAX_DATABASE_INTEGER = 2_147_483_647;
 const MAX_CAPTURE_PAGE_SIZE = 100;
 const MAX_GENERATED_BLOCK_BATCH = 100;
+const MAX_CAPTURE_SOURCE_NOTES = 100;
+const MAX_CAPTURE_UNDO_NOTES = 16;
+const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/u;
+
+const EncryptedCaptureUndoNoteStateSchema = z.strictObject({
+  spaceId: entityIdSchema("spc").nullable(),
+  type: NoteTypeSchema,
+  title: z.string().min(1).max(200),
+  bodyMarkdown: z.string().max(200_000),
+  structuredData: NoteStructuredDataSchema,
+  dailyDate: z.iso.date().nullable(),
+  isOpen: z.boolean(),
+  privacy: PrivacyModeSchema,
+  pinnedAt: z.iso.datetime({ offset: true }).nullable(),
+  archivedAt: z.iso.datetime({ offset: true }).nullable(),
+  deletedAt: z.iso.datetime({ offset: true }).nullable(),
+  tagIds: z.array(entityIdSchema("tag")).max(100),
+  links: z.array(NoteLinkValueSchema).max(100)
+});
+
+const EncryptedCaptureUndoOperationsSchema = z.array(UserOperationSchema).min(1).max(20);
 
 const CAPTURE_KEYS = [
   "captureId",
@@ -117,7 +157,12 @@ export const encryptedCaptureRpcFunctions = Object.freeze([
   "list_encrypted_captures",
   "get_encrypted_capture_receipt",
   "get_encrypted_capture_detail",
-  "get_encrypted_generated_blocks"
+  "get_encrypted_generated_blocks",
+  "get_encrypted_capture_command_claim",
+  "get_encrypted_capture_delete_context",
+  "retry_encrypted_capture",
+  "delete_encrypted_capture",
+  "delete_encrypted_capture_with_undo"
 ] as const);
 
 export type EncryptedCaptureRpcFunction = (typeof encryptedCaptureRpcFunctions)[number];
@@ -193,6 +238,102 @@ export type EncryptedGeneratedBlockRead = Readonly<{
   contentCipher: EncryptedAggregateRecord<"generated_block">;
 }>;
 
+export type EncryptedCaptureCommandScope = "retry_capture" | "delete_capture";
+
+export type EncryptedCaptureCommandClaim = Readonly<{
+  scope: EncryptedCaptureCommandScope;
+  captureId: EntityId<"cap">;
+  keyClass: KeyClass;
+  requestMacKey: Readonly<{
+    ownerId: string;
+    keyClass: KeyClass;
+    purpose: "content_mac";
+    keyId: string;
+    keyVersion: number;
+  }>;
+}>;
+
+export type EncryptedCaptureDeleteContext = Readonly<{
+  captureId: EntityId<"cap">;
+  sourceNoteIds: readonly EntityId<"note">[];
+}>;
+
+export type StoredEncryptedFieldRpcValue<Kind extends AggregateContentKind> = Readonly<
+  Pick<
+    EncryptedAggregateRecord<Kind>,
+    "envelope" | "keyId" | "keyClass" | "keyPurpose" | "keyVersion"
+  >
+>;
+
+type EncryptedCaptureCommandMaterial = Readonly<{
+  occurredAt: string;
+  requestMac: KeyedMacRpcValue;
+  responseCipher: EncryptedFieldRpcValue<"idempotency_response">;
+  responseVerificationMac: KeyedMacRpcValue;
+}>;
+
+export type EncryptedCaptureUndoWriteCommand = Readonly<{
+  noteId: EntityId<"note">;
+  targetMutationId: EntityId<"mut">;
+  expectedRevision: number;
+  sourcePrivacy: PrivacyMode;
+  expectedCurrentCipher: StoredEncryptedFieldRpcValue<"note_content">;
+  expectedMutationCipher: StoredEncryptedFieldRpcValue<"note_mutation">;
+  noteState: EncryptedNoteState;
+  noteCipher: EncryptedFieldRpcValue<"note_content">;
+  revision: EncryptedNoteRevisionCommand;
+  mutation: EncryptedNoteMutationCommand;
+  verification: Readonly<{
+    noteContent: KeyedMacRpcValue;
+    noteMutation: KeyedMacRpcValue;
+  }>;
+}>;
+
+export type RetryEncryptedCaptureCommand = Readonly<{
+  ownerId: string;
+  captureId: EntityId<"cap">;
+  privacy: PrivacyMode;
+  idempotencyKey: string;
+  command: EncryptedCaptureCommandMaterial | Readonly<{ requestMac: KeyedMacRpcValue }>;
+}>;
+
+export type DeleteEncryptedCaptureCommand = Readonly<{
+  ownerId: string;
+  captureId: EntityId<"cap">;
+  privacy: PrivacyMode;
+  idempotencyKey: string;
+  command:
+    | (EncryptedCaptureCommandMaterial &
+        Readonly<{
+          removeInsertedContent: false;
+          sourceNoteIds: readonly EntityId<"note">[];
+        }>)
+    | (EncryptedCaptureCommandMaterial &
+        Readonly<{
+          removeInsertedContent: true;
+          sourceNoteIds: readonly EntityId<"note">[];
+          receipt: Readonly<{
+            recordVersion: number;
+            cipher: StoredEncryptedFieldRpcValue<"capture_receipt">;
+          }>;
+          undoWrites: readonly EncryptedCaptureUndoWriteCommand[];
+        }>)
+    | Readonly<{ requestMac: KeyedMacRpcValue }>;
+}>;
+
+export type RetryEncryptedCaptureResult = Readonly<{
+  captureId: EntityId<"cap">;
+  jobId: EntityId<"job">;
+  encryptedResponse: EncryptedAggregateRecord<"idempotency_response">;
+  replayed: boolean;
+}>;
+
+export type DeleteEncryptedCaptureResult = Readonly<{
+  captureId: EntityId<"cap">;
+  encryptedResponse: EncryptedAggregateRecord<"idempotency_response">;
+  replayed: boolean;
+}>;
+
 export type CreateEncryptedCaptureCommand = Readonly<{
   ownerId: string;
   capture: Readonly<{
@@ -252,6 +393,24 @@ export type EncryptedCaptureRpcAdapter = Readonly<{
       blockIds: readonly EntityId<"blk">[];
     }>
   ): Promise<readonly EncryptedGeneratedBlockRead[]>;
+  getCommandClaim(
+    input: Readonly<{
+      ownerId: string;
+      scope: EncryptedCaptureCommandScope;
+      idempotencyKey: string;
+    }>
+  ): Promise<EncryptedCaptureCommandClaim | null>;
+  getDeleteContext(
+    input: Readonly<{
+      ownerId: string;
+      captureId: EntityId<"cap">;
+    }>
+  ): Promise<EncryptedCaptureDeleteContext>;
+  retryCapture(input: RetryEncryptedCaptureCommand): Promise<RetryEncryptedCaptureResult>;
+  deleteCapture(input: DeleteEncryptedCaptureCommand): Promise<DeleteEncryptedCaptureResult>;
+  deleteCaptureWithUndo(
+    input: DeleteEncryptedCaptureCommand
+  ): Promise<DeleteEncryptedCaptureResult>;
 }>;
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
@@ -284,7 +443,7 @@ function canonicalOwnerId(value: unknown, failure: Failure): string {
   return value.toLowerCase();
 }
 
-function entityId<Kind extends "blk" | "cap" | "dec" | "job" | "mut" | "note" | "rvw">(
+function entityId<Kind extends "blk" | "cap" | "dec" | "job" | "mut" | "note" | "rev" | "rvw">(
   value: unknown,
   kind: Kind,
   failure: Failure
@@ -477,6 +636,34 @@ function parseStoredCipher<Kind extends AggregateContentKind>(
     keyClass: expected.keyClass,
     keyPurpose: "object_wrap" as const,
     keyVersion
+  });
+}
+
+function storedCipherForCommand<Kind extends AggregateContentKind>(
+  value: unknown,
+  expected: Readonly<{
+    ownerId: string;
+    resourceId: string;
+    recordVersion: number;
+    kind: Kind;
+    keyClass?: KeyClass;
+  }>,
+  failure: Failure
+): StoredEncryptedFieldRpcValue<Kind> {
+  const raw = exactRecord(
+    value,
+    ["envelope", "keyId", "keyClass", "keyPurpose", "keyVersion"],
+    failure
+  );
+  const parsedClass = privacy(raw.keyClass, failure);
+  if (expected.keyClass !== undefined && parsedClass !== expected.keyClass) return failure();
+  const parsed = parseStoredCipher(raw, { ...expected, keyClass: parsedClass }, failure);
+  return Object.freeze({
+    envelope: parsed.envelope,
+    keyId: parsed.keyId,
+    keyClass: parsed.keyClass,
+    keyPurpose: parsed.keyPurpose,
+    keyVersion: parsed.keyVersion
   });
 }
 
@@ -821,6 +1008,445 @@ function parseCreateCommand(input: CreateEncryptedCaptureCommand): CreateEncrypt
   });
 }
 
+function idempotencyKey(value: unknown, failure: Failure): string {
+  const parsed = boundedString(value, 1, 80, failure);
+  return IDEMPOTENCY_KEY_PATTERN.test(parsed) ? parsed : failure();
+}
+
+function commandScope(value: unknown, failure: Failure): EncryptedCaptureCommandScope {
+  return value === "retry_capture" || value === "delete_capture" ? value : failure();
+}
+
+function sourceNoteIds(value: unknown, failure: Failure): readonly EntityId<"note">[] {
+  if (!Array.isArray(value) || value.length > MAX_CAPTURE_SOURCE_NOTES) return failure();
+  const parsed = Object.freeze(value.map((entry) => entityId(entry, "note", failure)));
+  for (let index = 1; index < parsed.length; index += 1) {
+    const previous = parsed[index - 1];
+    const current = parsed[index];
+    if (previous === undefined || current === undefined || previous >= current) return failure();
+  }
+  return parsed;
+}
+
+function sameStringArray(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function requestMacKey(
+  value: unknown,
+  ownerId: string,
+  expectedClass: KeyClass,
+  failure: Failure
+): EncryptedCaptureCommandClaim["requestMacKey"] {
+  const record = exactRecord(value, ["keyId", "keyClass", "keyPurpose", "keyVersion"], failure);
+  const parsedKeyId = boundedString(record.keyId, 1, 128, failure);
+  if (
+    !KEY_ID_PATTERN.test(parsedKeyId) ||
+    record.keyClass !== expectedClass ||
+    record.keyPurpose !== "content_mac"
+  )
+    return failure();
+  return Object.freeze({
+    ownerId,
+    keyClass: expectedClass,
+    purpose: "content_mac" as const,
+    keyId: parsedKeyId,
+    keyVersion: positiveInteger(record.keyVersion, MAX_DATABASE_INTEGER, failure)
+  });
+}
+
+function parseCommandMaterial(
+  value: unknown,
+  expected: Readonly<{
+    ownerId: string;
+    idempotencyKey: string;
+    keyClass: KeyClass;
+  }>,
+  keys: readonly string[],
+  failure: Failure
+): EncryptedCaptureCommandMaterial & UnknownRecord {
+  const command = exactRecord(value, keys, failure);
+  const occurredAt = timestamp(command.occurredAt, failure);
+  if (encryptedCaptureTimestampMicros(occurredAt, failure) % 1_000n !== 0n) return failure();
+  return Object.freeze({
+    ...command,
+    occurredAt,
+    requestMac: parseMacForRpc(command.requestMac, expected.keyClass, failure),
+    responseCipher: parseSealedCipher(
+      command.responseCipher,
+      {
+        ownerId: expected.ownerId,
+        resourceId: `idempotency:${expected.idempotencyKey}`,
+        recordVersion: 1,
+        kind: "idempotency_response",
+        keyClass: expected.keyClass
+      },
+      failure
+    ),
+    responseVerificationMac: parseMacForRpc(
+      command.responseVerificationMac,
+      expected.keyClass,
+      failure
+    )
+  });
+}
+
+function parseReplayCommand(
+  value: unknown,
+  expectedClass: KeyClass,
+  failure: Failure
+): Readonly<{ requestMac: KeyedMacRpcValue }> | null {
+  if (!isRecord(value) || Object.keys(value).length !== 1 || !("requestMac" in value)) return null;
+  return Object.freeze({ requestMac: parseMacForRpc(value.requestMac, expectedClass, failure) });
+}
+
+function parseRetryCommand(input: RetryEncryptedCaptureCommand): RetryEncryptedCaptureCommand {
+  const outer = exactRecord(
+    input,
+    ["ownerId", "captureId", "privacy", "idempotencyKey", "command"],
+    inputFailure
+  );
+  const ownerId = canonicalOwnerId(outer.ownerId, inputFailure);
+  const captureId = entityId(outer.captureId, "cap", inputFailure);
+  const parsedPrivacy = privacy(outer.privacy, inputFailure);
+  const parsedKey = idempotencyKey(outer.idempotencyKey, inputFailure);
+  const replay = parseReplayCommand(outer.command, parsedPrivacy, inputFailure);
+  const command =
+    replay ??
+    parseCommandMaterial(
+      outer.command,
+      { ownerId, idempotencyKey: parsedKey, keyClass: parsedPrivacy },
+      ["occurredAt", "requestMac", "responseCipher", "responseVerificationMac"],
+      inputFailure
+    );
+  return Object.freeze({
+    ownerId,
+    captureId,
+    privacy: parsedPrivacy,
+    idempotencyKey: parsedKey,
+    command
+  });
+}
+
+function parseUndoNoteState(
+  value: unknown,
+  noteId: EntityId<"note">,
+  failure: Failure
+): EncryptedNoteState {
+  const parsed = EncryptedCaptureUndoNoteStateSchema.safeParse(value);
+  if (!parsed.success) return failure();
+  if (new Set(parsed.data.tagIds).size !== parsed.data.tagIds.length) return failure();
+  const linkIdentities = parsed.data.links.map((link) => `${link.toNoteId}:${link.linkType}`);
+  if (
+    parsed.data.links.some((link) => link.toNoteId === noteId) ||
+    new Set(linkIdentities).size !== linkIdentities.length
+  ) {
+    return failure();
+  }
+  return Object.freeze({
+    ...parsed.data,
+    tagIds: Object.freeze(parsed.data.tagIds),
+    links: Object.freeze(parsed.data.links)
+  });
+}
+
+function parseUndoWrite(
+  value: unknown,
+  ownerId: string,
+  failure: Failure
+): EncryptedCaptureUndoWriteCommand {
+  const row = exactRecord(
+    value,
+    [
+      "noteId",
+      "targetMutationId",
+      "expectedRevision",
+      "sourcePrivacy",
+      "expectedCurrentCipher",
+      "expectedMutationCipher",
+      "noteState",
+      "noteCipher",
+      "revision",
+      "mutation",
+      "verification"
+    ],
+    failure
+  );
+  const noteId = entityId(row.noteId, "note", failure);
+  const targetMutationId = entityId(row.targetMutationId, "mut", failure);
+  const expectedRevision = positiveInteger(row.expectedRevision, MAX_DATABASE_INTEGER - 1, failure);
+  const sourcePrivacy = privacy(row.sourcePrivacy, failure);
+  const noteState = parseUndoNoteState(row.noteState, noteId, failure);
+  const historyClass = stickyKeyClass({ before: sourcePrivacy, after: noteState.privacy });
+  const revision = exactRecord(row.revision, ["id", "source", "actor", "cipher", "mac"], failure);
+  const mutation = exactRecord(
+    row.mutation,
+    ["id", "decisionId", "undoTargetMutationId", "operations", "inverse", "cipher"],
+    failure
+  );
+  const verification = exactRecord(row.verification, ["noteContent", "noteMutation"], failure);
+  const revisionId = entityId(revision.id, "rev", failure);
+  const mutationId = entityId(mutation.id, "mut", failure);
+  if (
+    revision.source !== "undo" ||
+    typeof revision.actor !== "string" ||
+    revision.actor.length > 200 ||
+    !ACTOR_PATTERN.test(revision.actor) ||
+    mutation.decisionId !== null ||
+    mutation.undoTargetMutationId !== targetMutationId ||
+    mutationId === targetMutationId
+  ) {
+    return failure();
+  }
+  const operations = EncryptedCaptureUndoOperationsSchema.safeParse(mutation.operations);
+  const inverse = EncryptedCaptureUndoOperationsSchema.safeParse(mutation.inverse);
+  if (!operations.success || !inverse.success) return failure();
+  const expectedMutationProjection = encryptedOnlyMutationProjection(noteState.privacy);
+  if (
+    !isDeepStrictEqual(noteState, encryptedOnlyNoteState(noteId, noteState)) ||
+    !isDeepStrictEqual(operations.data, expectedMutationProjection.operations) ||
+    !isDeepStrictEqual(inverse.data, expectedMutationProjection.inverse)
+  ) {
+    return failure();
+  }
+  return Object.freeze({
+    noteId,
+    targetMutationId,
+    expectedRevision,
+    sourcePrivacy,
+    expectedCurrentCipher: storedCipherForCommand(
+      row.expectedCurrentCipher,
+      {
+        ownerId,
+        resourceId: noteId,
+        recordVersion: expectedRevision,
+        kind: "note_content",
+        keyClass: sourcePrivacy
+      },
+      failure
+    ),
+    expectedMutationCipher: storedCipherForCommand(
+      row.expectedMutationCipher,
+      {
+        ownerId,
+        resourceId: targetMutationId,
+        recordVersion: expectedRevision,
+        kind: "note_mutation"
+      },
+      failure
+    ),
+    noteState,
+    noteCipher: parseSealedCipher(
+      row.noteCipher,
+      {
+        ownerId,
+        resourceId: noteId,
+        recordVersion: expectedRevision + 1,
+        kind: "note_content",
+        keyClass: noteState.privacy
+      },
+      failure
+    ),
+    revision: Object.freeze({
+      id: revisionId,
+      source: "undo" as const,
+      actor: revision.actor,
+      cipher: parseSealedCipher(
+        revision.cipher,
+        {
+          ownerId,
+          resourceId: revisionId,
+          recordVersion: expectedRevision + 1,
+          kind: "note_revision",
+          keyClass: historyClass
+        },
+        failure
+      ),
+      mac: parseMacForRpc(revision.mac, historyClass, failure)
+    }),
+    mutation: Object.freeze({
+      id: mutationId,
+      decisionId: null,
+      undoTargetMutationId: targetMutationId,
+      operations: Object.freeze(operations.data),
+      inverse: Object.freeze(inverse.data),
+      cipher: parseSealedCipher(
+        mutation.cipher,
+        {
+          ownerId,
+          resourceId: mutationId,
+          recordVersion: expectedRevision + 1,
+          kind: "note_mutation",
+          keyClass: historyClass
+        },
+        failure
+      )
+    }),
+    verification: Object.freeze({
+      noteContent: parseMacForRpc(verification.noteContent, noteState.privacy, failure),
+      noteMutation: parseMacForRpc(verification.noteMutation, historyClass, failure)
+    })
+  });
+}
+
+function parseDeleteCommand(input: DeleteEncryptedCaptureCommand): DeleteEncryptedCaptureCommand {
+  const outer = exactRecord(
+    input,
+    ["ownerId", "captureId", "privacy", "idempotencyKey", "command"],
+    inputFailure
+  );
+  const ownerId = canonicalOwnerId(outer.ownerId, inputFailure);
+  const captureId = entityId(outer.captureId, "cap", inputFailure);
+  const parsedPrivacy = privacy(outer.privacy, inputFailure);
+  const parsedKey = idempotencyKey(outer.idempotencyKey, inputFailure);
+  const replay = parseReplayCommand(outer.command, parsedPrivacy, inputFailure);
+  if (replay !== null) {
+    return Object.freeze({
+      ownerId,
+      captureId,
+      privacy: parsedPrivacy,
+      idempotencyKey: parsedKey,
+      command: replay
+    });
+  }
+  if (!isRecord(outer.command) || typeof outer.command.removeInsertedContent !== "boolean") {
+    return inputFailure();
+  }
+  const removeInsertedContent = outer.command.removeInsertedContent;
+  const material = parseCommandMaterial(
+    outer.command,
+    { ownerId, idempotencyKey: parsedKey, keyClass: parsedPrivacy },
+    removeInsertedContent
+      ? [
+          "occurredAt",
+          "removeInsertedContent",
+          "requestMac",
+          "responseCipher",
+          "responseVerificationMac",
+          "sourceNoteIds",
+          "receipt",
+          "undoWrites"
+        ]
+      : [
+          "occurredAt",
+          "removeInsertedContent",
+          "requestMac",
+          "responseCipher",
+          "responseVerificationMac",
+          "sourceNoteIds"
+        ],
+    inputFailure
+  );
+  const parsedSourceNoteIds = sourceNoteIds(material.sourceNoteIds, inputFailure);
+  if (!removeInsertedContent) {
+    return Object.freeze({
+      ownerId,
+      captureId,
+      privacy: parsedPrivacy,
+      idempotencyKey: parsedKey,
+      command: Object.freeze({
+        occurredAt: material.occurredAt,
+        removeInsertedContent: false as const,
+        requestMac: material.requestMac,
+        responseCipher: material.responseCipher,
+        responseVerificationMac: material.responseVerificationMac,
+        sourceNoteIds: parsedSourceNoteIds
+      })
+    });
+  }
+  const receipt = exactRecord(material.receipt, ["recordVersion", "cipher"], inputFailure);
+  const receiptRecordVersion = positiveInteger(
+    receipt.recordVersion,
+    MAX_DATABASE_INTEGER,
+    inputFailure
+  );
+  if (!Array.isArray(material.undoWrites) || material.undoWrites.length < 1) {
+    return inputFailure();
+  }
+  if (material.undoWrites.length > MAX_CAPTURE_UNDO_NOTES) return inputFailure();
+  const undoWrites = Object.freeze(
+    material.undoWrites.map((write) => parseUndoWrite(write, ownerId, inputFailure))
+  );
+  const noteIds = undoWrites.map((write) => write.noteId);
+  const targetMutationIds = undoWrites.map((write) => write.targetMutationId);
+  const newMutationIds = undoWrites.map((write) => write.mutation.id);
+  const newRevisionIds = undoWrites.map((write) => write.revision.id);
+  const reservationIds = [
+    material.responseCipher.reservationId,
+    ...undoWrites.flatMap((write) => [
+      write.noteCipher.reservationId,
+      write.revision.cipher.reservationId,
+      write.mutation.cipher.reservationId
+    ])
+  ];
+  if (
+    !sameStringArray(parsedSourceNoteIds, noteIds) ||
+    new Set(noteIds).size !== noteIds.length ||
+    new Set(targetMutationIds).size !== targetMutationIds.length ||
+    new Set(newMutationIds).size !== newMutationIds.length ||
+    new Set(newRevisionIds).size !== newRevisionIds.length ||
+    new Set(reservationIds).size !== reservationIds.length
+  ) {
+    return inputFailure();
+  }
+  for (let index = 1; index < noteIds.length; index += 1) {
+    const previous = noteIds[index - 1];
+    const current = noteIds[index];
+    if (previous === undefined || current === undefined || previous >= current) {
+      return inputFailure();
+    }
+  }
+  return Object.freeze({
+    ownerId,
+    captureId,
+    privacy: parsedPrivacy,
+    idempotencyKey: parsedKey,
+    command: Object.freeze({
+      occurredAt: material.occurredAt,
+      removeInsertedContent: true as const,
+      requestMac: material.requestMac,
+      responseCipher: material.responseCipher,
+      responseVerificationMac: material.responseVerificationMac,
+      sourceNoteIds: parsedSourceNoteIds,
+      receipt: Object.freeze({
+        recordVersion: receiptRecordVersion,
+        cipher: storedCipherForCommand(
+          receipt.cipher,
+          {
+            ownerId,
+            resourceId: captureId,
+            recordVersion: receiptRecordVersion,
+            kind: "capture_receipt",
+            keyClass: parsedPrivacy
+          },
+          inputFailure
+        )
+      }),
+      undoWrites
+    })
+  });
+}
+
+function parseCommandResponseCipher(
+  value: unknown,
+  ownerId: string,
+  idempotencyKeyValue: string,
+  keyClass: KeyClass,
+  failure: Failure
+): EncryptedAggregateRecord<"idempotency_response"> {
+  return parseStoredCipher(
+    value,
+    {
+      ownerId,
+      resourceId: `idempotency:${idempotencyKeyValue}`,
+      recordVersion: 1,
+      kind: "idempotency_response",
+      keyClass
+    },
+    failure
+  );
+}
+
 export function createEncryptedCaptureRpcAdapter(
   client: ServiceRpcClient
 ): EncryptedCaptureRpcAdapter {
@@ -1019,6 +1645,154 @@ export function createEncryptedCaptureRpcAdapter(
             : parseGeneratedBlock(value, ownerId, expectedId, projectionFailure);
         })
       );
+    },
+
+    async getCommandClaim(input) {
+      const parsedInput = exactRecord(input, ["ownerId", "scope", "idempotencyKey"], inputFailure);
+      const ownerId = canonicalOwnerId(parsedInput.ownerId, inputFailure);
+      const scope = commandScope(parsedInput.scope, inputFailure);
+      const parsedKey = idempotencyKey(parsedInput.idempotencyKey, inputFailure);
+      const response = exactRecord(
+        await client.rpc("get_encrypted_capture_command_claim", {
+          p_owner_id: ownerId,
+          p_scope: scope,
+          p_idempotency_key: parsedKey
+        }),
+        ["claim", "found"],
+        projectionFailure
+      );
+      if (typeof response.found !== "boolean") return projectionFailure();
+      if (!response.found) {
+        if (response.claim !== null) return projectionFailure();
+        return null;
+      }
+      const claim = exactRecord(
+        response.claim,
+        ["captureId", "keyClass", "requestMacKey", "scope"],
+        projectionFailure
+      );
+      const claimScope = commandScope(claim.scope, projectionFailure);
+      const keyClass = privacy(claim.keyClass, projectionFailure);
+      return Object.freeze({
+        scope: claimScope,
+        captureId: entityId(claim.captureId, "cap", projectionFailure),
+        keyClass,
+        requestMacKey: requestMacKey(claim.requestMacKey, ownerId, keyClass, projectionFailure)
+      });
+    },
+
+    async getDeleteContext(input) {
+      const parsedInput = exactRecord(input, ["ownerId", "captureId"], inputFailure);
+      const ownerId = canonicalOwnerId(parsedInput.ownerId, inputFailure);
+      const captureId = entityId(parsedInput.captureId, "cap", inputFailure);
+      const response = exactRecord(
+        await client.rpc("get_encrypted_capture_delete_context", {
+          p_owner_id: ownerId,
+          p_capture_id: captureId
+        }),
+        ["captureId", "sourceNoteIds"],
+        projectionFailure
+      );
+      const projectedCaptureId = entityId(response.captureId, "cap", projectionFailure);
+      if (projectedCaptureId !== captureId) return projectionFailure();
+      return Object.freeze({
+        captureId,
+        sourceNoteIds: sourceNoteIds(response.sourceNoteIds, projectionFailure)
+      });
+    },
+
+    async retryCapture(input) {
+      const parsed = parseRetryCommand(input);
+      const response = exactRecord(
+        await client.rpc("retry_encrypted_capture", {
+          p_owner_id: parsed.ownerId,
+          p_capture_id: parsed.captureId,
+          p_idempotency_key: parsed.idempotencyKey,
+          p_command: parsed.command
+        }),
+        ["captureId", "encryptedResponse", "jobId", "replayed"],
+        projectionFailure
+      );
+      const captureId = entityId(response.captureId, "cap", projectionFailure);
+      if (captureId !== parsed.captureId || typeof response.replayed !== "boolean") {
+        return projectionFailure();
+      }
+      return Object.freeze({
+        captureId,
+        jobId: entityId(response.jobId, "job", projectionFailure),
+        encryptedResponse: parseCommandResponseCipher(
+          response.encryptedResponse,
+          parsed.ownerId,
+          parsed.idempotencyKey,
+          parsed.privacy,
+          projectionFailure
+        ),
+        replayed: response.replayed
+      });
+    },
+
+    async deleteCapture(input) {
+      const parsed = parseDeleteCommand(input);
+      if ("removeInsertedContent" in parsed.command && parsed.command.removeInsertedContent) {
+        return inputFailure();
+      }
+      const response = exactRecord(
+        await client.rpc("delete_encrypted_capture", {
+          p_owner_id: parsed.ownerId,
+          p_capture_id: parsed.captureId,
+          p_idempotency_key: parsed.idempotencyKey,
+          p_command: parsed.command
+        }),
+        ["captureId", "encryptedResponse", "replayed"],
+        projectionFailure
+      );
+      const captureId = entityId(response.captureId, "cap", projectionFailure);
+      if (captureId !== parsed.captureId || typeof response.replayed !== "boolean") {
+        return projectionFailure();
+      }
+      return Object.freeze({
+        captureId,
+        encryptedResponse: parseCommandResponseCipher(
+          response.encryptedResponse,
+          parsed.ownerId,
+          parsed.idempotencyKey,
+          parsed.privacy,
+          projectionFailure
+        ),
+        replayed: response.replayed
+      });
+    },
+
+    async deleteCaptureWithUndo(input) {
+      const parsed = parseDeleteCommand(input);
+      if ("removeInsertedContent" in parsed.command && !parsed.command.removeInsertedContent) {
+        return inputFailure();
+      }
+      const response = exactRecord(
+        await client.rpc("delete_encrypted_capture_with_undo", {
+          p_owner_id: parsed.ownerId,
+          p_capture_id: parsed.captureId,
+          p_idempotency_key: parsed.idempotencyKey,
+          p_command: parsed.command
+        }),
+        ["captureId", "encryptedResponse", "replayed"],
+        projectionFailure
+      );
+      const captureId = entityId(response.captureId, "cap", projectionFailure);
+      if (captureId !== parsed.captureId || typeof response.replayed !== "boolean") {
+        return projectionFailure();
+      }
+      return Object.freeze({
+        captureId,
+        encryptedResponse: parseCommandResponseCipher(
+          response.encryptedResponse,
+          parsed.ownerId,
+          parsed.idempotencyKey,
+          parsed.privacy,
+          projectionFailure
+        ),
+        replayed: response.replayed
+      });
     }
   });
 }

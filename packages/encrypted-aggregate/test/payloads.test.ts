@@ -87,4 +87,49 @@ describe("stored capture receipt payload invariants", () => {
       actions: []
     });
   });
+
+  it("accepts a v2 receipt only when its sorted authenticated targets bind the primary undo", () => {
+    const undo = storedReceipt.actions.find((action) => action.type === "undo");
+    expect(undo?.type).toBe("undo");
+    const receiptV2 = {
+      ...storedReceipt,
+      schemaVersion: 2,
+      undoTargets: [
+        {
+          noteId: storedReceipt.destination.noteId,
+          mutationId: storedReceipt.mutationId,
+          expectedRevision: undo?.type === "undo" ? undo.expectedRevision : 1
+        },
+        {
+          noteId: OTHER_IDS.note,
+          mutationId: OTHER_MUTATION,
+          expectedRevision: 7
+        }
+      ]
+    } as const;
+    expect(CaptureReceiptPayloadSchema.parse(receiptV2)).toEqual(receiptV2);
+    expectInvalid({ ...receiptV2, undoTargets: [...receiptV2.undoTargets].reverse() });
+    expectInvalid({
+      ...receiptV2,
+      undoTargets: [
+        receiptV2.undoTargets[0],
+        { ...receiptV2.undoTargets[1], mutationId: receiptV2.undoTargets[0].mutationId }
+      ]
+    });
+    expectInvalid({
+      ...receiptV2,
+      undoTargets: receiptV2.undoTargets.map((target, index) =>
+        index === 0 ? { ...target, expectedRevision: target.expectedRevision + 1 } : target
+      )
+    });
+  });
+
+  it("keeps legacy v1 receipts readable without fabricating undo authority", () => {
+    const legacyWithoutUndo = {
+      ...storedReceipt,
+      actions: storedReceipt.actions.filter((action) => action.type !== "undo")
+    };
+    expect(CaptureReceiptPayloadSchema.parse(legacyWithoutUndo)).toEqual(legacyWithoutUndo);
+    expectInvalid({ ...legacyWithoutUndo, schemaVersion: 2, undoTargets: [] });
+  });
 });

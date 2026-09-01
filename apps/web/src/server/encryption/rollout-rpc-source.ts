@@ -48,6 +48,19 @@ export type ContentEncryptionRollout = Readonly<{
     encryptedObjectCount: number;
     verifiedObjectCount: number;
   }> | null;
+  plaintextScrub: Readonly<{
+    scrubId: string;
+    version: 1;
+    startedAt: string;
+    cursor: string | null;
+    completedAt: string | null;
+    scrubbedRowCount: number;
+    deletedChunkCount: number;
+    deletedIdempotencyCount: number;
+    attestationDigest: string | null;
+    lastRequestDigest: string | null;
+    lastResultDigest: string | null;
+  }> | null;
   readiness: ContentEncryptionReadiness;
 }>;
 
@@ -63,6 +76,14 @@ function hasExactKeys(value: Readonly<Record<string, unknown>>, keys: readonly s
 
 function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function validTimestamp(value: unknown): value is string {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
+function digestOrNull(value: unknown): value is string | null {
+  return value === null || (typeof value === "string" && /^[0-9a-f]{64}$/u.test(value));
 }
 
 function failClosed(): never {
@@ -152,12 +173,77 @@ function expectedModes(state: EncryptionRolloutState): Readonly<{
   };
 }
 
+function parsePlaintextScrub(
+  value: unknown,
+  state: EncryptionRolloutState
+): ContentEncryptionRollout["plaintextScrub"] {
+  if (value === null) {
+    if (state === "encrypted_only" || state === "contracted") return failClosed();
+    return null;
+  }
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "scrubId",
+      "version",
+      "startedAt",
+      "cursor",
+      "completedAt",
+      "scrubbedRowCount",
+      "deletedChunkCount",
+      "deletedIdempotencyCount",
+      "attestationDigest",
+      "lastRequestDigest",
+      "lastResultDigest"
+    ]) ||
+    typeof value.scrubId !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+      value.scrubId
+    ) ||
+    value.version !== 1 ||
+    !validTimestamp(value.startedAt) ||
+    (value.cursor !== null &&
+      (typeof value.cursor !== "string" || value.cursor.length < 1 || value.cursor.length > 500)) ||
+    (value.completedAt !== null && !validTimestamp(value.completedAt)) ||
+    !isCount(value.scrubbedRowCount) ||
+    !isCount(value.deletedChunkCount) ||
+    !isCount(value.deletedIdempotencyCount) ||
+    !digestOrNull(value.attestationDigest) ||
+    !digestOrNull(value.lastRequestDigest) ||
+    !digestOrNull(value.lastResultDigest) ||
+    (value.lastRequestDigest === null) !== (value.lastResultDigest === null) ||
+    (value.completedAt === null) !== (value.attestationDigest === null) ||
+    state === "expanded" ||
+    state === "dual_write" ||
+    ((state === "encrypted_only" || state === "contracted") && value.completedAt === null)
+  ) {
+    return failClosed();
+  }
+  return Object.freeze({
+    scrubId: value.scrubId,
+    version: 1,
+    startedAt: value.startedAt,
+    cursor: value.cursor,
+    completedAt: value.completedAt,
+    scrubbedRowCount: value.scrubbedRowCount,
+    deletedChunkCount: value.deletedChunkCount,
+    deletedIdempotencyCount: value.deletedIdempotencyCount,
+    attestationDigest: value.attestationDigest,
+    lastRequestDigest: value.lastRequestDigest,
+    lastResultDigest: value.lastResultDigest
+  });
+}
+
 export function parseContentEncryptionRollout(value: unknown): ContentEncryptionRollout {
   if (!isRecord(value) || typeof value.found !== "boolean") return failClosed();
-  const keys = value.found
+  const priorKeys = value.found
     ? ["found", "state", "writeMode", "readMode", "backfill", "readiness"]
     : ["found", "state", "writeMode", "readMode", "readiness"];
-  if (!hasExactKeys(value, keys)) return failClosed();
+  const scrubKeys = value.found
+    ? [...priorKeys, "plaintextScrub"]
+    : [...priorKeys, "backfill", "plaintextScrub"];
+  const hasScrubProjection = hasExactKeys(value, scrubKeys);
+  if (!hasScrubProjection && !hasExactKeys(value, priorKeys)) return failClosed();
   const state = rolloutState(value.state);
   const modes = expectedModes(state);
   if (value.writeMode !== modes.writeMode || value.readMode !== modes.readMode) {
@@ -165,8 +251,20 @@ export function parseContentEncryptionRollout(value: unknown): ContentEncryption
   }
   const readiness = parseReadiness(value.readiness);
   if (!value.found) {
-    if (state !== "expanded") return failClosed();
-    return Object.freeze({ found: false, state, ...modes, backfill: null, readiness });
+    if (
+      state !== "expanded" ||
+      (hasScrubProjection && (value.backfill !== null || value.plaintextScrub !== null))
+    ) {
+      return failClosed();
+    }
+    return Object.freeze({
+      found: false,
+      state,
+      ...modes,
+      backfill: null,
+      plaintextScrub: null,
+      readiness
+    });
   }
   if (
     !isRecord(value.backfill) ||
@@ -186,6 +284,12 @@ export function parseContentEncryptionRollout(value: unknown): ContentEncryption
   ) {
     return failClosed();
   }
+  const plaintextScrub = hasScrubProjection
+    ? parsePlaintextScrub(value.plaintextScrub, state)
+    : null;
+  if (!hasScrubProjection && (state === "encrypted_only" || state === "contracted")) {
+    return failClosed();
+  }
   return Object.freeze({
     found: true,
     state,
@@ -196,6 +300,7 @@ export function parseContentEncryptionRollout(value: unknown): ContentEncryption
       encryptedObjectCount: value.backfill.encryptedObjectCount,
       verifiedObjectCount: value.backfill.verifiedObjectCount
     }),
+    plaintextScrub,
     readiness
   });
 }

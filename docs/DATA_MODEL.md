@@ -16,10 +16,13 @@ The Milestone C Supabase schema has checked-in, forward-only migrations. They ar
 - [`20260830000012_durable_capture_workflow.sql`](../supabase/migrations/20260830000012_durable_capture_workflow.sql) adds authenticated capture envelopes, strict deletion scrubbing, durable leases/heartbeats/recovery, content-free retry replay, receipts, and the service-only capture RPC boundary.
 - [`20260830000013_organization_job_lease_privacy.sql`](../supabase/migrations/20260830000013_organization_job_lease_privacy.sql) removes direct queue reads so opaque lease and transition capabilities remain service-only.
 - [`20260830000014_note_retention_workflow_lock_order.sql`](../supabase/migrations/20260830000014_note_retention_workflow_lock_order.sql) aligns note purging with the workflow lock order and converts affected receipts into bounded, non-actionable Inbox history before deleting their destinations.
+- [`20260830000015_encrypted_library_expansion.sql`](../supabase/migrations/20260830000015_encrypted_library_expansion.sql) through [`20260830000020_encrypted_organizer_runtime.sql`](../supabase/migrations/20260830000020_encrypted_organizer_runtime.sql) add managed content-key custody, the typed encrypted aggregate, private RAG generations/jobs, queue liveness, canonical generation verification, and the isolated eight-RPC organizer boundary.
+- [`20260830000021_encrypted_only_cutover.sql`](../supabase/migrations/20260830000021_encrypted_only_cutover.sql) through [`20260830000026_encrypted_owner_export_and_deletion.sql`](../supabase/migrations/20260830000026_encrypted_owner_export_and_deletion.sql) add encrypted-only rollout, capture/taxonomy commands, retention, multi-note undo, owner export, and account deletion.
+- [`20260830000027_encrypted_storage_contract.sql`](../supabase/migrations/20260830000027_encrypted_storage_contract.sql) installs the expand-compatible readiness/receipt control plane and the explicit database-owner/digest-bound operation that atomically removes the plaintext rollback contract.
 
 This document remains the readable schema reference and must change in the same change set as future migrations. If prose or an illustrative DDL excerpt differs from a migration, the migration wins.
 
-**Status boundary:** the current manual-note schema below still stores note content and search derivatives in plaintext. The Milestone C capture envelope does not close that gap. Section 2.1 records the accepted Milestone C.5 target from [ADR-0006](./decisions/ADR-0006-application-encrypted-library-and-private-rag.md); it is not implemented until a checked-in migration and the C.5 verification gate land. Do not use this target design as evidence that current notes are encrypted.
+**Status boundary:** C.5a–d now implement the encrypted note/search overlay and the explicit plaintext-storage contract. Migration 27 is expand-compatible when installed, so a hosted database retains its pre-contract rollback columns until the separately approved operator call commits. Section 2.1 describes the contracted target and the checked-in implementation; it is local code evidence, not proof that Production has applied the contract or aged out exposed backups.
 
 Related: [BUILD_PLAN.md](./BUILD_PLAN.md) §12, [SECURITY_AND_PRIVACY.md](./SECURITY_AND_PRIVACY.md) for RLS strategy and retention.
 
@@ -428,7 +431,7 @@ create table auth_otp_quota_events (
 
 Milestone C capture clients have no direct table privileges and cannot invoke the storage RPCs. The authenticated Next API derives the owner from the verified session, then calls service-only RPCs with that owner identifier. Those RPCs enforce owner predicates before returning an envelope to the server decryptor; the product API returns only authenticated plaintext DTOs and strips the envelope, fingerprint, and key identifier. Job claim, heartbeat, completion, failure, and recovery functions are also service-only. A claimed job uses `FOR UPDATE SKIP LOCKED`, a bounded lease token, at most five attempts, and replay-safe terminal transitions.
 
-### 2.1 Milestone C.5 target overlay (accepted, not implemented)
+### 2.1 Milestone C.5 encrypted overlay (implemented; Production contraction pending)
 
 `ContentEnvelopeV1` is a strictly validated JSON/column group containing cipher/version, content ciphertext + nonce, wrapped DEK + nonce, and wrapping-key ID. Its authenticated context is supplied externally and binds `{user_id, resource_id, record_version, content_kind}`. The target keeps ownership, foreign keys, revision counters, privacy, lifecycle timestamps, queue state, and other bounded operational metadata plaintext. Object sizes, types, timestamps, opaque graph relationships, and access patterns therefore remain visible.
 

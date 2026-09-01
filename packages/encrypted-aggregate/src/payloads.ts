@@ -162,22 +162,46 @@ const ReceiptReasonCodeSchema = z
   .max(64)
   .regex(/^[a-z][a-z0-9_]*$/u);
 
+export const MAX_CAPTURE_RECEIPT_UNDO_TARGETS = 16;
+
+export const CaptureReceiptUndoTargetSchema = z.strictObject({
+  noteId: entityIdSchema("note"),
+  mutationId: entityIdSchema("mut"),
+  expectedRevision: z.number().int().positive()
+});
+export type CaptureReceiptUndoTarget = z.infer<typeof CaptureReceiptUndoTargetSchema>;
+
+const CaptureReceiptPayloadFields = {
+  captureId: entityIdSchema("cap"),
+  jobId: entityIdSchema("job"),
+  decisionId: entityIdSchema("dec").nullable(),
+  reviewItemId: entityIdSchema("rvw").nullable(),
+  mutationId: entityIdSchema("mut").nullable(),
+  outcome: CaptureReceiptOutcomeSchema,
+  headline: z.string().min(1).max(240),
+  destination: CaptureReceiptDestinationSchema.nullable(),
+  insertedContentReferences: z.array(CaptureReceiptContentReferenceSchema).max(500),
+  actions: z.array(CaptureReceiptActionSchema).max(3),
+  reasonCodes: z.array(ReceiptReasonCodeSchema).max(20),
+  createdAt: z.iso.datetime({ offset: true })
+} as const;
+
+const CaptureReceiptPayloadV1Schema = z.strictObject({
+  schemaVersion: z.literal(1),
+  ...CaptureReceiptPayloadFields
+});
+
+const CaptureReceiptPayloadV2Schema = z.strictObject({
+  schemaVersion: z.literal(2),
+  ...CaptureReceiptPayloadFields,
+  undoTargets: z.array(CaptureReceiptUndoTargetSchema).max(MAX_CAPTURE_RECEIPT_UNDO_TARGETS)
+});
+
 export const CaptureReceiptPayloadSchema = z
-  .strictObject({
-    schemaVersion: z.literal(1),
-    captureId: entityIdSchema("cap"),
-    jobId: entityIdSchema("job"),
-    decisionId: entityIdSchema("dec").nullable(),
-    reviewItemId: entityIdSchema("rvw").nullable(),
-    mutationId: entityIdSchema("mut").nullable(),
-    outcome: CaptureReceiptOutcomeSchema,
-    headline: z.string().min(1).max(240),
-    destination: CaptureReceiptDestinationSchema.nullable(),
-    insertedContentReferences: z.array(CaptureReceiptContentReferenceSchema).max(500),
-    actions: z.array(CaptureReceiptActionSchema).max(3),
-    reasonCodes: z.array(ReceiptReasonCodeSchema).max(20),
-    createdAt: z.iso.datetime({ offset: true })
-  })
+  .discriminatedUnion("schemaVersion", [
+    CaptureReceiptPayloadV1Schema,
+    CaptureReceiptPayloadV2Schema
+  ])
   .superRefine((receipt, context) => {
     const actionTypes = new Set<string>();
     for (const [index, action] of receipt.actions.entries()) {
@@ -251,6 +275,32 @@ export const CaptureReceiptPayloadSchema = z
           path: ["insertedContentReferences"]
         });
       }
+      if (receipt.schemaVersion === 2) {
+        if (receipt.undoTargets.length === 0) {
+          context.addIssue({
+            code: "custom",
+            message: "A routed v2 receipt requires authenticated undo targets",
+            path: ["undoTargets"]
+          });
+        }
+        const primary = receipt.undoTargets.find(
+          (target) =>
+            target.noteId === receipt.destination?.noteId &&
+            target.mutationId === receipt.mutationId
+        );
+        const undo = receipt.actions.find((action) => action.type === "undo");
+        if (
+          primary === undefined ||
+          undo?.mutationId !== primary.mutationId ||
+          undo.expectedRevision !== primary.expectedRevision
+        ) {
+          context.addIssue({
+            code: "custom",
+            message: "The primary undo action must match an authenticated v2 undo target",
+            path: ["undoTargets"]
+          });
+        }
+      }
     } else {
       if (receipt.destination !== null || receipt.mutationId !== null) {
         context.addIssue({
@@ -265,6 +315,35 @@ export const CaptureReceiptPayloadSchema = z
           message: "A non-routed receipt cannot expose unpersisted effects or actions",
           path: ["actions"]
         });
+      }
+      if (receipt.schemaVersion === 2 && receipt.undoTargets.length > 0) {
+        context.addIssue({
+          code: "custom",
+          message: "A non-routed receipt cannot expose undo targets",
+          path: ["undoTargets"]
+        });
+      }
+    }
+    if (receipt.schemaVersion === 2) {
+      const mutationIds = new Set<string>();
+      let previousNoteId: string | null = null;
+      for (const [index, target] of receipt.undoTargets.entries()) {
+        if (previousNoteId !== null && previousNoteId >= target.noteId) {
+          context.addIssue({
+            code: "custom",
+            message: "Undo targets must be strictly ordered by note ID",
+            path: ["undoTargets", index, "noteId"]
+          });
+        }
+        previousNoteId = target.noteId;
+        if (mutationIds.has(target.mutationId)) {
+          context.addIssue({
+            code: "custom",
+            message: "Undo target mutations must be unique",
+            path: ["undoTargets", index, "mutationId"]
+          });
+        }
+        mutationIds.add(target.mutationId);
       }
     }
     if (receipt.outcome === "needs_review" && receipt.reviewItemId === null) {

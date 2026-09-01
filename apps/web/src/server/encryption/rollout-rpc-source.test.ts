@@ -41,6 +41,23 @@ function present(overrides: Readonly<Record<string, unknown>> = {}) {
   };
 }
 
+function completedScrub(overrides: Readonly<Record<string, unknown>> = {}) {
+  return {
+    scrubId: "22222222-2222-4222-8222-222222222222",
+    version: 1,
+    startedAt: "2026-08-30T12:00:00.000Z",
+    cursor: null,
+    completedAt: "2026-08-30T12:01:00.000Z",
+    scrubbedRowCount: 12,
+    deletedChunkCount: 3,
+    deletedIdempotencyCount: 2,
+    attestationDigest: "a".repeat(64),
+    lastRequestDigest: "b".repeat(64),
+    lastResultDigest: "c".repeat(64),
+    ...overrides
+  };
+}
+
 describe("content encryption rollout RPC source", () => {
   it("parses the exact absent-owner projection as expanded legacy mode", () => {
     const parsed = parseContentEncryptionRollout({
@@ -92,6 +109,49 @@ describe("content encryption rollout RPC source", () => {
     });
   });
 
+  it("parses migration21 absent and completed encrypted-only scrub projections", () => {
+    const absent = parseContentEncryptionRollout({
+      found: false,
+      state: "expanded",
+      writeMode: "legacy",
+      readMode: "legacy",
+      backfill: null,
+      plaintextScrub: null,
+      readiness: readiness({
+        requiredObjectCount: 0,
+        exactVerifiedObjectCount: 0,
+        missingObjectCount: 0,
+        missingBySurface: {},
+        activeKeySlots: 0,
+        taxonomyEpochReady: false
+      })
+    });
+    const contracted = parseContentEncryptionRollout(
+      present({
+        state: "contracted",
+        readMode: "encrypted",
+        plaintextScrub: completedScrub(),
+        backfill: {
+          cursor: null,
+          complete: true,
+          encryptedObjectCount: 3,
+          verifiedObjectCount: 3
+        },
+        readiness: readiness({
+          readyForEncryptedRead: true,
+          requiredObjectCount: 3,
+          exactVerifiedObjectCount: 3,
+          missingObjectCount: 0,
+          missingBySurface: {},
+          backfillComplete: true
+        })
+      })
+    );
+
+    expect(absent).toMatchObject({ found: false, backfill: null, plaintextScrub: null });
+    expect(contracted.plaintextScrub).toEqual(completedScrub());
+  });
+
   it("looks up state by authenticated repository owner", async () => {
     const rpc = vi.fn<ServiceRpcClient["rpc"]>().mockResolvedValue(present());
     const source = new ContentEncryptionRolloutRpcSource(Object.freeze({ rpc }));
@@ -128,6 +188,18 @@ describe("content encryption rollout RPC source", () => {
     }),
     present({
       readiness: readiness({ backfillComplete: true })
+    }),
+    { ...present(), plaintextScrub: completedScrub(), unexpected: true },
+    present({ state: "contracted", readMode: "encrypted", plaintextScrub: null }),
+    present({
+      state: "encrypted_only",
+      readMode: "encrypted",
+      plaintextScrub: completedScrub({ attestationDigest: "not-a-digest" })
+    }),
+    present({
+      state: "encrypted_only",
+      readMode: "encrypted",
+      plaintextScrub: completedScrub({ lastResultDigest: null })
     })
   ])("fails closed for malformed or internally inconsistent projections", (projection) => {
     expect(() => parseContentEncryptionRollout(projection)).toThrow(ServiceRpcError);

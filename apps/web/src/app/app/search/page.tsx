@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { PageHeading } from "@/components/product/page-heading";
 import { SearchView } from "@/components/product/search-view";
 export const metadata: Metadata = { title: "Search" };
+
 export default function SearchPage() {
   return (
     <main id="main-content" className="product-page">

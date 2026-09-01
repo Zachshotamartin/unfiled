@@ -115,7 +115,7 @@ describe("Milestone B API client", () => {
     await client.listSpaces({ limit: 30 });
     await client.getSpace(SPACE_ID);
     await client.listTags({ limit: 30 });
-    await client.searchNotes({ q: " milk ", archive: "include", limit: 5 });
+    await client.searchNotes({ query: " milk ", archive: "include", limit: 5 });
 
     const urls = fetcher.mock.calls.map(([url]) => requestUrl(url));
     expect(urls).toEqual([
@@ -125,11 +125,19 @@ describe("Milestone B API client", () => {
       "https://example.test/api/v1/spaces?limit=30",
       `https://example.test/api/v1/spaces/${SPACE_ID}`,
       "https://example.test/api/v1/tags?limit=30",
-      "https://example.test/api/v1/search?q=milk&archive=include&limit=5"
+      "https://example.test/api/v1/search"
     ]);
     for (const [, init] of fetcher.mock.calls) {
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer access-token");
     }
+    const searchInit = fetcher.mock.calls.at(-1)?.[1];
+    expect(searchInit).toMatchObject({ cache: "no-store", method: "POST" });
+    expect(new Headers(searchInit?.headers).get("content-type")).toBe("application/json");
+    expect(await new Response(searchInit?.body).json()).toEqual({
+      query: "milk",
+      archive: "include",
+      limit: 5
+    });
   });
 
   it("sends caller-owned idempotency keys on every manual-note write", async () => {

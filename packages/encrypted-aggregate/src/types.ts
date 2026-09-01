@@ -284,6 +284,8 @@ export type AggregateVerificationSurface =
   | "note_mutation"
   | "organization_decision"
   | "review_item"
+  | "space_display"
+  | "tag_display"
   | "idempotency_response";
 
 export type CaptureReceiptVerificationMacInput = Readonly<{
@@ -320,6 +322,16 @@ export type ReviewVerificationMacInput = Readonly<{
   payload: ReviewPayload;
 }>;
 
+export type SpaceDisplayVerificationMacInput = Readonly<{
+  surface: "space_display";
+}> &
+  SealSpaceDisplayInput;
+
+export type TagDisplayVerificationMacInput = Readonly<{
+  surface: "tag_display";
+}> &
+  SealTagDisplayInput;
+
 export type IdempotencyResponseVerificationMacInput<Payload> = Readonly<{
   surface: "idempotency_response";
   idempotencyKey: string;
@@ -334,6 +346,8 @@ export type AggregateVerificationMacInput<Payload = never> =
   | NoteMutationVerificationMacInput
   | OrganizationDecisionVerificationMacInput
   | ReviewVerificationMacInput
+  | SpaceDisplayVerificationMacInput
+  | TagDisplayVerificationMacInput
   | IdempotencyResponseVerificationMacInput<Payload>;
 
 type BackfillSurfaceInput<Surface extends AggregateContentKind, Input> = Readonly<{

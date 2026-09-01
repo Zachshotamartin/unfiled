@@ -506,6 +506,7 @@ function writeHarness(options: WriteHarnessOptions = {}) {
       revisionId: REVISION,
       mutationId: MUTATION,
       occurredAt: CLAIM_TIME,
+      commandProjection: "legacy",
       requestMacKey: Object.freeze({
         keyId: `${keyClass}-mac-v1`,
         keyClass,
@@ -954,6 +955,7 @@ describe("encrypted note aggregate repository", () => {
       revisionId: REVISION,
       mutationId: MUTATION,
       occurredAt: CLAIM_TIME,
+      commandProjection: "legacy",
       requestMacKey: Object.freeze({
         keyId: "ai_assisted-mac-v1",
         keyClass: "ai_assisted",

@@ -33,7 +33,7 @@ type Schema<T> = Readonly<{
 
 export type CaptureHandlerDependencies = Readonly<{
   authenticate?: (request: Request) => Promise<AuthenticatedRequest>;
-  repository: CaptureRepository | (() => CaptureRepository);
+  repository: CaptureRepository | ((request: Request) => CaptureRepository);
   scheduleDrain?: () => void;
 }>;
 
@@ -79,7 +79,7 @@ export function createCaptureHandlers(dependencies: CaptureHandlerDependencies) 
       const session = await authenticate(request);
       const repository =
         typeof dependencies.repository === "function"
-          ? dependencies.repository()
+          ? dependencies.repository(request)
           : dependencies.repository;
       const response = await action(repository, {
         accessToken: session.accessToken,

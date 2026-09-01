@@ -90,6 +90,7 @@ function claim(): IncompleteEncryptedNoteWriteClaim {
     revisionId: REVISION,
     mutationId: MUTATION,
     occurredAt: OCCURRED_AT,
+    commandProjection: "legacy",
     requestMacKey: Object.freeze({
       keyId: mac.keyId,
       keyClass: mac.keyClass,
@@ -178,8 +179,16 @@ function material(): EncryptedNoteWriteMaterial<ResponsePayload> {
   });
 }
 
-function harness(options?: Readonly<{ verificationValid?: boolean }>) {
-  const prepared = claim();
+function harness(
+  options?: Readonly<{
+    verificationValid?: boolean;
+    commandProjection?: "legacy" | "encrypted_only";
+  }>
+) {
+  const prepared = Object.freeze({
+    ...claim(),
+    commandProjection: options?.commandProjection ?? "legacy"
+  });
   const noteCipher = sealed("note_content", NOTE, 1);
   const revisionCipher = sealed("note_revision", REVISION, 1);
   const mutationCipher = sealed("note_mutation", MUTATION, 1);
@@ -294,6 +303,21 @@ describe("encrypted note write execution", () => {
       code: ServiceRpcErrorCode.PROVIDER_UNAVAILABLE
     });
     expect(dependencies.createNote).not.toHaveBeenCalled();
+  });
+
+  it("keeps authored title, body, and structured content out of the encrypted-only RPC command", async () => {
+    const dependencies = harness({ commandProjection: "encrypted_only" });
+    await executeEncryptedNoteWrite(dependencies, input());
+
+    const command = dependencies.createNote.mock.calls[0]?.[0].command;
+    expect(command?.noteState).toMatchObject({
+      title: `e-${NOTE.toLowerCase()}`,
+      bodyMarkdown: "",
+      structuredData: { schemaVersion: 1 }
+    });
+    const serialized = JSON.stringify(command);
+    expect(serialized).not.toContain("Groceries");
+    expect(serialized).not.toContain("Milk");
   });
 
   it("rejects material whose encrypted snapshot does not match the authoritative state", async () => {
