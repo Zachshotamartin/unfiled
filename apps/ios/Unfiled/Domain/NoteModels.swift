@@ -255,7 +255,54 @@ public struct NoteArchiveRequest: Codable, Equatable, Sendable {
 
 public typealias NoteSoftDeleteRequest = RevisionMutationRequest
 public typealias NoteRestoreDeletedRequest = RevisionMutationRequest
-public typealias MutationUndoRequest = RevisionMutationRequest
+
+public struct MutationUndoRequest: Codable, Equatable, Sendable {
+    public let expectedRevision: Int
+    public let idempotencyKey: String
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case expectedRevision, idempotencyKey
+    }
+
+    public init(expectedRevision: Int, idempotencyKey: String) throws {
+        guard expectedRevision > 0, IdempotencyKeyContract.isValid(idempotencyKey) else {
+            throw DomainValidationError.invalidValue("Mutation undo request violates the API contract")
+        }
+        self.expectedRevision = expectedRevision
+        self.idempotencyKey = idempotencyKey
+    }
+
+    public init(from decoder: Decoder) throws {
+        try StrictJSONKey.requireExactKeys(CodingKeys.allCases.map(\.rawValue), from: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let expectedRevision = try container.decode(Int.self, forKey: .expectedRevision)
+        let idempotencyKey = try container.decode(String.self, forKey: .idempotencyKey)
+        guard expectedRevision > 0, IdempotencyKeyContract.isValid(idempotencyKey) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .expectedRevision,
+                in: container,
+                debugDescription: "Mutation undo request violates the API contract"
+            )
+        }
+        self.expectedRevision = expectedRevision
+        self.idempotencyKey = idempotencyKey
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        guard expectedRevision > 0, IdempotencyKeyContract.isValid(idempotencyKey) else {
+            throw EncodingError.invalidValue(
+                expectedRevision,
+                .init(
+                    codingPath: encoder.codingPath,
+                    debugDescription: "Mutation undo request violates the API contract"
+                )
+            )
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(expectedRevision, forKey: .expectedRevision)
+        try container.encode(idempotencyKey, forKey: .idempotencyKey)
+    }
+}
 
 public struct ToggleItemCheckedOperation: Codable, Equatable, Sendable {
     public let type: String
@@ -264,6 +311,7 @@ public struct ToggleItemCheckedOperation: Codable, Equatable, Sendable {
     public init(itemId: ItemID, checked: Bool) { type = "toggle_item_checked"; self.itemId = itemId; self.checked = checked }
     private enum CodingKeys: String, CodingKey { case type, itemId, checked }
     public init(from decoder: Decoder) throws {
+        try StrictJSONKey.requireExactKeys(["type", "itemId", "checked"], from: decoder)
         let c = try decoder.container(keyedBy: CodingKeys.self)
         guard try c.decode(String.self, forKey: .type) == "toggle_item_checked" else {
             throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "Unknown operation")
@@ -273,11 +321,102 @@ public struct ToggleItemCheckedOperation: Codable, Equatable, Sendable {
     }
 }
 
+public struct UpdateLogFieldOperation: Codable, Equatable, Sendable {
+    public let type: String
+    public let entryId: EntryID
+    public let fieldPath: [String]
+    public let value: LogFieldValue
+
+    private enum CodingKeys: String, CodingKey { case type, entryId, fieldPath, value }
+
+    public init(entryId: EntryID, fieldPath: [String], value: LogFieldValue) throws {
+        guard (1 ... 8).contains(fieldPath.count), fieldPath.allSatisfy(Self.validPathComponent),
+              Self.valid(value) else {
+            throw DomainValidationError.invalidValue("Log-field update violates the API contract")
+        }
+        type = "update_log_field"
+        self.entryId = entryId
+        self.fieldPath = fieldPath
+        self.value = value
+    }
+
+    public init(from decoder: Decoder) throws {
+        try StrictJSONKey.requireExactKeys(["type", "entryId", "fieldPath", "value"], from: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard try container.decode(String.self, forKey: .type) == "update_log_field" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .type,
+                in: container,
+                debugDescription: "Unknown interactive operation"
+            )
+        }
+        entryId = try container.decode(EntryID.self, forKey: .entryId)
+        fieldPath = try container.decode([String].self, forKey: .fieldPath)
+        value = try container.decode(LogFieldValue.self, forKey: .value)
+        type = "update_log_field"
+        guard (1 ... 8).contains(fieldPath.count), fieldPath.allSatisfy(Self.validPathComponent),
+              Self.valid(value) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .fieldPath,
+                in: container,
+                debugDescription: "Log-field update violates the API contract"
+            )
+        }
+    }
+
+    private static func validPathComponent(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (1 ... 80).contains(trimmed.utf16.count)
+    }
+
+    private static func valid(_ value: LogFieldValue) -> Bool {
+        if case let .string(text) = value { return text.utf16.count <= 500 }
+        return true
+    }
+}
+
+public enum InteractiveOperation: Codable, Equatable, Sendable {
+    case toggleItemChecked(ToggleItemCheckedOperation)
+    case updateLogField(UpdateLogFieldOperation)
+
+    private enum CodingKeys: String, CodingKey { case type }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(String.self, forKey: .type) {
+        case "toggle_item_checked":
+            self = .toggleItemChecked(try ToggleItemCheckedOperation(from: decoder))
+        case "update_log_field":
+            self = .updateLogField(try UpdateLogFieldOperation(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .type,
+                in: container,
+                debugDescription: "Unknown interactive operation"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case let .toggleItemChecked(operation): try operation.encode(to: encoder)
+        case let .updateLogField(operation): try operation.encode(to: encoder)
+        }
+    }
+}
+
 public struct InteractiveOperationsRequest: Codable, Equatable, Sendable {
     public let expectedRevision: Int; public let idempotencyKey: String
-    public let operations: [ToggleItemCheckedOperation]
-    public init(expectedRevision: Int, idempotencyKey: String, operations: [ToggleItemCheckedOperation]) {
+    public let operations: [InteractiveOperation]
+    public init(expectedRevision: Int, idempotencyKey: String, operations: [InteractiveOperation]) {
         self.expectedRevision = expectedRevision; self.idempotencyKey = idempotencyKey; self.operations = operations
+    }
+    public init(expectedRevision: Int, idempotencyKey: String, operations: [ToggleItemCheckedOperation]) {
+        self.init(
+            expectedRevision: expectedRevision,
+            idempotencyKey: idempotencyKey,
+            operations: operations.map(InteractiveOperation.toggleItemChecked)
+        )
     }
 }
 
@@ -316,6 +455,57 @@ public struct MutationResult: Codable, Equatable, Sendable {
     public let replayed: Bool; public let undo: UndoEligibility
 }
 
+public struct MutationBatchUndoMember: Codable, Equatable, Sendable {
+    public let note: Note
+    public let revision: NoteRevision
+    public let mutationId: MutationID
+    public let undo: UndoEligibility
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case note, revision, mutationId, undo
+    }
+
+    public init(from decoder: Decoder) throws {
+        try StrictJSONKey.requireExactKeys(CodingKeys.allCases.map(\.rawValue), from: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        note = try container.decode(Note.self, forKey: .note)
+        revision = try container.decode(NoteRevision.self, forKey: .revision)
+        mutationId = try container.decode(MutationID.self, forKey: .mutationId)
+        undo = try container.decode(UndoEligibility.self, forKey: .undo)
+        guard note.id == revision.noteId,
+              note.currentRevision == revision.revision else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .revision,
+                in: container,
+                debugDescription: "Batch undo revision must be the returned note's current revision"
+            )
+        }
+    }
+}
+
+public struct MutationBatchUndoResponse: Codable, Equatable, Sendable {
+    public let members: [MutationBatchUndoMember]
+    public let replayed: Bool
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case members, replayed }
+
+    public init(from decoder: Decoder) throws {
+        try StrictJSONKey.requireExactKeys(CodingKeys.allCases.map(\.rawValue), from: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        members = try container.decode([MutationBatchUndoMember].self, forKey: .members)
+        replayed = try container.decode(Bool.self, forKey: .replayed)
+        guard (1 ... 16).contains(members.count),
+              Set(members.map(\.note.id)).count == members.count,
+              Set(members.map(\.mutationId)).count == members.count else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .members,
+                in: container,
+                debugDescription: "Batch undo requires one to sixteen distinct notes and mutations"
+            )
+        }
+    }
+}
+
 public struct NoteLink: Codable, Equatable, Sendable {
     public let id: LinkID; public let fromNoteId: NoteID; public let toNoteId: NoteID
     public let linkType: LinkType; public let targetTitle: String
@@ -344,5 +534,4 @@ public typealias NoteLinkCreateRequest = NoteLinkMutationRequest
 public typealias NoteLinkDeleteRequest = NoteLinkMutationRequest
 public typealias NoteTagUnlinkRequest = RevisionMutationRequest
 public typealias NoteRelationMutationResponse = MutationResult
-public typealias InteractiveOperation = ToggleItemCheckedOperation
 public typealias OperationsRequest = InteractiveOperationsRequest

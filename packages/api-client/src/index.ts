@@ -23,7 +23,13 @@ import {
   CaptureReceiptResponseSchema,
   CaptureRetryRequestSchema,
   CaptureRetryResponseSchema,
+  DecisionCorrectionRequestSchema,
+  DecisionCorrectionResponseSchema,
+  GeneratedBlockListResponseSchema,
+  GeneratedBlockResolveRequestSchema,
+  GeneratedBlockResolveResponseSchema,
   InteractiveOperationsRequestSchema,
+  MutationBatchUndoResponseSchema,
   MutationResultSchema,
   MutationUndoRequestSchema,
   NoteArchiveRequestSchema,
@@ -34,6 +40,8 @@ import {
   NoteLinkCreateRequestSchema,
   NoteLinkDeleteRequestSchema,
   NoteLinkListResponseSchema,
+  NoteBacklinksQuerySchema,
+  NoteBacklinksResponseSchema,
   NoteMoveRequestSchema,
   NoteRestoreDeletedRequestSchema,
   NoteRestoreRequestSchema,
@@ -42,12 +50,27 @@ import {
   NoteSoftDeleteRequestSchema,
   NoteUpdateRequestSchema,
   NoteRelationMutationResponseSchema,
+  NoteSourcesQuerySchema,
+  NoteSourcesResponseSchema,
   NoteTagLinkRequestSchema,
   NoteTagUnlinkRequestSchema,
   ListReviewItemsResponseSchema,
   ReviewItemListQuerySchema,
+  ReviewResolveRequestSchema,
+  ReviewResolveResponseSchema,
+  RoutingRuleCreateRequestSchema,
+  RoutingRuleDeleteRequestSchema,
+  RoutingRuleDeleteResponseSchema,
+  RoutingRuleListResponseSchema,
+  RoutingRuleMutationResponseSchema,
+  RoutingRuleUpdateRequestSchema,
   SearchNotesRequestSchema,
   SearchNotesResponseSchema,
+  ProviderKeyDeleteRequestSchema,
+  ProviderKeyDeleteResponseSchema,
+  ProviderKeyPutRequestSchema,
+  ProviderKeyPutResponseSchema,
+  ProviderKeyResponseSchema,
   SpaceArchiveRequestSchema,
   SpaceCreateRequestSchema,
   SpaceDetailResponseSchema,
@@ -62,6 +85,9 @@ import {
   TagMutationResultSchema,
   TagUpdateRequestSchema,
   DeleteMutationResultSchema,
+  UserSettingsResponseSchema,
+  UserSettingsUpdateRequestSchema,
+  UserSettingsUpdateResponseSchema,
   entityIdSchema,
   type ApiError,
   type AccountDeleteRequest,
@@ -74,6 +100,8 @@ import {
   type CaptureDeleteRequest,
   type CaptureListQuery,
   type CaptureRetryRequest,
+  type DecisionCorrectionRequest,
+  type GeneratedBlockResolveRequest,
   type InteractiveOperationsRequest,
   type MutationUndoRequest,
   type NoteArchiveRequest,
@@ -81,6 +109,7 @@ import {
   type NoteListQuery,
   type NoteLinkCreateRequest,
   type NoteLinkDeleteRequest,
+  type NoteBacklinksQuery,
   type NoteMoveRequest,
   type NoteRestoreDeletedRequest,
   type NoteRestoreRequest,
@@ -89,7 +118,14 @@ import {
   type NoteUpdateRequest,
   type NoteTagLinkRequest,
   type NoteTagUnlinkRequest,
+  type NoteSourcesQuery,
+  type ProviderKeyDeleteRequest,
+  type ProviderKeyPutRequest,
   type ReviewItemListQuery,
+  type ReviewResolveRequest,
+  type RoutingRuleCreateRequest,
+  type RoutingRuleDeleteRequest,
+  type RoutingRuleUpdateRequest,
   type SearchNotesRequest,
   type SpaceArchiveRequest,
   type SpaceCreateRequest,
@@ -98,7 +134,8 @@ import {
   type TagCreateRequest,
   type TagDeleteRequest,
   type TagListQuery,
-  type TagUpdateRequest
+  type TagUpdateRequest,
+  type UserSettingsUpdateRequest
 } from "@unfiled/contracts";
 import type { ZodType } from "zod";
 
@@ -306,6 +343,16 @@ export function createApiClient(options: ApiClientOptions) {
       );
     },
 
+    correctDecision(decisionId: string, input: DecisionCorrectionRequest) {
+      const id = entityIdSchema("dec").parse(decisionId);
+      const body = DecisionCorrectionRequestSchema.parse(input);
+      return request(
+        `/decisions/${id}/correct`,
+        { body, cache: "no-store", idempotencyKey: body.idempotencyKey, method: "POST" },
+        DecisionCorrectionResponseSchema
+      );
+    },
+
     listNotes(input: Partial<NoteListQuery> = {}) {
       const query = NoteListQuerySchema.parse(input);
       const suffix = queryString([
@@ -347,6 +394,43 @@ export function createApiClient(options: ApiClientOptions) {
         `/notes/${id}/links/${relationId}`,
         { body, idempotencyKey: body.idempotencyKey, method: "DELETE" },
         NoteRelationMutationResponseSchema
+      );
+    },
+
+    listNoteSources(noteId: string, input: Partial<NoteSourcesQuery> = {}) {
+      const id = entityIdSchema("note").parse(noteId);
+      const query = NoteSourcesQuerySchema.parse(input);
+      const suffix = queryString([
+        ["limit", query.limit],
+        ["cursor", query.cursor]
+      ]);
+      return request(
+        `/notes/${id}/sources${suffix}`,
+        { cache: "no-store" },
+        NoteSourcesResponseSchema
+      );
+    },
+
+    listNoteBacklinks(noteId: string, input: Partial<NoteBacklinksQuery> = {}) {
+      const id = entityIdSchema("note").parse(noteId);
+      const query = NoteBacklinksQuerySchema.parse(input);
+      const suffix = queryString([
+        ["limit", query.limit],
+        ["cursor", query.cursor]
+      ]);
+      return request(
+        `/notes/${id}/backlinks${suffix}`,
+        { cache: "no-store" },
+        NoteBacklinksResponseSchema
+      );
+    },
+
+    listGeneratedBlocks(noteId: string) {
+      const id = entityIdSchema("note").parse(noteId);
+      return request(
+        `/notes/${id}/generated-blocks`,
+        { cache: "no-store" },
+        GeneratedBlockListResponseSchema
       );
     },
 
@@ -470,6 +554,16 @@ export function createApiClient(options: ApiClientOptions) {
       );
     },
 
+    undoMutationBatch(mutationId: string, input: MutationUndoRequest) {
+      const id = entityIdSchema("mut").parse(mutationId);
+      const body = MutationUndoRequestSchema.parse(input);
+      return request(
+        `/mutation-batches/${id}/undo`,
+        { body, cache: "no-store", idempotencyKey: body.idempotencyKey, method: "POST" },
+        MutationBatchUndoResponseSchema
+      );
+    },
+
     listSpaces(input: Partial<SpaceListQuery> = {}) {
       const query = SpaceListQuerySchema.parse(input);
       const suffix = queryString([
@@ -559,7 +653,64 @@ export function createApiClient(options: ApiClientOptions) {
         ["limit", query.limit],
         ["cursor", query.cursor]
       ]);
-      return request(`/review-items${suffix}`, {}, ListReviewItemsResponseSchema);
+      return request(
+        `/review-items${suffix}`,
+        { cache: "no-store" },
+        ListReviewItemsResponseSchema
+      );
+    },
+
+    resolveReviewItem(reviewItemId: string, input: ReviewResolveRequest) {
+      const id = entityIdSchema("rvw").parse(reviewItemId);
+      const body = ReviewResolveRequestSchema.parse(input);
+      return request(
+        `/review-items/${id}/resolve`,
+        { body, cache: "no-store", idempotencyKey: body.idempotencyKey, method: "POST" },
+        ReviewResolveResponseSchema
+      );
+    },
+
+    resolveGeneratedBlock(blockId: string, input: GeneratedBlockResolveRequest) {
+      const id = entityIdSchema("blk").parse(blockId);
+      const body = GeneratedBlockResolveRequestSchema.parse(input);
+      return request(
+        `/generated-blocks/${id}/resolve`,
+        { body, cache: "no-store", idempotencyKey: body.idempotencyKey, method: "POST" },
+        GeneratedBlockResolveResponseSchema
+      );
+    },
+
+    listRoutingRules() {
+      return request("/routing-rules", { cache: "no-store" }, RoutingRuleListResponseSchema);
+    },
+
+    createRoutingRule(input: RoutingRuleCreateRequest) {
+      const body = RoutingRuleCreateRequestSchema.parse(input);
+      return request(
+        "/routing-rules",
+        { body, cache: "no-store", idempotencyKey: body.idempotencyKey, method: "POST" },
+        RoutingRuleMutationResponseSchema
+      );
+    },
+
+    updateRoutingRule(routingRuleId: string, input: RoutingRuleUpdateRequest) {
+      const id = entityIdSchema("rule").parse(routingRuleId);
+      const body = RoutingRuleUpdateRequestSchema.parse(input);
+      return request(
+        `/routing-rules/${id}`,
+        { body, cache: "no-store", idempotencyKey: body.idempotencyKey, method: "PATCH" },
+        RoutingRuleMutationResponseSchema
+      );
+    },
+
+    deleteRoutingRule(routingRuleId: string, input: RoutingRuleDeleteRequest) {
+      const id = entityIdSchema("rule").parse(routingRuleId);
+      const body = RoutingRuleDeleteRequestSchema.parse(input);
+      return request(
+        `/routing-rules/${id}`,
+        { body, cache: "no-store", idempotencyKey: body.idempotencyKey, method: "DELETE" },
+        RoutingRuleDeleteResponseSchema
+      );
     },
 
     searchNotes(input: SearchNotesRequest) {
@@ -568,6 +719,41 @@ export function createApiClient(options: ApiClientOptions) {
         "/search",
         { body, cache: "no-store", method: "POST" },
         SearchNotesResponseSchema
+      );
+    },
+
+    getUserSettings() {
+      return request("/me/settings", {}, UserSettingsResponseSchema);
+    },
+
+    updateUserSettings(input: UserSettingsUpdateRequest) {
+      const body = UserSettingsUpdateRequestSchema.parse(input);
+      return request(
+        "/me/settings",
+        { body, idempotencyKey: body.idempotencyKey, method: "PATCH" },
+        UserSettingsUpdateResponseSchema
+      );
+    },
+
+    getProviderKeyMetadata() {
+      return request("/me/provider-key", { cache: "no-store" }, ProviderKeyResponseSchema);
+    },
+
+    putProviderKey(input: ProviderKeyPutRequest) {
+      const body = ProviderKeyPutRequestSchema.parse(input);
+      return request(
+        "/me/provider-key",
+        { body, cache: "no-store", idempotencyKey: body.idempotencyKey, method: "PUT" },
+        ProviderKeyPutResponseSchema
+      );
+    },
+
+    deleteProviderKey(input: ProviderKeyDeleteRequest) {
+      const body = ProviderKeyDeleteRequestSchema.parse(input);
+      return request(
+        "/me/provider-key",
+        { body, cache: "no-store", idempotencyKey: body.idempotencyKey, method: "DELETE" },
+        ProviderKeyDeleteResponseSchema
       );
     },
 

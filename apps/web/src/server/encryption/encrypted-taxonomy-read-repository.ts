@@ -1,4 +1,12 @@
-import type { EntityId, ReviewItemDto, ReviewState } from "@unfiled/contracts";
+import {
+  ReviewItemDtoSchema,
+  ReviewProposalSchema,
+  type EntityId,
+  type ReviewItemDto,
+  type ReviewProposal,
+  type ReviewState,
+  type ReviewType
+} from "@unfiled/contracts";
 import type {
   AuthorizedOwnerAccess,
   EncryptedAggregateService
@@ -46,6 +54,23 @@ function boundedPage(page: RepositoryPage | undefined): RepositoryPage {
     return invalidInput();
   }
   return value;
+}
+
+function legacyReviewProposal(type: ReviewType, choices: readonly unknown[]): ReviewProposal {
+  if (type === "revision_conflict") return { type: "conflict", reason: "revision" };
+  if (type === "structure_conflict") return { type: "conflict", reason: "structure" };
+  if (type === "pending_expansion") {
+    return { type: "conflict", reason: "consent_controls" };
+  }
+  if (type === "duplicate_suggestion") {
+    const duplicate = ReviewProposalSchema.safeParse({ type: "duplicate_notes", notes: choices });
+    if (duplicate.success) return duplicate.data;
+  }
+
+  // Low-confidence routing and failed-job V1 ciphertext lack the plan/error
+  // required by their frozen proposal types. Arbitrary choices cannot safely
+  // recreate those authenticated semantics.
+  return unavailable();
 }
 
 async function readCompleteSurface<Surface extends EncryptedLibrarySurface>(
@@ -201,17 +226,30 @@ export class EncryptedTaxonomyReadRepository {
           }
         );
         if (payload.state !== row.operational.state) return unavailable();
-        return Object.freeze({
+        if (
+          payload.schemaVersion === 1 &&
+          (payload.state !== "open" || payload.resolution !== null)
+        ) {
+          return unavailable();
+        }
+        const proposal =
+          payload.schemaVersion === 2
+            ? payload.proposal
+            : legacyReviewProposal(row.operational.type, payload.choices);
+        const resolution = payload.schemaVersion === 2 ? payload.resolution : null;
+        const parsed = ReviewItemDtoSchema.safeParse({
           id: row.resourceId as EntityId<"rvw">,
           captureId: row.operational.captureId as EntityId<"cap"> | null,
           noteId: row.operational.noteId as EntityId<"note"> | null,
           type: row.operational.type,
-          choices: payload.choices,
+          proposal,
           state: payload.state,
-          resolution: payload.resolution,
+          resolution,
           createdAt: row.operational.createdAt,
           resolvedAt: row.operational.resolvedAt
         });
+        if (!parsed.success) return unavailable();
+        return Object.freeze(parsed.data);
       })
     );
     return records

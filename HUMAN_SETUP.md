@@ -16,10 +16,11 @@ The Milestone D organizer, cipher, encrypted RAG path, and OpenAI adapters are i
 
 1. Create the dedicated OpenAI Production project/service account, restrict its model/key authority, set rate/spend controls, decide and document its data-retention posture, and place the key only in the organizer Production secret store.
 2. Keep `pnpm eval:routing` as the deterministic mock safety gate and run `pnpm eval:routing:pipeline` for the deterministic production-component seam. Its report names the real components exercised and the database/runtime guarantees it excludes. The optional credentialed runner is checked in as `pnpm eval:routing:live`; it requires only `UNFILED_ROUTING_EVAL_OPENAI_API_KEY`, runs exactly three samples per eligible synthetic case, and emits safe content-free telemetry. No credentialed live run or stochastic provider report exists yet.
-3. Provision and prove the exact Vercel Trusted Sources, AWS OIDC/KMS roles, CloudTrail trail, and TLS-only PostgreSQL logins. The organizer login must expose exactly ten RPCs.
+3. Provision and prove the exact Vercel Trusted Sources, AWS OIDC/KMS roles, CloudTrail trail, and TLS-only PostgreSQL logins. The organizer login must expose exactly ten RPCs through Milestone D/E3; only E4 may add the eleventh lease-bound Vault credential RPC.
 4. Run the staged synthetic organizer canaries and outage/race/replay cases, verify ciphertext-only durable state, and record the disable/rollback decision points before admitting a small cohort.
 5. Complete the restore drill, apply the one-way C.5d production contract from a real database-owner session, verify the post-contract canary, and track every pre-contract backup until expiry.
 6. Complete Apple signing, signed archive inspection, SQLCipher/Keychain/App Group checks, and the Lock Screen widget matrix on a physical iPhone.
+7. After E1–E4 code lands, run the owner-interaction and Vault-only BYOK gates below. No user BYOK or Anthropic control may be enabled from the current Milestone D state.
 
 The production storage promise is application encryption at rest with scoped server-side decryption. It is not end-to-end encryption or zero-knowledge storage.
 
@@ -690,6 +691,84 @@ Until the dedicated OpenAI project, live stochastic report, explicit production 
 account canaries, rotation/restore evidence, and backup-expiry gates pass, the organizer is an
 implemented fail-closed routing system—not a production routing claim or proof that the complete
 note library is encrypted.
+
+### Milestone E owner-interaction and Vault-only BYOK gates
+
+The accepted contracts are [ADR-0011](docs/decisions/ADR-0011-encrypted-owner-interactions-and-personal-rules.md)
+and [ADR-0012](docs/decisions/ADR-0012-vault-only-lease-bound-byok-credentials.md). Shared E0
+migration `20260901000001_milestone_e0_interaction_contracts.sql` now installs revisioned settings,
+Vault-only metadata constraints, immutable content-free job snapshots, and the common interaction
+lifecycle without adding E1–E4 public RPCs. E1 through E4 retain migrations
+`20260901000002`–`00005`. The complete release gate below must wait until those slices land;
+Milestone D still discards returned generated-expansion text and rejects user BYOK.
+
+1. From a clean release candidate, verify the database applied the shared E0 migration followed by
+   exactly these feature migrations in order:
+   `20260901000001_milestone_e0_interaction_contracts.sql`,
+   `20260901000002_encrypted_decision_corrections.sql`,
+   `20260901000003_encrypted_routing_rules_and_personalization.sql`,
+   `20260901000004_encrypted_generated_blocks_and_duplicate_suggestions.sql`, and
+   `20260901000005_vault_byok_and_ai_settings.sql`. Confirm no parallel change reused an assigned
+   timestamp or renamed the public RPCs listed in the ADRs.
+2. Before testing personal data, use two synthetic owners to run correction, Review resolution, and
+   batch undo races. Record content-free evidence that commits lock note IDs in ascending order,
+   validate every note/revision/reservation/MAC before writing, create two mutations plus exactly one
+   feedback event for a successful two-note correction, and publish no note change when the original
+   exact inverse is unsafe. Exercise lost responses and stale revisions; replay must be exact.
+3. Create an explicit routing rule and a repeated-correction proposal. Inspect authorized decrypted
+   results only through web, then prove the condition/alias is private-manual ciphertext everywhere
+   durable and absent from organizer/provider requests, jobs, Realtime, logs, and telemetry. The
+   organizer may receive only rule ID, exact revision, destination kind/ID, priority, and match
+   result. Prove the proposal stays disabled until the synthetic owner explicitly confirms it; this
+   applies to aliases too.
+4. Return a unique synthetic generated expansion from the provider fixture. Before E3 the marker
+   must be discarded and absent from product UI/durable stores. After E3, prove it is a separately
+   encrypted `proposed` generated block, remains stable across response-loss replay, and accept/reject
+   never modifies user-authored body or structured data. Seed a duplicate suggestion and prove no
+   organizer/model action merges, deletes, archives, rewrites, or redirects either note.
+5. In the Production Supabase project, confirm Vault is enabled and included in the approved backup,
+   restore, audit, and retention posture. E4 must remove or permanently constrain the legacy
+   `user_provider_keys.key_ciphertext` fallback. If Vault or these controls are unavailable, leave
+   BYOK disabled; do not create an app-layer provider-key KEK or store credential ciphertext in an
+   ordinary table/content envelope.
+6. Run a PostgreSQL privilege probe. Browser/native, `anon`, `authenticated`, `service_role`, index
+   worker, verifier, and organizer must have no direct provider-key table, Vault table/view/function,
+   or arbitrary secret access. The owner-authorized web boundary may call only
+   `get_owner_ai_settings`, `update_owner_ai_settings`, `get_user_provider_key_status`,
+   `put_user_provider_key`, and `delete_user_provider_key`. The organizer gains only
+   `get_lease_bound_organizer_provider_credential`; after E4 its complete public allowlist must be
+   exactly eleven rather than ten.
+7. Create a low-value, separately budgeted synthetic-provider key. Enter it only into the masked
+   authenticated settings form; do not paste it into a CLI argument, shell history, screenshot,
+   ticket, chat, fixture, or report. A deliberately invalid key must fail the minimal provider check
+   and create no Vault secret or metadata row. A valid write must return only provider, status,
+   last-four, validation time, and credential revision; replace it and prove the superseded Vault
+   secret is destroyed atomically.
+8. Queue a synthetic BYOK job and inspect application tables through an administrative schema-only
+   query. Its immutable snapshot may contain provider mode/provider, effort, expansion style,
+   explicit fallback, registry version, and settings revision, but no provider key, Vault secret ID,
+   authorization header, ciphertext, content-key/wrap record, or environment-secret name. A wrong
+   owner, caller-selected provider/Vault ID, missing/expired/stolen lease, private capture, deleted
+   capture, or invalid credential must not resolve a secret.
+9. Hold a queued job before credential resolution, delete its key through the product, then release
+   the job. It must make no BYOK provider call. Repeat replacement and runtime 401/403 cases: only the
+   resolved owner/provider credential revision becomes `invalid`. With fallback off, the capture
+   enters Inbox with `provider_key_invalid`; with fallback explicitly on in that job's immutable
+   snapshot, allow at most the designed single app-key transition. Record no key or content.
+10. Seed a unique canary key and run settings put/status/delete, one leased provider call, invalid-key
+    handling, export, and account deletion. Search Vercel, Supabase/database, provider diagnostics,
+    Sentry, traces, jobs, HTTP responses, exports, content envelopes, and backup-visible application
+    tables for the canary; require zero hits. Confirm live Vault destruction and document separately
+    when Vault/infrastructure backups containing the old secret age out—live deletion is not proof of
+    immediate backup erasure.
+11. Keep Anthropic and every unevaluated provider/tier absent from API discovery and both clients.
+    Enable one only after its production adapter, strict schema/cancellation behavior, provider data-
+    control review, complete routing corpus, live stochastic evaluation, custody canary, and budget/
+    rate gates pass for the exact pinned version. A database enum or settings mockup is not evidence.
+12. User-facing semantic search remains blocked after E4. Before Milestone F hybrid search, accept a
+    separate ADR and deploy a separate search trust domain. It must not reuse organizer/index-worker
+    database credentials, OIDC identities, provider API keys, runtime secrets, or plaintext caches;
+    explicitly decide and prove whether a new principal may unwrap the existing AI index envelopes.
 
 ### Global encrypted-storage contract — C.5d one-way production operation
 

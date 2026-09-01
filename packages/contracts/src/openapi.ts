@@ -36,8 +36,31 @@ import {
   CaptureRetryResponseSchema,
   CaptureSummarySchema
 } from "./captures.js";
+import {
+  DecisionCorrectionRequestSchema,
+  DecisionCorrectionResponseSchema
+} from "./corrections.js";
 import { ApiErrorSchema } from "./errors.js";
-import { MutationResultSchema, MutationUndoRequestSchema } from "./mutations.js";
+import {
+  GeneratedBlockDtoSchema,
+  GeneratedBlockListResponseSchema,
+  GeneratedBlockResolveRequestSchema,
+  GeneratedBlockResolveResponseSchema
+} from "./generated-blocks.js";
+import {
+  MutationBatchUndoMemberSchema,
+  MutationBatchUndoResponseSchema,
+  MutationResultSchema,
+  MutationUndoRequestSchema
+} from "./mutations.js";
+import {
+  NoteBacklinkDtoSchema,
+  NoteBacklinksQuerySchema,
+  NoteBacklinksResponseSchema,
+  NoteSourceDtoSchema,
+  NoteSourcesQuerySchema,
+  NoteSourcesResponseSchema
+} from "./note-context.js";
 import {
   NoteArchiveRequestSchema,
   NoteCreateRequestSchema,
@@ -61,7 +84,11 @@ import {
 import {
   ListReviewItemsResponseSchema,
   ReviewItemDtoSchema,
-  ReviewItemListQuerySchema
+  ReviewItemListQuerySchema,
+  ReviewProposalSchema,
+  ReviewResolveRequestSchema,
+  ReviewResolveResponseSchema,
+  ReviewResolutionSchema
 } from "./review.js";
 import {
   NoteRestoreRequestSchema,
@@ -69,6 +96,27 @@ import {
   NoteRevisionListResponseSchema
 } from "./revisions.js";
 import { SearchNotesRequestSchema, SearchNotesResponseSchema } from "./search.js";
+import {
+  RoutingRuleCreateRequestSchema,
+  RoutingRuleDeleteRequestSchema,
+  RoutingRuleDeleteResponseSchema,
+  RoutingRuleDtoSchema,
+  RoutingRuleListResponseSchema,
+  RoutingRuleMutationResponseSchema,
+  RoutingRuleUpdateRequestSchema
+} from "./routing-rules.js";
+import {
+  ProviderKeyDeleteRequestSchema,
+  ProviderKeyDeleteResponseSchema,
+  ProviderKeyMetadataSchema,
+  ProviderKeyPutRequestSchema,
+  ProviderKeyPutResponseSchema,
+  ProviderKeyResponseSchema,
+  UserSettingsDtoSchema,
+  UserSettingsResponseSchema,
+  UserSettingsUpdateRequestSchema,
+  UserSettingsUpdateResponseSchema
+} from "./settings.js";
 import {
   SpaceArchiveRequestSchema,
   SpaceCreateRequestSchema,
@@ -120,7 +168,7 @@ function privateJsonResponse(description: string, name: string) {
     ...jsonResponse(description, name),
     headers: {
       "Cache-Control": {
-        description: "Prevents storage of owner-authorized plaintext search data.",
+        description: "Prevents storage of owner-authorized private data.",
         required: true,
         schema: { type: "string", const: "private, no-store" }
       },
@@ -162,6 +210,7 @@ function privateArchiveResponse(description: string) {
 }
 
 const errorResponse = jsonResponse("Stable API error", "ApiError");
+const privateErrorResponse = privateJsonResponse("Stable API error", "ApiError");
 const authenticated = [{ bearerAuth: [] }] as const;
 const idempotencyHeader = {
   name: "Idempotency-Key",
@@ -201,6 +250,10 @@ const spaceId = pathId("spaceId", "^spc_[0-9A-HJKMNP-TV-Z]{26}$");
 const tagId = pathId("tagId", "^tag_[0-9A-HJKMNP-TV-Z]{26}$");
 const mutationId = pathId("mutationId", "^mut_[0-9A-HJKMNP-TV-Z]{26}$");
 const captureId = pathId("captureId", "^cap_[0-9A-HJKMNP-TV-Z]{26}$");
+const decisionId = pathId("decisionId", "^dec_[0-9A-HJKMNP-TV-Z]{26}$");
+const reviewItemId = pathId("reviewItemId", "^rvw_[0-9A-HJKMNP-TV-Z]{26}$");
+const routingRuleId = pathId("routingRuleId", "^rule_[0-9A-HJKMNP-TV-Z]{26}$");
+const generatedBlockId = pathId("blockId", "^blk_[0-9A-HJKMNP-TV-Z]{26}$");
 
 const cursorQuery = {
   name: "cursor",
@@ -289,6 +342,13 @@ const commonErrors = {
   "401": errorResponse,
   "404": errorResponse,
   "409": errorResponse
+} as const;
+
+const privateCommonErrors = {
+  "400": privateErrorResponse,
+  "401": privateErrorResponse,
+  "404": privateErrorResponse,
+  "409": privateErrorResponse
 } as const;
 
 export const openApiDocument = {
@@ -444,6 +504,22 @@ export const openApiDocument = {
         }
       }
     },
+    "/decisions/{decisionId}/correct": {
+      post: {
+        operationId: "correctDecision",
+        summary: "Atomically move a routed capture to a corrected destination",
+        security: authenticated,
+        parameters: [decisionId, idempotencyHeader],
+        requestBody: jsonBody("DecisionCorrectionRequest"),
+        responses: {
+          "200": privateJsonResponse(
+            "Applied decision correction or queued exact-inverse review",
+            "DecisionCorrectionResponse"
+          ),
+          ...privateCommonErrors
+        }
+      }
+    },
     "/notes": {
       get: {
         operationId: "listNotes",
@@ -550,6 +626,45 @@ export const openApiDocument = {
         requestBody: jsonBody("NoteLinkDeleteRequest"),
         responses: {
           "200": jsonResponse("Deleted note relation", "NoteRelationMutationResponse"),
+          ...commonErrors
+        }
+      }
+    },
+    "/notes/{noteId}/sources": {
+      get: {
+        operationId: "listNoteSources",
+        summary: "List captures that contributed content to a note",
+        security: authenticated,
+        parameters: [noteId, limitQuery, cursorQuery],
+        responses: {
+          "200": privateJsonResponse("Paginated note sources", "NoteSourcesResponse"),
+          ...commonErrors
+        }
+      }
+    },
+    "/notes/{noteId}/backlinks": {
+      get: {
+        operationId: "listNoteBacklinks",
+        summary: "List notes that link to this note",
+        security: authenticated,
+        parameters: [noteId, limitQuery, cursorQuery],
+        responses: {
+          "200": privateJsonResponse("Paginated note backlinks", "NoteBacklinksResponse"),
+          ...commonErrors
+        }
+      }
+    },
+    "/notes/{noteId}/generated-blocks": {
+      get: {
+        operationId: "listGeneratedBlocks",
+        summary: "List AI-generated blocks for a note",
+        security: authenticated,
+        parameters: [noteId],
+        responses: {
+          "200": privateJsonResponse(
+            "AI-generated blocks for the note",
+            "GeneratedBlockListResponse"
+          ),
           ...commonErrors
         }
       }
@@ -727,7 +842,36 @@ export const openApiDocument = {
         security: authenticated,
         parameters: [reviewStateQuery, limitQuery, cursorQuery],
         responses: {
-          "200": jsonResponse("Paginated Review items", "ListReviewItemsResponse"),
+          "200": privateJsonResponse("Paginated Review items", "ListReviewItemsResponse"),
+          ...privateCommonErrors
+        }
+      }
+    },
+    "/review-items/{reviewItemId}/resolve": {
+      post: {
+        operationId: "resolveReviewItem",
+        summary: "Resolve one Review item with a typed action",
+        security: authenticated,
+        parameters: [reviewItemId, idempotencyHeader],
+        requestBody: jsonBody("ReviewResolveRequest"),
+        responses: {
+          "200": privateJsonResponse("Resolved Review item", "ReviewResolveResponse"),
+          ...privateCommonErrors
+        }
+      }
+    },
+    "/generated-blocks/{blockId}/resolve": {
+      post: {
+        operationId: "resolveGeneratedBlock",
+        summary: "Accept or reject an AI-generated block",
+        security: authenticated,
+        parameters: [generatedBlockId, idempotencyHeader],
+        requestBody: jsonBody("GeneratedBlockResolveRequest"),
+        responses: {
+          "200": privateJsonResponse(
+            "Resolved AI-generated block",
+            "GeneratedBlockResolveResponse"
+          ),
           ...commonErrors
         }
       }
@@ -740,6 +884,65 @@ export const openApiDocument = {
         parameters: [mutationId, idempotencyHeader],
         requestBody: jsonBody("MutationUndoRequest"),
         responses: { "200": jsonResponse("Undo mutation", "MutationResult"), ...commonErrors }
+      }
+    },
+    "/mutation-batches/{mutationId}/undo": {
+      post: {
+        operationId: "undoMutationBatch",
+        summary: "Undo one atomic multi-note mutation batch",
+        security: authenticated,
+        parameters: [mutationId, idempotencyHeader],
+        requestBody: jsonBody("MutationUndoRequest"),
+        responses: {
+          "200": privateJsonResponse("Undo mutation batch", "MutationBatchUndoResponse"),
+          ...privateCommonErrors
+        }
+      }
+    },
+    "/routing-rules": {
+      get: {
+        operationId: "listRoutingRules",
+        summary: "List visible personal routing rules",
+        security: authenticated,
+        responses: {
+          "200": privateJsonResponse("Personal routing rules", "RoutingRuleListResponse"),
+          ...privateCommonErrors
+        }
+      },
+      post: {
+        operationId: "createRoutingRule",
+        summary: "Create an explicit personal routing rule",
+        security: authenticated,
+        parameters: [idempotencyHeader],
+        requestBody: jsonBody("RoutingRuleCreateRequest"),
+        responses: {
+          "201": privateJsonResponse("Created routing rule", "RoutingRuleMutationResponse"),
+          ...privateCommonErrors
+        }
+      }
+    },
+    "/routing-rules/{routingRuleId}": {
+      patch: {
+        operationId: "updateRoutingRule",
+        summary: "Update a personal routing rule",
+        security: authenticated,
+        parameters: [routingRuleId, idempotencyHeader],
+        requestBody: jsonBody("RoutingRuleUpdateRequest"),
+        responses: {
+          "200": privateJsonResponse("Updated routing rule", "RoutingRuleMutationResponse"),
+          ...privateCommonErrors
+        }
+      },
+      delete: {
+        operationId: "deleteRoutingRule",
+        summary: "Delete a personal routing rule",
+        security: authenticated,
+        parameters: [routingRuleId, idempotencyHeader],
+        requestBody: jsonBody("RoutingRuleDeleteRequest"),
+        responses: {
+          "200": privateJsonResponse("Deleted routing rule", "RoutingRuleDeleteResponse"),
+          ...privateCommonErrors
+        }
       }
     },
     "/search": {
@@ -766,6 +969,61 @@ export const openApiDocument = {
           "200": privateArchiveResponse("Streamed tar.gz account export"),
           "401": privateJsonResponse("Stable API error", "ApiError"),
           "503": privateJsonResponse("Stable API error", "ApiError")
+        }
+      }
+    },
+    "/me/settings": {
+      get: {
+        operationId: "getUserSettings",
+        summary: "Read organization and AI settings",
+        security: authenticated,
+        responses: {
+          "200": jsonResponse("Current user settings", "UserSettingsResponse"),
+          ...commonErrors
+        }
+      },
+      patch: {
+        operationId: "updateUserSettings",
+        summary: "Update organization and AI settings",
+        security: authenticated,
+        parameters: [idempotencyHeader],
+        requestBody: jsonBody("UserSettingsUpdateRequest"),
+        responses: {
+          "200": jsonResponse("Updated user settings", "UserSettingsUpdateResponse"),
+          ...commonErrors
+        }
+      }
+    },
+    "/me/provider-key": {
+      get: {
+        operationId: "getProviderKeyMetadata",
+        summary: "Read provider-key metadata without exposing key material",
+        security: authenticated,
+        responses: {
+          "200": privateJsonResponse("Provider-key metadata", "ProviderKeyResponse"),
+          ...commonErrors
+        }
+      },
+      put: {
+        operationId: "putProviderKey",
+        summary: "Validate and securely store a provider key",
+        security: authenticated,
+        parameters: [idempotencyHeader],
+        requestBody: jsonBody("ProviderKeyPutRequest"),
+        responses: {
+          "200": privateJsonResponse("Stored provider-key metadata", "ProviderKeyPutResponse"),
+          ...commonErrors
+        }
+      },
+      delete: {
+        operationId: "deleteProviderKey",
+        summary: "Revoke and destroy a stored provider key",
+        security: authenticated,
+        parameters: [idempotencyHeader],
+        requestBody: jsonBody("ProviderKeyDeleteRequest"),
+        responses: {
+          "200": privateJsonResponse("Deleted provider key", "ProviderKeyDeleteResponse"),
+          ...commonErrors
         }
       }
     },
@@ -847,6 +1105,8 @@ export const openApiDocument = {
       CaptureRetryResponse: openApiSchema(CaptureRetryResponseSchema),
       CaptureDeleteRequest: openApiSchema(CaptureDeleteRequestSchema),
       CaptureDeleteResponse: openApiSchema(CaptureDeleteResponseSchema),
+      DecisionCorrectionRequest: openApiSchema(DecisionCorrectionRequestSchema),
+      DecisionCorrectionResponse: openApiSchema(DecisionCorrectionResponseSchema),
       NoteCreateRequest: openApiSchema(NoteCreateRequestSchema),
       NoteListQuery: openApiSchema(NoteListQuerySchema),
       NoteUpdateRequest: openApiSchema(NoteUpdateRequestSchema),
@@ -863,9 +1123,17 @@ export const openApiDocument = {
       NoteTagLinkRequest: openApiSchema(NoteTagLinkRequestSchema),
       NoteTagUnlinkRequest: openApiSchema(NoteTagUnlinkRequestSchema),
       NoteRelationMutationResponse: openApiSchema(NoteRelationMutationResponseSchema),
+      NoteSourcesQuery: openApiSchema(NoteSourcesQuerySchema),
+      NoteSourceDto: openApiSchema(NoteSourceDtoSchema),
+      NoteSourcesResponse: openApiSchema(NoteSourcesResponseSchema),
+      NoteBacklinksQuery: openApiSchema(NoteBacklinksQuerySchema),
+      NoteBacklinkDto: openApiSchema(NoteBacklinkDtoSchema),
+      NoteBacklinksResponse: openApiSchema(NoteBacklinksResponseSchema),
       NoteRevisionListResponse: openApiSchema(NoteRevisionListResponseSchema),
       NoteRevisionListQuery: openApiSchema(NoteRevisionListQuerySchema),
       NoteRestoreRequest: openApiSchema(NoteRestoreRequestSchema),
+      MutationBatchUndoMember: openApiSchema(MutationBatchUndoMemberSchema),
+      MutationBatchUndoResponse: openApiSchema(MutationBatchUndoResponseSchema),
       MutationResult: openApiSchema(MutationResultSchema),
       MutationUndoRequest: openApiSchema(MutationUndoRequestSchema),
       SpaceCreateRequest: openApiSchema(SpaceCreateRequestSchema),
@@ -883,8 +1151,33 @@ export const openApiDocument = {
       TagMutationResult: openApiSchema(TagMutationResultSchema),
       DeleteMutationResult: openApiSchema(DeleteMutationResultSchema),
       ReviewItemDto: openApiSchema(ReviewItemDtoSchema),
+      ReviewProposal: openApiSchema(ReviewProposalSchema),
+      ReviewResolution: openApiSchema(ReviewResolutionSchema),
       ReviewItemListQuery: openApiSchema(ReviewItemListQuerySchema),
       ListReviewItemsResponse: openApiSchema(ListReviewItemsResponseSchema),
+      ReviewResolveRequest: openApiSchema(ReviewResolveRequestSchema),
+      ReviewResolveResponse: openApiSchema(ReviewResolveResponseSchema),
+      RoutingRuleDto: openApiSchema(RoutingRuleDtoSchema),
+      RoutingRuleListResponse: openApiSchema(RoutingRuleListResponseSchema),
+      RoutingRuleCreateRequest: openApiSchema(RoutingRuleCreateRequestSchema),
+      RoutingRuleUpdateRequest: openApiSchema(RoutingRuleUpdateRequestSchema),
+      RoutingRuleDeleteRequest: openApiSchema(RoutingRuleDeleteRequestSchema),
+      RoutingRuleMutationResponse: openApiSchema(RoutingRuleMutationResponseSchema),
+      RoutingRuleDeleteResponse: openApiSchema(RoutingRuleDeleteResponseSchema),
+      GeneratedBlockDto: openApiSchema(GeneratedBlockDtoSchema),
+      GeneratedBlockListResponse: openApiSchema(GeneratedBlockListResponseSchema),
+      GeneratedBlockResolveRequest: openApiSchema(GeneratedBlockResolveRequestSchema),
+      GeneratedBlockResolveResponse: openApiSchema(GeneratedBlockResolveResponseSchema),
+      UserSettingsDto: openApiSchema(UserSettingsDtoSchema),
+      UserSettingsResponse: openApiSchema(UserSettingsResponseSchema),
+      UserSettingsUpdateRequest: openApiSchema(UserSettingsUpdateRequestSchema),
+      UserSettingsUpdateResponse: openApiSchema(UserSettingsUpdateResponseSchema),
+      ProviderKeyMetadata: openApiSchema(ProviderKeyMetadataSchema),
+      ProviderKeyResponse: openApiSchema(ProviderKeyResponseSchema),
+      ProviderKeyPutRequest: openApiSchema(ProviderKeyPutRequestSchema),
+      ProviderKeyPutResponse: openApiSchema(ProviderKeyPutResponseSchema),
+      ProviderKeyDeleteRequest: openApiSchema(ProviderKeyDeleteRequestSchema),
+      ProviderKeyDeleteResponse: openApiSchema(ProviderKeyDeleteResponseSchema),
       SearchNotesRequest: openApiSchema(SearchNotesRequestSchema),
       SearchNotesResponse: openApiSchema(SearchNotesResponseSchema)
     }

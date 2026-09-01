@@ -403,6 +403,9 @@ describe("manual note route handlers", () => {
       request("/api/v1/review-items?state=open&limit=30")
     );
     const reviewBody: unknown = await review.json();
+    const invalidReview = await handlers.listReviewItems(
+      request("/api/v1/review-items?state=private-canary")
+    );
 
     expect(conflict.status).toBe(409);
     expect(retriedConflict.status).toBe(409);
@@ -414,6 +417,12 @@ describe("manual note route handlers", () => {
       currentRevision: 1
     });
     expect(ListReviewItemsResponseSchema.safeParse(reviewBody).success).toBe(true);
+    expect(review.headers.get("cache-control")).toBe("private, no-store");
+    expect(review.headers.get("pragma")).toBe("no-cache");
+    expect(invalidReview.status).toBe(400);
+    expect(invalidReview.headers.get("cache-control")).toBe("private, no-store");
+    expect(invalidReview.headers.get("pragma")).toBe("no-cache");
+    expect(await invalidReview.text()).not.toContain("private-canary");
     const reviewItems = (
       reviewBody as {
         items: { noteId: string; type: string }[];

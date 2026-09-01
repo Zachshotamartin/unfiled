@@ -22,6 +22,16 @@ const REVIEW_A = "rvw_01K5F0A0000000000000000001";
 const REVIEW_B = "rvw_01K5F0A0000000000000000002";
 const CREATED = "2026-08-30T12:00:00.000Z";
 const UPDATED = "2026-08-31T12:00:00.000Z";
+const REVIEW_PLAN = Object.freeze({
+  schemaVersion: 1 as const,
+  captureKind: "freeform" as const,
+  decision: "needs_review" as const,
+  destination: { candidateId: null, newNote: null },
+  operations: [{ type: "append_raw" as const, content: "Write this down" }],
+  generatedExpansion: null,
+  alternatives: [],
+  reasonCodes: ["ambiguous_intent" as const]
+});
 
 function object<Surface extends EncryptedLibrarySurface>(
   surface: Surface,
@@ -153,7 +163,7 @@ describe("encrypted taxonomy and Review reads", () => {
       {
         captureId: null,
         noteId: null,
-        type: "low_confidence",
+        type: "structure_conflict",
         state: "open",
         createdAt: UPDATED,
         resolvedAt: null
@@ -180,7 +190,7 @@ describe("encrypted taxonomy and Review reads", () => {
     await expect(repository.listReviewItems("open", { limit: 10, offset: 0 })).resolves.toEqual([
       expect.objectContaining({
         id: REVIEW_A,
-        choices: [REVIEW_A],
+        proposal: { type: "conflict", reason: "structure" },
         state: "open",
         resolution: null
       })
@@ -191,6 +201,85 @@ describe("encrypted taxonomy and Review reads", () => {
       open.encrypted,
       expect.objectContaining({ sourcePrivacy: "ai_assisted", recordVersion: 2 })
     );
+  });
+
+  it("returns a V2 Review only when its authenticated proposal matches its type", async () => {
+    const review = object(
+      "review_item",
+      REVIEW_A,
+      2,
+      {
+        captureId: null,
+        noteId: null,
+        type: "low_confidence",
+        state: "open",
+        createdAt: CREATED,
+        resolvedAt: null
+      },
+      "ai_assisted"
+    );
+    const input = dependencies({ review_item: [review] });
+    vi.mocked(input.aggregate.openReview).mockResolvedValue({
+      schemaVersion: 2,
+      proposal: { type: "route_capture", plan: REVIEW_PLAN },
+      state: "open",
+      resolution: null
+    });
+
+    await expect(
+      new EncryptedTaxonomyReadRepository(input).listReviewItems("open")
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: REVIEW_A,
+        type: "low_confidence",
+        proposal: { type: "route_capture", plan: REVIEW_PLAN },
+        resolution: null
+      })
+    ]);
+  });
+
+  it("fails closed when operational Review type and authenticated V2 proposal disagree", async () => {
+    const review = object("review_item", REVIEW_A, 2, {
+      captureId: null,
+      noteId: null,
+      type: "failed_job",
+      state: "open",
+      createdAt: CREATED,
+      resolvedAt: null
+    });
+    const input = dependencies({ review_item: [review] });
+    vi.mocked(input.aggregate.openReview).mockResolvedValue({
+      schemaVersion: 2,
+      proposal: { type: "route_capture", plan: REVIEW_PLAN },
+      state: "open",
+      resolution: null
+    });
+
+    await expect(
+      new EncryptedTaxonomyReadRepository(input).listReviewItems("open")
+    ).rejects.toMatchObject({ code: ServiceRpcErrorCode.PROVIDER_UNAVAILABLE });
+  });
+
+  it("fails closed on a V1 open Review carrying a resolution", async () => {
+    const review = object("review_item", REVIEW_A, 1, {
+      captureId: null,
+      noteId: null,
+      type: "structure_conflict",
+      state: "open",
+      createdAt: CREATED,
+      resolvedAt: null
+    });
+    const input = dependencies({ review_item: [review] });
+    vi.mocked(input.aggregate.openReview).mockResolvedValue({
+      schemaVersion: 1,
+      choices: [],
+      state: "open",
+      resolution: { type: "dismiss" }
+    });
+
+    await expect(
+      new EncryptedTaxonomyReadRepository(input).listReviewItems("open")
+    ).rejects.toMatchObject({ code: ServiceRpcErrorCode.PROVIDER_UNAVAILABLE });
   });
 
   it("fails closed on invalid pages, broken topology, Review mismatch, and cursor loops", async () => {

@@ -48,6 +48,15 @@ export const ToggleItemCheckedOperationSchema = z.strictObject({
   itemId: entityIdSchema("itm"),
   checked: z.boolean()
 });
+export type ToggleItemCheckedOperation = z.infer<typeof ToggleItemCheckedOperationSchema>;
+
+export const UpdateLogFieldOperationSchema = z.strictObject({
+  type: z.literal("update_log_field"),
+  entryId: entityIdSchema("ent"),
+  fieldPath: z.array(z.string().trim().min(1).max(80)).min(1).max(8),
+  value: z.union([z.string().max(500), z.number(), z.null()])
+});
+export type UpdateLogFieldOperation = z.infer<typeof UpdateLogFieldOperationSchema>;
 
 export const RestoreSnapshotOperationSchema = z.strictObject({
   type: z.literal("restore_snapshot"),
@@ -90,12 +99,7 @@ export const UserOperationSchema = z.discriminatedUnion("type", [
     links: z.array(NoteLinkValueSchema).max(100)
   }),
   ToggleItemCheckedOperationSchema,
-  z.strictObject({
-    type: z.literal("update_log_field"),
-    entryId: entityIdSchema("ent"),
-    fieldPath: z.array(z.string().trim().min(1).max(80)).min(1).max(8),
-    value: z.union([z.string().max(500), z.number(), z.null()])
-  }),
+  UpdateLogFieldOperationSchema,
   z.strictObject({
     type: z.literal("edit_item_text"),
     itemId: entityIdSchema("itm"),
@@ -109,7 +113,10 @@ export type UserOperation = z.infer<typeof UserOperationSchema>;
 export const TypedOperationSchema = z.union([ModelOperationSchema, UserOperationSchema]);
 export type TypedOperation = z.infer<typeof TypedOperationSchema>;
 
-export const InteractiveOperationSchema = ToggleItemCheckedOperationSchema;
+export const InteractiveOperationSchema = z.discriminatedUnion("type", [
+  ToggleItemCheckedOperationSchema,
+  UpdateLogFieldOperationSchema
+]);
 export type InteractiveOperation = z.infer<typeof InteractiveOperationSchema>;
 
 export const InteractiveOperationsRequestSchema = z.strictObject({

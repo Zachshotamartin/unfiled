@@ -101,9 +101,10 @@ public final class APIClient: Sendable {
     }
 
     func put<Response: Decodable, Body: Encodable>(_ path: String, body: Body,
+                                                    idempotencyKey: String? = nil,
                                                     authenticated: Bool = false,
                                                     as: Response.Type = Response.self) async throws -> Response {
-        try await send("PUT", path: path, body: body,
+        try await send("PUT", path: path, body: body, idempotencyKey: idempotencyKey,
                        authentication: authenticated ? .required : .none, response: Response.self)
     }
 

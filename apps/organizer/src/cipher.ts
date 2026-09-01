@@ -555,19 +555,22 @@ function reviewType(reason: OrganizerReviewReason): string {
   return "pending_expansion";
 }
 
-function reviewPayload(plan: MaterializedOrganizationCommand): ReviewPayload {
+function reviewPayload(
+  plan: MaterializedOrganizationCommand,
+  reason: OrganizerReviewReason
+): ReviewPayload {
+  const proposal =
+    reason === "revision_conflict"
+      ? { type: "conflict" as const, reason: "revision" as const }
+      : reason === "explicit_destination_unavailable"
+        ? { type: "conflict" as const, reason: "candidate_eligibility" as const }
+        : reason === "expansion_pending"
+          ? { type: "conflict" as const, reason: "consent_controls" as const }
+          : { type: "route_capture" as const, plan: plan.validatedPlan };
   return ReviewPayloadSchema.parse({
-    choices:
-      plan.kind === "review"
-        ? plan.alternatives.map(({ candidateId, noteId, noteType, revision }) => ({
-            candidateId,
-            noteId,
-            noteType,
-            revision
-          }))
-        : [],
+    proposal,
     resolution: null,
-    schemaVersion: 1,
+    schemaVersion: 2,
     state: "open"
   });
 }
@@ -751,7 +754,7 @@ async function sealReviewCommand(
     resourceOwnerId: input.job.ownerId
   });
   const decisionValue = decisionPayload(input);
-  const reviewValue = reviewPayload(input.plan);
+  const reviewValue = reviewPayload(input.plan, input.reviewReason);
   const receiptValue = deferredReceipt(input);
   const decision = await runtime.aggregate.sealOrganizationDecision(access, {
     decisionId: input.preparation.ids.decisionId,

@@ -78,11 +78,13 @@ public typealias DecisionID = EntityID<DecisionIDKind>
 public typealias EntryID = EntityID<EntryIDKind>
 public typealias ItemID = EntityID<ItemIDKind>
 public typealias JobID = EntityID<JobIDKind>
+public typealias KeyID = EntityID<KeyIDKind>
 public typealias LinkID = EntityID<LinkIDKind>
 public typealias MutationID = EntityID<MutationIDKind>
 public typealias NoteID = EntityID<NoteIDKind>
 public typealias RevisionID = EntityID<RevisionIDKind>
 public typealias ReviewID = EntityID<ReviewIDKind>
+public typealias RuleID = EntityID<RuleIDKind>
 public typealias SpaceID = EntityID<SpaceIDKind>
 public typealias TagID = EntityID<TagIDKind>
 

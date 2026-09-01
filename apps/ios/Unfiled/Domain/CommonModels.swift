@@ -121,6 +121,21 @@ public enum DomainValidationError: Error, Equatable, Sendable {
     case invalidValue(String)
 }
 
+enum IdempotencyKeyContract {
+    static func isValid(_ value: String) -> Bool {
+        guard (1 ... 80).contains(value.utf8.count),
+              let first = value.utf8.first,
+              isASCIIAlphaNumeric(first) else { return false }
+        return value.utf8.dropFirst().allSatisfy {
+            isASCIIAlphaNumeric($0) || $0 == 46 || $0 == 95 || $0 == 58 || $0 == 45
+        }
+    }
+
+    private static func isASCIIAlphaNumeric(_ byte: UInt8) -> Bool {
+        (48 ... 57).contains(byte) || (65 ... 90).contains(byte) || (97 ... 122).contains(byte)
+    }
+}
+
 extension KeyedEncodingContainer {
     mutating func encodePatch<T>(_ field: PatchField<T>, forKey key: Key) throws {
         switch field {

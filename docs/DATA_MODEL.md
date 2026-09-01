@@ -94,8 +94,8 @@ create table user_provider_keys (
   id text primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
   provider ai_provider not null,
-  vault_secret_id uuid,                -- Supabase Vault reference (selected mechanism)
-  key_ciphertext text,                 -- fallback: app-layer AES-256-GCM if Vault unavailable
+  vault_secret_id uuid,                -- Supabase Vault reference (E4 accepted mechanism)
+  key_ciphertext text,                 -- legacy placeholder; forbidden for product use and removed/constrained by E4
   key_last4 text not null check (char_length(key_last4) = 4),
   status key_status not null default 'active',
   validated_at timestamptz,
@@ -469,6 +469,8 @@ create table user_content_keys (
 );
 ```
 
+The excerpt above remains faithful to the initial migration, but its `key_ciphertext` alternative is not an accepted shipping path. [ADR-0012](./decisions/ADR-0012-vault-only-lease-bound-byok-credentials.md) supersedes the application-ciphertext fallback. Shared E0 migration `20260901000001_milestone_e0_interaction_contracts.sql` fails closed if any legacy ciphertext remains, requires a Vault locator with null application ciphertext, and installs monotonic settings and credential revisions. It never erases a legacy credential based only on an unverified UUID. E4 must add the exact owner CRUD and lease-bound credential capabilities and prove Vault custody before BYOK is enabled. Until then, the D organizer rejects user BYOK and the table is not reachable through a product credential API.
+
 The KMS root is not stored here. A wrapped intermediate key copied into a backup can remain decryptable under the retained shared root, so deleting the live row is not immediate backup erasure.
 
 The accepted retrieval target stores no plaintext tokens, snippets, `tsvector`, or vectors:
@@ -536,7 +538,31 @@ The current `unfiled_organizer_worker` database identity has exactly ten public 
 
 The two Milestone D additions accept a job ID and lease token, never an owner ID. `list_encrypted_organizer_rag_page` revalidates the live disclosure lease, derives the owner from the locked job, and pages only that owner's active encrypted index through the reviewed exact-scan path. The organizer decrypts and ranks those index records within its AI-only key boundary, then submits an ordered selection of one to eight `{noteId,indexedRevision}` pairs with the active generation ID and revision token. `select_encrypted_organizer_candidates` revalidates the lease, active-generation attestation, complete current coverage, absence of queued/leased index work, note privacy/lifecycle, current note revision, key record, and an 8 MiB aggregate-envelope budget before returning the selected encrypted note aggregates. It records the content-free controls and candidate manifest used by the existing heartbeat/prepare/commit revalidation fence.
 
-Milestone D also extends the claim projection with the source capture's content MAC and MAC-key record plus database-owned occurrence time, timezone, account capture ordinal, routing mode, and storage state. The encrypted capture and note envelopes remain opaque to PostgreSQL and to the web caller; only the isolated organizer receives AI-assisted object-wrap/content-MAC material. The original bounded candidate RPC remains the explicit-destination and degraded fallback, now with the same complete relational metadata needed to build an append snapshot.
+Milestone D also extends the claim projection with the source capture's content MAC and MAC-key record plus database-owned occurrence time, timezone, account capture ordinal, routing mode, and exact command projection (`legacy` or `encrypted_only`). The database selects `encrypted_only` as soon as a plaintext scrub exists or the rollout reaches `encrypted_only`/`contracted`; the organizer cannot infer it from a stale rollout label. The encrypted capture and note envelopes remain opaque to PostgreSQL and to the web caller; only the isolated organizer receives AI-assisted object-wrap/content-MAC material. The original bounded candidate RPC remains the explicit-destination and degraded fallback, now with the same complete relational metadata needed to build an append snapshot.
+
+Milestone D does not persist a model-returned `generatedExpansion`. Its text is discarded; no current row or Review envelope can support acceptance/rejection recovery. E3 must extend organizer preparation/commit to reserve, seal, and atomically publish a separate `proposed` generated block before that behavior is claimed.
+
+### 2.3 Milestone E encrypted-interaction boundary
+
+[ADR-0011](./decisions/ADR-0011-encrypted-owner-interactions-and-personal-rules.md) and [ADR-0012](./decisions/ADR-0012-vault-only-lease-bound-byok-credentials.md) freeze migration ownership and public function names. E0 now exists as the shared structural foundation; E1–E4 remain assigned implementation slices. This table prevents parallel lanes from choosing overlapping timestamps or generic capabilities.
+
+| Lane | Reserved migration                                                        | Exact future public functions                                                                                                                                                                                                 |
+| ---- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| E0   | `20260901000001_milestone_e0_interaction_contracts.sql`                   | None; shared revision, lifecycle, Vault-only metadata, immutable settings-snapshot, and service-only evidence structures                                                                                                      |
+| E1   | `20260901000002_encrypted_decision_corrections.sql`                       | `prepare_encrypted_decision_correction`, `commit_encrypted_decision_correction`, `prepare_encrypted_review_resolution`, `commit_encrypted_review_resolution`, `get_encrypted_mutation_batch`, `undo_encrypted_mutation_batch` |
+| E2   | `20260901000003_encrypted_routing_rules_and_personalization.sql`          | `prepare_encrypted_routing_rule_write`, `commit_encrypted_routing_rule_write`, `delete_encrypted_routing_rule`                                                                                                                |
+| E3   | `20260901000004_encrypted_generated_blocks_and_duplicate_suggestions.sql` | extend `prepare_encrypted_organizer_create`, `prepare_encrypted_organizer_append`, and `commit_encrypted_organizer_job`; add `resolve_encrypted_generated_block`                                                              |
+| E4   | `20260901000005_vault_byok_and_ai_settings.sql`                           | `get_owner_ai_settings`, `update_owner_ai_settings`, `get_user_provider_key_status`, `put_user_provider_key`, `delete_user_provider_key`, `get_lease_bound_organizer_provider_credential`                                     |
+
+Timestamp `20260901000001` is implemented by the shared E0 migration. None of the assigned timestamps or names may be reused or replaced with a generic table gateway, arbitrary Vault getter, or caller-owner function.
+
+E1 prepare calls claim the owner/idempotency key, validate current decision/Review/mutation references and expected revisions, create stable identities, and issue exact wrap reservations. The owner-authorized web service decrypts and derives all result snapshots, seals them, and submits a canonical request MAC. Commit locks every affected note in ascending note-ID order, validates the complete set before its first write, consumes the reservations, and publishes all revisions, mutations, one shared feedback event, Review/receipt state, cursor events, and index jobs atomically. Both sides of a two-note correction reference that one prepared feedback-event ID. A correction removes old content only through the original mutation's exact compatible inverse; otherwise neither note changes and an encrypted Review item is created. `get_encrypted_mutation_batch` and `undo_encrypted_mutation_batch` apply the same all-members-safe rule.
+
+E2 stores every condition/alias under the private-manual key class. The owner-authorized web process evaluates plaintext and binds only `{ruleId, ruleRevision, destinationKind, destinationId, priority, matched}` to the capture/job. The organizer never receives rule text or private key material. Learned rules remain disabled proposals until explicit owner confirmation.
+
+E3 stores generated text in a separate proposed encrypted block; it never changes user-authored body/structure. Duplicate suspicions create non-destructive encrypted Review items only. `resolve_encrypted_generated_block` accepts/rejects the separate proposal; it does not authorize a merge or fuzzy deletion.
+
+E0 writes an immutable non-secret settings snapshot when a capture/job is accepted. It includes organization mode, provider mode/provider, effort, expansion style, explicit fallback, registry version, and settings revision, but no provider key, credential revision, Vault ID, authorization header, ciphertext, or wrapping material. E4 adds the owner settings/provider-key capabilities and `get_lease_bound_organizer_provider_credential`, which derives the owner/provider from one live job lease and returns exactly one current active Vault credential to the organizer. Only when E4 lands does the organizer allowlist change from ten to eleven functions.
 
 ## 3. Row Level Security
 
@@ -556,7 +582,7 @@ Deviations from the template:
 - `organization_jobs`: service-only. Rows contain opaque worker lease and transition capabilities; clients receive only reviewed capture-state projections from the authenticated server API.
 - `organization_decisions`, `note_mutations`, `generated_blocks`, `capture_note_links`, `routing_rules`, `review_items`, legacy `note_chunks`, `feedback_events`, `user_events`, and `organization_mutation_attempts`: owner-scoped `select` only; writes happen exclusively through reviewed functions or the service role inside the workflow, so clients cannot forge decisions, mutations, retries, or cursor events.
 - C.5 `user_content_keys`, `rag_index_generations`, `note_rag_index`, and `note_index_jobs`: no direct client access. Reviewed owner-authorized services return decrypted product DTOs; the index worker has only the AI-assisted KMS class and service functions required to lease/commit eligible work.
-- `user_provider_keys`: **no client access at all** — not even `select`. Until later reviewed key-custody functions exist, only the service role can reach this table; plaintext is never stored or returned.
+- `user_provider_keys`: **no client access at all** — not even `select`. Until E4's reviewed functions exist, no product path may store or resolve a user key. E4 revokes direct table/Vault access from API and workload roles and exposes only the exact owner status/put/delete plus lease-bound organizer functions in ADR-0012; plaintext is never stored or returned.
 - `api_idempotency_records`: **no client access at all**. Reviewed functions claim and complete receipts in the same transaction as the requested write.
 - `auth_otp_quota_events`: **no direct table access for any API role**. The service-only quota function uses advisory locks and stores only HMAC-SHA256 digests.
 - Join ownership is checked inside the reviewed relation operations; a forged tag, note, link target, space, or parent fails the entire transaction.
@@ -582,7 +608,7 @@ Reviewed SQL uses `security definer` with an empty `search_path`. Authenticated 
 - `search_notes(query, archive_filter, limit, offset)` — current owner-scoped plaintext search. C.5 retires this SQL function and its indexes; the replacement is an authenticated `POST` service over authorized in-memory decryption, with lexical-only private-note handling.
 - `consume_auth_otp_quota(email_hash, ip_hash, now)` — service-only, accepts lowercase 64-byte-hex HMAC digests, permits 5 requests per email and 20 per IP in a rolling hour, and raises the PostgREST `PGRST` signal with HTTP 429 metadata when limited. `Retry-After` is the exact positive whole-second wait until both dimensions permit another request (the later limiting deadline, ceiled and clamped to 1–3600 seconds).
 
-Provider-key and interactive review-resolution functions remain later-milestone work. Encrypted organizer create/append/Review publication and owner export/account deletion now use reviewed service/worker paths; their tables remain directly non-writable to clients.
+Provider-key and interactive review-resolution functions remain later-milestone work. Their exact reserved names and trust boundaries are listed in §2.3; listing them is not implementation evidence. Encrypted organizer create/append/Review publication and owner export/account deletion now use reviewed service/worker paths; their tables remain directly non-writable to clients.
 
 **C.5 target transaction:** the server authorizes and decrypts revision N, validates/applies the shared typed operation in memory, and calls a service-only `apply_encrypted_note_mutation` RPC. That RPC locks the owned note, requires `current_revision = N`, and atomically commits the new note envelope, immutable revision envelope, encrypted mutation/inverse and idempotency response, content-free cursor event, and target-revision index job. A keyed MAC over canonical input preserves same-key replay detection despite randomized ciphertext. A stale revision or mismatched owner commits nothing. Create, undo, restore, Review resolution, and AI application follow the same envelope/CAS pattern.
 
@@ -696,6 +722,7 @@ deletion begins only after a human reviews the dry-run count and explicitly enab
 ## 8. Migration conventions
 
 - One migration per change set, forward-only, in `supabase/migrations`; CI applies all from zero on every PR.
+- Milestone E reserves `20260901000001` for shared integration, E1 `00002`, E2 `00003`, E3 `00004`, and E4 `00005`. A parallel lane may not take another lane's timestamp or rename the public RPCs frozen in §2.3.
 - Enum additions, new tables, and new nullable columns are safe; anything else needs a two-step expand/contract migration and an ADR if it touches a contract.
 - C.5 uses expand/backfill/verify/read-cutover/write-cutover/contract. Contract drops all legacy plaintext columns/functions/indexes only after canary scans and rollback approval; old backups may remain decryptable until their documented expiry.
 - `seed.sql` creates the deterministic local fixture users and library used by tests and the demo account (clearly labeled synthetic data).

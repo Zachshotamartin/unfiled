@@ -43,6 +43,8 @@ Normalization: lowercase, Unicode NFKC, collapse whitespace, strip trailing punc
 
 A rule match produces a short-circuit plan (destination + extraction kind) with reason code `rule_match:<ruleId>` and **no model call** unless extraction itself needs one (plain list/log syntax is parsed deterministically; see §6). A rule whose destination is archived/deleted is skipped and flagged.
 
+Milestone E evaluates rule-condition plaintext only inside the authenticated owner-authorized web service. Each condition is encrypted with the private-manual content class. The durable capture/job records only a database-bound snapshot of `{ruleId, ruleRevision, destinationKind, destinationId, priority, matched}`; the organizer receives that content-free snapshot and never receives a rule condition, alias, edit history, or private key record. Repeated corrections may offer a disabled learned rule, but every rule type—including aliases—requires explicit owner confirmation before it becomes active. See [ADR-0011](./decisions/ADR-0011-encrypted-owner-interactions-and-personal-rules.md).
+
 ## 4. Stage 2 — Candidate retrieval
 
 Candidate retrieval is an owner-scoped service over the active encrypted index generation. It exact-scans the authenticated user's decrypted-in-memory index documents; persisted snippets, lexical features, and embeddings remain ciphertext. Build a manifest of at most **8** candidates from these sources, deduplicated, in priority order:
@@ -74,12 +76,12 @@ An embedding-model change builds a complete new generation beside the active one
 
 ## 5. Stage 3 — Model contract
 
-The `OrganizationModel` port has two adapters behind a provider registry; both must pass the identical evaluation corpus before being selectable:
+The `OrganizationModel` port supports a provider registry target. A provider is selectable only after its concrete adapter and identical provider×tier evaluation gate pass:
 
-- **OpenAI:** Responses API, strict Structured Outputs, `store: false`.
-- **Anthropic:** Messages API with a single forced tool call whose `input_schema` is the organization schema (§5.2), yielding schema-constrained JSON.
+- **OpenAI — implemented in Milestone D, live/account gate pending:** Responses API, strict Structured Outputs, `store: false`.
+- **Anthropic — planned, not implemented or selectable:** Messages API with a single forced tool call whose `input_schema` is the organization schema (§5.2), yielding schema-constrained JSON.
 
-Credential resolution per request: user's BYOK key for their selected provider → application key for the default provider (see §14 and SECURITY_AND_PRIVACY §7.1). Model IDs come from server config keyed by `(provider, effort tier)`; selection justified by eval runs only. Timeout 20 s, one retry on transient error, then fail to Inbox with `provider_unavailable` (or `provider_key_invalid` on auth failure of a user key).
+The current D runtime uses only its dedicated application-owned OpenAI key and rejects user BYOK. After E4, credential resolution is the user's Vault-held key for the selected provider or the application key selected by the immutable job settings snapshot. The key is disclosed only through `get_lease_bound_organizer_provider_credential` for that live job lease; no job stores a key or Vault ID. Model IDs come from server config keyed by `(provider, effort tier)`; selection is justified by eval runs only. Timeout 20 s, one retry on transient error, then fail to Inbox with `provider_unavailable` (or `provider_key_invalid` on auth failure of a user key). See [ADR-0012](./decisions/ADR-0012-vault-only-lease-bound-byok-credentials.md).
 
 ### 5.1 Prompt template
 
@@ -176,6 +178,8 @@ In order; first failure sends the capture to Inbox with `invalid_plan` (and the 
 
 Deterministic extraction preference: when inferred kind is `list_items` or `log_entry` and the syntax parses deterministically, the server's parser output **overrides** the model's item split if they disagree materially (model chooses destination; parser owns extraction). Reason code `parser_override` recorded.
 
+**Current implementation boundary:** Milestone D validates a returned `generatedExpansion` conservatively but does not persist its text; the application discards it. E3 must extend the encrypted organizer prepare/commit payloads to create a separate `proposed` generated block before pending-expansion UI, acceptance, rejection, receipt copy, or recovery can be claimed. Generated text is never merged into the user's operation list.
+
 ## 7. Stage 5 — Scoring and bands
 
 ### 7.1 Features (initial weights)
@@ -241,6 +245,8 @@ For AI-assisted notes, the authorized service decrypts only that user's active-g
 
 User-initiated search is a separate path. Private-manual notes may be decrypted and matched lexically in owner-authorized process memory, but have no persisted index row or embedding. Neither a private query nor private content is sent to an embedding provider. Search requests use authenticated `POST` bodies so query text is not copied into URLs, access logs, or browser history. No search path synthesizes an answer over the library in MVP.
 
+The current accepted user-facing search implementation is lexical only. Sending an AI-assisted user's search query to an embedding provider requires a separate ADR/trust review and separately deployable search service. It may not reuse organizer or index-worker workload keys: no database password, provider API key, OIDC credential, KMS grant, runtime secret, or plaintext cache may be copied. The review must decide explicitly whether a new exact search principal may be separately authorized to unwrap existing AI-assisted index envelopes; Milestone D's routing-query embedding does not authorize user search traffic.
+
 ## 12. Evaluation corpus and harness
 
 ### 12.1 Case format
@@ -288,7 +294,7 @@ The optional credentialed stage is `pnpm eval:routing:live`. It requires the ded
 
 ## 13. Provider and effort settings (BYOK)
 
-User-facing settings and their exact effect on this pipeline:
+These are the target user-facing settings after E4. The current D runtime exposes only its pinned application OpenAI configuration; BYOK, Anthropic, and unqualified provider/tier choices remain hidden.
 
 | Setting             | Values                                    | Effect                                                                                                                            |
 | ------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
@@ -301,7 +307,7 @@ User-facing settings and their exact effect on this pipeline:
 |                     | `detailed`                                | expansion ≤ 600 chars                                                                                                             |
 | Fallback to app key | off (default) / on                        | behavior on BYOK auth failure (§10)                                                                                               |
 
-Rules: effort changes model tier and sampling, never the schema, validation, or scoring bands — trust behavior is identical at every effort level. Settings take effect on the next capture. Settings copy states the cost implication in one line when BYOK is active. Each `(provider, tier)` pair must meet the §12.3 thresholds on the evaluation corpus before it is selectable; a tier that fails stays hidden.
+Rules: effort changes model tier and sampling, never the schema, validation, or scoring bands — trust behavior is identical at every effort level. Settings are copied into an immutable non-secret snapshot when the next capture is accepted; later changes do not rewrite queued jobs. BYOK keys stay only in Supabase Vault and are resolved from a live lease, never copied into the snapshot. Settings copy states the cost implication in one line when BYOK is active. Each `(provider, tier)` pair must meet the §12.3 thresholds on the evaluation corpus before it is selectable; a tier that fails stays hidden. `brief`/`detailed` can request expansion, but E3 must land before the returned text is preserved or shown.
 
 ## 14. Telemetry
 

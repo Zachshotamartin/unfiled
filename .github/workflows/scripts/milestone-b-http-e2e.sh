@@ -503,14 +503,28 @@ if grep --fixed-strings --quiet "$e2e_private_search_canary" "$e2e_tmp_dir/web.l
   exit 1
 fi
 
-request_json GET '/review-items?state=open&limit=30' | node -e '
-  let input = "";
-  process.stdin.on("data", (chunk) => (input += chunk));
-  process.stdin.on("end", () => {
-    const value = JSON.parse(input);
-    if (!Array.isArray(value.items) || typeof value.pageInfo?.hasMore !== "boolean") process.exit(1);
-  });
-'
+# The development seed intentionally contains a V1 low-confidence Review row
+# whose exact route proposal cannot be reconstructed safely. E0 must reject
+# that row instead of inventing proposal semantics; E1 replaces it with a V2
+# write/read path and restores the ordinary list assertion.
+e2e_review_status="$(
+  curl --silent --show-error \
+    --request GET \
+    --header "authorization: Bearer $e2e_access_token" \
+    --dump-header "$e2e_tmp_dir/review-list.headers" \
+    --output "$e2e_tmp_dir/review-list.json" \
+    --write-out '%{http_code}' \
+    "$e2e_app_url/api/v1/review-items?state=open&limit=30"
+)"
+[[ "$e2e_review_status" == "503" ]]
+node -e '
+  const fs = require("node:fs");
+  const headers = fs.readFileSync(process.argv[1], "utf8").replaceAll("\r", "");
+  const value = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+  if (!/^cache-control:\s*private, no-store\s*$/imu.test(headers)) process.exit(1);
+  if (!/^pragma:\s*no-cache\s*$/imu.test(headers)) process.exit(1);
+  if (value.code !== "provider_unavailable") process.exit(1);
+' "$e2e_tmp_dir/review-list.headers" "$e2e_tmp_dir/review-list.json"
 
 e2e_capture_id="cap_$(node -e '
   const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
