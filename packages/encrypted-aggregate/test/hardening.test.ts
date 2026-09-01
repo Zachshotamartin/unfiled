@@ -29,6 +29,24 @@ function activeObjectKey(
   return key;
 }
 
+function groupedReservation(
+  reference: ObjectWrapKeyReference,
+  input: Readonly<{
+    operationCount: number;
+    operationIndex: number;
+    reservationId?: string;
+  }>
+): ObjectWrapReservation {
+  return Object.freeze({
+    reservationId: input.reservationId ?? "reservation_grouped",
+    reference,
+    groupUse: Object.freeze({
+      operationCount: input.operationCount,
+      operationIndex: input.operationIndex
+    })
+  });
+}
+
 async function malformedNoteRecord(
   harness: Awaited<ReturnType<typeof createHarness>>,
   bytes: Uint8Array
@@ -119,6 +137,378 @@ describe("encrypted aggregate hardening", () => {
         payload: notePayload
       })
     ).rejects.toMatchObject({ code: "reservation_invalid" });
+  });
+
+  it("accepts every unique indexed use in one bounded reservation group", async () => {
+    const harness = await createHarness();
+    const key = activeObjectKey(harness);
+    const indexes = [3, 0, 2, 1];
+    harness.setReservationOverride(() => {
+      const operationIndex = indexes.shift();
+      if (operationIndex === undefined) throw new Error("group exhausted");
+      return Promise.resolve(
+        groupedReservation(key.reference, { operationCount: 4, operationIndex })
+      );
+    });
+
+    const records = [];
+    for (let currentRevision = 1; currentRevision <= 4; currentRevision += 1) {
+      records.push(
+        await harness.service.sealNoteContent(harness.accessA, {
+          noteId: IDS.note,
+          currentRevision,
+          privacy: "ai_assisted",
+          payload: notePayload
+        })
+      );
+    }
+
+    expect(records.map(({ reservationId }) => reservationId)).toEqual(
+      Array.from({ length: 4 }, () => "reservation_grouped")
+    );
+    expect(new Set(records.map(({ keyId }) => keyId))).toEqual(new Set([key.reference.keyId]));
+    expect(harness.resolveObjectWrappingKey).toHaveBeenCalledTimes(4);
+  });
+
+  it("accepts a one-operation group exactly once", async () => {
+    const harness = await createHarness();
+    const key = activeObjectKey(harness);
+    harness.setReservationOverride(() =>
+      Promise.resolve(
+        groupedReservation(key.reference, {
+          operationCount: 1,
+          operationIndex: 0,
+          reservationId: "reservation_grouped_single"
+        })
+      )
+    );
+
+    await harness.service.sealNoteContent(harness.accessA, {
+      noteId: IDS.note,
+      currentRevision: 1,
+      privacy: "ai_assisted",
+      payload: notePayload
+    });
+    await expect(
+      harness.service.sealNoteContent(harness.accessA, {
+        noteId: IDS.note,
+        currentRevision: 2,
+        privacy: "ai_assisted",
+        payload: notePayload
+      })
+    ).rejects.toMatchObject({ code: "reservation_invalid" });
+    expect(harness.resolveObjectWrappingKey).toHaveBeenCalledTimes(1);
+  });
+
+  it("claims concurrent grouped indexes atomically within one service instance", async () => {
+    const uniqueHarness = await createHarness();
+    const uniqueKey = activeObjectKey(uniqueHarness);
+    let nextIndex = 0;
+    uniqueHarness.setReservationOverride(() =>
+      Promise.resolve(
+        groupedReservation(uniqueKey.reference, {
+          operationCount: 4,
+          operationIndex: nextIndex++,
+          reservationId: "reservation_concurrent_unique"
+        })
+      )
+    );
+
+    const uniqueRecords = await Promise.all(
+      [1, 2, 3, 4].map((currentRevision) =>
+        uniqueHarness.service.sealNoteContent(uniqueHarness.accessA, {
+          noteId: IDS.note,
+          currentRevision,
+          privacy: "ai_assisted",
+          payload: notePayload
+        })
+      )
+    );
+    expect(uniqueRecords).toHaveLength(4);
+    expect(uniqueHarness.resolveObjectWrappingKey).toHaveBeenCalledTimes(4);
+
+    const duplicateHarness = await createHarness();
+    const duplicateKey = activeObjectKey(duplicateHarness);
+    duplicateHarness.setReservationOverride(() =>
+      Promise.resolve(
+        groupedReservation(duplicateKey.reference, {
+          operationCount: 2,
+          operationIndex: 0,
+          reservationId: "reservation_concurrent_duplicate"
+        })
+      )
+    );
+    const outcomes = await Promise.all(
+      [1, 2].map(async (currentRevision) => {
+        try {
+          await duplicateHarness.service.sealNoteContent(duplicateHarness.accessA, {
+            noteId: IDS.note,
+            currentRevision,
+            privacy: "ai_assisted",
+            payload: notePayload
+          });
+          return "fulfilled" as const;
+        } catch (error: unknown) {
+          expect(error).toMatchObject({ code: "reservation_invalid" });
+          return "rejected" as const;
+        }
+      })
+    );
+    expect(outcomes.filter((outcome) => outcome === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome === "rejected")).toHaveLength(1);
+    expect(duplicateHarness.resolveObjectWrappingKey).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects duplicate and over-cap grouped uses without weakening one-shot reservations", async () => {
+    const duplicateHarness = await createHarness();
+    const duplicateKey = activeObjectKey(duplicateHarness);
+    duplicateHarness.setReservationOverride(() =>
+      Promise.resolve(
+        groupedReservation(duplicateKey.reference, {
+          operationCount: 2,
+          operationIndex: 0
+        })
+      )
+    );
+    await duplicateHarness.service.sealNoteContent(duplicateHarness.accessA, {
+      noteId: IDS.note,
+      currentRevision: 1,
+      privacy: "ai_assisted",
+      payload: notePayload
+    });
+    await expect(
+      duplicateHarness.service.sealNoteContent(duplicateHarness.accessA, {
+        noteId: IDS.note,
+        currentRevision: 2,
+        privacy: "ai_assisted",
+        payload: notePayload
+      })
+    ).rejects.toMatchObject({ code: "reservation_invalid" });
+
+    const overuseHarness = await createHarness();
+    const overuseKey = activeObjectKey(overuseHarness);
+    let operationIndex = 0;
+    overuseHarness.setReservationOverride(() =>
+      Promise.resolve(
+        groupedReservation(overuseKey.reference, {
+          operationCount: 2,
+          operationIndex: operationIndex++
+        })
+      )
+    );
+    for (const currentRevision of [1, 2]) {
+      await overuseHarness.service.sealNoteContent(overuseHarness.accessA, {
+        noteId: IDS.note,
+        currentRevision,
+        privacy: "ai_assisted",
+        payload: notePayload
+      });
+    }
+    await expect(
+      overuseHarness.service.sealNoteContent(overuseHarness.accessA, {
+        noteId: IDS.note,
+        currentRevision: 3,
+        privacy: "ai_assisted",
+        payload: notePayload
+      })
+    ).rejects.toMatchObject({ code: "reservation_invalid" });
+
+    const singleHarness = await createHarness();
+    const singleKey = activeObjectKey(singleHarness);
+    singleHarness.setReservationOverride(() =>
+      Promise.resolve({ reservationId: "reservation_single", reference: singleKey.reference })
+    );
+    await singleHarness.service.sealNoteContent(singleHarness.accessA, {
+      noteId: IDS.note,
+      currentRevision: 1,
+      privacy: "ai_assisted",
+      payload: notePayload
+    });
+    await expect(
+      singleHarness.service.sealNoteContent(singleHarness.accessA, {
+        noteId: IDS.note,
+        currentRevision: 2,
+        privacy: "ai_assisted",
+        payload: notePayload
+      })
+    ).rejects.toMatchObject({ code: "reservation_invalid" });
+  });
+
+  it.each(["owner", "class", "key_id", "key_version", "operation_count"] as const)(
+    "rejects a grouped reservation whose %s binding changes between uses",
+    async (variant) => {
+      const harness = await createHarness();
+      const firstKey = activeObjectKey(harness);
+      let secondAccess: AuthorizedOwnerAccess = harness.accessA;
+      let secondPrivacy: "ai_assisted" | "private_manual" = "ai_assisted";
+      let secondReference: ObjectWrapKeyReference = firstKey.reference;
+      let secondOperationCount = 4;
+      if (variant === "owner") {
+        secondAccess = harness.accessB;
+        secondReference = activeObjectKey(harness, OWNER_B).reference;
+      } else if (variant === "class") {
+        secondPrivacy = "private_manual";
+        secondReference = activeObjectKey(harness, OWNER_A, "private_manual").reference;
+      } else if (variant === "key_id") {
+        secondReference = Object.freeze({ ...firstKey.reference, keyId: "key_changed_wrap" });
+      } else if (variant === "key_version") {
+        secondReference = Object.freeze({ ...firstKey.reference, keyVersion: 99 });
+      } else {
+        secondOperationCount = 5;
+      }
+      let invocation = 0;
+      harness.setReservationOverride(() => {
+        const first = invocation++ === 0;
+        return Promise.resolve(
+          groupedReservation(first ? firstKey.reference : secondReference, {
+            operationCount: first ? 4 : secondOperationCount,
+            operationIndex: first ? 0 : 1
+          })
+        );
+      });
+
+      await harness.service.sealNoteContent(harness.accessA, {
+        noteId: IDS.note,
+        currentRevision: 1,
+        privacy: "ai_assisted",
+        payload: notePayload
+      });
+      await expect(
+        harness.service.sealNoteContent(secondAccess, {
+          noteId: IDS.note,
+          currentRevision: 2,
+          privacy: secondPrivacy,
+          payload: notePayload
+        })
+      ).rejects.toMatchObject({ code: "reservation_invalid" });
+      expect(harness.resolveObjectWrappingKey).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("rejects collisions between legacy one-shot IDs and grouped IDs in both directions", async () => {
+    const groupFirstHarness = await createHarness();
+    const groupFirstKey = activeObjectKey(groupFirstHarness);
+    let groupFirstInvocation = 0;
+    groupFirstHarness.setReservationOverride(() =>
+      Promise.resolve(
+        groupFirstInvocation++ === 0
+          ? groupedReservation(groupFirstKey.reference, {
+              operationCount: 2,
+              operationIndex: 0,
+              reservationId: "reservation_mode_collision"
+            })
+          : {
+              reservationId: "reservation_mode_collision",
+              reference: groupFirstKey.reference
+            }
+      )
+    );
+    await groupFirstHarness.service.sealNoteContent(groupFirstHarness.accessA, {
+      noteId: IDS.note,
+      currentRevision: 1,
+      privacy: "ai_assisted",
+      payload: notePayload
+    });
+    await expect(
+      groupFirstHarness.service.sealNoteContent(groupFirstHarness.accessA, {
+        noteId: IDS.note,
+        currentRevision: 2,
+        privacy: "ai_assisted",
+        payload: notePayload
+      })
+    ).rejects.toMatchObject({ code: "reservation_invalid" });
+
+    const singleFirstHarness = await createHarness();
+    const singleFirstKey = activeObjectKey(singleFirstHarness);
+    let singleFirstInvocation = 0;
+    singleFirstHarness.setReservationOverride(() =>
+      Promise.resolve(
+        singleFirstInvocation++ === 0
+          ? {
+              reservationId: "reservation_mode_collision",
+              reference: singleFirstKey.reference
+            }
+          : groupedReservation(singleFirstKey.reference, {
+              operationCount: 2,
+              operationIndex: 1,
+              reservationId: "reservation_mode_collision"
+            })
+      )
+    );
+    await singleFirstHarness.service.sealNoteContent(singleFirstHarness.accessA, {
+      noteId: IDS.note,
+      currentRevision: 1,
+      privacy: "ai_assisted",
+      payload: notePayload
+    });
+    await expect(
+      singleFirstHarness.service.sealNoteContent(singleFirstHarness.accessA, {
+        noteId: IDS.note,
+        currentRevision: 2,
+        privacy: "ai_assisted",
+        payload: notePayload
+      })
+    ).rejects.toMatchObject({ code: "reservation_invalid" });
+  });
+
+  it.each([
+    ["count below database minimum", { operationCount: 0, operationIndex: 0 }],
+    ["count above database maximum", { operationCount: 101, operationIndex: 0 }],
+    ["fractional count", { operationCount: 2.5, operationIndex: 0 }],
+    ["not-a-number count", { operationCount: Number.NaN, operationIndex: 0 }],
+    ["infinite count", { operationCount: Number.POSITIVE_INFINITY, operationIndex: 0 }],
+    ["unsafe count", { operationCount: Number.MAX_SAFE_INTEGER + 1, operationIndex: 0 }],
+    ["negative index", { operationCount: 2, operationIndex: -1 }],
+    ["index equal to count", { operationCount: 2, operationIndex: 2 }],
+    ["fractional index", { operationCount: 2, operationIndex: 0.5 }],
+    ["not-a-number index", { operationCount: 2, operationIndex: Number.NaN }],
+    ["infinite index", { operationCount: 2, operationIndex: Number.POSITIVE_INFINITY }],
+    ["unsafe index", { operationCount: 2, operationIndex: Number.MAX_SAFE_INTEGER + 1 }],
+    ["null group", null],
+    ["array group", []],
+    ["missing count", { operationIndex: 0 }],
+    ["missing index", { operationCount: 2 }],
+    ["extra group key", { operationCount: 2, operationIndex: 0, extra: true }]
+  ])("rejects invalid grouped reservation shape: %s", async (_label, groupUse) => {
+    const harness = await createHarness();
+    const key = activeObjectKey(harness);
+    harness.setReservationOverride(() =>
+      Promise.resolve({
+        reservationId: "reservation_invalid_group",
+        reference: key.reference,
+        groupUse
+      })
+    );
+    await expect(
+      harness.service.sealNoteContent(harness.accessA, {
+        noteId: IDS.note,
+        currentRevision: 1,
+        privacy: "ai_assisted",
+        payload: notePayload
+      })
+    ).rejects.toMatchObject({ code: "reservation_invalid" });
+    expect(harness.resolveObjectWrappingKey).not.toHaveBeenCalled();
+  });
+
+  it("rejects extra keys on a grouped reservation capability", async () => {
+    const harness = await createHarness();
+    const key = activeObjectKey(harness);
+    harness.setReservationOverride(() =>
+      Promise.resolve({
+        ...groupedReservation(key.reference, { operationCount: 2, operationIndex: 0 }),
+        extra: true
+      })
+    );
+
+    await expect(
+      harness.service.sealNoteContent(harness.accessA, {
+        noteId: IDS.note,
+        currentRevision: 1,
+        privacy: "ai_assisted",
+        payload: notePayload
+      })
+    ).rejects.toMatchObject({ code: "reservation_invalid" });
+    expect(harness.resolveObjectWrappingKey).not.toHaveBeenCalled();
   });
 
   it.each(["provider", "shape", "identifier", "owner", "class", "purpose", "version", "missing"])(

@@ -65,8 +65,14 @@ jobs:
       - name: Verifier production capacity gate
         run: pnpm --filter @unfiled/verifier test:capacity
 
+      - name: Organizer encrypted retrieval capacity gate
+        run: pnpm test:retrieval-capacity
+
       - name: Deterministic routing evaluation
         run: pnpm eval:routing
+
+      - name: Production-pipeline deterministic routing evaluation
+        run: pnpm eval:routing:pipeline
 
       - name: Build web, worker, verifier, organizer, and shared packages
         run: pnpm build

@@ -1,5 +1,6 @@
 import { parseContentEnvelope, serializeContentEnvelope } from "@unfiled/content-crypto";
 import { parseManagedKeyRecord } from "@unfiled/key-management";
+import type { PrivateRagGenerationSnapshot, PrivateRagPageReadResult } from "@unfiled/search";
 
 import type {
   AtomicOrganizerCommand,
@@ -12,6 +13,8 @@ import type {
   OrganizerCommitResult,
   OrganizerHeartbeatResult,
   OrganizerPreparation,
+  OrganizerRagRecord,
+  OrganizerRagSelection,
   OrganizerRepository
 } from "./drain.js";
 import { OrganizerUnavailableError } from "./errors.js";
@@ -21,14 +24,21 @@ const ENTITY_SUFFIX = "[0-9A-HJKMNP-TV-Z]{26}";
 const JOB = new RegExp(`^job_${ENTITY_SUFFIX}$`, "u");
 const CAPTURE = new RegExp(`^cap_${ENTITY_SUFFIX}$`, "u");
 const NOTE = new RegExp(`^note_${ENTITY_SUFFIX}$`, "u");
+const INDEX = new RegExp(`^irw_${ENTITY_SUFFIX}$`, "u");
+const GENERATION = new RegExp(`^igen_${ENTITY_SUFFIX}$`, "u");
+const SPACE = new RegExp(`^spc_${ENTITY_SUFFIX}$`, "u");
+const TAG = new RegExp(`^tag_${ENTITY_SUFFIX}$`, "u");
 const DECISION = new RegExp(`^dec_${ENTITY_SUFFIX}$`, "u");
 const MUTATION = new RegExp(`^mut_${ENTITY_SUFFIX}$`, "u");
 const REVIEW = new RegExp(`^rvw_${ENTITY_SUFFIX}$`, "u");
 const REVISION = new RegExp(`^rev_${ENTITY_SUFFIX}$`, "u");
 const NOTE_TYPES = ["generic", "list", "log", "principle", "project"] as const;
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/u;
+const DATE = /^\d{4}-\d{2}-\d{2}$/u;
+const MODEL_ID = /^[\x21-\x7e]{1,200}$/u;
 const SOURCE_BYTE_BUDGET = 8_388_608;
 const BASE64URL = /^[A-Za-z0-9_-]+$/u;
+const HEX_MAC = /^[0-9a-f]{64}$/u;
 
 export const ORGANIZER_RPC_NAMES = Object.freeze([
   "claim_encrypted_organizer_jobs",
@@ -38,7 +48,9 @@ export const ORGANIZER_RPC_NAMES = Object.freeze([
   "prepare_encrypted_organizer_append",
   "commit_encrypted_organizer_job",
   "fail_encrypted_organizer_job",
-  "recover_stale_encrypted_organizer_jobs"
+  "recover_stale_encrypted_organizer_jobs",
+  "list_encrypted_organizer_rag_page",
+  "select_encrypted_organizer_candidates"
 ] as const);
 
 export const ORGANIZER_IDENTITY_SQL =
@@ -50,6 +62,10 @@ export const ORGANIZER_RPC_SQL = Object.freeze({
     "select public.heartbeat_encrypted_organizer_job($1::text, $2::text, $3::integer, $4::jsonb) as result",
   candidates:
     "select public.list_encrypted_organizer_candidates($1::text, $2::text, $3::integer) as result",
+  ragPage:
+    "select public.list_encrypted_organizer_rag_page($1::text, $2::text, $3::jsonb, $4::integer, $5::integer) as result",
+  selectCandidates:
+    "select public.select_encrypted_organizer_candidates($1::text, $2::text, $3::jsonb) as result",
   prepareCreate:
     "select public.prepare_encrypted_organizer_create($1::text, $2::text, $3::text, $4::text) as result",
   prepareAppend:
@@ -102,6 +118,26 @@ function string(value: unknown, pattern: RegExp): string {
 function integer(value: unknown, minimum = 0, maximum = Number.MAX_SAFE_INTEGER): number {
   if (!Number.isSafeInteger(value) || Number(value) < minimum || Number(value) > maximum) reject();
   return Number(value);
+}
+function timestamp(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    value.length > 40 ||
+    !TIMESTAMP.test(value) ||
+    !Number.isFinite(Date.parse(value))
+  )
+    reject();
+  return value;
+}
+function nullableTimestamp(value: unknown): string | null {
+  return value === null ? null : timestamp(value);
+}
+function nullableDate(value: unknown): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string" || !DATE.test(value)) reject();
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  if (!Number.isFinite(parsed.valueOf()) || parsed.toISOString().slice(0, 10) !== value) reject();
+  return value;
 }
 function isNoteId(value: string): value is `note_${string}` {
   return NOTE.test(value);
@@ -156,16 +192,23 @@ function projection(
     ownerId: string;
     resourceId: string;
     recordVersion: number;
-    kind: "capture" | "note_content";
+    kind: "capture" | "note_content" | "note_rag_index";
   }>
 ): ParsedProjection {
-  const row = exact(value, [
-    "resourceId",
-    "recordVersion",
-    "envelope",
-    "keyRecord",
-    "encryptedByteLength"
-  ]);
+  const row = exact(
+    value,
+    expected.kind === "capture"
+      ? [
+          "resourceId",
+          "recordVersion",
+          "envelope",
+          "keyRecord",
+          "contentMac",
+          "contentMacKeyRecord",
+          "encryptedByteLength"
+        ]
+      : ["resourceId", "recordVersion", "envelope", "keyRecord", "encryptedByteLength"]
+  );
   if (row.resourceId !== expected.resourceId || row.recordVersion !== expected.recordVersion)
     reject();
   let envelope;
@@ -192,7 +235,7 @@ function projection(
     (key.status !== "active" && key.status !== "retired")
   )
     reject();
-  return Object.freeze({
+  const base = {
     resourceId: expected.resourceId,
     recordVersion: expected.recordVersion,
     cipher: Object.freeze({
@@ -205,6 +248,45 @@ function projection(
     key,
     encryptedByteLength,
     serializedEnvelopeBytes: new TextEncoder().encode(serializedEnvelope).byteLength
+  };
+  if (expected.kind !== "capture") return Object.freeze(base);
+
+  const contentMac = exact(row.contentMac, [
+    "mac",
+    "keyId",
+    "keyClass",
+    "keyPurpose",
+    "keyVersion"
+  ]);
+  let contentMacKey;
+  try {
+    contentMacKey = parseManagedKeyRecord(row.contentMacKeyRecord);
+  } catch {
+    return reject();
+  }
+  if (
+    typeof contentMac.mac !== "string" ||
+    !HEX_MAC.test(contentMac.mac) ||
+    contentMac.keyId !== contentMacKey.keyId ||
+    contentMac.keyClass !== "ai_assisted" ||
+    contentMac.keyPurpose !== "content_mac" ||
+    contentMac.keyVersion !== contentMacKey.keyVersion ||
+    contentMacKey.ownerId !== expected.ownerId ||
+    contentMacKey.keyClass !== "ai_assisted" ||
+    contentMacKey.purpose !== "content_mac" ||
+    (contentMacKey.status !== "active" && contentMacKey.status !== "retired")
+  )
+    reject();
+  return Object.freeze({
+    ...base,
+    contentMac: Object.freeze({
+      value: contentMac.mac,
+      keyId: contentMacKey.keyId,
+      keyClass: "ai_assisted" as const,
+      keyPurpose: "content_mac" as const,
+      keyVersion: contentMacKey.keyVersion
+    }),
+    contentMacKey
   });
 }
 
@@ -215,17 +297,22 @@ function claimResult(value: unknown, limit: number): readonly ClaimedOrganizerJo
   const jobs = root.jobs.map(
     (entry): ClaimedOrganizerJob & Readonly<{ source: ParsedProjection }> => {
       const row = exact(entry, [
+        "accountCaptureOrdinal",
         "attempt",
         "captureId",
+        "clientTimezone",
         "controls",
         "jobId",
         "leaseExpiresAt",
         "leaseToken",
+        "occurredAt",
         "ownerId",
         "promptVersion",
         "replanCount",
+        "routingMode",
         "schemaVersion",
-        "source"
+        "source",
+        "commandProjection"
       ]);
       const jobId = string(row.jobId, JOB);
       const captureId = string(row.captureId, CAPTURE) as `cap_${string}`;
@@ -242,24 +329,39 @@ function claimResult(value: unknown, limit: number): readonly ClaimedOrganizerJo
       ids.add(jobId);
       const promptVersion = string(row.promptVersion, /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/u);
       const schemaVersion = integer(row.schemaVersion, 1, 2_147_483_647);
+      if (
+        typeof row.clientTimezone !== "string" ||
+        !/^[A-Za-z_+-][A-Za-z0-9_+./:-]{0,99}$/u.test(row.clientTimezone) ||
+        (row.routingMode !== "cautious" &&
+          row.routingMode !== "balanced" &&
+          row.routingMode !== "automatic")
+      )
+        reject();
+      if (row.commandProjection !== "legacy" && row.commandProjection !== "encrypted_only")
+        reject();
       const controls = captureControls(row.controls);
       return Object.freeze({
+        accountCaptureOrdinal: integer(row.accountCaptureOrdinal, 1),
         attempt,
         captureId,
+        clientTimezone: row.clientTimezone,
         controls,
         jobId,
         leaseExpiresAt: row.leaseExpiresAt,
         leaseToken: string(row.leaseToken, UUID),
+        occurredAt: timestamp(row.occurredAt),
         ownerId,
         promptVersion,
         replanCount,
+        routingMode: row.routingMode,
         schemaVersion,
         source: projection(row.source, {
           kind: "capture",
           ownerId,
           recordVersion: 1,
           resourceId: captureId
-        })
+        }),
+        commandProjection: row.commandProjection
       });
     }
   );
@@ -276,6 +378,95 @@ function claimResult(value: unknown, limit: number): readonly ClaimedOrganizerJo
   return Object.freeze(jobs);
 }
 
+function candidateEntries(
+  value: unknown,
+  input: Readonly<{ limit: number; ownerId: string }>
+): readonly EncryptedCandidate[] {
+  if (!Array.isArray(value) || value.length > input.limit) reject();
+  const ids = new Set<string>();
+  return Object.freeze(
+    value.map((entry): EncryptedCandidate & Readonly<{ source: ParsedProjection }> => {
+      const row = exact(entry, [
+        "aggregate",
+        "candidateId",
+        "metadata",
+        "noteId",
+        "revision",
+        "type"
+      ]);
+      const candidateIdValue = string(row.candidateId, NOTE);
+      const noteIdValue = typeof row.noteId === "string" ? row.noteId : "";
+      const metadata = exact(row.metadata, [
+        "archivedAt",
+        "dailyDate",
+        "deletedAt",
+        "isOpen",
+        "links",
+        "pinnedAt",
+        "spaceId",
+        "tagIds",
+        "updatedAt"
+      ]);
+      if (
+        !isNoteId(noteIdValue) ||
+        !isNoteId(candidateIdValue) ||
+        candidateIdValue !== noteIdValue ||
+        ids.has(candidateIdValue) ||
+        !NOTE_TYPES.includes(row.type as never) ||
+        typeof metadata.isOpen !== "boolean" ||
+        (metadata.spaceId !== null &&
+          (typeof metadata.spaceId !== "string" || !SPACE.test(metadata.spaceId))) ||
+        metadata.archivedAt !== null ||
+        metadata.deletedAt !== null ||
+        !Array.isArray(metadata.tagIds) ||
+        metadata.tagIds.length > 100 ||
+        !Array.isArray(metadata.links) ||
+        metadata.links.length > 100
+      )
+        reject();
+      ids.add(candidateIdValue);
+      const tagIds = metadata.tagIds.map((tagId) => string(tagId, TAG) as `tag_${string}`);
+      if (new Set(tagIds).size !== tagIds.length) reject();
+      const linkIdentities = new Set<string>();
+      const links = metadata.links.map((link) => {
+        const parsed = exact(link, ["linkType", "toNoteId"]);
+        const toNoteId = string(parsed.toNoteId, NOTE) as `note_${string}`;
+        if (
+          toNoteId === noteIdValue ||
+          (parsed.linkType !== "reference" && parsed.linkType !== "related")
+        )
+          reject();
+        const identity = `${toNoteId}:${parsed.linkType}`;
+        if (linkIdentities.has(identity)) reject();
+        linkIdentities.add(identity);
+        return Object.freeze({ linkType: parsed.linkType, toNoteId });
+      });
+      const revision = integer(row.revision, 1);
+      return Object.freeze({
+        archivedAt: null,
+        candidateId: candidateIdValue,
+        dailyDate: nullableDate(metadata.dailyDate),
+        deletedAt: null,
+        isOpen: metadata.isOpen,
+        links: Object.freeze(links),
+        noteId: noteIdValue,
+        noteType: row.type as EncryptedCandidate["noteType"],
+        pinnedAt: nullableTimestamp(metadata.pinnedAt),
+        revision,
+        spaceId: metadata.spaceId as `spc_${string}` | null,
+        source: projection(row.aggregate, {
+          kind: "note_content",
+          ownerId: input.ownerId,
+          recordVersion: revision,
+          resourceId: noteIdValue
+        }),
+        tagIds: Object.freeze(tagIds),
+        updatedAt: timestamp(metadata.updatedAt)
+      });
+    })
+  );
+}
+
 function candidateResult(
   value: unknown,
   input: Readonly<{ jobId: string; limit: number }>,
@@ -289,66 +480,329 @@ function candidateResult(
     "encryptedBytes",
     "encryptedByteBudget"
   ]);
-  if (
-    root.jobId !== input.jobId ||
-    !Array.isArray(root.candidates) ||
-    root.candidates.length > input.limit
-  )
-    reject();
-  const ids = new Set<string>();
-  const candidates = root.candidates.map(
-    (entry): EncryptedCandidate & Readonly<{ source: ParsedProjection }> => {
-      const row = exact(entry, [
-        "aggregate",
-        "candidateId",
-        "metadata",
-        "noteId",
-        "revision",
-        "type"
-      ]);
-      const candidateIdValue = string(row.candidateId, NOTE);
-      const noteIdValue = typeof row.noteId === "string" ? row.noteId : "";
-      const metadata = exact(row.metadata, ["isOpen", "spaceId", "updatedAt"]);
-      if (
-        !isNoteId(noteIdValue) ||
-        !isNoteId(candidateIdValue) ||
-        ids.has(candidateIdValue) ||
-        !NOTE_TYPES.includes(row.type as never) ||
-        typeof metadata.isOpen !== "boolean" ||
-        (metadata.spaceId !== null &&
-          (typeof metadata.spaceId !== "string" ||
-            !/^spc_[0-9A-HJKMNP-TV-Z]{26}$/u.test(metadata.spaceId))) ||
-        typeof metadata.updatedAt !== "string" ||
-        !TIMESTAMP.test(metadata.updatedAt)
-      )
-        reject();
-      ids.add(candidateIdValue);
-      const revision = integer(row.revision, 1);
-      return Object.freeze({
-        candidateId: candidateIdValue,
-        isOpen: metadata.isOpen,
-        noteId: noteIdValue,
-        noteType: row.type as EncryptedCandidate["noteType"],
-        revision,
-        source: projection(row.aggregate, {
-          kind: "note_content",
-          ownerId,
-          recordVersion: revision,
-          resourceId: noteIdValue
-        })
-      });
-    }
-  );
+  if (root.jobId !== input.jobId) reject();
+  const candidates = candidateEntries(root.candidates, { limit: input.limit, ownerId });
   const encryptedByteBudget = integer(root.encryptedByteBudget, 1, SOURCE_BYTE_BUDGET);
   const encryptedBytes = integer(root.encryptedBytes, 0, encryptedByteBudget);
   const canonicalEnvelopeBytes = candidates.reduce(
-    (sum, candidate) => sum + candidate.source.serializedEnvelopeBytes,
+    (sum, candidate) => sum + (candidate.source as ParsedProjection).serializedEnvelopeBytes,
     0
   );
   if (root.returnedCount !== candidates.length || encryptedBytes < canonicalEnvelopeBytes) reject();
   return Object.freeze({
-    candidates: Object.freeze(candidates),
+    candidates,
     controls: captureControls(root.controls)
+  });
+}
+
+function selectedCandidateResult(
+  value: unknown,
+  input: Readonly<{
+    jobId: string;
+    ownerId: string;
+    selection: OrganizerRagSelection;
+  }>
+): OrganizerCandidatePage & Readonly<{ snapshot: PrivateRagGenerationSnapshot }> {
+  const root = exact(value, [
+    "candidates",
+    "controls",
+    "encryptedByteBudget",
+    "encryptedBytes",
+    "generationId",
+    "jobId",
+    "returnedCount",
+    "revisionToken"
+  ]);
+  const snapshot = input.selection.snapshot;
+  if (
+    root.jobId !== input.jobId ||
+    root.generationId !== snapshot.generationId ||
+    String(integer(root.revisionToken, 0)) !== snapshot.revisionToken
+  )
+    reject();
+  const candidates = candidateEntries(root.candidates, {
+    limit: input.selection.candidates.length,
+    ownerId: input.ownerId
+  });
+  const encryptedByteBudget = integer(root.encryptedByteBudget, 1, SOURCE_BYTE_BUDGET);
+  const encryptedBytes = integer(root.encryptedBytes, 0, encryptedByteBudget);
+  const canonicalEnvelopeBytes = candidates.reduce(
+    (sum, candidate) => sum + (candidate.source as ParsedProjection).serializedEnvelopeBytes,
+    0
+  );
+  if (
+    root.returnedCount !== candidates.length ||
+    candidates.length !== input.selection.candidates.length ||
+    encryptedBytes < canonicalEnvelopeBytes ||
+    candidates.some((candidate, index) => {
+      const selected = input.selection.candidates[index];
+      return (
+        candidate.noteId !== selected?.noteId || candidate.revision !== selected.indexedRevision
+      );
+    })
+  )
+    reject();
+  return Object.freeze({
+    candidates,
+    controls: captureControls(root.controls),
+    snapshot
+  });
+}
+
+type RagCursor = Readonly<{
+  afterIndexId: string;
+  generationId: string;
+  revisionToken: number;
+}>;
+
+function ragCursor(value: string | null): RagCursor | null {
+  if (value === null) return null;
+  if (new TextEncoder().encode(value).byteLength > 4_096) reject();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    return reject();
+  }
+  const row = exact(parsed, ["afterIndexId", "generationId", "revisionToken"]);
+  return Object.freeze({
+    afterIndexId: string(row.afterIndexId, INDEX),
+    generationId: string(row.generationId, GENERATION),
+    revisionToken: integer(row.revisionToken, 0)
+  });
+}
+
+function ragSnapshot(
+  value: unknown,
+  coverage: Readonly<Record<string, unknown>>
+): PrivateRagGenerationSnapshot {
+  const row = exact(value, [
+    "embeddingDimensions",
+    "embeddingModelId",
+    "envelopeSchemaVersion",
+    "generationId",
+    "revisionToken"
+  ]);
+  if (
+    typeof row.embeddingModelId !== "string" ||
+    !MODEL_ID.test(row.embeddingModelId) ||
+    row.envelopeSchemaVersion !== 1
+  )
+    reject();
+  return Object.freeze({
+    generationId: string(row.generationId, GENERATION),
+    modelId: row.embeddingModelId,
+    dimensions: integer(row.embeddingDimensions, 1, 4_096),
+    revisionToken: String(integer(row.revisionToken, 0)),
+    expectedNoteCount: integer(coverage.expectedNoteCount, 0),
+    indexedNoteCount: integer(coverage.indexedNoteCount, 0)
+  });
+}
+
+function ragPageResult(
+  value: unknown,
+  input: Readonly<{
+    cursor: string | null;
+    jobId: string;
+    limit: number;
+    maxBytes: number;
+    ownerId: string;
+  }>
+): PrivateRagPageReadResult<OrganizerRagRecord> {
+  const wrapper = exact(value, ["jobId", "result"]);
+  if (wrapper.jobId !== input.jobId) reject();
+  const root = exact(wrapper.result, [
+    "coverage",
+    "generation",
+    "items",
+    "keys",
+    "ownerId",
+    "page"
+  ]);
+  if (
+    root.ownerId !== input.ownerId ||
+    !Array.isArray(root.items) ||
+    root.items.length > input.limit ||
+    !Array.isArray(root.keys)
+  )
+    reject();
+  const coverageRow = exact(root.coverage, [
+    "complete",
+    "coveredNoteCount",
+    "eligibleNoteCount",
+    "expectedNoteCount",
+    "indexedNoteCount",
+    "pendingJobCount",
+    "repairCandidates",
+    "repairCount",
+    "repairLimitExceeded",
+    "verified"
+  ]);
+  if (
+    !Array.isArray(coverageRow.repairCandidates) ||
+    coverageRow.repairCandidates.length > 50 ||
+    typeof coverageRow.repairLimitExceeded !== "boolean" ||
+    typeof coverageRow.verified !== "boolean" ||
+    typeof coverageRow.complete !== "boolean"
+  )
+    reject();
+  const repairCount = integer(coverageRow.repairCount, 0, 51);
+  const repairCandidates = coverageRow.repairCandidates.map((candidate) => {
+    const row = exact(candidate, ["currentRevision", "noteId", "updatedAt"]);
+    timestamp(row.updatedAt);
+    return Object.freeze({
+      currentRevision: integer(row.currentRevision, 1),
+      noteId: string(row.noteId, NOTE)
+    });
+  });
+  const expectedNoteCount = integer(coverageRow.expectedNoteCount, 0);
+  const indexedNoteCount = integer(coverageRow.indexedNoteCount, 0);
+  const eligibleNoteCount = integer(coverageRow.eligibleNoteCount, 0);
+  const coveredNoteCount = integer(coverageRow.coveredNoteCount, 0);
+  const pendingJobCount = integer(coverageRow.pendingJobCount, 0);
+  if (
+    indexedNoteCount > expectedNoteCount ||
+    coveredNoteCount > eligibleNoteCount ||
+    repairCandidates.length !== Math.min(repairCount, 50) ||
+    coverageRow.repairLimitExceeded !== (repairCount === 51) ||
+    (coverageRow.complete &&
+      (!coverageRow.verified ||
+        repairCount !== 0 ||
+        pendingJobCount !== 0 ||
+        expectedNoteCount !== eligibleNoteCount ||
+        indexedNoteCount !== eligibleNoteCount ||
+        coveredNoteCount !== eligibleNoteCount))
+  )
+    reject();
+  if (root.generation === null) {
+    if (
+      root.items.length !== 0 ||
+      root.keys.length !== 0 ||
+      expectedNoteCount !== 0 ||
+      indexedNoteCount !== 0
+    )
+      reject();
+    return Object.freeze({ status: "no_active_generation" as const });
+  }
+  const snapshot = ragSnapshot(root.generation, coverageRow);
+  const keyById = new Map<string, ReturnType<typeof parseManagedKeyRecord>>();
+  for (const unknownKey of root.keys) {
+    let key;
+    try {
+      key = parseManagedKeyRecord(unknownKey);
+    } catch {
+      return reject();
+    }
+    const identity = `${key.keyId}:${key.keyVersion}`;
+    if (
+      keyById.has(identity) ||
+      key.ownerId !== input.ownerId ||
+      key.keyClass !== "ai_assisted" ||
+      key.purpose !== "object_wrap" ||
+      (key.status !== "active" && key.status !== "retired")
+    )
+      reject();
+    keyById.set(identity, key);
+  }
+  const itemIds = new Set<string>();
+  const referencedKeys = new Set<string>();
+  const items = root.items.map((unknownItem) => {
+    const row = exact(unknownItem, [
+      "cipher",
+      "encryptedByteLength",
+      "indexId",
+      "indexedRevision",
+      "noteId"
+    ]);
+    const indexId = string(row.indexId, INDEX);
+    const noteId = string(row.noteId, NOTE);
+    const indexedRevision = integer(row.indexedRevision, 1);
+    const cipher = exact(row.cipher, ["envelope", "keyClass", "keyId", "keyPurpose", "keyVersion"]);
+    if (
+      itemIds.has(indexId) ||
+      cipher.keyClass !== "ai_assisted" ||
+      cipher.keyPurpose !== "object_wrap" ||
+      typeof cipher.keyId !== "string"
+    )
+      reject();
+    const keyIdentity = `${cipher.keyId}:${integer(cipher.keyVersion, 1, 2_147_483_647)}`;
+    const key = keyById.get(keyIdentity);
+    if (key === undefined) reject();
+    itemIds.add(indexId);
+    referencedKeys.add(keyIdentity);
+    const encryptedByteLength = integer(row.encryptedByteLength, 16, 262_160);
+    const record = projection(
+      {
+        encryptedByteLength,
+        envelope: cipher.envelope,
+        keyRecord: key,
+        recordVersion: indexedRevision,
+        resourceId: indexId
+      },
+      {
+        kind: "note_rag_index",
+        ownerId: input.ownerId,
+        recordVersion: indexedRevision,
+        resourceId: indexId
+      }
+    );
+    return Object.freeze({
+      ciphertextBytes: encryptedByteLength,
+      indexId,
+      indexedRevision,
+      noteId,
+      record
+    });
+  });
+  if (referencedKeys.size !== keyById.size) reject();
+  const pageRow = exact(root.page, [
+    "ciphertextByteBudget",
+    "ciphertextBytes",
+    "hasMore",
+    "limit",
+    "nextCursor",
+    "returnedCount"
+  ]);
+  if (
+    pageRow.limit !== input.limit ||
+    pageRow.ciphertextByteBudget !== input.maxBytes ||
+    pageRow.returnedCount !== items.length ||
+    pageRow.ciphertextBytes !== items.reduce((sum, item) => sum + item.ciphertextBytes, 0) ||
+    typeof pageRow.hasMore !== "boolean"
+  )
+    reject();
+  const next = pageRow.nextCursor === null ? null : ragCursor(JSON.stringify(pageRow.nextCursor));
+  if (pageRow.hasMore !== (next !== null)) reject();
+  const last = items.at(-1);
+  if (
+    next !== null &&
+    (last === undefined ||
+      next.generationId !== snapshot.generationId ||
+      String(next.revisionToken) !== snapshot.revisionToken ||
+      next.afterIndexId !== last.indexId)
+  )
+    reject();
+  const supplied = ragCursor(input.cursor);
+  if (
+    supplied !== null &&
+    (supplied.generationId !== snapshot.generationId ||
+      String(supplied.revisionToken) !== snapshot.revisionToken)
+  )
+    reject();
+  const missingOrStaleCount = repairCount;
+  return Object.freeze({
+    status: "page" as const,
+    page: Object.freeze({
+      coverage: Object.freeze({
+        missingOrStaleCount,
+        repairCandidates: Object.freeze(repairCandidates),
+        repairOverflow: coverageRow.repairLimitExceeded,
+        status: coverageRow.complete ? ("complete" as const) : ("incomplete" as const)
+      }),
+      items: Object.freeze(items),
+      nextCursor: next === null ? null : JSON.stringify(next),
+      snapshot
+    })
   });
 }
 
@@ -760,6 +1214,101 @@ export function createOrganizerRepository(
         ),
         input,
         context.ownerId
+      );
+      jobs.set(input.jobId, Object.freeze({ controls: page.controls, ownerId: context.ownerId }));
+      candidatePages.set(input.jobId, page.candidates);
+      return page;
+    },
+    async ragPage(input) {
+      integer(input.limit, 1, 50);
+      integer(input.maxBytes, 262_160, SOURCE_BYTE_BUDGET);
+      const context = jobs.get(input.jobId);
+      if (context === undefined) reject();
+      const cursor = ragCursor(input.cursor);
+      return ragPageResult(
+        await execute(
+          executor,
+          ORGANIZER_RPC_SQL.ragPage,
+          [input.jobId, input.leaseToken, cursor, input.limit, input.maxBytes],
+          input.signal
+        ),
+        {
+          cursor: input.cursor,
+          jobId: input.jobId,
+          limit: input.limit,
+          maxBytes: input.maxBytes,
+          ownerId: context.ownerId
+        }
+      );
+    },
+    async selectCandidates(input) {
+      const context = jobs.get(input.jobId);
+      if (context === undefined) reject();
+      const selection = exact(input.selection, ["candidates", "snapshot"]);
+      const snapshot = exact(selection.snapshot, [
+        "dimensions",
+        "expectedNoteCount",
+        "generationId",
+        "indexedNoteCount",
+        "modelId",
+        "revisionToken"
+      ]);
+      string(snapshot.generationId, GENERATION);
+      if (typeof snapshot.modelId !== "string" || !MODEL_ID.test(snapshot.modelId)) reject();
+      integer(snapshot.dimensions, 1, 4_096);
+      integer(snapshot.expectedNoteCount, 0);
+      integer(snapshot.indexedNoteCount, 0);
+      if (
+        typeof snapshot.revisionToken !== "string" ||
+        !/^(?:0|[1-9][0-9]{0,15})$/u.test(snapshot.revisionToken)
+      )
+        reject();
+      const revisionToken = Number(snapshot.revisionToken);
+      integer(revisionToken, 0);
+      if (
+        !Array.isArray(selection.candidates) ||
+        selection.candidates.length < 1 ||
+        selection.candidates.length > 8
+      )
+        reject();
+      const seen = new Set<string>();
+      const candidates = selection.candidates.map((entry) => {
+        const row = exact(entry, ["indexedRevision", "noteId"]);
+        const noteId = string(row.noteId, NOTE) as `note_${string}`;
+        if (seen.has(noteId)) reject();
+        seen.add(noteId);
+        return Object.freeze({
+          indexedRevision: integer(row.indexedRevision, 1),
+          noteId
+        });
+      });
+      const normalizedSelection: OrganizerRagSelection = Object.freeze({
+        candidates: Object.freeze(candidates),
+        snapshot: Object.freeze({
+          dimensions: Number(snapshot.dimensions),
+          expectedNoteCount: Number(snapshot.expectedNoteCount),
+          generationId: String(snapshot.generationId),
+          indexedNoteCount: Number(snapshot.indexedNoteCount),
+          modelId: snapshot.modelId,
+          revisionToken: snapshot.revisionToken
+        })
+      });
+      const page = selectedCandidateResult(
+        await execute(
+          executor,
+          ORGANIZER_RPC_SQL.selectCandidates,
+          [
+            input.jobId,
+            input.leaseToken,
+            jsonBounded({
+              candidates,
+              generationId: snapshot.generationId,
+              revisionToken
+            })
+          ],
+          input.signal
+        ),
+        { jobId: input.jobId, ownerId: context.ownerId, selection: normalizedSelection }
       );
       jobs.set(input.jobId, Object.freeze({ controls: page.controls, ownerId: context.ownerId }));
       candidatePages.set(input.jobId, page.candidates);

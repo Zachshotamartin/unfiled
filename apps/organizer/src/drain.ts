@@ -1,11 +1,18 @@
 import {
+  applyDeterministicExtractionOverride,
+  bandRoutingDecision,
   materializeAuthorizedOrganizationPlan,
   OrganizationMaterializationError,
   parseAuthorizedOrganizationPlan,
   type MaterializedOrganizationCommand,
   type OrganizerCandidateManifest,
+  type RoutingBehaviorMode,
+  type RoutingPolicyResult,
+  type RoutingSignalFeatures,
   type StableOrganizationIds
 } from "@unfiled/ai-routing";
+import type { PrivateRagGenerationSnapshot, PrivateRagPageReadResult } from "@unfiled/search";
+import type { OrganizationPlan } from "@unfiled/contracts";
 import { createHash } from "node:crypto";
 
 import type { OrganizerKeyAuthority } from "./key-management.js";
@@ -14,9 +21,14 @@ import {
   type DecryptedCapture,
   type OrganizerCaptureControls,
   type OrganizerPlanner,
+  inferOrganizerCaptureKind,
   proposedNoteIdForJob
 } from "./planner.js";
-import { OrganizerUnavailableError } from "./errors.js";
+import {
+  OrganizerPlannerReviewError,
+  OrganizerProviderError,
+  OrganizerUnavailableError
+} from "./errors.js";
 
 export type DrainTrigger = "manual" | "recovery" | "schedule";
 export type OrganizerDrainResult = Readonly<{
@@ -29,28 +41,54 @@ export type EncryptedProjection = Readonly<{
   resourceId: string;
   recordVersion: number;
   cipher: unknown;
+  contentMac?: unknown;
+  contentMacKey?: unknown;
   key: unknown;
 }>;
 export type ClaimedOrganizerJob = Readonly<{
+  accountCaptureOrdinal: number;
   attempt: number;
   captureId: `cap_${string}`;
+  clientTimezone: string;
   controls: OrganizerCaptureControls;
   jobId: string;
   leaseExpiresAt: string;
   leaseToken: string;
+  occurredAt: string;
   ownerId: string;
   promptVersion: string;
   replanCount: 0 | 1;
+  routingMode: RoutingBehaviorMode;
   schemaVersion: number;
   source: EncryptedProjection;
+  commandProjection: "encrypted_only" | "legacy";
 }>;
 export type EncryptedCandidate = Readonly<{
+  archivedAt: string | null;
   candidateId: `note_${string}`;
+  dailyDate: string | null;
+  deletedAt: string | null;
   isOpen: boolean;
+  links: readonly Readonly<{
+    linkType: "reference" | "related";
+    toNoteId: `note_${string}`;
+  }>[];
   noteId: `note_${string}`;
   noteType: DecryptedCandidate["noteType"];
+  pinnedAt: string | null;
   revision: number;
+  spaceId: `spc_${string}` | null;
   source: EncryptedProjection;
+  tagIds: readonly `tag_${string}`[];
+  updatedAt: string;
+}>;
+export type OrganizerRagRecord = EncryptedProjection;
+export type OrganizerRagSelection = Readonly<{
+  candidates: readonly Readonly<{
+    indexedRevision: number;
+    noteId: `note_${string}`;
+  }>[];
+  snapshot: PrivateRagGenerationSnapshot;
 }>;
 export type CandidateRevalidationBinding = Readonly<{
   candidateId: `note_${string}`;
@@ -98,6 +136,17 @@ export type OrganizerReviewReason =
   | "planner_ambiguity"
   | "revision_conflict";
 export type OrganizerConflictReason = "candidate_eligibility" | "consent_controls" | "revision";
+export type OrganizerRoutingPolicyContext = Readonly<{
+  accountCaptureOrdinal: number;
+  candidateFeatures?: readonly Readonly<{
+    candidateId: `note_${string}`;
+    features: RoutingSignalFeatures;
+  }>[];
+  deterministicRuleMatch: boolean;
+  features: RoutingSignalFeatures;
+  mode: RoutingBehaviorMode;
+  retrievalAutoEligible: boolean;
+}>;
 export type OrganizerCommitResult =
   | Readonly<{
       jobId: string;
@@ -155,6 +204,26 @@ export type OrganizerCandidatePage = Readonly<{
   candidates: readonly EncryptedCandidate[];
   controls: OrganizerCaptureControls;
 }>;
+export type OrganizerDisclosedCandidate = Readonly<{
+  decrypted: DecryptedCandidate;
+  encrypted: EncryptedCandidate;
+}>;
+export type OrganizerCandidateRetrievalPort = Readonly<{
+  retrieve(
+    input: Readonly<{
+      authority: OrganizerKeyAuthority;
+      capture: DecryptedCapture;
+      job: ClaimedOrganizerJob;
+      signal: AbortSignal;
+    }>
+  ): Promise<
+    OrganizerCandidatePage &
+      Readonly<{
+        ragGenerationId?: string | null;
+        routingPolicyContext: OrganizerRoutingPolicyContext;
+      }>
+  >;
+}>;
 export type OrganizerRepository = Readonly<{
   release(jobId: string): void;
   preflight(signal: AbortSignal): Promise<void>;
@@ -179,6 +248,24 @@ export type OrganizerRepository = Readonly<{
   candidates(
     input: Readonly<{ jobId: string; leaseToken: string; limit: number; signal: AbortSignal }>
   ): Promise<OrganizerCandidatePage>;
+  ragPage(
+    input: Readonly<{
+      cursor: string | null;
+      jobId: string;
+      leaseToken: string;
+      limit: number;
+      maxBytes: number;
+      signal: AbortSignal;
+    }>
+  ): Promise<PrivateRagPageReadResult<OrganizerRagRecord>>;
+  selectCandidates(
+    input: Readonly<{
+      jobId: string;
+      leaseToken: string;
+      selection: OrganizerRagSelection;
+      signal: AbortSignal;
+    }>
+  ): Promise<OrganizerCandidatePage & Readonly<{ snapshot: PrivateRagGenerationSnapshot }>>;
   prepareCreate(
     input: Readonly<{
       jobId: string;
@@ -234,13 +321,21 @@ export type OrganizerCipher = Readonly<{
   ): Promise<DecryptedCandidate>;
   sealCommand(
     input: Readonly<{
+      activeReplanCount: 0 | 1;
       authority: OrganizerKeyAuthority;
+      candidates: readonly OrganizerDisclosedCandidate[];
       capture: DecryptedCapture;
       controls: OrganizerCaptureControls;
+      destination: Readonly<{
+        decrypted: DecryptedCandidate;
+        encrypted: EncryptedCandidate;
+      }> | null;
       job: ClaimedOrganizerJob;
       plan: MaterializedOrganizationCommand;
       preparation: OrganizerPreparation;
+      ragGenerationId: string | null;
       reviewReason: OrganizerReviewReason | null;
+      routingDecision: RoutingPolicyResult | null;
       signal: AbortSignal;
       stableIds: StableOrganizationIds;
     }>
@@ -322,9 +417,80 @@ function preparedStableIds(
 }
 
 function safeFailure(error: unknown): Readonly<{ errorCode: string; retryable: boolean }> {
+  if (error instanceof OrganizerProviderError)
+    return { errorCode: error.safeCode, retryable: error.retryable };
   if (error instanceof OrganizerUnavailableError)
     return { errorCode: "provider_unavailable", retryable: true };
+  if (error instanceof Error && error.name === "AbortError")
+    return { errorCode: "provider_unavailable", retryable: true };
   return { errorCode: "validation_failed", retryable: false };
+}
+
+function signalActive(signal: AbortSignal): void {
+  if (signal.aborted) throw new DOMException("The operation was aborted", "AbortError");
+}
+
+const FAIL_CLOSED_ROUTING_CONTEXT: OrganizerRoutingPolicyContext = Object.freeze({
+  accountCaptureOrdinal: 1,
+  deterministicRuleMatch: false,
+  features: Object.freeze({
+    destinationRecency: 0,
+    duplicateTitleSuspicion: 0,
+    explicitDestinationMention: 0,
+    margin: 0,
+    openSameDayTypeMatch: 0,
+    priorAccepted: 0,
+    reasonCodeConsistency: 0,
+    ruleOrAliasNearMatch: 0,
+    semanticSimilarity: 0,
+    typeCompatibility: 0
+  }),
+  mode: "balanced",
+  retrievalAutoEligible: false
+});
+
+function routingPolicyForPlan(
+  plan: ReturnType<typeof parseAuthorizedOrganizationPlan>["plan"],
+  manifest: OrganizerCandidateManifest,
+  captureText: string,
+  inferredKind: ReturnType<typeof inferOrganizerCaptureKind>,
+  context: OrganizerRoutingPolicyContext
+): RoutingPolicyResult {
+  const candidate =
+    plan.destination.candidateId === null
+      ? undefined
+      : manifest.candidates.find(({ candidateId }) => candidateId === plan.destination.candidateId);
+  const destinationNoteType = candidate?.noteType ?? plan.destination.newNote?.noteType ?? null;
+  const features =
+    (plan.destination.candidateId === null
+      ? undefined
+      : context.candidateFeatures?.find(
+          ({ candidateId }) => candidateId === plan.destination.candidateId
+        )?.features) ?? context.features;
+  const decision = bandRoutingDecision({
+    accountCaptureOrdinal: context.accountCaptureOrdinal,
+    captureKind: inferredKind,
+    captureLength: Array.from(captureText).length,
+    createSignals:
+      plan.decision === "create_note"
+        ? {
+            noCandidateFitStrength:
+              manifest.candidates.length === 0 && plan.reasonCodes.includes("no_candidate_fit")
+                ? 1
+                : 0,
+            titleValidity: plan.destination.newNote === null ? 0 : 1
+          }
+        : null,
+    destinationNoteType,
+    deterministicRuleMatch: context.deterministicRuleMatch,
+    duplicateNoteSuspected: plan.reasonCodes.includes("duplicate_suspected"),
+    failure: null,
+    features,
+    mode: context.mode,
+    planDecision: plan.decision,
+    retrievalAutoEligible: context.retrievalAutoEligible
+  });
+  return decision;
 }
 
 function candidateManifest(
@@ -358,18 +524,35 @@ function assertDecryptedCandidateBinding(
 
 function forcedReview(
   manifest: OrganizerCandidateManifest,
-  preparation: OrganizerPreparation
+  preparation: OrganizerPreparation,
+  captureKind: ReturnType<typeof inferOrganizerCaptureKind>,
+  sourcePlan: OrganizationPlan | null
 ): Readonly<{ plan: MaterializedOrganizationCommand; stableIds: StableOrganizationIds }> {
+  const authorizedCandidates = new Set(manifest.candidates.map(({ candidateId }) => candidateId));
+  const alternatives = Array.from(
+    new Set([
+      ...(sourcePlan?.destination.candidateId === null ||
+      sourcePlan?.destination.candidateId === undefined
+        ? []
+        : [sourcePlan.destination.candidateId]),
+      ...(sourcePlan?.alternatives ?? [])
+    ])
+  )
+    .filter((candidateId) => authorizedCandidates.has(candidateId))
+    .slice(0, 2);
+  const reasonCodes = Array.from(
+    new Set(["ambiguous_intent" as const, ...(sourcePlan?.reasonCodes ?? [])])
+  ).slice(0, 5);
   const authorized = parseAuthorizedOrganizationPlan({
     manifest,
     unknownPlan: {
-      alternatives: [],
-      captureKind: "freeform",
+      alternatives,
+      captureKind,
       decision: "needs_review",
       destination: { candidateId: null, newNote: null },
       generatedExpansion: null,
       operations: [],
-      reasonCodes: ["ambiguous_intent"],
+      reasonCodes,
       schemaVersion: 1
     }
   });
@@ -420,6 +603,8 @@ export function createOrganizerDrain(
     planner: OrganizerPlanner;
     recoveryLimit: number;
     repository: OrganizerRepository;
+    retrieval?: OrganizerCandidateRetrievalPort;
+    routingPolicyContext?: OrganizerRoutingPolicyContext;
     cipher: OrganizerCipher;
     workerId: string;
   }>
@@ -440,13 +625,19 @@ export function createOrganizerDrain(
       let writeGeneration = 0;
       let plannerCalls = 0;
       let pendingReviewReason: OrganizerReviewReason | null = null;
+      let pendingReviewPlan: OrganizationPlan | null = null;
+      let pendingRoutingDecision: RoutingPolicyResult | null = null;
 
       async function commitReview(
         manifest: OrganizerCandidateManifest,
         revalidationManifest: CandidateRevalidationManifest,
         controls: OrganizerCaptureControls,
+        candidates: readonly OrganizerDisclosedCandidate[],
+        ragGenerationId: string | null,
         reviewReason: OrganizerReviewReason,
-        suppliedPreparation?: OrganizerPreparation
+        suppliedPreparation?: OrganizerPreparation,
+        sourcePlan: OrganizationPlan | null = pendingReviewPlan,
+        routingDecision: RoutingPolicyResult | null = pendingRoutingDecision
       ): Promise<"completed" | "retry"> {
         const provisional = provisionalIds(job.jobId);
         const preparation =
@@ -458,19 +649,30 @@ export function createOrganizerDrain(
             signal,
             stableNoteId: proposedNoteIdForJob(job.jobId)
           }));
-        const review = forcedReview(manifest, preparation);
+        const review = forcedReview(
+          manifest,
+          preparation,
+          inferOrganizerCaptureKind(capture.rawContent),
+          sourcePlan
+        );
         const command = await options.cipher.sealCommand({
+          activeReplanCount: replanCount,
           authority,
+          candidates,
           capture: Object.freeze({ controls, rawContent: capture.rawContent }),
           controls,
+          destination: null,
           job,
           plan: review.plan,
           preparation,
+          ragGenerationId,
           reviewReason,
+          routingDecision,
           signal,
           stableIds: review.stableIds
         });
         assertCommandBinding(command, review.plan, reviewReason);
+        signalActive(signal);
         const publication = await options.repository.heartbeat({
           candidateManifest: revalidationManifest,
           jobId: job.jobId,
@@ -484,6 +686,7 @@ export function createOrganizerDrain(
           pendingReviewReason = reviewReasonForConflict(publication.conflictReason, controls);
           return "retry";
         }
+        signalActive(signal);
         const committed = await options.repository.commit({
           command,
           jobId: job.jobId,
@@ -502,12 +705,23 @@ export function createOrganizerDrain(
       }
 
       for (;;) {
-        const page = await options.repository.candidates({
-          jobId: job.jobId,
-          leaseToken: job.leaseToken,
-          limit: options.candidateLimit ?? 8,
-          signal
-        });
+        let page: OrganizerCandidatePage;
+        let ragGenerationId: string | null = null;
+        let routingPolicyContext: OrganizerRoutingPolicyContext;
+        if (options.retrieval === undefined) {
+          page = await options.repository.candidates({
+            jobId: job.jobId,
+            leaseToken: job.leaseToken,
+            limit: options.candidateLimit ?? 8,
+            signal
+          });
+          routingPolicyContext = options.routingPolicyContext ?? FAIL_CLOSED_ROUTING_CONTEXT;
+        } else {
+          const retrieved = await options.retrieval.retrieve({ authority, capture, job, signal });
+          page = retrieved;
+          ragGenerationId = retrieved.ragGenerationId ?? null;
+          routingPolicyContext = retrieved.routingPolicyContext;
+        }
         const encryptedCandidates = page.candidates;
         const controls = page.controls;
         const currentCapture = Object.freeze({ controls, rawContent: capture.rawContent });
@@ -524,6 +738,13 @@ export function createOrganizerDrain(
             throw new OrganizerUnavailableError();
           assertDecryptedCandidateBinding(encrypted, decrypted);
         }
+        const disclosedCandidates = Object.freeze(
+          candidates.map((decrypted, index) => {
+            const encrypted = routableEncryptedCandidates[index];
+            if (encrypted === undefined) throw new OrganizerUnavailableError();
+            return Object.freeze({ decrypted, encrypted });
+          })
+        );
         const revalidationManifest = candidateManifest(controls, encryptedCandidates);
         // This renewal is the external-disclosure authorization linearization point.
         const disclosure = await options.repository.heartbeat({
@@ -535,13 +756,15 @@ export function createOrganizerDrain(
         });
         const manifest: OrganizerCandidateManifest = {
           schemaVersion: 1,
-          candidates: candidates.map(({ candidateId, isOpen, noteId, noteType, revision }) => ({
-            candidateId,
-            isOpen,
-            noteId,
-            noteType,
-            revision
-          })),
+          candidates: disclosedCandidates.map(
+            ({ decrypted: { candidateId, isOpen, noteId, noteType, revision } }) => ({
+              candidateId,
+              isOpen,
+              noteId,
+              noteType,
+              revision
+            })
+          ),
           controls,
           authorizedSpaceIds: [],
           authorizedTagIds: []
@@ -568,6 +791,8 @@ export function createOrganizerDrain(
             manifest,
             revalidationManifest,
             controls,
+            disclosedCandidates,
+            ragGenerationId,
             pendingReviewReason
           );
           if (result === "retry") continue;
@@ -578,6 +803,7 @@ export function createOrganizerDrain(
           continue;
         }
         plannerCalls += 1;
+        signalActive(signal);
         let unknownPlan: unknown;
         try {
           unknownPlan = await options.planner.plan({
@@ -585,24 +811,64 @@ export function createOrganizerDrain(
             candidates,
             captureId: job.captureId,
             controls,
+            promptVersion: job.promptVersion,
+            schemaVersion: job.schemaVersion,
             signal
           });
-        } catch {
+          signalActive(signal);
+        } catch (error: unknown) {
+          if (error instanceof OrganizerPlannerReviewError) {
+            pendingReviewReason = "planner_ambiguity";
+            continue;
+          }
+          if (error instanceof OrganizerProviderError) throw error;
           throw new OrganizerUnavailableError();
         }
         let authorized: ReturnType<typeof parseAuthorizedOrganizationPlan>;
         try {
-          authorized = parseAuthorizedOrganizationPlan({ manifest, unknownPlan });
+          const initiallyAuthorized = parseAuthorizedOrganizationPlan({ manifest, unknownPlan });
+          const inferredKind = inferOrganizerCaptureKind(currentCapture.rawContent);
+          if (initiallyAuthorized.plan.captureKind !== inferredKind) {
+            pendingReviewReason = "planner_ambiguity";
+            continue;
+          }
+          const overridden = applyDeterministicExtractionOverride({
+            captureText: currentCapture.rawContent,
+            inferredKind,
+            plan: initiallyAuthorized.plan
+          });
+          authorized = parseAuthorizedOrganizationPlan({
+            captureText: currentCapture.rawContent,
+            manifest,
+            unknownPlan: overridden.plan
+          });
         } catch (error: unknown) {
           if (!(error instanceof OrganizationMaterializationError)) throw error;
           pendingReviewReason = "planner_ambiguity";
           continue;
         }
+        const routingDecision = routingPolicyForPlan(
+          authorized.plan,
+          manifest,
+          currentCapture.rawContent,
+          inferOrganizerCaptureKind(currentCapture.rawContent),
+          routingPolicyContext
+        );
         if (authorized.plan.generatedExpansion !== null) {
+          pendingReviewPlan = authorized.plan;
+          pendingRoutingDecision = routingDecision;
           pendingReviewReason = "expansion_pending";
           continue;
         }
         if (authorized.plan.decision === "add_to_inbox") {
+          pendingReviewPlan = authorized.plan;
+          pendingRoutingDecision = routingDecision;
+          pendingReviewReason = "planner_ambiguity";
+          continue;
+        }
+        if (!routingDecision.autoApply) {
+          pendingReviewPlan = authorized.plan;
+          pendingRoutingDecision = routingDecision;
           pendingReviewReason = "planner_ambiguity";
           continue;
         }
@@ -648,8 +914,12 @@ export function createOrganizerDrain(
               manifest,
               revalidationManifest,
               controls,
+              disclosedCandidates,
+              ragGenerationId,
               pendingReviewReason,
-              preparationResult.preparation
+              preparationResult.preparation,
+              authorized.plan,
+              routingDecision
             );
             if (result === "retry") continue;
             return result;
@@ -660,7 +930,11 @@ export function createOrganizerDrain(
         const stableIds = preparedStableIds(preparation, authorized.plan.decision);
         let plan: MaterializedOrganizationCommand;
         try {
-          plan = materializeAuthorizedOrganizationPlan({ ...authorized, stableIds });
+          plan = materializeAuthorizedOrganizationPlan({
+            ...authorized,
+            captureText: currentCapture.rawContent,
+            stableIds
+          });
         } catch (error: unknown) {
           if (!(error instanceof OrganizationMaterializationError)) throw error;
           pendingReviewReason = "planner_ambiguity";
@@ -668,27 +942,46 @@ export function createOrganizerDrain(
             manifest,
             revalidationManifest,
             controls,
+            disclosedCandidates,
+            ragGenerationId,
             pendingReviewReason,
-            preparation
+            preparation,
+            authorized.plan,
+            routingDecision
           );
           if (result === "retry") continue;
           return result;
         }
         const reviewReason = reviewReasonForPlan(plan);
+        const disclosedDestination =
+          destinationCandidate === undefined
+            ? undefined
+            : disclosedCandidates.find(
+                ({ decrypted }) => decrypted.candidateId === destinationCandidate.candidateId
+              );
+        if (plan.kind === "append" && disclosedDestination === undefined) {
+          throw new OrganizerUnavailableError();
+        }
         const command = await options.cipher.sealCommand({
+          activeReplanCount: replanCount,
           authority,
+          candidates: disclosedCandidates,
           capture: currentCapture,
           controls,
+          destination: disclosedDestination ?? null,
           job,
           plan,
           preparation,
+          ragGenerationId,
           reviewReason,
+          routingDecision,
           signal,
           stableIds
         });
         const expectedOutcome =
           plan.kind === "append" ? "appended" : plan.kind === "create" ? "created" : "review";
         assertCommandBinding(command, plan, reviewReason);
+        signalActive(signal);
         // Revalidate immediately before publishing any encrypted effect.
         const publication = await options.repository.heartbeat({
           candidateManifest: revalidationManifest,
@@ -704,10 +997,13 @@ export function createOrganizerDrain(
             continue;
           }
           pendingReviewReason = reviewReasonForConflict(publication.conflictReason, controls);
+          pendingReviewPlan = plan.validatedPlan;
+          pendingRoutingDecision = routingDecision;
           writeGeneration += 1;
           replanCount = 1;
           continue;
         }
+        signalActive(signal);
         const committed = await options.repository.commit({
           command,
           jobId: job.jobId,
@@ -718,6 +1014,8 @@ export function createOrganizerDrain(
         if (committed.outcome === expectedOutcome) return "completed";
         if (committed.outcome === "review_required") {
           pendingReviewReason = reviewReasonForConflict(committed.conflictReason, controls);
+          pendingReviewPlan = plan.validatedPlan;
+          pendingRoutingDecision = routingDecision;
           writeGeneration += 1;
           continue;
         }

@@ -43,10 +43,28 @@ export type PrivacyTransition = Readonly<{
 export type ObjectWrapKeyReference = KeyReference & Readonly<{ purpose: "object_wrap" }>;
 export type ContentMacKeyReference = KeyReference & Readonly<{ purpose: "content_mac" }>;
 
-export type ObjectWrapReservation = Readonly<{
+export type GroupedObjectWrapReservationUse = Readonly<{
+  /** Total number of encrypted fields authorized by this reservation ID. */
+  operationCount: number;
+  /** Zero-based, unique use position within the reservation group. */
+  operationIndex: number;
+}>;
+
+type ObjectWrapReservationBinding = Readonly<{
   reservationId: string;
   reference: ObjectWrapKeyReference;
 }>;
+
+/**
+ * A reservation without `groupUse` remains a one-shot capability. Grouped
+ * reservations explicitly identify every authorized use while sharing the
+ * reservation ID that the database consumes as one atomic operation group.
+ * Each indexed use must be returned as a fresh reservation object. A service
+ * instance prevents duplicate or excessive uses; the atomic database commit
+ * remains responsible for rejecting an incomplete group.
+ */
+export type ObjectWrapReservation = ObjectWrapReservationBinding &
+  (Readonly<{ groupUse?: never }> | Readonly<{ groupUse: GroupedObjectWrapReservationUse }>);
 
 export type ObjectWrapReservationPort = Readonly<{
   reserveObjectWrappingKey(

@@ -2,7 +2,7 @@ import { Pool, type PoolClient, type PoolConfig, type QueryResult } from "pg";
 
 import {
   ORGANIZER_IDENTITY_SQL,
-  ORGANIZER_RPC_NAMES,
+  ORGANIZER_RPC_SQL,
   OrganizerDatabaseContractError,
   assertOrganizerSessionRows,
   type OrganizerDatabaseExecutor,
@@ -10,7 +10,7 @@ import {
 } from "./database.js";
 import { parseOrganizerDatabaseUrl } from "./database-url.js";
 
-const RPC_PATTERN = /^select public\.([a-z_]+)\([^;]*\) as result$/u;
+const ALLOWED_SQL = new Set<string>([ORGANIZER_IDENTITY_SQL, ...Object.values(ORGANIZER_RPC_SQL)]);
 type OrganizerPoolClient = Readonly<{
   query(
     config: Readonly<{ text: string; values: readonly unknown[] }>
@@ -27,10 +27,7 @@ export type PostgresOrganizerExecutor = Readonly<{
 }>;
 
 function assertSql(text: string): void {
-  if (text === ORGANIZER_IDENTITY_SQL) return;
-  const name = RPC_PATTERN.exec(text)?.[1];
-  if (name === undefined || !(ORGANIZER_RPC_NAMES as readonly string[]).includes(name))
-    throw new OrganizerDatabaseContractError("contract_violation");
+  if (!ALLOWED_SQL.has(text)) throw new OrganizerDatabaseContractError("contract_violation");
 }
 
 async function queryWithAbort(

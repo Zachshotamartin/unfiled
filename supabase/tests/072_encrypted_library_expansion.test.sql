@@ -471,9 +471,13 @@ from unnest(array[
 select ok(
   strpos(
     lower(pg_get_functiondef(signature::regprocedure)),
-    'session_user <> ''unfiled_index_worker'''
+    case
+      when signature = 'public.list_active_note_rag_index(uuid,jsonb,integer,integer)'
+      then 'session_user not in (''unfiled_index_worker'', ''unfiled_organizer_worker'')'
+      else 'session_user <> ''unfiled_index_worker'''
+    end
   ) > 0,
-  format('%s requires the exact dedicated connection identity', signature)
+  format('%s requires its exact dedicated connection identity allowlist', signature)
 )
 from unnest(array[
   'public.claim_note_index_jobs(text,integer,integer)',

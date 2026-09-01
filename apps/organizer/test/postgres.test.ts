@@ -20,7 +20,7 @@ function pool(
 }
 
 describe("organizer Postgres executor", () => {
-  it("allows only identity preflight and the exact eight RPC SQL statements", async () => {
+  it("allows only identity preflight and the exact ten RPC SQL statements", async () => {
     const selectedPool = pool(vi.fn().mockResolvedValue({ rows: [{ result: {} }] }));
     const database = createOrganizerDatabaseExecutor(selectedPool);
     await database.executor.query({
@@ -31,11 +31,21 @@ describe("organizer Postgres executor", () => {
     for (const text of Object.values(ORGANIZER_RPC_SQL)) {
       await database.executor.query({ signal: new AbortController().signal, text, values: [] });
     }
-    expect(selectedPool.client.release).toHaveBeenCalledTimes(9);
+    expect(Object.values(ORGANIZER_RPC_SQL)).toHaveLength(10);
+    expect(selectedPool.client.release).toHaveBeenCalledTimes(
+      Object.values(ORGANIZER_RPC_SQL).length + 1
+    );
     await expect(
       database.executor.query({
         signal: new AbortController().signal,
         text: "select * from public.notes",
+        values: []
+      })
+    ).rejects.toBeInstanceOf(OrganizerDatabaseContractError);
+    await expect(
+      database.executor.query({
+        signal: new AbortController().signal,
+        text: "select public.claim_encrypted_organizer_jobs() as result",
         values: []
       })
     ).rejects.toBeInstanceOf(OrganizerDatabaseContractError);

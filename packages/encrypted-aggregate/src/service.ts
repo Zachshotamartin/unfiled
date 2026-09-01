@@ -62,6 +62,8 @@ import {
 } from "./validation.js";
 
 const RESERVATION_KEYS = ["reservationId", "reference"] as const;
+const GROUPED_RESERVATION_KEYS = ["reservationId", "reference", "groupUse"] as const;
+const GROUP_USE_KEYS = ["operationCount", "operationIndex"] as const;
 const REFERENCE_KEYS = ["ownerId", "keyClass", "purpose", "keyId", "keyVersion"] as const;
 const PROTECTED_RECORD_KEYS = ["encrypted", "contentMac"] as const;
 const IDEMPOTENCY_RECORD_KEYS = [
@@ -80,6 +82,7 @@ const LOGICAL_REQUEST_KEYS = [
 ] as const;
 const NOTE_RAG_INDEX_ID_PATTERN = /^irw_[0-9A-HJKMNP-TV-Z]{26}$/u;
 const SCOPE_PATTERN = /^[a-z][a-z0-9_.:-]{0,99}$/u;
+const MAX_GROUPED_RESERVATION_OPERATIONS = 100;
 
 type ExpectedAggregate<Kind extends AggregateContentKind> = Readonly<{
   ownerId: string;
@@ -98,6 +101,23 @@ type ReservedWrappingKey = Readonly<{
   reservationId: string;
   key: ManagedObjectWrappingKey;
 }>;
+
+type ParsedGroupedReservationUse = Readonly<{
+  operationCount: number;
+  operationIndex: number;
+}>;
+
+type ReservationUsage =
+  | Readonly<{ kind: "single" }>
+  | Readonly<{
+      kind: "grouped";
+      keyClass: KeyClass;
+      keyId: string;
+      keyVersion: number;
+      operationCount: number;
+      operationIndexes: Set<number>;
+      ownerId: string;
+    }>;
 
 function expectedAggregate<Kind extends AggregateContentKind>(
   ownerId: string,
@@ -302,7 +322,7 @@ export function createEncryptedAggregateService(
   options: EncryptedAggregateServiceOptions
 ): EncryptedAggregateService {
   const usedReservations = new WeakSet<object>();
-  const usedReservationIds = new Set<string>();
+  const reservationUsageById = new Map<string, ReservationUsage>();
 
   async function reservedWrappingKey(
     ownerId: string,
@@ -320,9 +340,16 @@ export function createEncryptedAggregateService(
         "Object-wrap reservation is unavailable"
       );
     }
+    if (!isRecord(reservation)) {
+      aggregateFailure(
+        EncryptedAggregateErrorCode.RESERVATION_INVALID,
+        "Object-wrap reservation is invalid"
+      );
+    }
+    const isSingleReservation = hasExactKeys(reservation, RESERVATION_KEYS);
+    const isGroupedReservation = hasExactKeys(reservation, GROUPED_RESERVATION_KEYS);
     if (
-      !isRecord(reservation) ||
-      !hasExactKeys(reservation, RESERVATION_KEYS) ||
+      (!isSingleReservation && !isGroupedReservation) ||
       typeof reservation.reservationId !== "string" ||
       !isRecord(reservation.reference) ||
       !hasExactKeys(reservation.reference, REFERENCE_KEYS) ||
@@ -337,6 +364,31 @@ export function createEncryptedAggregateService(
         "Object-wrap reservation is invalid"
       );
     }
+    let groupUse: ParsedGroupedReservationUse | null = null;
+    if (isGroupedReservation) {
+      const groupUseValue = reservation.groupUse;
+      if (
+        !isRecord(groupUseValue) ||
+        !hasExactKeys(groupUseValue, GROUP_USE_KEYS) ||
+        typeof groupUseValue.operationCount !== "number" ||
+        !Number.isSafeInteger(groupUseValue.operationCount) ||
+        groupUseValue.operationCount < 1 ||
+        groupUseValue.operationCount > MAX_GROUPED_RESERVATION_OPERATIONS ||
+        typeof groupUseValue.operationIndex !== "number" ||
+        !Number.isSafeInteger(groupUseValue.operationIndex) ||
+        groupUseValue.operationIndex < 0 ||
+        groupUseValue.operationIndex >= groupUseValue.operationCount
+      ) {
+        aggregateFailure(
+          EncryptedAggregateErrorCode.RESERVATION_INVALID,
+          "Object-wrap reservation is invalid"
+        );
+      }
+      groupUse = Object.freeze({
+        operationCount: groupUseValue.operationCount,
+        operationIndex: groupUseValue.operationIndex
+      });
+    }
     try {
       assertIdentifier(reservation.reservationId, "Reservation identifier");
       assertIdentifier(reservation.reference.keyId, "Key identifier");
@@ -348,7 +400,6 @@ export function createEncryptedAggregateService(
     }
     if (
       usedReservations.has(reservation) ||
-      usedReservationIds.has(reservation.reservationId) ||
       !exactKeyReference(reservation.reference, {
         ownerId,
         keyClass,
@@ -360,8 +411,56 @@ export function createEncryptedAggregateService(
         "Object-wrap reservation is invalid"
       );
     }
+    const existingUsage = reservationUsageById.get(reservation.reservationId);
+    if (groupUse === null) {
+      if (existingUsage !== undefined) {
+        aggregateFailure(
+          EncryptedAggregateErrorCode.RESERVATION_INVALID,
+          "Object-wrap reservation is invalid"
+        );
+      }
+      reservationUsageById.set(reservation.reservationId, Object.freeze({ kind: "single" }));
+    } else {
+      let groupedUsage: Extract<ReservationUsage, { kind: "grouped" }>;
+      if (existingUsage === undefined) {
+        groupedUsage = Object.freeze({
+          kind: "grouped",
+          keyClass: reservation.reference.keyClass,
+          keyId: reservation.reference.keyId,
+          keyVersion: reservation.reference.keyVersion,
+          operationCount: groupUse.operationCount,
+          operationIndexes: new Set<number>(),
+          ownerId: reservation.reference.ownerId
+        });
+        reservationUsageById.set(reservation.reservationId, groupedUsage);
+      } else {
+        if (
+          existingUsage.kind !== "grouped" ||
+          existingUsage.ownerId !== reservation.reference.ownerId ||
+          existingUsage.keyClass !== reservation.reference.keyClass ||
+          existingUsage.keyId !== reservation.reference.keyId ||
+          existingUsage.keyVersion !== reservation.reference.keyVersion ||
+          existingUsage.operationCount !== groupUse.operationCount
+        ) {
+          aggregateFailure(
+            EncryptedAggregateErrorCode.RESERVATION_INVALID,
+            "Object-wrap reservation is invalid"
+          );
+        }
+        groupedUsage = existingUsage;
+      }
+      if (
+        groupedUsage.operationIndexes.size >= groupedUsage.operationCount ||
+        groupedUsage.operationIndexes.has(groupUse.operationIndex)
+      ) {
+        aggregateFailure(
+          EncryptedAggregateErrorCode.RESERVATION_INVALID,
+          "Object-wrap reservation is invalid"
+        );
+      }
+      groupedUsage.operationIndexes.add(groupUse.operationIndex);
+    }
     usedReservations.add(reservation);
-    usedReservationIds.add(reservation.reservationId);
 
     let resolved: ManagedObjectWrappingKey | null;
     try {

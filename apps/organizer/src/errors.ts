@@ -44,6 +44,42 @@ export class OrganizerUnavailableError extends OrganizerError {
   }
 }
 
+export type OrganizerProviderFailureCode =
+  "provider_key_invalid" | "provider_unavailable" | "rate_limited" | "validation_failed";
+
+/** Safe internal provider failure. It never retains provider or user content. */
+export class OrganizerProviderError extends Error {
+  public readonly retryable: boolean;
+  public readonly safeCode: OrganizerProviderFailureCode;
+  public readonly status: number | null;
+
+  public constructor(
+    safeCode: OrganizerProviderFailureCode,
+    retryable: boolean,
+    status: number | null = null
+  ) {
+    super("The organizer provider request failed.");
+    this.name = "OrganizerProviderError";
+    this.retryable = retryable;
+    this.safeCode = safeCode;
+    this.status = status;
+  }
+}
+
+export type OrganizerPlannerReviewReason =
+  "incomplete" | "input_bounds" | "invalid_output" | "refusal";
+
+/** A safe planner outcome that must become Review rather than a job failure. */
+export class OrganizerPlannerReviewError extends Error {
+  public readonly reason: OrganizerPlannerReviewReason;
+
+  public constructor(reason: OrganizerPlannerReviewReason) {
+    super("The organizer planner deferred this capture for review.");
+    this.name = "OrganizerPlannerReviewError";
+    this.reason = reason;
+  }
+}
+
 export type OrganizerFailure = Readonly<{
   code: OrganizerErrorCode;
   errorClass: "configuration" | "http" | "timeout" | "unknown" | "unavailable";

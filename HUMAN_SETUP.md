@@ -10,6 +10,19 @@ This file contains only steps that require a human account, physical device, pai
 - `main` branch protection enabled with strict `CI`, admin enforcement, and force-push/deletion
   protection.
 
+## Remaining release gates at a glance
+
+The Milestone D organizer, cipher, encrypted RAG path, and OpenAI adapters are implemented in code. The following steps still require a human-controlled account, credential, environment, or device and remain release-blocking:
+
+1. Create the dedicated OpenAI Production project/service account, restrict its model/key authority, set rate/spend controls, decide and document its data-retention posture, and place the key only in the organizer Production secret store.
+2. Keep `pnpm eval:routing` as the deterministic mock safety gate and run `pnpm eval:routing:pipeline` for the deterministic production-component seam. Its report names the real components exercised and the database/runtime guarantees it excludes. The optional credentialed runner is checked in as `pnpm eval:routing:live`; it requires only `UNFILED_ROUTING_EVAL_OPENAI_API_KEY`, runs exactly three samples per eligible synthetic case, and emits safe content-free telemetry. No credentialed live run or stochastic provider report exists yet.
+3. Provision and prove the exact Vercel Trusted Sources, AWS OIDC/KMS roles, CloudTrail trail, and TLS-only PostgreSQL logins. The organizer login must expose exactly ten RPCs.
+4. Run the staged synthetic organizer canaries and outage/race/replay cases, verify ciphertext-only durable state, and record the disable/rollback decision points before admitting a small cohort.
+5. Complete the restore drill, apply the one-way C.5d production contract from a real database-owner session, verify the post-contract canary, and track every pre-contract backup until expiry.
+6. Complete Apple signing, signed archive inspection, SQLCipher/Keychain/App Group checks, and the Lock Screen widget matrix on a physical iPhone.
+
+The production storage promise is application encryption at rest with scoped server-side decryption. It is not end-to-end encryption or zero-knowledge storage.
+
 ## Local prerequisites
 
 1. Install Node.js 22.18 or newer for the web, worker, shared packages, and repository checks.
@@ -43,7 +56,7 @@ Complete these human validation items before treating Milestone 0 as approved:
 ## Vercel
 
 1. Import `Zachshotamartin/unfiled` into Vercel and set the root directory to `apps/web`.
-2. In the `apps/web` project, set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and provider application keys in the appropriate environment scopes. Do not copy the service-role key into the separate worker, verifier, or organizer project.
+2. In the `apps/web` project, set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and only the provider application keys owned by web in the appropriate environment scopes. Do not copy the service-role key into the separate worker, verifier, or organizer project, and do not place `UNFILED_ORGANIZER_OPENAI_API_KEY` in web.
 3. Generate a separate OTP rate-limit pepper for each deployed environment with
    `openssl rand -hex 32`. Add it with `vercel env add AUTH_RATE_LIMIT_PEPPER preview` and
    `vercel env add AUTH_RATE_LIMIT_PEPPER production`; never reuse a provider, Supabase, or cron
@@ -192,9 +205,11 @@ The checked-in module at `infra/aws-kms` defines the exact production identities
    keys, a root KEK, a private KMS identifier, a user/browser session secret, `CRON_SECRET`, the
    local drain bearer, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_SECRET_KEY`, or another global
    Supabase service/secret variant in any isolated project. The worker and verifier must also reject
-   every AI content-MAC identifier. All three reject provider API keys at this checkpoint; Milestone
-   D must add any evaluated planner credential only to the organizer's separately reviewed provider
-   boundary, never to web, worker, or verifier.
+   every AI content-MAC identifier and every provider key. The organizer rejects generic/ambient
+   provider variables and user BYOK, but Milestone D accepts exactly one
+   `UNFILED_ORGANIZER_OPENAI_API_KEY` from the dedicated project configured below. Never place that
+   key in web, worker, verifier, Preview, local development, CI, Terraform, source control, logs, or
+   an issue/chat transcript.
 
 6. Deploy the worker, verifier, and organizer first, but do not make an OIDC-bearing call to any one yet. The
    runtime cannot cryptographically derive a Vercel project ID from a `*.vercel.app` alias, so each
@@ -221,10 +236,11 @@ The checked-in module at `infra/aws-kms` defines the exact production identities
    token to the web project.
 
    Do not invoke any protected workload yet. Production composition intentionally fails closed
-   until the worker has its dedicated database/provider configuration and both verifier and organizer
-   have their dedicated database configuration. Alias proof establishes only the OIDC-token egress target; it
-   is not runtime, database, provider, or KMS readiness evidence. Complete the three dedicated-login
-   sections below before making a real protected call.
+   until the worker has its dedicated database/provider configuration, the verifier has its
+   dedicated database configuration, and the organizer has its dedicated database plus OpenAI
+   project configuration. Alias proof establishes only the OIDC-token egress target; it is not
+   runtime, database, provider, or KMS readiness evidence. Complete the provider and three
+   dedicated-login sections below before making a real protected call.
 
 7. Configure a CloudTrail trail that retains read and write **management events** and does not
    exclude KMS events. KMS cryptographic operations are management events, not CloudTrail data
@@ -429,20 +445,91 @@ decision, not a signature or MAC over plaintext.
 
 Until those steps and C.5 pass, Unfiled may be shown as a portfolio work in progress but must not claim that the complete note library is encrypted or that private-manual mode is end-to-end encrypted.
 
+### Dedicated OpenAI organizer project and live routing gate — provision before organization canary
+
+Milestone D implements the organizer's production OpenAI embedding and Responses adapters, but no
+provider key or live stochastic report is checked into the repository. `pnpm eval:routing` is a
+175-case deterministic mock safety evaluation; it makes no network request and cannot authorize
+live note traffic. Complete every step below with synthetic data before running the organizer
+canary.
+
+1. In the OpenAI organization, create a dedicated Production project named for the Unfiled
+   organizer. Do not reuse a personal key, web project, index-worker embedding project, Preview
+   project, or another application's project. Record only the project ID, service-account ID,
+   retention setting, model-permission policy, rate/spend policy, and approver in release evidence.
+2. Create one project service account for the Production organizer and one API key for that service
+   account. Restrict the key/project to the Responses and Embeddings access required by this
+   workload, and restrict project model permissions to the code-pinned routing snapshot
+   `gpt-5.4-mini-2026-03-17` plus the exact embedding model used by the active encrypted RAG
+   generation. Deny unrelated models and hosted tools where the account controls support it. The
+   application independently sends `tools: []` and `tool_choice: "none"`; project permissions are a
+   second boundary, not a substitute for that request contract.
+3. Copy the new key once into the `apps/organizer` Vercel **Production** secret scope as
+   `UNFILED_ORGANIZER_OPENAI_API_KEY`. Never reveal it in a CLI argument, shell history, source,
+   `.env.example`, build output, Terraform state, report, screenshot, ticket, or chat. Do not set it
+   in Preview or local development: the checked production configuration rejects a provider key in
+   those runtimes. Do not set `OPENAI_API_KEY`, `UNFILED_OPENAI_API_KEY`, model/base-URL overrides,
+   an Anthropic variable, or user BYOK in any organizer environment.
+4. Configure project rate limits, a spend alert, and a hard spend limit appropriate to the canary
+   cohort. The organizer itself pins a 20-second provider deadline, at most one narrow retry, bounded
+   request/response sizes, and at most two concurrent claimed jobs by default; project controls must
+   still bound a credential leak or application loop. Record the configured limits without the key.
+5. Decide and record the project's data-retention posture before traffic. The organizer sets
+   `store: false` on a foreground Responses request, which disables Responses application-state
+   storage. The capture-query Embeddings request has no `store` parameter. Neither fact is a Zero
+   Data Retention guarantee: OpenAI documents default abuse-monitoring logs that may contain
+   customer content and may be retained for up to 30 days. If the release requires Modified Abuse
+   Monitoring or Zero Data Retention, obtain OpenAI approval and select that control for this exact
+   project before the canary; do not infer it from request code. Record the project setting and date,
+   not dashboard tokens or request content.
+6. From a clean checkout of the release commit, run `pnpm eval:routing` and
+   `pnpm eval:routing:pipeline`. Retain their JSON outputs as separate deterministic reports. The
+   first is the 175-case mock policy/safety corpus; the second exercises the production-component
+   retrieval, plan parsing/authorization, source preservation, policy, materialization, and
+   application path with a deterministic model adapter and explicitly reports
+   `liveProviderEvidence=false`. Require both gates to pass. Neither report contains live model
+   samples, provider latency, token usage, or cost, and neither authorizes provider traffic.
+7. The optional credentialed runner is checked in as `pnpm eval:routing:live`. Supply the dedicated
+   evaluation key only through `UNFILED_ROUTING_EVAL_OPENAI_API_KEY`; the runner deliberately has no
+   fallback to `OPENAI_API_KEY` or an application runtime secret. Set
+   `UNFILED_ROUTING_EVAL_REPORT_PATH` to a new `.json` path under `docs/eval-reports/` when recording
+   evidence. It exercises the strict `createOpenAIOrganizerPlanner` adapter over frozen synthetic
+   production-pipeline cases, runs exactly three independent samples per eligible case, and never
+   persists prompts/responses or prints capture/candidate text. Its safe report contains case IDs,
+   decisions/bands/error codes, completion status, latency, token counts, estimated cost, pinned
+   versions and hashes, and worst-of-three results. Commit a dated, reviewed content-free report and
+   require every eligible case to pass all three samples plus the release thresholds. A mock-only
+   report, one sample per case, an unpinned model, or a report containing content fails the gate.
+   The runner exists, but no credentialed live execution or report has been completed yet.
+8. Redeploy the organizer after adding the Vercel secret. Before placing a job in the queue, prove
+   `/health` is content-free, configuration accepts only the dedicated variable, and controlled
+   invalid/revoked-key requests fail as `provider_key_invalid`/unavailable without a note write,
+   plaintext log, or fallback planner. Reissue the key after this probe if its value was exposed to
+   any human-readable diagnostic surface.
+9. Rotate the provider key independently. Create a second key on the same service account, update
+   only the organizer Production secret, redeploy, run the empty-queue and one synthetic Review
+   probe, then revoke the old key and prove it can no longer call the API. Record key IDs and
+   timestamps only. Repeat the model permission, retention, rate/spend, live-eval, and canary gates
+   after a project transfer, service-account change, model/prompt/schema change, or data-control
+   change.
+
+Official references: [project service-account keys](https://developers.openai.com/api/reference/typescript/resources/admin/subresources/organization/subresources/projects/subresources/service_accounts/subresources/api_keys/methods/create), [project controls](https://developers.openai.com/api/reference/typescript/resources/admin/subresources/organization/subresources/projects), [Responses `store`](https://developers.openai.com/api/reference/cli/resources/responses/methods/create), and [API data controls](https://developers.openai.com/api/docs/guides/your-data).
+
 ### Dedicated encrypted-organizer database login — provision separately
 
-Migration `20260830000020_encrypted_organizer_runtime.sql` creates the exact PostgreSQL role
+Migration `20260830000020_encrypted_organizer_runtime.sql`, as narrowed and extended by
+`20260901000000_milestone_d_organizer_retrieval.sql`, creates the exact PostgreSQL role
 `unfiled_organizer_worker` as `NOLOGIN`, `NOINHERIT`, and `NOBYPASSRLS`. It has no table, sequence,
 private-schema, public-create, inherited-role, service-role, index-worker, verifier, or key-admin
-capability. It can execute exactly eight job/lease-scoped public RPCs. None accepts an owner UUID;
+capability. It can execute exactly ten job/lease-scoped public RPCs. None accepts an owner UUID;
 ownership is derived from the currently leased organization job. The matching `apps/organizer`
 deployment is a fourth trust domain with a 49-second maximum request deadline and AI-assisted
-object-wrap/content-MAC custody only. Its production planner and content-mutation cipher remain
-deliberately unavailable until Milestone D, so this section can establish infrastructure readiness
-but cannot establish a real create-or-append result yet.
+object-wrap/content-MAC custody only. Milestone D composes the production cipher, encrypted RAG
+retrieval, OpenAI planner, and atomic create-or-append/Review path; the real-provider evaluation and
+account canary above still gate actual personal-note traffic.
 
 1. Apply `supabase/roles.sql` and every migration through
-   `20260830000020_encrypted_organizer_runtime.sql` before provisioning the login. Inspect
+   `20260901000000_milestone_d_organizer_retrieval.sql` before provisioning the login. Inspect
    `pg_auth_members`: zero membership rows touching `unfiled_organizer_worker` is preferred after a
    real bootstrap-superuser cleanup. If the managed Supabase bootstrap grant cannot be removed, the
    only permitted row is granted role `unfiled_organizer_worker`, member `postgres`, grantor
@@ -492,14 +579,16 @@ but cannot establish a real create-or-append result yet.
    UNFILED_ORGANIZER_CONCURRENCY=2
    UNFILED_ORGANIZER_LEASE_SECONDS=120
    UNFILED_ORGANIZER_RECOVERY_LIMIT=100
+   UNFILED_ORGANIZER_OPENAI_API_KEY=<dedicated-project-service-account-key>
    ```
 
    Production must not contain `UNFILED_ORGANIZER_DRAIN_SECRET` or `CRON_SECRET`; exact web
    Trusted Sources identity is the only drain authorization. It must also reject static AWS access
    keys, private-manual KMS identifiers, a global Supabase key/URL, a browser/user secret, and
    `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `UNFILED_OPENAI_API_KEY`,
-   `UNFILED_ANTHROPIC_API_KEY`, or `UNFILED_ORGANIZATION_MODEL_API_KEY`. Milestone D must introduce
-   any evaluated provider credential through a separately reviewed organizer-only boundary.
+   `UNFILED_ANTHROPIC_API_KEY`, `UNFILED_ORGANIZATION_MODEL_API_KEY`, or a model/base-URL override.
+   The exact dedicated organizer variable is required only in Production and must match the OpenAI
+   project/live-evaluation gate above.
 
 5. Open a connection through the deployed organizer adapter and record a content-free readiness
    result proving both `session_user` and `current_user` equal exactly
@@ -513,6 +602,8 @@ but cannot establish a real create-or-append result yet.
    - `claim_encrypted_organizer_jobs(text,integer,integer)`
    - `heartbeat_encrypted_organizer_job(text,text,integer,jsonb)`
    - `list_encrypted_organizer_candidates(text,text,integer)`
+   - `list_encrypted_organizer_rag_page(text,text,jsonb,integer,integer)`
+   - `select_encrypted_organizer_candidates(text,text,jsonb)`
    - `prepare_encrypted_organizer_create(text,text,text,text)`
    - `prepare_encrypted_organizer_append(text,text,text,bigint,text)`
    - `commit_encrypted_organizer_job(text,text,jsonb)`
@@ -529,12 +620,16 @@ but cannot establish a real create-or-append result yet.
    timestamps only.
 
 7. Test the data boundary with synthetic ciphertext and content-free reports. A claim must return no
-   more than the configured limit; candidate projection must return at most eight AI-assisted
-   candidates within its fixed byte budget; private/deleted/stale/cross-owner rows must return no
-   projection. A request cannot supply or switch an owner. Lose or replace the lease, flip privacy,
-   delete the capture/note, change consent controls, and advance an append revision at each
-   disclosure/publication race point. Every race must fail closed, replan at most once, or produce
-   Review; it must never disclose private content, publish against stale authority, or loop.
+   more than the configured limit; fallback candidate projection must return at most eight
+   AI-assisted candidates within its fixed byte budget. RAG pagination must expose only the active,
+   complete, owner-bound encrypted generation under the live lease and fixed page/byte limits.
+   Exact selection must accept only a unique top-eight list tied to the same generation snapshot,
+   indexed revisions, privacy state, and currently open notes. Private/deleted/stale/cross-owner
+   rows must return no projection, and a request cannot supply or switch an owner. Lose or replace
+   the lease, flip privacy, delete the capture/note, change consent controls, mutate/activate a RAG
+   generation, and advance an append revision at each disclosure/publication race point. Every race
+   must fail closed, degrade out of RAG auto-apply, replan at most once, or produce Review; it must
+   never disclose private content, publish against stale authority, or loop.
 8. From web Production, invoke the exact proved organizer Production alias with an empty synthetic
    queue. Prove Vercel preserves `x-vercel-trusted-oidc-idp-token`; the organizer verifies the exact
    issuer, audience, subject, team slug/ID, web project name/ID, and Production environment; and the
@@ -551,13 +646,16 @@ but cannot establish a real create-or-append result yet.
    key administration, and another workload's authority. Match allowed and denied calls to
    content-free CloudTrail management events. Never record tokens, plaintext, ciphertext, email,
    owner IDs, or encryption-context values.
-10. Do not submit a real organization canary at C.5c-3. The checked Production composition has an
-    unavailable planner and cipher by design and must fail safely rather than call an unevaluated
-    provider or write a partial note. After Milestone D lands, run create, append, explicit
-    destination, ambiguous Review, revision-race/replan, response-loss replay, and provider/KMS/DB
-    outage canaries. Each successful terminal transaction must atomically publish encrypted note
-    state, revision/mutation, decision, receipt/Review, terminal lease state, and one content-free
-    index job. Then invoke the independent index recovery path and prove that job completes. The
+10. Only after the dedicated OpenAI project and live stochastic gate above pass, submit synthetic
+    create, append, explicit-destination, ambiguous Review, revision-race/replan, response-loss
+    replay, incomplete/stale-RAG, privacy-flip, and provider/KMS/database outage canaries. Use unique
+    non-sensitive markers and never include a real note. Each successful terminal transaction must
+    atomically publish encrypted note state, revision/mutation, decision, receipt/Review, terminal
+    lease state, and one content-free index job. Decrypt only through the owner-authorized API to
+    compare expected content. Inspect rows, indexes, queues, idempotency state, Realtime, logs,
+    traces, analytics, error sinks, and OpenAI request-history surfaces allowed by the selected data
+    controls; require zero plaintext marker outside the explicitly authorized response/provider
+    request path. Then invoke the independent index recovery path and prove that job completes. The
     organizer response must never synchronously chain the index worker's long-running drain.
 11. Exercise connection loss, statement timeout, 49-second request cancellation, stale lease
     recovery, credential revocation, and Vercel alias drift. Jobs must remain encrypted and queued,
@@ -568,14 +666,30 @@ but cannot establish a real create-or-append result yet.
 12. Rotate this credential independently of the web, worker, verifier, and Supabase service keys.
     Pause organizer invocations, use the trusted verified-TLS `\password unfiled_organizer_worker`
     prompt, update only the organizer Production secret, redeploy/recycle its pool, prove the old
-    credential is rejected and the new session preserves the exact eight-RPC ACL, run the empty-queue
+    credential is rejected and the new session preserves the exact ten-RPC ACL, run the empty-queue
     readiness and denial probes again, then resume. Re-prove alias ownership, OIDC, database session,
     and KMS denials after a project transfer, alias change, role/policy change, CA rotation, database
     restore, or migration replay.
+13. Record and rehearse the organizer disable/rollback path before enabling any non-synthetic job.
+    Stop the web capture schedule and any manual drain caller, revoke web → organizer Trusted Sources
+    authorization, and confirm no new lease is claimed. Revoke the OpenAI key if provider compromise
+    is suspected; otherwise remove it from the organizer secret scope only after the deployment is
+    stopped so it cannot appear in a failed build. Existing captures and jobs must remain encrypted
+    and queued. Before the C.5d contract commits, the Milestone D migration is additive, so a
+    previously verified encrypted, planner-disabled organizer deployment may be promoted after
+    confirming it is compatible with the current schema; it must fail closed rather than reinterpret
+    a queued command. After the C.5d contract commits, there is no schema downgrade: correct forward,
+    or execute the separately approved restore of the recorded pre-contract backup, its authorized
+    keys, and its matching application deployment. Never hand-recreate plaintext columns or weaken
+    grants. Treat any wrong auto-append, source-preservation failure, private/cross-tenant disclosure,
+    plaintext canary hit, unexpected KMS authority, or unaudited provider retention as an immediate
+    disable trigger. Record timestamps, deployment IDs, queue/lease counts, decision, and approver
+    without content or credentials.
 
-Until the production planner/cipher, explicit production C.5d contraction, account canaries, rotation/restore evidence, and
-backup-expiry gates pass, the organizer is an implemented fail-closed security substrate—not a
-production routing claim or proof that the complete note library is encrypted.
+Until the dedicated OpenAI project, live stochastic report, explicit production C.5d contraction,
+account canaries, rotation/restore evidence, and backup-expiry gates pass, the organizer is an
+implemented fail-closed routing system—not a production routing claim or proof that the complete
+note library is encrypted.
 
 ### Global encrypted-storage contract — C.5d one-way production operation
 
@@ -591,7 +705,8 @@ Supabase HTTP API. Use a verified database-owner session where `session_user = c
    history/undo, capture, authenticated body-only search, export, deletion, and retention operation
    succeeds through its encrypted adapter. A rollout lookup, RPC, KMS, or projection failure must
    fail closed; it must never invoke a legacy repository. Keep AI organization disabled until the
-   Milestone D planner/cipher gate passes.
+   dedicated OpenAI project, separate live stochastic report, exact ten-RPC organizer proof, and
+   synthetic canary gate above pass.
 2. Pause signups, interactive writes, organizer drains, index maintenance, and retention. Record the
    exact web/organizer/worker/verifier deployment IDs and migration checksum. Create the required
    pre-cutover backup/PITR point, restore it to an isolated scratch project, attach only separately
@@ -646,7 +761,8 @@ Supabase HTTP API. Use a verified database-owner session where `session_user = c
    `POST /api/v1/search`, contains no query in URLs, and sends `Cache-Control: no-store`. Search the
    database, backups created after contraction, application/provider logs, traces, analytics,
    Realtime payloads, and error sinks for unique synthetic canaries; require zero plaintext hits.
-   Do not call a real AI organization canary until Milestone D is green.
+   Run the real provider only with the synthetic organization canaries from organizer step 10 and
+   only after its dedicated provider/live-evaluation gate passes.
 8. Re-enable traffic gradually and watch KMS denials, encrypted-read failures, queue age, search
    errors, retention errors, and receipt latency. If a post-commit defect cannot be corrected
    forward, recovery is a separately approved restore of the recorded pre-cutover backup plus its

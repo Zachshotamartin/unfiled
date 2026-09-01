@@ -7,6 +7,7 @@ const MAX_DATABASE_CA_BYTES = 32_768;
 const MAX_DATABASE_URL_LENGTH = 4_096;
 const MAX_RETIRED_ROOTS = 20;
 const MAX_RETIRED_REGISTRY_BYTES = 32_768;
+const ORGANIZER_OPENAI_API_KEY = "UNFILED_ORGANIZER_OPENAI_API_KEY" as const;
 const KMS_KEY_ARN_PATTERN =
   /^arn:(aws(?:-us-gov|-cn)?):kms:([a-z0-9-]+):(\d{12}):key\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
@@ -41,6 +42,7 @@ const PROVIDER_CAPABILITIES = [
   "UNFILED_OPENAI_API_KEY",
   "UNFILED_ORGANIZATION_MODEL_API_KEY"
 ] as const;
+const PROVIDER_CONFIGURATION_PATTERN = /(?:ANTHROPIC|OPENAI|ORGANIZATION_MODEL|ORGANIZER_MODEL)/u;
 const GENERIC_DATABASE_CAPABILITY_PATTERN =
   /^(?:DATABASE_(?:URL|URI)(?:_[A-Z0-9]+)*|POSTGRES(?:QL)?_[A-Z0-9_]+|PG(?:DATABASE|HOST|PASSFILE|PASSWORD|PORT|SERVICE|SERVICEFILE|USER)(?:_[A-Z0-9]+)*)$/iu;
 const SUPABASE_CAPABILITY_PATTERN = /SUPABASE/iu;
@@ -99,11 +101,14 @@ export type OrganizerPipelineConfig =
       leaseSeconds: number;
       recoveryLimit: number;
     }>;
+export type OrganizerPlannerConfig =
+  Readonly<{ kind: "disabled" }> | Readonly<{ apiKey: string; kind: "openai-responses" }>;
 export type OrganizerConfig = Readonly<{
   invocationAuth: OrganizerInvocationAuth;
   keyBoundary: LocalOrganizerKeyBoundary | AwsOrganizerKeyBoundary;
   maxRequestBytes: number;
   pipeline: OrganizerPipelineConfig;
+  planner: OrganizerPlannerConfig;
   port: number;
   requestTimeoutMs: number;
   runtime: OrganizerRuntime;
@@ -115,7 +120,7 @@ export const ORGANIZER_CAPABILITIES = Object.freeze({
   decryptKeyPurposes: ["content_mac", "object_wrap"] as const,
   generateDataKeyClasses: ["ai_assisted"] as const,
   generateDataKeyPurposes: ["content_mac", "object_wrap"] as const,
-  productionPlannerConfigured: false,
+  productionPlannerConfigured: true,
   rendersUserInterface: false
 });
 
@@ -125,6 +130,16 @@ function hasValue(environment: OrganizerEnvironment, name: string): boolean {
 
 function rejectCapabilities(environment: OrganizerEnvironment, names: readonly string[]): void {
   const present = names.filter((name) => hasValue(environment, name));
+  if (present.length > 0) throw new OrganizerConfigurationError(present);
+}
+
+function rejectUnapprovedProviderConfiguration(environment: OrganizerEnvironment): void {
+  const present = Object.keys(environment).filter(
+    (name) =>
+      name !== ORGANIZER_OPENAI_API_KEY &&
+      PROVIDER_CONFIGURATION_PATTERN.test(name) &&
+      hasValue(environment, name)
+  );
   if (present.length > 0) throw new OrganizerConfigurationError(present);
 }
 
@@ -141,6 +156,36 @@ function required(environment: OrganizerEnvironment, name: string): string {
   const value = environment[name]?.trim();
   if (value === undefined || value.length === 0) throw new OrganizerConfigurationError([name]);
   return value;
+}
+
+function hasUnsafeSecretCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit <= 0x20 || codeUnit === 0x7f) return true;
+  }
+  return false;
+}
+
+function planner(
+  environment: OrganizerEnvironment,
+  selectedRuntime: OrganizerRuntime
+): OrganizerPlannerConfig {
+  const raw = environment[ORGANIZER_OPENAI_API_KEY];
+  if (selectedRuntime !== "production") {
+    if (hasValue(environment, ORGANIZER_OPENAI_API_KEY))
+      throw new OrganizerConfigurationError([ORGANIZER_OPENAI_API_KEY]);
+    return Object.freeze({ kind: "disabled" });
+  }
+  if (
+    raw === undefined ||
+    raw.length < 20 ||
+    raw.length > 512 ||
+    raw.trim() !== raw ||
+    hasUnsafeSecretCharacter(raw)
+  ) {
+    throw new OrganizerConfigurationError([ORGANIZER_OPENAI_API_KEY]);
+  }
+  return Object.freeze({ apiKey: raw, kind: "openai-responses" });
 }
 
 function integer(
@@ -410,8 +455,10 @@ export function loadOrganizerConfig(
   rejectCapabilities(environment, PRIVATE_CAPABILITIES);
   rejectCapabilities(environment, USER_SESSION_CAPABILITIES);
   rejectCapabilities(environment, PROVIDER_CAPABILITIES);
+  rejectUnapprovedProviderConfiguration(environment);
   rejectAmbientDatabaseCapabilities(environment);
   const selectedRuntime = runtime(environment);
+  const selectedPlanner = planner(environment, selectedRuntime);
   const keyBoundary =
     selectedRuntime === "production"
       ? awsBoundary(environment)
@@ -462,6 +509,7 @@ export function loadOrganizerConfig(
       16_384
     ),
     pipeline: selectedPipeline,
+    planner: selectedPlanner,
     port: integer(environment, "PORT", DEFAULT_PORT, 1, 65_535),
     requestTimeoutMs,
     runtime: selectedRuntime

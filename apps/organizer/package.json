@@ -7,7 +7,11 @@
   "dependencies": {
     "@unfiled/ai-routing": "workspace:*",
     "@unfiled/content-crypto": "workspace:*",
+    "@unfiled/contracts": "workspace:*",
+    "@unfiled/domain": "workspace:*",
+    "@unfiled/encrypted-aggregate": "workspace:*",
     "@unfiled/key-management": "workspace:*",
+    "@unfiled/search": "workspace:*",
     "@vercel/oidc": "3.8.5",
     "pg": "8.23.0"
   },
@@ -24,6 +28,7 @@
     "test:built-server": "node dist/scripts/smoke-built-server.js",
     "test:coverage": "vitest run --coverage",
     "test:lock-order": "tsx scripts/test-lock-order.ts",
+    "test:retrieval-capacity": "vitest run --config vitest.capacity.config.ts --reporter=verbose",
     "test:storage-contract-concurrency": "tsx scripts/test-storage-contract-concurrency.ts",
     "typecheck": "tsc --noEmit"
   },

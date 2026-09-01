@@ -1,8 +1,9 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
     environment: "node",
+    exclude: [...configDefaults.exclude, "test/retrieval-capacity.integration.test.ts"],
     coverage: {
       provider: "v8",
       reporter: ["text", "json", "lcov"],
