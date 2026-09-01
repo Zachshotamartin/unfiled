@@ -43,6 +43,12 @@ describe("strict f32le-base64url embeddings", () => {
     expect(() => decodeFloat32LeBase64Url("AACAPw==", 1)).toThrow(
       expect.objectContaining({ code: "invalid_base64url" })
     );
+    expect(() => decodeFloat32LeBase64Url("AACAPx", 1)).toThrow(
+      expect.objectContaining({ code: "invalid_base64url" })
+    );
+    expect(() => decodeFloat32LeBase64Url("AACAPgAAAMB", 2)).toThrow(
+      expect.objectContaining({ code: "invalid_base64url" })
+    );
     expect(() => decodeFloat32LeBase64Url("AADAfw", 1)).toThrow(
       expect.objectContaining({ code: "non_finite_embedding" })
     );

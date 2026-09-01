@@ -100,6 +100,16 @@ function decodeBase64Url(value: string, expectedBytes: number): Uint8Array {
     privateRagValidationFailure("invalid_base64url");
   }
 
+  const remainder = value.length % 4;
+  const finalSextet = BASE64URL_ALPHABET.indexOf(value.at(-1) ?? "");
+  if (
+    finalSextet < 0 ||
+    (remainder === 2 && (finalSextet & 0x0f) !== 0) ||
+    (remainder === 3 && (finalSextet & 0x03) !== 0)
+  ) {
+    privateRagValidationFailure("invalid_base64url");
+  }
+
   const output = new Uint8Array(expectedBytes);
   let accumulator = 0;
   let bits = 0;
@@ -121,7 +131,7 @@ function decodeBase64Url(value: string, expectedBytes: number): Uint8Array {
     }
   }
 
-  if (outputIndex !== expectedBytes || encodeBase64Url(output) !== value) {
+  if (outputIndex !== expectedBytes) {
     output.fill(0);
     privateRagValidationFailure("invalid_base64url");
   }
