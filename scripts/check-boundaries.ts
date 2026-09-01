@@ -69,6 +69,19 @@ const rules: Readonly<Record<string, BoundaryRule>> = Object.freeze({
   "apps/worker": {
     forbidden: ["next", "react", ...retiredClientDependencies, "@unfiled/web"],
     sourceRoots: ["src", "api"]
+  },
+  "apps/verifier": {
+    forbidden: [
+      "next",
+      "react",
+      ...retiredClientDependencies,
+      "@supabase",
+      "openai",
+      "@anthropic-ai",
+      "@unfiled/web",
+      "@unfiled/worker"
+    ],
+    sourceRoots: ["src", "api"]
   }
 });
 
@@ -179,6 +192,19 @@ function assertScannerSelfTest(): void {
   );
   if (apiFixture.length !== 1 || manifestFixture.length !== 1) {
     throw new Error("Boundary scanner self-test failed: worker violations were not detected");
+  }
+
+  const verifierRule = rules["apps/verifier"];
+  if (verifierRule === undefined || !verifierRule.sourceRoots.includes("api")) {
+    throw new Error("Boundary scanner self-test failed: verifier API root is not covered");
+  }
+  const verifierFixture = sourceViolations(
+    "apps/verifier/src/fixture.ts",
+    'import OpenAI from "openai";\nvoid OpenAI;',
+    verifierRule.forbidden
+  );
+  if (verifierFixture.length !== 1) {
+    throw new Error("Boundary scanner self-test failed: verifier violations were not detected");
   }
 }
 

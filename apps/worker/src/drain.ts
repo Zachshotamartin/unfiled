@@ -1,5 +1,5 @@
-import type { AiAssistedKeyAuthority } from "./key-management-adapter";
-import { WorkerUnavailableError } from "./errors";
+import type { AiAssistedKeyAuthority } from "./key-management-adapter.js";
+import { WorkerUnavailableError } from "./errors.js";
 
 export type DrainTrigger = "manual" | "recovery" | "schedule";
 

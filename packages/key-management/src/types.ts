@@ -3,7 +3,11 @@ import type { ContentKeyResolver, KeyEncryptionKey } from "@unfiled/content-cryp
 export const KEY_CLASSES = Object.freeze(["ai_assisted", "private_manual"] as const);
 export const KEY_PURPOSES = Object.freeze(["object_wrap", "content_mac"] as const);
 export const KEY_STATUSES = Object.freeze(["pending", "active", "retired", "revoked"] as const);
-export const KEY_WORKLOADS = Object.freeze(["interactive_api", "organization_worker"] as const);
+export const KEY_WORKLOADS = Object.freeze([
+  "interactive_api",
+  "organization_worker",
+  "index_worker"
+] as const);
 
 export type KeyClass = (typeof KEY_CLASSES)[number];
 export type KeyPurpose = (typeof KEY_PURPOSES)[number];
@@ -61,9 +65,15 @@ export type AiAssistedRootKeySet = Readonly<{
   ai_assisted: PurposeRootKeySet;
 }>;
 
+export type IndexWorkerRootKeySet = Readonly<{
+  ai_assisted: Readonly<{
+    object_wrap: string;
+  }>;
+}>;
+
 export type RootKeySet = Readonly<Record<KeyClass, PurposeRootKeySet>>;
 
-export type WorkloadRootKeySet = RootKeySet | AiAssistedRootKeySet;
+export type WorkloadRootKeySet = RootKeySet | AiAssistedRootKeySet | IndexWorkerRootKeySet;
 
 export type RetiredRootKeySet = Readonly<
   Partial<Record<KeyClass, Readonly<Partial<Record<KeyPurpose, readonly string[]>>>>>
@@ -71,6 +81,12 @@ export type RetiredRootKeySet = Readonly<
 
 export type AiAssistedRetiredRootKeySet = Readonly<{
   ai_assisted?: Readonly<Partial<Record<KeyPurpose, readonly string[]>>>;
+}>;
+
+export type IndexWorkerRetiredRootKeySet = Readonly<{
+  ai_assisted?: Readonly<{
+    object_wrap?: readonly string[];
+  }>;
 }>;
 
 export type ManagedKeyStore = Readonly<{

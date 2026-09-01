@@ -45,6 +45,11 @@ const SERVICE_RPC_HTTP_MAPPING = {
     code: ApiErrorCode.PROVIDER_UNAVAILABLE,
     message: "Encrypted storage could not complete that action. Try again."
   },
+  [ServiceRpcErrorCode.STALE_MAINTENANCE_CURSOR]: {
+    status: 503,
+    code: ApiErrorCode.PROVIDER_UNAVAILABLE,
+    message: "Encrypted storage could not complete that action. Try again."
+  },
   [ServiceRpcErrorCode.STALE_REVISION]: {
     status: 409,
     code: ApiErrorCode.STALE_REVISION,

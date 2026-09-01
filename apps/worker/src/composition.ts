@@ -1,15 +1,15 @@
 import { randomUUID } from "node:crypto";
 
-import type { WorkerConfig } from "./config";
-import { WorkerConfigurationError } from "./errors";
-import { createOpenAiEmbeddingProvider } from "./embedding-provider";
-import { createWorkerApp, type WorkerApp } from "./http";
-import { createManagedIndexCryptoFactory } from "./index-crypto";
-import { createNoteIndexRepository } from "./index-database";
-import { createNoteIndexDrain } from "./index-drain";
-import { createVercelTrustedSourcesInvocationAuth } from "./invocation-auth-adapter";
-import { createWorkerKeyManagementAdapter } from "./key-management-adapter";
-import { createPostgresIndexExecutor } from "./postgres-index-executor";
+import type { WorkerConfig } from "./config.js";
+import { WorkerConfigurationError } from "./errors.js";
+import { createOpenAiEmbeddingProvider } from "./embedding-provider.js";
+import { createWorkerApp, type WorkerApp } from "./http.js";
+import { createManagedIndexCryptoFactory } from "./index-crypto.js";
+import { createNoteIndexRepository } from "./index-database.js";
+import { createNoteIndexDrain } from "./index-drain.js";
+import { createVercelTrustedSourcesInvocationAuth } from "./invocation-auth-adapter.js";
+import { createWorkerKeyManagementAdapter } from "./key-management-adapter.js";
+import { createPostgresIndexExecutor } from "./postgres-index-executor.js";
 
 export type WorkerComposition = Readonly<{
   app: WorkerApp;

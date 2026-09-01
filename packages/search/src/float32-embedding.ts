@@ -8,7 +8,15 @@ export const MAX_EMBEDDING_MODEL_ID_BYTES = 200;
 
 const FLOAT32_BYTES = 4;
 const BASE64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/u;
+const INVALID_BASE64URL_DIGIT = 0xff;
+const BASE64URL_DECODE_TABLE = (() => {
+  const table = new Uint8Array(128);
+  table.fill(INVALID_BASE64URL_DIGIT);
+  for (let index = 0; index < BASE64URL_ALPHABET.length; index += 1) {
+    table[BASE64URL_ALPHABET.charCodeAt(index)] = index;
+  }
+  return table;
+})();
 const textEncoder = new TextEncoder();
 
 export type Float32LeEmbeddingV1 = Readonly<{
@@ -92,10 +100,20 @@ function encodeBase64Url(bytes: Uint8Array): string {
 
 function decodeBase64Url(value: string, expectedBytes: number): Uint8Array {
   const expectedCharacters = Math.ceil((expectedBytes * 4) / 3);
+  if (value.length !== expectedCharacters || value.length % 4 === 1) {
+    privateRagValidationFailure("invalid_base64url");
+  }
+
+  const remainder = value.length % 4;
+  const finalCode = value.charCodeAt(value.length - 1);
+  const finalSextet =
+    finalCode < BASE64URL_DECODE_TABLE.length
+      ? (BASE64URL_DECODE_TABLE[finalCode] ?? INVALID_BASE64URL_DIGIT)
+      : INVALID_BASE64URL_DIGIT;
   if (
-    value.length !== expectedCharacters ||
-    value.length % 4 === 1 ||
-    !BASE64URL_PATTERN.test(value)
+    finalSextet === INVALID_BASE64URL_DIGIT ||
+    (remainder === 2 && (finalSextet & 0x0f) !== 0) ||
+    (remainder === 3 && (finalSextet & 0x03) !== 0)
   ) {
     privateRagValidationFailure("invalid_base64url");
   }
@@ -104,9 +122,13 @@ function decodeBase64Url(value: string, expectedBytes: number): Uint8Array {
   let accumulator = 0;
   let bits = 0;
   let outputIndex = 0;
-  for (const character of value) {
-    const digit = BASE64URL_ALPHABET.indexOf(character);
-    if (digit < 0) {
+  for (let inputIndex = 0; inputIndex < value.length; inputIndex += 1) {
+    const code = value.charCodeAt(inputIndex);
+    const digit =
+      code < BASE64URL_DECODE_TABLE.length
+        ? (BASE64URL_DECODE_TABLE[code] ?? INVALID_BASE64URL_DIGIT)
+        : INVALID_BASE64URL_DIGIT;
+    if (digit === INVALID_BASE64URL_DIGIT) {
       output.fill(0);
       privateRagValidationFailure("invalid_base64url");
     }
@@ -121,7 +143,7 @@ function decodeBase64Url(value: string, expectedBytes: number): Uint8Array {
     }
   }
 
-  if (outputIndex !== expectedBytes || encodeBase64Url(output) !== value) {
+  if (outputIndex !== expectedBytes) {
     output.fill(0);
     privateRagValidationFailure("invalid_base64url");
   }

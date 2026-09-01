@@ -1,8 +1,8 @@
 import { verifyVercelOidcToken, type VercelOidcPayload } from "@vercel/oidc";
 
-import { hasValidBearerCredential } from "./auth";
-import type { VercelTrustedSource, WorkerRuntime } from "./config";
-import { WorkerError, WorkerUnavailableError } from "./errors";
+import { hasValidBearerCredential } from "./auth.js";
+import type { VercelTrustedSource, WorkerRuntime } from "./config.js";
+import { WorkerError, WorkerUnavailableError } from "./errors.js";
 
 const MAX_TRUSTED_SOURCE_TOKEN_LENGTH = 16_384;
 const CLOCK_TOLERANCE_SECONDS = 5;

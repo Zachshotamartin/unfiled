@@ -1,6 +1,6 @@
 # Unfiled Product Documentation
 
-This directory is the planning and implementation-reference set for **Unfiled**. Milestones A, B, and the credential-free portion of Milestone C are complete. Gate 3 was recorded green on 2026-08-30 with a clean database rebuild, zero database-lint findings, and 18 pgTAP files / 822 assertions. C.5a supplies the expand-only encrypted schema and RAG lifecycle, managed-key package and Terraform policy, isolated worker trust boundary, dedicated non-bypass worker database role, and root-rewrap CAS contract. The current C.5b change set adds the typed encrypted aggregate, service-only rollout/backfill/write/read capabilities, and managed note/capture adapters. The production repository factory is not yet wired to those adapters; fresh AI-assisted capture remains deliberately fail-closed until C.5c adds the organizer atomic writer, and C.5d must still remove the plaintext contract. Account-bound cloud and physical-device evidence remains pending in `HUMAN_SETUP.md`, so the note library is not yet eligible for a complete encrypted-at-rest claim.
+This directory is the planning and implementation-reference set for **Unfiled**. Milestones A, B, and the credential-free portion of Milestone C are complete. C.5a supplies encrypted-schema expansion and managed-key custody; C.5b adds typed encrypted aggregates and managed adapters; and the current C.5c code supplies the isolated index worker, resumable shadow-generation controller, and independent decrypt-only verifier. The production repository factory is not yet wired to the encrypted adapters, fresh AI-assisted capture remains deliberately fail-closed until the separate organizer can commit create-or-append atomically, and C.5d must still remove the plaintext contract. Account-bound cloud and physical-device evidence remains pending in `HUMAN_SETUP.md`, so the note library is not yet eligible for a complete encrypted-at-rest claim.
 
 ## Reading order
 
@@ -22,13 +22,13 @@ This directory is the planning and implementation-reference set for **Unfiled**.
 
 | Document                   | Status                                                                       | Owned by milestone                  |
 | -------------------------- | ---------------------------------------------------------------------------- | ----------------------------------- |
-| BUILD_PLAN.md              | Current; A/B/C code gates and C.5b implementation status recorded            | revised at each milestone gate      |
+| BUILD_PLAN.md              | Current; A/B/C gates and C.5a–c implementation status recorded               | revised at each milestone gate      |
 | PRODUCT_REQUIREMENTS.md    | Complete for MVP scope                                                       | revised at each milestone gate      |
 | AI_ROUTING_SPEC.md         | Complete; weights and thresholds are initial values pending evaluation       | Milestone D                         |
 | DATA_MODEL.md              | Initial migrations landed; checked-in migrations are authoritative           | Milestone A and every schema change |
-| SECURITY_AND_PRIVACY.md    | C.5b aggregate boundary implemented; production cutover remains              | Milestone C.5 and Gate 6            |
-| ENCRYPTION_ARCHITECTURE.md | Capture + C.5a/b custody and aggregate audit; C.5c/d remain                  | Milestone C.5                       |
-| OPERATIONS_TEST_PLAN.md    | Current; B/C gates and C.5a/b code evidence recorded; human gates remain     | every milestone                     |
+| SECURITY_AND_PRIVACY.md    | Encrypted aggregate/index boundary implemented; production cutover remains   | Milestone C.5 and Gate 6            |
+| ENCRYPTION_ARCHITECTURE.md | Capture through C.5c verifier audited; organizer/C.5d remain                 | Milestone C.5                       |
+| OPERATIONS_TEST_PLAN.md    | Current; B/C and C.5a–c code evidence recorded; human gates remain           | every milestone                     |
 | BRAND_SYSTEM_UNFILED.md    | Selected v1 creative direction; name clearance and vector production pending | Milestone 0                         |
 | DESIGN_SYSTEM.md           | Initial skeleton with token draft                                            | Milestone 0                         |
 | OPEN_QUESTIONS.md          | Live document                                                                | continuous                          |
@@ -54,24 +54,24 @@ The milestone owner recorded the credential-free aggregate Gate 2 code decision 
 
 The milestone owner recorded the credential-free aggregate Gate 3 decision as green on 2026-08-30. Cloud, Apple-signing, and physical-device evidence remains explicitly pending and is not implied by this local code gate.
 
-| Evidence                                                                                                               | Current result                                                 |
-| ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| capture contracts, `/api/v1/captures` OpenAPI surface, and shared API client                                           | pass; 33 contract tests and 14 API-client tests                |
-| AES-256-GCM capture envelopes with owner/resource/version/kind binding and ciphertext-only active database persistence | implemented                                                    |
-| capture tables and storage RPCs denied to clients; verified Next API uses service-only owner-scoped RPCs               | implemented                                                    |
-| leased workflow claims, heartbeats, retry/recovery, dead-letter handling, receipts, and deletion scrubbing             | implemented                                                    |
-| Web Crypto-encrypted IndexedDB intents/outbox and native GRDB/SQLCipher drafts/outbox                                  | pass; covered by the web and native test suites                |
-| complete local pgTAP suite                                                                                             | pass; 18 files / 822 assertions                                |
-| aggregate format, lint, typecheck, coverage, build, OpenAPI, native Xcode, database, and routing gates                 | pass                                                           |
-| frozen-lockfile install, production dependency audit, and built-app/local-Supabase HTTP E2E                            | pass; zero known production vulnerabilities                    |
-| responsive production UI and static assets                                                                             | pass at desktop and 390 px; no failed images                   |
-| focused WidgetKit tests, Swift 6 checks, and generated-project/resource inspect gate                                   | pass                                                           |
-| GRDB with SQLCipher plus the WidgetKit/App Intents target `QuickCaptureWidget`                                         | pass; native dependencies and target boundaries are explicit   |
-| unsigned SwiftUI application and `QuickCaptureWidget` extension builds with selected Xcode 26.6                        | pass for the iPhone 17 Pro simulator only                      |
-| Apple signing/archive, physical iPhone SQLCipher/widget matrix, cloud canary/log audit, and preview performance        | pending human evidence in `HUMAN_SETUP.md`                     |
-| C.5a custody/expansion code                                                                                            | pass; 989 pgTAP + 12 Terraform tests; account evidence pending |
-| C.5b encrypted aggregate and managed adapters                                                                          | implemented; focused evidence recorded below                   |
-| C.5c private RAG/organizer and C.5d plaintext contraction                                                              | index worker implemented; verifier/organizer/cutover pending   |
+| Evidence                                                                                                               | Current result                                                  |
+| ---------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| capture contracts, `/api/v1/captures` OpenAPI surface, and shared API client                                           | pass; 33 contract tests and 14 API-client tests                 |
+| AES-256-GCM capture envelopes with owner/resource/version/kind binding and ciphertext-only active database persistence | implemented                                                     |
+| capture tables and storage RPCs denied to clients; verified Next API uses service-only owner-scoped RPCs               | implemented                                                     |
+| leased workflow claims, heartbeats, retry/recovery, dead-letter handling, receipts, and deletion scrubbing             | implemented                                                     |
+| Web Crypto-encrypted IndexedDB intents/outbox and native GRDB/SQLCipher drafts/outbox                                  | pass; covered by the web and native test suites                 |
+| complete local pgTAP suite                                                                                             | pass; 18 files / 822 assertions                                 |
+| aggregate format, lint, typecheck, coverage, build, OpenAPI, native Xcode, database, and routing gates                 | pass                                                            |
+| frozen-lockfile install, production dependency audit, and built-app/local-Supabase HTTP E2E                            | pass; zero known production vulnerabilities                     |
+| responsive production UI and static assets                                                                             | pass at desktop and 390 px; no failed images                    |
+| focused WidgetKit tests, Swift 6 checks, and generated-project/resource inspect gate                                   | pass                                                            |
+| GRDB with SQLCipher plus the WidgetKit/App Intents target `QuickCaptureWidget`                                         | pass; native dependencies and target boundaries are explicit    |
+| unsigned SwiftUI application and `QuickCaptureWidget` extension builds with selected Xcode 26.6                        | pass for the iPhone 17 Pro simulator only                       |
+| Apple signing/archive, physical iPhone SQLCipher/widget matrix, cloud canary/log audit, and preview performance        | pending human evidence in `HUMAN_SETUP.md`                      |
+| C.5a custody/expansion code                                                                                            | pass; 989 pgTAP + 12 Terraform tests; account evidence pending  |
+| C.5b encrypted aggregate and managed adapters                                                                          | implemented; focused evidence recorded below                    |
+| C.5c private RAG/organizer and C.5d plaintext contraction                                                              | index/lifecycle/verifier implemented; organizer/cutover pending |
 
 ## Milestone C.5a boundary
 
@@ -85,7 +85,7 @@ C.5b implements the application-side typed encrypted aggregate and strict servic
 
 The private-manual capture branch can seal and persist its source and receipt through the encrypted aggregate. A fresh AI-assisted capture is intentionally rejected with `encrypted_organizer_write_unavailable` until C.5c can atomically commit generated notes, mutations, receipts, and index work. The production repository factory still selects the legacy path, so checked-in adapter code and backfill machinery do not imply production cutover.
 
-The current C.5c slice implements the encrypted index capability contract, generation attestation/activation gate, strict float32 encrypted payload codec, bounded exact-scan retrieval/ranking primitives, a production-composed index worker, and a content-free web wake-up/recovery caller. The worker is isolated behind exact Vercel OIDC source claims, a hostname- and certificate-verified dedicated PostgreSQL login with only six RPCs, and AI-only KMS custody. The shadow-generation seed/verifier controller and atomic organizer remain deliberately absent and fail closed, so this is not a complete production index or C.5 claim. Local evidence for this slice is 29/29 search tests, 103/103 encrypted-aggregate tests, 158/158 worker tests, 378/378 web tests, and 22 database files / 1,132 assertions from a clean rebuild.
+The current C.5c slice implements the encrypted index capability contract, strict float32 encrypted payload codec, bounded exact-scan retrieval/ranking primitives, a production-composed index worker, resumable shadow-generation maintenance, and an independent decrypt-only verifier. Worker and verifier use different exact Vercel, database, and AWS identities: the worker retains six RAG RPCs and AI object-wrap key generation/decryption, while the verifier has exactly two RPCs and AI object-wrap decryption only. The verifier's fixed admission capacity is 1,000 notes: 33 pages provide 1,023 physical worst-row slots under the fixed ciphertext budget, deliberately capped at the accepted retrieval gate; larger libraries defer without repeatedly creating bad generations. A separate fixed four-key-record limit bounds KMS work. Current focused evidence is 158 worker tests, 436 web tests, 168 verifier unit tests plus the dedicated 1,000-document capacity gate, 13 Terraform tests, and a clean 23-file / 1,185-assertion database run. The atomic organizer remains deliberately absent and fail-closed, so this is not a complete production index or C.5 claim. Account evidence remains pending in `HUMAN_SETUP.md`.
 
 Local C.5b evidence established in this change set includes 93/93 encrypted-aggregate package tests, 38/38 note read/write/coordinator security tests, 14/14 adversarial note-repository tests, and 20 database test files / 1,091 assertions, including 101/101 assertions in `073_encrypted_aggregate_dual_write.test.sql`. C.5c must connect the organizer and encrypted retrieval adapter; C.5d must stop plaintext writes, remove plaintext reads/search/indexes/columns, pass canary and restore gates, and age out or destroy exposed backups before any complete-library encryption-at-rest claim.
 

@@ -3,9 +3,9 @@ import type {
   DecryptDataKeyResponse,
   GenerateDataKeyResponse,
   ReEncryptDataKeyResponse
-} from "./aws-transport";
-import { decodeBase64Url, encodeBase64Url } from "./base64url";
-import { kmsEncryptionContextForKey } from "./kms-context";
+} from "./aws-transport.js";
+import { decodeBase64Url, encodeBase64Url } from "./base64url.js";
+import { kmsEncryptionContextForKey } from "./kms-context.js";
 import {
   KeyManagementErrorCode,
   keyManagementFailure,
@@ -13,6 +13,8 @@ import {
   type AiAssistedRootKeySet,
   type CreateIntermediateKeyRequest,
   type IntermediateKeyCustodian,
+  type IndexWorkerRetiredRootKeySet,
+  type IndexWorkerRootKeySet,
   type InteractiveKeyCustodian,
   type KeyBinding,
   type KeyClass,
@@ -22,7 +24,7 @@ import {
   type RetiredRootKeySet,
   type RootKeySet,
   type WorkloadRootKeySet
-} from "./types";
+} from "./types.js";
 import {
   assertIsoTimestamp,
   assertWorkload,
@@ -32,19 +34,28 @@ import {
   parseManagedKeyRecord,
   parseRetiredRootKeySet,
   parseWorkloadRootKeySet
-} from "./validation";
+} from "./validation.js";
 
 const INTERMEDIATE_KEY_BYTES = 32;
 const MAX_KMS_CIPHERTEXT_BYTES = 8_192;
 
 export type AwsKmsEnvelopeCustodianOptions =
-  OrganizationWorkerEnvelopeCustodianOptions | InteractiveEnvelopeCustodianOptions;
+  | OrganizationWorkerEnvelopeCustodianOptions
+  | IndexWorkerEnvelopeCustodianOptions
+  | InteractiveEnvelopeCustodianOptions;
 
 export type OrganizationWorkerEnvelopeCustodianOptions = Readonly<{
   activeRoots: AiAssistedRootKeySet;
   retiredRoots?: AiAssistedRetiredRootKeySet;
   transport: AwsKmsTransport;
   workload: "organization_worker";
+}>;
+
+export type IndexWorkerEnvelopeCustodianOptions = Readonly<{
+  activeRoots: IndexWorkerRootKeySet;
+  retiredRoots?: IndexWorkerRetiredRootKeySet;
+  transport: AwsKmsTransport;
+  workload: "index_worker";
 }>;
 
 export type InteractiveEnvelopeCustodianOptions = Readonly<{
@@ -99,13 +110,16 @@ function copyCiphertext(response: GenerateDataKeyResponse | ReEncryptDataKeyResp
 }
 
 function rootFor(activeRoots: WorkloadRootKeySet, binding: KeyBinding): string {
-  const roots = (activeRoots as Readonly<Partial<Record<KeyClass, PurposeRootKeySet>>>)[
-    binding.keyClass
-  ];
-  if (roots === undefined) {
+  const roots = (
+    activeRoots as Readonly<
+      Partial<Record<KeyClass, Readonly<Partial<Record<keyof PurposeRootKeySet, string>>>>>
+    >
+  )[binding.keyClass];
+  const root = roots?.[binding.purpose];
+  if (root === undefined) {
     keyManagementFailure(KeyManagementErrorCode.ACCESS_DENIED, "Key access is denied");
   }
-  return roots[binding.purpose];
+  return root;
 }
 
 function rootIsDecryptable(
@@ -139,7 +153,7 @@ function latestRewrapBoundary(record: ManagedKeyRecordV1): number {
 }
 
 export function createAwsKmsEnvelopeCustodian(
-  options: OrganizationWorkerEnvelopeCustodianOptions
+  options: OrganizationWorkerEnvelopeCustodianOptions | IndexWorkerEnvelopeCustodianOptions
 ): IntermediateKeyCustodian;
 export function createAwsKmsEnvelopeCustodian(
   options: InteractiveEnvelopeCustodianOptions
@@ -158,7 +172,7 @@ export function createAwsKmsEnvelopeCustodian(
       operationOptions?: KeyCustodyOperationOptions
     ): Promise<Result> {
       const request = normalizeCreateIntermediateKeyRequest(requestValue);
-      assertWorkloadCanAccess(options.workload, request.keyClass);
+      assertWorkloadCanAccess(options.workload, request.keyClass, request.purpose);
       const rootKeyArn = rootFor(activeRoots, request);
       const response = await callKms(
         () =>
@@ -213,7 +227,7 @@ export function createAwsKmsEnvelopeCustodian(
       operationOptions?: KeyCustodyOperationOptions
     ): Promise<Result> {
       const record = parseManagedKeyRecord(recordValue);
-      assertWorkloadCanAccess(options.workload, record.keyClass);
+      assertWorkloadCanAccess(options.workload, record.keyClass, record.purpose);
       if (
         !isDecryptableStatus(record.status) ||
         !rootIsDecryptable(activeRoots, retiredRoots, record)
@@ -247,7 +261,7 @@ export function createAwsKmsEnvelopeCustodian(
       }
     }
   };
-  if (options.workload === "organization_worker") {
+  if (options.workload !== "interactive_api") {
     return Object.freeze(runtimeCustodian);
   }
   return Object.freeze({
@@ -259,7 +273,7 @@ export function createAwsKmsEnvelopeCustodian(
     ): Promise<ManagedKeyRecordV1> {
       const record = parseManagedKeyRecord(recordValue);
       assertIsoTimestamp(rewrappedAt);
-      assertWorkloadCanAccess(options.workload, record.keyClass);
+      assertWorkloadCanAccess(options.workload, record.keyClass, record.purpose);
       if (
         record.status === "revoked" ||
         record.rotation.rootRewrapCount >= 1_000_000 ||

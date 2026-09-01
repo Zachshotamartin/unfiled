@@ -8,7 +8,7 @@ const integrationMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@unfiled/key-management", () => ({
-  assertAiAssistedKmsReadiness: integrationMocks.assertReadiness,
+  assertIndexWorkerKmsReadiness: integrationMocks.assertReadiness,
   createAwsKmsEnvelopeCustodian: integrationMocks.createCustodian,
   createVercelOidcKmsTransport: integrationMocks.createTransport
 }));
@@ -356,8 +356,6 @@ describe("isolated worker HTTP app", () => {
     const keys = keyManagement();
     const awsConfig = config({
       keyBoundary: {
-        aiContentMacKmsKeyArn:
-          "arn:aws:kms:us-west-2:123456789012:key/66666666-7777-4888-9999-aaaaaaaaaaaa",
         aiObjectWrapKmsKeyArn:
           "arn:aws:kms:us-west-2:123456789012:key/11111111-2222-4333-8444-555555555555",
         expectedOidcSubject: "owner:team-example:project:unfiled-worker:environment:production",
@@ -365,7 +363,7 @@ describe("isolated worker HTTP app", () => {
         keyClass: "ai_assisted",
         oidcAudience: "sts.amazonaws.com",
         region: "us-west-2",
-        retiredRoots: { ai_assisted: { content_mac: [], object_wrap: [] } },
+        retiredRoots: { ai_assisted: { object_wrap: [] } },
         roleArn: "arn:aws:iam::123456789012:role/unfiled-worker-production",
         vercelProjectId: "prj_example"
       },
@@ -396,7 +394,7 @@ describe("isolated worker HTTP app", () => {
     expect(integrationMocks.createTransport).toHaveBeenCalledWith({
       region: "us-west-2",
       roleArn: "arn:aws:iam::123456789012:role/unfiled-worker-production",
-      workload: "organization_worker"
+      workload: "index_worker"
     });
     expect(integrationMocks.assertReadiness).toHaveBeenCalledOnce();
     expect(transport.destroy).toHaveBeenCalledOnce();

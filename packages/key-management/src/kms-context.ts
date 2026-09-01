@@ -1,6 +1,6 @@
-import type { KmsEncryptionContext } from "./aws-transport";
-import type { KeyReference } from "./types";
-import { parseKeyReference } from "./validation";
+import type { KmsEncryptionContext } from "./aws-transport.js";
+import type { KeyReference } from "./types.js";
+import { parseKeyReference } from "./validation.js";
 
 export function kmsEncryptionContextForKey(value: KeyReference): KmsEncryptionContext {
   const reference = parseKeyReference({

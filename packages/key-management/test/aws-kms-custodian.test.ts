@@ -10,8 +10,8 @@ import {
 } from "../src/index";
 import {
   CREATED_AT,
-  AI_ROOTS,
   OWNER_A,
+  INDEX_ROOTS,
   RETIRED_AI_OBJECT_ROOT,
   REWRAPPED_AT,
   ROOTS,
@@ -73,9 +73,9 @@ describe("AWS KMS envelope custodian", () => {
   it("generates a pending per-owner intermediate key with exact KMS context", async () => {
     const kms = transport();
     const custodian = createAwsKmsEnvelopeCustodian({
-      activeRoots: AI_ROOTS,
+      activeRoots: INDEX_ROOTS,
       transport: kms,
-      workload: "organization_worker"
+      workload: "index_worker"
     });
     let callbackBytes: Uint8Array | undefined;
     const record = await custodian.withGeneratedIntermediateKey(request(), (bytes, generated) => {
@@ -240,15 +240,21 @@ describe("AWS KMS envelope custodian", () => {
   it("blocks the worker from private keys before contacting KMS", async () => {
     const kms = transport();
     const custodian = createAwsKmsEnvelopeCustodian({
-      activeRoots: AI_ROOTS,
+      activeRoots: INDEX_ROOTS,
       transport: kms,
-      workload: "organization_worker"
+      workload: "index_worker"
     });
 
     expect("rewrapIntermediateKey" in custodian).toBe(false);
     // @ts-expect-error Worker custody intentionally has no rotation-admin capability.
     expect(custodian.rewrapIntermediateKey).toBeUndefined();
 
+    await expect(
+      custodian.withGeneratedIntermediateKey(
+        request({ purpose: "content_mac", keyId: "ai.content-mac.v1" }),
+        () => Promise.resolve()
+      )
+    ).rejects.toSatisfy(expectCode(KeyManagementErrorCode.ACCESS_DENIED));
     await expect(
       custodian.withGeneratedIntermediateKey(
         request({ keyClass: "private_manual", keyId: "private.object.v1" }),
@@ -268,9 +274,9 @@ describe("AWS KMS envelope custodian", () => {
     const controller = new AbortController();
     const kms = transport();
     const worker = createAwsKmsEnvelopeCustodian({
-      activeRoots: AI_ROOTS,
+      activeRoots: INDEX_ROOTS,
       transport: kms,
-      workload: "organization_worker"
+      workload: "index_worker"
     });
     await worker.withGeneratedIntermediateKey(request(), () => Promise.resolve(), {
       signal: controller.signal
@@ -301,9 +307,9 @@ describe("AWS KMS envelope custodian", () => {
     aborted.abort("CANARY_ABORT_REASON");
     const unusedKms = transport();
     const abortedWorker = createAwsKmsEnvelopeCustodian({
-      activeRoots: AI_ROOTS,
+      activeRoots: INDEX_ROOTS,
       transport: unusedKms,
-      workload: "organization_worker"
+      workload: "index_worker"
     });
     try {
       await abortedWorker.withGeneratedIntermediateKey(request(), () => Promise.resolve(), {

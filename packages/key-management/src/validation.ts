@@ -6,6 +6,7 @@ import {
   KeyManagementErrorCode,
   keyManagementFailure,
   type AiAssistedRootKeySet,
+  type IndexWorkerRootKeySet,
   type CreateIntermediateKeyRequest,
   type KeyBinding,
   type KeyClass,
@@ -19,8 +20,8 @@ import {
   type RetiredRootKeySet,
   type RootKeySet,
   type WorkloadRootKeySet
-} from "./types";
-import { decodeBase64Url } from "./base64url";
+} from "./types.js";
+import { decodeBase64Url } from "./base64url.js";
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const OWNER_ID_PATTERN =
@@ -356,26 +357,27 @@ export function assertKmsKeyArn(value: unknown): asserts value is string {
 
 function parseRootKeyClasses(
   value: unknown,
-  requiredClasses: readonly KeyClass[]
-): Readonly<Partial<Record<KeyClass, Readonly<Record<KeyPurpose, string>>>>> {
+  requiredClasses: readonly KeyClass[],
+  requiredPurposes: readonly KeyPurpose[] = KEY_PURPOSES
+): Readonly<Partial<Record<KeyClass, Readonly<Partial<Record<KeyPurpose, string>>>>>> {
   if (!isRecord(value) || !hasExactKeys(value, requiredClasses)) {
     keyManagementFailure(
       KeyManagementErrorCode.CONFIGURATION_INVALID,
       "AWS KMS root-key configuration is invalid"
     );
   }
-  const output = {} as Record<KeyClass, Record<KeyPurpose, string>>;
+  const output: Partial<Record<KeyClass, Partial<Record<KeyPurpose, string>>>> = {};
   const seen = new Set<string>();
   for (const keyClass of requiredClasses) {
     const purposes = value[keyClass];
-    if (!isRecord(purposes) || !hasExactKeys(purposes, KEY_PURPOSES)) {
+    if (!isRecord(purposes) || !hasExactKeys(purposes, requiredPurposes)) {
       keyManagementFailure(
         KeyManagementErrorCode.CONFIGURATION_INVALID,
         "AWS KMS root-key configuration is invalid"
       );
     }
-    output[keyClass] = {} as Record<KeyPurpose, string>;
-    for (const purpose of KEY_PURPOSES) {
+    const parsedPurposes: Partial<Record<KeyPurpose, string>> = {};
+    for (const purpose of requiredPurposes) {
       const arn = purposes[purpose];
       assertKmsKeyArn(arn);
       if (seen.has(arn)) {
@@ -385,9 +387,9 @@ function parseRootKeyClasses(
         );
       }
       seen.add(arn);
-      output[keyClass][purpose] = arn;
+      parsedPurposes[purpose] = arn;
     }
-    Object.freeze(output[keyClass]);
+    output[keyClass] = Object.freeze(parsedPurposes);
   }
   return Object.freeze(output);
 }
@@ -398,6 +400,9 @@ export function parseRootKeySet(value: unknown): RootKeySet {
 
 export function parseWorkloadRootKeySet(value: unknown, workload: KeyWorkload): WorkloadRootKeySet {
   assertWorkload(workload);
+  if (workload === "index_worker") {
+    return parseRootKeyClasses(value, ["ai_assisted"], ["object_wrap"]) as IndexWorkerRootKeySet;
+  }
   if (workload === "organization_worker") {
     return parseRootKeyClasses(value, ["ai_assisted"]) as AiAssistedRootKeySet;
   }
@@ -410,7 +415,7 @@ export function parseRetiredRootKeySet(
 ): RetiredRootKeySet {
   if (value === undefined) return Object.freeze({});
   const activeByClass = active as Readonly<
-    Partial<Record<KeyClass, Readonly<Record<KeyPurpose, string>>>>
+    Partial<Record<KeyClass, Readonly<Partial<Record<KeyPurpose, string>>>>>
   >;
   const activeClasses = KEY_CLASSES.filter((keyClass) => activeByClass[keyClass] !== undefined);
   if (
@@ -422,25 +427,37 @@ export function parseRetiredRootKeySet(
       "AWS KMS retired root-key configuration is invalid"
     );
   }
+  const activePurposesByClass = Object.fromEntries(
+    activeClasses.map((keyClass) => [
+      keyClass,
+      KEY_PURPOSES.filter((purpose) => activeByClass[keyClass]?.[purpose] !== undefined)
+    ])
+  ) as Readonly<Partial<Record<KeyClass, readonly KeyPurpose[]>>>;
   const activeArns = new Set(
-    activeClasses.flatMap((keyClass) => {
-      const purposes = activeByClass[keyClass];
-      return purposes === undefined ? [] : KEY_PURPOSES.map((purpose) => purposes[purpose]);
-    })
+    activeClasses.flatMap((keyClass) =>
+      (activePurposesByClass[keyClass] ?? []).flatMap((purpose) => {
+        const arn = activeByClass[keyClass]?.[purpose];
+        return arn === undefined ? [] : [arn];
+      })
+    )
   );
   const allRetired = new Set<string>();
   const output: Partial<Record<KeyClass, Partial<Record<KeyPurpose, readonly string[]>>>> = {};
   for (const keyClass of activeClasses) {
     const purposes = value[keyClass];
     if (purposes === undefined) continue;
-    if (!isRecord(purposes) || Object.keys(purposes).some((key) => !includes(KEY_PURPOSES, key))) {
+    const allowedPurposes = activePurposesByClass[keyClass] ?? [];
+    if (
+      !isRecord(purposes) ||
+      Object.keys(purposes).some((key) => !includes(allowedPurposes, key))
+    ) {
       keyManagementFailure(
         KeyManagementErrorCode.CONFIGURATION_INVALID,
         "AWS KMS retired root-key configuration is invalid"
       );
     }
     const parsedPurposes: Partial<Record<KeyPurpose, readonly string[]>> = {};
-    for (const purpose of KEY_PURPOSES) {
+    for (const purpose of allowedPurposes) {
       const arns = purposes[purpose];
       if (arns === undefined) continue;
       if (!Array.isArray(arns) || arns.length > 20) {
@@ -476,9 +493,16 @@ export function assertWorkload(value: unknown): asserts value is KeyWorkload {
   }
 }
 
-export function assertWorkloadCanAccess(workload: KeyWorkload, keyClass: KeyClass): void {
+export function assertWorkloadCanAccess(
+  workload: KeyWorkload,
+  keyClass: KeyClass,
+  purpose?: KeyPurpose
+): void {
   assertWorkload(workload);
-  if (workload === "organization_worker" && keyClass === "private_manual") {
+  if (
+    (workload === "organization_worker" && keyClass === "private_manual") ||
+    (workload === "index_worker" && (keyClass !== "ai_assisted" || purpose !== "object_wrap"))
+  ) {
     keyManagementFailure(KeyManagementErrorCode.ACCESS_DENIED, "Key access is denied");
   }
 }

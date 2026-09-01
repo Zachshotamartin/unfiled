@@ -113,4 +113,30 @@ describe("private RAG payload values", () => {
       buildPrivateRagPayloadValue(input({ updatedAt: "2026-08-31T05:00:00-07:00" }))
     ).toThrow(expect.objectContaining({ code: "invalid_timestamp" }));
   });
+
+  it("accepts canonical ASCII and Unicode text while rejecting normalization changes", () => {
+    const value = buildPrivateRagPayloadValue(input());
+    const codec = createPrivateRagPayloadCodec(EXPECTED);
+
+    expect(
+      codec.parse({ ...value, normalizedLexicalText: 'canonical "quoted" \\ path' })
+    ).toMatchObject({ normalizedLexicalText: 'canonical "quoted" \\ path' });
+    expect(codec.parse({ ...value, normalizedLexicalText: "café notes" })).toMatchObject({
+      normalizedLexicalText: "café notes"
+    });
+
+    for (const normalizedLexicalText of [
+      "Uppercase",
+      "double  space",
+      "tab\tspace",
+      " leading",
+      "trailing ",
+      "café",
+      "Kelvin"
+    ]) {
+      expect(() => codec.parse({ ...value, normalizedLexicalText })).toThrow(
+        expect.objectContaining({ code: "invalid_text" })
+      );
+    }
+  });
 });

@@ -18,7 +18,7 @@ const keyMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@unfiled/key-management", () => ({
-  assertAiAssistedKmsReadiness: keyMocks.assertReadiness,
+  assertIndexWorkerKmsReadiness: keyMocks.assertReadiness,
   createAwsKmsEnvelopeCustodian: keyMocks.createCustodian,
   createVercelOidcKmsTransport: keyMocks.createTransport
 }));
@@ -31,8 +31,6 @@ const {
 } = await import("../src/key-management-adapter");
 
 const awsBoundary: WorkerConfig["keyBoundary"] = {
-  aiContentMacKmsKeyArn:
-    "arn:aws:kms:us-west-2:123456789012:key/66666666-7777-4888-9999-aaaaaaaaaaaa",
   aiObjectWrapKmsKeyArn:
     "arn:aws:kms:us-west-2:123456789012:key/11111111-2222-4333-8444-555555555555",
   expectedOidcSubject: "owner:team-example:project:unfiled-worker:environment:production",
@@ -42,7 +40,6 @@ const awsBoundary: WorkerConfig["keyBoundary"] = {
   region: "us-west-2",
   retiredRoots: {
     ai_assisted: {
-      content_mac: ["arn:aws:kms:us-west-2:123456789012:key/77777777-7777-4777-8777-777777777777"],
       object_wrap: ["arn:aws:kms:us-west-2:123456789012:key/88888888-8888-4888-8888-888888888888"]
     }
   },
@@ -133,7 +130,7 @@ describe("production key-management composition", () => {
     keyMocks.verifyOidc.mockReset();
   });
 
-  it("uses the worker role and proves both exact AI roots before issuing authority", async () => {
+  it("uses the worker role and proves the exact AI object-wrap root before issuing authority", async () => {
     let retainedAuthority: Parameters<typeof custodianForAiAssistedAuthority>[0] | undefined;
     let retainedFacade: IntermediateKeyCustodian | undefined;
     const closeSawRevoked: boolean[] = [];
@@ -189,13 +186,11 @@ describe("production key-management composition", () => {
     expect(keyMocks.createTransport).toHaveBeenCalledWith({
       region: "us-west-2",
       roleArn: "arn:aws:iam::123456789012:role/unfiled-worker-production",
-      workload: "organization_worker"
+      workload: "index_worker"
     });
     expect(keyMocks.assertReadiness).toHaveBeenCalledWith({
       activeRoots: {
         ai_assisted: {
-          content_mac:
-            "arn:aws:kms:us-west-2:123456789012:key/66666666-7777-4888-9999-aaaaaaaaaaaa",
           object_wrap: "arn:aws:kms:us-west-2:123456789012:key/11111111-2222-4333-8444-555555555555"
         }
       },
@@ -205,14 +200,12 @@ describe("production key-management composition", () => {
     expect(keyMocks.createCustodian).toHaveBeenCalledWith({
       activeRoots: {
         ai_assisted: {
-          content_mac:
-            "arn:aws:kms:us-west-2:123456789012:key/66666666-7777-4888-9999-aaaaaaaaaaaa",
           object_wrap: "arn:aws:kms:us-west-2:123456789012:key/11111111-2222-4333-8444-555555555555"
         }
       },
       retiredRoots: awsBoundary.retiredRoots,
       transport,
-      workload: "organization_worker"
+      workload: "index_worker"
     });
     expect(
       JSON.stringify([

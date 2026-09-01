@@ -4,10 +4,10 @@ import type {
   IndexDatabaseQuery,
   IndexDatabaseQueryExecutor,
   IndexDatabaseQueryResult
-} from "./index-database";
-import { IndexDatabaseContractError, NOTE_INDEX_RPC_NAMES } from "./index-database";
-import { parseIndexWorkerDatabaseUrl } from "./index-database-url";
-import { INDEX_DATABASE_QUERY_CANCEL_GRACE_MS } from "./config";
+} from "./index-database.js";
+import { IndexDatabaseContractError, NOTE_INDEX_RPC_NAMES } from "./index-database.js";
+import { parseIndexWorkerDatabaseUrl } from "./index-database-url.js";
+import { INDEX_DATABASE_QUERY_CANCEL_GRACE_MS } from "./config.js";
 
 const EXPECTED_ROLE = "unfiled_index_worker";
 const IDENTITY_SQL =

@@ -3,16 +3,17 @@ import type {
   DecryptDataKeyResponse,
   GenerateDataKeyResponse,
   KmsTransportOperationOptions
-} from "./aws-transport";
-import { kmsEncryptionContextForKey } from "./kms-context";
+} from "./aws-transport.js";
+import { kmsEncryptionContextForKey } from "./kms-context.js";
 import {
   KEY_PURPOSES,
   KeyManagementErrorCode,
   keyManagementFailure,
   type AiAssistedRootKeySet,
+  type IndexWorkerRootKeySet,
   type KeyPurpose
-} from "./types";
-import { parseWorkloadRootKeySet } from "./validation";
+} from "./types.js";
+import { parseWorkloadRootKeySet } from "./validation.js";
 
 const READINESS_OWNER_ID = "00000000-0000-4000-8000-000000000001";
 const INTERMEDIATE_KEY_BYTES = 32;
@@ -22,6 +23,12 @@ type AiAssistedReadinessTransport = Pick<AwsKmsTransport, "decryptDataKey" | "ge
 
 export type AiAssistedKmsReadinessOptions = Readonly<{
   activeRoots: AiAssistedRootKeySet;
+  signal?: AbortSignal;
+  transport: AiAssistedReadinessTransport;
+}>;
+
+export type IndexWorkerKmsReadinessOptions = Readonly<{
+  activeRoots: IndexWorkerRootKeySet;
   signal?: AbortSignal;
   transport: AiAssistedReadinessTransport;
 }>;
@@ -161,4 +168,23 @@ export async function assertAiAssistedKmsReadiness(
       options.signal
     );
   }
+}
+
+/**
+ * Proves only the index worker's active AI-assisted object-wrap root. The
+ * dedicated workload has no content-MAC root in its runtime configuration.
+ */
+export async function assertIndexWorkerKmsReadiness(
+  options: IndexWorkerKmsReadinessOptions
+): Promise<void> {
+  const roots = parseWorkloadRootKeySet(
+    options.activeRoots,
+    "index_worker"
+  ) as IndexWorkerRootKeySet;
+  await assertPurposeReady(
+    options.transport,
+    "object_wrap",
+    roots.ai_assisted.object_wrap,
+    options.signal
+  );
 }

@@ -23,6 +23,7 @@ import {
 import {
   AI_ROOTS,
   CREATED_AT,
+  INDEX_ROOTS,
   OWNER_A,
   RETIRED_AI_OBJECT_ROOT,
   ROOTS,
@@ -181,12 +182,21 @@ describe("key-management validation", () => {
 
   it("requires only AI roots for workers and keeps private roots out of worker configuration", () => {
     expect(parseWorkloadRootKeySet(AI_ROOTS, "organization_worker")).toEqual(AI_ROOTS);
+    expect(parseWorkloadRootKeySet(INDEX_ROOTS, "index_worker")).toEqual(INDEX_ROOTS);
     expect(() => parseWorkloadRootKeySet(ROOTS, "organization_worker")).toThrow(KeyManagementError);
+    expect(() => parseWorkloadRootKeySet(AI_ROOTS, "index_worker")).toThrow(KeyManagementError);
+    expect(() => parseWorkloadRootKeySet(ROOTS, "index_worker")).toThrow(KeyManagementError);
     expect(() => parseWorkloadRootKeySet(AI_ROOTS, "interactive_api")).toThrow(KeyManagementError);
     expect(() =>
       parseRetiredRootKeySet(
         { private_manual: { object_wrap: [RETIRED_AI_OBJECT_ROOT] } },
         AI_ROOTS
+      )
+    ).toThrow(KeyManagementError);
+    expect(() =>
+      parseRetiredRootKeySet(
+        { ai_assisted: { content_mac: [RETIRED_AI_OBJECT_ROOT] } },
+        INDEX_ROOTS
       )
     ).toThrow(KeyManagementError);
   });
@@ -231,6 +241,18 @@ describe("key-management validation", () => {
       throw new Error("expected access denial");
     } catch (error: unknown) {
       expect(error).toSatisfy(expectCode(KeyManagementErrorCode.ACCESS_DENIED));
+    }
+    expect(() =>
+      assertWorkloadCanAccess("index_worker", "ai_assisted", "object_wrap")
+    ).not.toThrow();
+    for (const [keyClass, purpose] of [
+      ["ai_assisted", "content_mac"],
+      ["private_manual", "object_wrap"],
+      ["private_manual", "content_mac"]
+    ] as const) {
+      expect(() => assertWorkloadCanAccess("index_worker", keyClass, purpose)).toThrow(
+        KeyManagementError
+      );
     }
   });
 });

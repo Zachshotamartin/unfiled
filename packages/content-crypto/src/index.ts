@@ -9,7 +9,16 @@ const MAX_PLAINTEXT_BYTES = 1_048_576;
 const MAX_SERIALIZED_ENVELOPE_BYTES = 1_500_000;
 const MAX_IDENTIFIER_LENGTH = 128;
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
-const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/u;
+const BASE64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const INVALID_BASE64URL_DIGIT = 0xff;
+const BASE64URL_DECODE_TABLE = (() => {
+  const table = new Uint8Array(128);
+  table.fill(INVALID_BASE64URL_DIGIT);
+  for (let index = 0; index < BASE64URL_ALPHABET.length; index += 1) {
+    table[BASE64URL_ALPHABET.charCodeAt(index)] = index;
+  }
+  return table;
+})();
 
 export const encryptedContentKinds = Object.freeze([
   "capture",
@@ -158,41 +167,76 @@ function sameContext(left: EncryptionContext, right: EncryptionContext): boolean
 }
 
 function encodeBase64Url(bytes: Uint8Array): string {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
   let encoded = "";
   for (let index = 0; index < bytes.length; index += 3) {
     const first = bytes[index] ?? 0;
     const second = bytes[index + 1];
     const third = bytes[index + 2];
     const block = (first << 16) | ((second ?? 0) << 8) | (third ?? 0);
-    encoded += alphabet.charAt((block >>> 18) & 63);
-    encoded += alphabet.charAt((block >>> 12) & 63);
-    if (second !== undefined) encoded += alphabet.charAt((block >>> 6) & 63);
-    if (third !== undefined) encoded += alphabet.charAt(block & 63);
+    encoded += BASE64URL_ALPHABET.charAt((block >>> 18) & 63);
+    encoded += BASE64URL_ALPHABET.charAt((block >>> 12) & 63);
+    if (second !== undefined) encoded += BASE64URL_ALPHABET.charAt((block >>> 6) & 63);
+    if (third !== undefined) encoded += BASE64URL_ALPHABET.charAt(block & 63);
   }
   return encoded;
 }
 
-function decodeBase64Url(value: string, maximumBytes: number): Uint8Array {
+function base64UrlDigit(value: string, index: number): number {
+  const code = value.charCodeAt(index);
+  return code < BASE64URL_DECODE_TABLE.length
+    ? (BASE64URL_DECODE_TABLE[code] ?? INVALID_BASE64URL_DIGIT)
+    : INVALID_BASE64URL_DIGIT;
+}
+
+function base64UrlByteLength(
+  value: string,
+  maximumBytes: number,
+  validateCharacters: boolean
+): number {
   if (
     value.length === 0 ||
     value.length > Math.ceil((maximumBytes * 4) / 3) ||
-    !BASE64URL_PATTERN.test(value) ||
     value.length % 4 === 1
   ) {
     fail(ContentCryptoErrorCode.INVALID_ENVELOPE, "Envelope encoding is invalid");
   }
 
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  const remainder = value.length % 4;
+  const finalSextet = base64UrlDigit(value, value.length - 1);
+  if (
+    finalSextet === INVALID_BASE64URL_DIGIT ||
+    (remainder === 2 && (finalSextet & 0x0f) !== 0) ||
+    (remainder === 3 && (finalSextet & 0x03) !== 0)
+  ) {
+    fail(ContentCryptoErrorCode.INVALID_ENVELOPE, "Envelope encoding is not canonical");
+  }
   const outputLength = Math.floor((value.length * 6) / 8);
+  if (outputLength > maximumBytes) {
+    fail(ContentCryptoErrorCode.INVALID_ENVELOPE, "Envelope encoding is invalid");
+  }
+  if (validateCharacters) {
+    for (let index = 0; index < value.length; index += 1) {
+      if (base64UrlDigit(value, index) === INVALID_BASE64URL_DIGIT) {
+        fail(ContentCryptoErrorCode.INVALID_ENVELOPE, "Envelope encoding is invalid");
+      }
+    }
+  }
+  return outputLength;
+}
+
+function decodeBase64Url(value: string, maximumBytes: number): Uint8Array {
+  const outputLength = base64UrlByteLength(value, maximumBytes, false);
   const output = new Uint8Array(outputLength);
   let accumulator = 0;
   let bits = 0;
   let outputIndex = 0;
 
-  for (const character of value) {
-    const digit = alphabet.indexOf(character);
-    if (digit < 0) fail(ContentCryptoErrorCode.INVALID_ENVELOPE, "Envelope encoding is invalid");
+  for (let inputIndex = 0; inputIndex < value.length; inputIndex += 1) {
+    const digit = base64UrlDigit(value, inputIndex);
+    if (digit === INVALID_BASE64URL_DIGIT) {
+      output.fill(0);
+      fail(ContentCryptoErrorCode.INVALID_ENVELOPE, "Envelope encoding is invalid");
+    }
     accumulator = (accumulator << 6) | digit;
     bits += 6;
     if (bits >= 8) {
@@ -202,26 +246,35 @@ function decodeBase64Url(value: string, maximumBytes: number): Uint8Array {
     }
   }
 
-  if (outputIndex !== output.length || encodeBase64Url(output) !== value) {
+  if (outputIndex !== output.length) {
+    output.fill(0);
     fail(ContentCryptoErrorCode.INVALID_ENVELOPE, "Envelope encoding is not canonical");
   }
   return output;
 }
 
-function parseEncryptedPart(value: unknown, expectedCiphertextBytes?: number): EncryptedPart {
+function parseEncryptedPart(
+  value: unknown,
+  expectedCiphertextBytes?: number,
+  validateEncoding = true
+): EncryptedPart {
   if (!isRecord(value) || !hasExactKeys(value, ["nonce", "ciphertext"])) {
     fail(ContentCryptoErrorCode.INVALID_ENVELOPE, "Encrypted part is invalid");
   }
   if (typeof value.nonce !== "string" || typeof value.ciphertext !== "string") {
     fail(ContentCryptoErrorCode.INVALID_ENVELOPE, "Encrypted part is invalid");
   }
-  const nonce = decodeBase64Url(value.nonce, GCM_NONCE_BYTES);
   const maximumCiphertextBytes = expectedCiphertextBytes ?? MAX_PLAINTEXT_BYTES + GCM_TAG_BYTES;
-  const ciphertext = decodeBase64Url(value.ciphertext, maximumCiphertextBytes);
+  const nonceLength = base64UrlByteLength(value.nonce, GCM_NONCE_BYTES, validateEncoding);
+  const ciphertextLength = base64UrlByteLength(
+    value.ciphertext,
+    maximumCiphertextBytes,
+    validateEncoding
+  );
   if (
-    nonce.length !== GCM_NONCE_BYTES ||
-    ciphertext.length < GCM_TAG_BYTES ||
-    (expectedCiphertextBytes !== undefined && ciphertext.length !== expectedCiphertextBytes)
+    nonceLength !== GCM_NONCE_BYTES ||
+    ciphertextLength < GCM_TAG_BYTES ||
+    (expectedCiphertextBytes !== undefined && ciphertextLength !== expectedCiphertextBytes)
   ) {
     fail(ContentCryptoErrorCode.INVALID_ENVELOPE, "Encrypted part has an invalid length");
   }
@@ -251,7 +304,7 @@ function parseContext(value: unknown): EncryptionContext {
   });
 }
 
-function parseEnvelopeValue(value: unknown): ContentEnvelopeV1 {
+function parseEnvelopeValue(value: unknown, validateEncoding = true): ContentEnvelopeV1 {
   if (
     !isRecord(value) ||
     !hasExactKeys(value, ["version", "suite", "keyId", "context", "wrappedDataKey", "payload"]) ||
@@ -266,8 +319,12 @@ function parseEnvelopeValue(value: unknown): ContentEnvelopeV1 {
     suite: CIPHER_SUITE,
     keyId: value.keyId,
     context: parseContext(value.context),
-    wrappedDataKey: parseEncryptedPart(value.wrappedDataKey, DATA_KEY_BYTES + GCM_TAG_BYTES),
-    payload: parseEncryptedPart(value.payload)
+    wrappedDataKey: parseEncryptedPart(
+      value.wrappedDataKey,
+      DATA_KEY_BYTES + GCM_TAG_BYTES,
+      validateEncoding
+    ),
+    payload: parseEncryptedPart(value.payload, undefined, validateEncoding)
   });
 }
 
@@ -484,7 +541,9 @@ export async function openBytes(
   keyEncryptionKey: KeyEncryptionKey,
   cryptoImplementation?: Crypto
 ): Promise<Uint8Array> {
-  const envelope = parseEnvelopeValue(envelopeValue);
+  // The decode operations below perform the full alphabet and canonical-tail validation once.
+  // Avoid scanning maximum-sized ciphertext a second time while constructing the envelope view.
+  const envelope = parseEnvelopeValue(envelopeValue, false);
   assertContext(expectedContext);
   assertKeyEncryptionKey(keyEncryptionKey);
   if (!sameContext(envelope.context, expectedContext)) {

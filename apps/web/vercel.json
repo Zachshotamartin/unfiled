@@ -10,6 +10,10 @@
       "schedule": "17 3 * * *"
     },
     {
+      "path": "/api/internal/indexing/maintenance",
+      "schedule": "22 2 * * *"
+    },
+    {
       "path": "/api/internal/indexing/drain",
       "schedule": "27 3 * * *"
     }

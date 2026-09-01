@@ -12,7 +12,7 @@ import {
   type IntermediateKeyCustodian,
   type ManagedKeyRecordV1
 } from "../src/index";
-import { AI_ROOTS, CREATED_AT, OWNER_A, OWNER_B, ROOTS, rawKey } from "./fixtures";
+import { CREATED_AT, INDEX_ROOTS, OWNER_A, OWNER_B, ROOTS, rawKey } from "./fixtures";
 
 function expectCode(code: string): (error: unknown) => boolean {
   return (error: unknown) => error instanceof KeyManagementError && error.code === code;
@@ -59,9 +59,9 @@ describe("key custody role-separation probe", () => {
   it("proves AI round-trip, software private denial, wrong-context rejection, and safe events", async () => {
     const events: unknown[] = [];
     const custodian = createAwsKmsEnvelopeCustodian({
-      activeRoots: AI_ROOTS,
+      activeRoots: INDEX_ROOTS,
       transport: contextAwareTransport(),
-      workload: "organization_worker"
+      workload: "index_worker"
     });
     const report = await runKeyCustodyProbe({
       aiKeyRequest: aiRequest(),
@@ -71,10 +71,12 @@ describe("key custody role-separation probe", () => {
     });
 
     expect(report).toEqual({
+      aiContentMacDenialEvidence: "application_guard",
       passed: true,
       privateDenialEvidence: "application_guard",
       checks: [
         { check: "ai_generate_decrypt", status: "passed" },
+        { check: "ai_content_mac_application_guard_denied", status: "passed" },
         { check: "private_object_wrap_application_guard_denied", status: "passed" },
         { check: "private_content_mac_application_guard_denied", status: "passed" },
         { check: "wrong_context_denied", status: "passed" },
@@ -100,21 +102,27 @@ describe("key custody role-separation probe", () => {
       reEncryptDataKey: vi.fn(() => Promise.reject(new Error("not used")))
     };
     const custodian = createAwsKmsEnvelopeCustodian({
-      activeRoots: AI_ROOTS,
+      activeRoots: INDEX_ROOTS,
       transport: contextAwareTransport(),
-      workload: "organization_worker"
+      workload: "index_worker"
     });
 
     const report = await runKeyCustodyProbe({
       aiKeyRequest: aiRequest(),
       custodian,
       directPrivateKmsProbe: {
+        aiContentMacRootArn: ROOTS.ai_assisted.content_mac,
         rootKeyArns: ROOTS.private_manual,
         transport: privateTransport
       },
       wrongOwnerId: OWNER_B
     });
     expect(report).toMatchObject({ passed: true, privateDenialEvidence: "direct_kms" });
+    expect(report).toMatchObject({ aiContentMacDenialEvidence: "direct_kms" });
+    expect(report.checks).toContainEqual({
+      check: "ai_content_mac_kms_generate_decrypt_denied",
+      status: "passed"
+    });
     expect(report.checks).toContainEqual({
       check: "private_object_wrap_kms_generate_decrypt_denied",
       status: "passed"
@@ -123,9 +131,19 @@ describe("key custody role-separation probe", () => {
       check: "private_content_mac_kms_generate_decrypt_denied",
       status: "passed"
     });
-    expect(privateGenerate).toHaveBeenCalledTimes(2);
-    expect(privateDecrypt).toHaveBeenCalledTimes(2);
+    expect(privateGenerate).toHaveBeenCalledTimes(3);
+    expect(privateDecrypt).toHaveBeenCalledTimes(3);
     expect(privateGenerate).toHaveBeenNthCalledWith(1, {
+      EncryptionContext: {
+        UnfiledOwnerId: OWNER_A,
+        UnfiledKeyClass: "ai_assisted",
+        UnfiledKeyPurpose: "content_mac",
+        UnfiledKeyRecordId: "probe.ai.content-mac.v1"
+      },
+      KeyId: ROOTS.ai_assisted.content_mac,
+      KeySpec: "AES_256"
+    });
+    expect(privateGenerate).toHaveBeenNthCalledWith(2, {
       EncryptionContext: {
         UnfiledOwnerId: OWNER_A,
         UnfiledKeyClass: "private_manual",
@@ -135,7 +153,7 @@ describe("key custody role-separation probe", () => {
       KeyId: ROOTS.private_manual.object_wrap,
       KeySpec: "AES_256"
     });
-    expect(privateGenerate).toHaveBeenNthCalledWith(2, {
+    expect(privateGenerate).toHaveBeenNthCalledWith(3, {
       EncryptionContext: {
         UnfiledOwnerId: OWNER_A,
         UnfiledKeyClass: "private_manual",
@@ -166,15 +184,16 @@ describe("key custody role-separation probe", () => {
       reEncryptDataKey: vi.fn(() => Promise.reject(new Error("not used")))
     };
     const custodian = createAwsKmsEnvelopeCustodian({
-      activeRoots: AI_ROOTS,
+      activeRoots: INDEX_ROOTS,
       transport: contextAwareTransport(),
-      workload: "organization_worker"
+      workload: "index_worker"
     });
     await expect(
       runKeyCustodyProbe({
         aiKeyRequest: aiRequest(),
         custodian,
         directPrivateKmsProbe: {
+          aiContentMacRootArn: ROOTS.ai_assisted.content_mac,
           rootKeyArns: ROOTS.private_manual,
           transport: privateTransport
         },
@@ -222,6 +241,7 @@ describe("key custody role-separation probe", () => {
         aiKeyRequest: aiRequest(),
         custodian: permissiveCustodian,
         directPrivateKmsProbe: {
+          aiContentMacRootArn: ROOTS.ai_assisted.content_mac,
           rootKeyArns: ROOTS.private_manual,
           transport: {
             destroy: vi.fn(),
@@ -241,9 +261,9 @@ describe("key custody role-separation probe", () => {
 
   it("rejects invalid probe bindings, collapsed roots, and non-denial provider errors", async () => {
     const custodian = createAwsKmsEnvelopeCustodian({
-      activeRoots: AI_ROOTS,
+      activeRoots: INDEX_ROOTS,
       transport: contextAwareTransport(),
-      workload: "organization_worker"
+      workload: "index_worker"
     });
     await expect(
       runKeyCustodyProbe({
@@ -264,6 +284,7 @@ describe("key custody role-separation probe", () => {
         aiKeyRequest: aiRequest(),
         custodian,
         directPrivateKmsProbe: {
+          aiContentMacRootArn: ROOTS.private_manual.object_wrap,
           rootKeyArns: {
             object_wrap: ROOTS.private_manual.object_wrap,
             content_mac: ROOTS.private_manual.object_wrap
@@ -285,6 +306,7 @@ describe("key custody role-separation probe", () => {
         aiKeyRequest: aiRequest(),
         custodian,
         directPrivateKmsProbe: {
+          aiContentMacRootArn: ROOTS.ai_assisted.content_mac,
           rootKeyArns: ROOTS.private_manual,
           transport: unavailablePrivateTransport
         },

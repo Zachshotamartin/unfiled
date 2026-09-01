@@ -1,5 +1,5 @@
-import type { AwsKmsTransport } from "./aws-transport";
-import { kmsEncryptionContextForKey } from "./kms-context";
+import type { AwsKmsTransport } from "./aws-transport.js";
+import { kmsEncryptionContextForKey } from "./kms-context.js";
 import {
   KeyManagementError,
   KeyManagementErrorCode,
@@ -7,15 +7,17 @@ import {
   type CreateIntermediateKeyRequest,
   type IntermediateKeyCustodian,
   type ManagedKeyRecordV1
-} from "./types";
+} from "./types.js";
 import {
   assertKmsKeyArn,
   normalizeCreateIntermediateKeyRequest,
   parseManagedKeyRecord
-} from "./validation";
+} from "./validation.js";
 
 export const KEY_CUSTODY_PROBE_CHECKS = Object.freeze([
   "ai_generate_decrypt",
+  "ai_content_mac_application_guard_denied",
+  "ai_content_mac_kms_generate_decrypt_denied",
   "private_object_wrap_application_guard_denied",
   "private_content_mac_application_guard_denied",
   "private_object_wrap_kms_generate_decrypt_denied",
@@ -34,12 +36,14 @@ export type KeyCustodyProbeEvent = Readonly<{
 export type KeyCustodyPrivateDenialEvidence = "application_guard" | "direct_kms";
 
 export type KeyCustodyProbeReport = Readonly<{
+  aiContentMacDenialEvidence: KeyCustodyPrivateDenialEvidence;
   checks: readonly KeyCustodyProbeEvent[];
   passed: true;
   privateDenialEvidence: KeyCustodyPrivateDenialEvidence;
 }>;
 
 export type DirectPrivateKmsProbe = Readonly<{
+  aiContentMacRootArn: string;
   rootKeyArns: Readonly<{
     content_mac: string;
     object_wrap: string;
@@ -116,6 +120,18 @@ function privateRequest(
   });
 }
 
+function aiContentMacRequest(
+  aiRequest: CreateIntermediateKeyRequest
+): CreateIntermediateKeyRequest {
+  return normalizeCreateIntermediateKeyRequest({
+    ...aiRequest,
+    purpose: "content_mac",
+    keyId: "probe.ai.content-mac.v1",
+    keyVersion: 1,
+    predecessorKeyId: null
+  });
+}
+
 function privateDenialCheck(
   purpose: "object_wrap" | "content_mac",
   evidence: KeyCustodyPrivateDenialEvidence
@@ -137,7 +153,14 @@ function validateDirectPrivateProbe(probe: DirectPrivateKmsProbe): void {
   }
   assertKmsKeyArn(probe.rootKeyArns.object_wrap);
   assertKmsKeyArn(probe.rootKeyArns.content_mac);
-  if (probe.rootKeyArns.object_wrap === probe.rootKeyArns.content_mac) {
+  assertKmsKeyArn(probe.aiContentMacRootArn);
+  if (
+    new Set([
+      probe.aiContentMacRootArn,
+      probe.rootKeyArns.object_wrap,
+      probe.rootKeyArns.content_mac
+    ]).size !== 3
+  ) {
     keyManagementFailure(KeyManagementErrorCode.KEY_INVALID, "Key custody probe failed");
   }
 }
@@ -166,7 +189,10 @@ async function expectPrivatePurposeDenied(
     );
     return;
   }
-  const rootKeyArn = directProbe.rootKeyArns[request.purpose];
+  const rootKeyArn =
+    request.keyClass === "ai_assisted"
+      ? directProbe.aiContentMacRootArn
+      : directProbe.rootKeyArns[request.purpose];
   const context = kmsEncryptionContextForKey(request);
   await expectAccessDenied(() =>
     directProbe.transport.generateDataKey({
@@ -224,6 +250,13 @@ export async function runKeyCustodyProbe(
       }
       passed("ai_generate_decrypt");
 
+      await expectPrivatePurposeDenied(options, aiContentMacRequest(aiRequest));
+      passed(
+        privateDenialEvidence === "direct_kms"
+          ? "ai_content_mac_kms_generate_decrypt_denied"
+          : "ai_content_mac_application_guard_denied"
+      );
+
       await expectPrivatePurposeDenied(options, privateRequest(aiRequest, "object_wrap"));
       passed(privateDenialCheck("object_wrap", privateDenialEvidence));
       await expectPrivatePurposeDenied(options, privateRequest(aiRequest, "content_mac"));
@@ -255,6 +288,7 @@ export async function runKeyCustodyProbe(
   }
   options.emit?.(contentFreeEvent);
   return Object.freeze({
+    aiContentMacDenialEvidence: privateDenialEvidence,
     checks: Object.freeze(checks),
     passed: true,
     privateDenialEvidence

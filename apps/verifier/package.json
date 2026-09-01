@@ -1,0 +1,35 @@
+{
+  "name": "@unfiled/verifier",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Independent strict-decrypt verifier for encrypted Unfiled RAG generations.",
+  "dependencies": {
+    "@aws-sdk/client-kms": "3.1121.0",
+    "@unfiled/contracts": "workspace:*",
+    "@unfiled/content-crypto": "workspace:*",
+    "@unfiled/key-management": "workspace:*",
+    "@unfiled/search": "workspace:*",
+    "@vercel/oidc": "3.8.5",
+    "@vercel/oidc-aws-credentials-provider": "3.3.5",
+    "pg": "8.23.0"
+  },
+  "devDependencies": {
+    "@types/pg": "8.23.1",
+    "esbuild": "0.28.2"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && esbuild src/server.ts --bundle --platform=node --format=esm --target=node22.18 --sourcemap --outfile=dist/server.js --external:pg --external:@aws-sdk/client-kms --external:@vercel/oidc --external:@vercel/oidc-aws-credentials-provider",
+    "dev": "tsx src/server.ts",
+    "lint": "eslint api scripts src test --max-warnings=0",
+    "start": "node dist/server.js",
+    "test": "vitest run",
+    "test:capacity": "vitest run --config vitest.capacity.config.ts",
+    "test:built-server": "node dist/scripts/smoke-built-server.js",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  }
+}

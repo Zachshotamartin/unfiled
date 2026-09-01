@@ -75,12 +75,32 @@ begin
 end;
 $$;
 
+create function pg_temp.verify_rag_index_generation(
+  p_owner_id uuid,
+  p_generation_id text,
+  p_expected_revision_token bigint,
+  p_attestation jsonb
+)
+returns jsonb
+language sql
+volatile
+security definer
+set search_path = ''
+as $$
+  select private.verify_rag_index_generation_impl(
+    p_owner_id, p_generation_id, p_expected_revision_token, p_attestation
+  );
+$$;
+
 create temporary table c5_values (
   key text primary key,
   value jsonb not null
 ) on commit drop;
 grant all on table c5_values to service_role, unfiled_rag_verifier;
 grant select, insert, update on table c5_values to unfiled_index_worker;
+grant execute on function pg_temp.verify_rag_index_generation(
+  uuid, text, bigint, jsonb
+) to unfiled_rag_verifier;
 
 select ok(
   private.valid_content_envelope(
@@ -1333,7 +1353,7 @@ from public.rag_index_generations
 where id = 'igen_72000000000000000000000001';
 grant unfiled_rag_verifier to postgres;
 set local role unfiled_rag_verifier;
-select public.verify_rag_index_generation(
+select pg_temp.verify_rag_index_generation(
   '22222222-2222-4222-8222-222222222222',
   'igen_72000000000000000000000001',
   (

@@ -1,4 +1,4 @@
-import { WorkerConfigurationError } from "./errors";
+import { WorkerConfigurationError } from "./errors.js";
 
 const DEFAULT_MAX_REQUEST_BYTES = 1_024;
 const DEFAULT_PORT = 8_788;
@@ -13,16 +13,16 @@ const MIN_LEASE_MARGIN_MS = 5_000;
 const INDEX_DATABASE_POOL_LIMIT = 2;
 const INDEX_COLD_SETUP_QUERY_SLOTS = 6;
 const INDEX_TERMINAL_QUERY_SLOTS_PER_JOB = 8;
-const INDEX_KMS_READINESS_CALLS = 4;
+const INDEX_KMS_READINESS_CALLS = 2;
 const INDEX_KMS_CALLS_PER_PROVIDER_ROUND = 2;
 const INDEX_KMS_CALL_BUDGET_MS = 2_000;
 export const INDEX_DATABASE_QUERY_CANCEL_GRACE_MS = 250;
-const MAX_RETIRED_AI_ROOTS_PER_PURPOSE = 20;
+const MAX_RETIRED_AI_OBJECT_WRAP_ROOTS = 20;
 const MAX_RETIRED_ROOT_REGISTRY_BYTES = 32_768;
 const MAX_DATABASE_CA_BYTES = 32_768;
 const MAX_DATABASE_URL_LENGTH = 4_096;
 const MAX_PROVIDER_KEY_LENGTH = 512;
-const RETIRED_ROOT_REGISTRY_VARIABLE = "UNFILED_RETIRED_AI_ROOT_REGISTRY_JSON";
+const RETIRED_OBJECT_WRAP_ROOTS_VARIABLE = "UNFILED_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON";
 const KMS_KEY_ARN_PATTERN =
   /^arn:(aws(?:-us-gov|-cn)?):kms:([a-z0-9-]+):(\d{12}):key\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
@@ -49,6 +49,15 @@ const PRIVATE_MANUAL_CAPABILITIES = [
 ] as const;
 
 const LEGACY_SINGULAR_KEY_VARIABLES = ["UNFILED_AI_KMS_KEY_ID"] as const;
+
+const FORBIDDEN_AI_CONTENT_MAC_CAPABILITIES = [
+  "UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN",
+  "UNFILED_RETIRED_AI_CONTENT_MAC_ROOTS_JSON",
+  "UNFILED_RETIRED_AI_ROOT_REGISTRY_JSON"
+] as const;
+
+const AI_CONTENT_MAC_CAPABILITY_PATTERN =
+  /^UNFILED_(?=[A-Z0-9_]*AI)(?=[A-Z0-9_]*CONTENT_MAC)[A-Z0-9_]+$/u;
 
 const USER_SESSION_CAPABILITIES = [
   "AUTH_SECRET",
@@ -86,13 +95,11 @@ export type LocalWorkerKeyBoundary = Readonly<{
 
 export type AiAssistedRetiredRoots = Readonly<{
   ai_assisted: Readonly<{
-    content_mac: readonly string[];
     object_wrap: readonly string[];
   }>;
 }>;
 
 export type AwsWorkerKeyBoundary = Readonly<{
-  aiContentMacKmsKeyArn: string;
   aiObjectWrapKmsKeyArn: string;
   expectedOidcSubject: string;
   kind: "aws-oidc";
@@ -146,6 +153,9 @@ export type WorkerConfig = Readonly<{
 export const WORKER_CAPABILITIES = Object.freeze({
   acceptsUserSessions: false,
   decryptKeyClasses: ["ai_assisted"] as const,
+  decryptKeyPurposes: ["object_wrap"] as const,
+  generateDataKeyClasses: ["ai_assisted"] as const,
+  generateDataKeyPurposes: ["object_wrap"] as const,
   rendersUserInterface: false
 });
 
@@ -178,6 +188,13 @@ function hasInvalidPemCharacter(value: string): boolean {
 
 function rejectCapabilities(environment: WorkerEnvironment, names: readonly string[]): void {
   const present = names.filter((name) => hasValue(environment, name));
+  if (present.length > 0) throw new WorkerConfigurationError(present);
+}
+
+function rejectAiContentMacCapabilities(environment: WorkerEnvironment): void {
+  const present = Object.keys(environment).filter(
+    (name) => AI_CONTENT_MAC_CAPABILITY_PATTERN.test(name) && hasValue(environment, name)
+  );
   if (present.length > 0) throw new WorkerConfigurationError(present);
 }
 
@@ -488,75 +505,51 @@ function parseInvocationAuth(
   return { kind: "bearer", secret: value };
 }
 
-function parseRetiredAiRoots(
+function parseRetiredAiObjectWrapRoots(
   environment: WorkerEnvironment,
   expected: Readonly<{
     accountId: string;
-    activeArns: readonly string[];
+    activeArn: string;
     partition: string;
     region: string;
   }>
 ): AiAssistedRetiredRoots {
-  const raw = environment[RETIRED_ROOT_REGISTRY_VARIABLE]?.trim() ?? "[]";
-  if (raw.length === 0) {
-    return { ai_assisted: { content_mac: [], object_wrap: [] } };
-  }
+  const raw = environment[RETIRED_OBJECT_WRAP_ROOTS_VARIABLE]?.trim() ?? "[]";
   if (new TextEncoder().encode(raw).byteLength > MAX_RETIRED_ROOT_REGISTRY_BYTES) {
-    throw new WorkerConfigurationError([RETIRED_ROOT_REGISTRY_VARIABLE]);
+    throw new WorkerConfigurationError([RETIRED_OBJECT_WRAP_ROOTS_VARIABLE]);
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    throw new WorkerConfigurationError([RETIRED_ROOT_REGISTRY_VARIABLE]);
+    throw new WorkerConfigurationError([RETIRED_OBJECT_WRAP_ROOTS_VARIABLE]);
   }
-  if (!Array.isArray(parsed) || parsed.length > MAX_RETIRED_AI_ROOTS_PER_PURPOSE * 2) {
-    throw new WorkerConfigurationError([RETIRED_ROOT_REGISTRY_VARIABLE]);
+  if (!Array.isArray(parsed) || parsed.length > MAX_RETIRED_AI_OBJECT_WRAP_ROOTS) {
+    throw new WorkerConfigurationError([RETIRED_OBJECT_WRAP_ROOTS_VARIABLE]);
   }
 
-  const activeArns = new Set(expected.activeArns);
   const allRetiredArns = new Set<string>();
-  const roots: Record<"content_mac" | "object_wrap", string[]> = {
-    content_mac: [],
-    object_wrap: []
-  };
+  const objectWrapRoots: string[] = [];
   for (const entry of parsed) {
-    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
-      throw new WorkerConfigurationError([RETIRED_ROOT_REGISTRY_VARIABLE]);
-    }
-    const record = entry as Record<string, unknown>;
-    if (
-      Object.keys(record).sort().join(",") !== "arn,keyClass,purpose,status" ||
-      record.keyClass !== "ai_assisted" ||
-      (record.purpose !== "content_mac" && record.purpose !== "object_wrap") ||
-      record.status !== "retired" ||
-      typeof record.arn !== "string"
-    ) {
-      throw new WorkerConfigurationError([RETIRED_ROOT_REGISTRY_VARIABLE]);
-    }
-    const match = KMS_KEY_ARN_PATTERN.exec(record.arn);
+    const match = typeof entry === "string" ? KMS_KEY_ARN_PATTERN.exec(entry) : null;
     if (
       match?.[1] !== expected.partition ||
       match[2] !== expected.region ||
       match[3] !== expected.accountId ||
-      activeArns.has(record.arn) ||
-      allRetiredArns.has(record.arn)
+      entry === expected.activeArn ||
+      typeof entry !== "string" ||
+      allRetiredArns.has(entry)
     ) {
-      throw new WorkerConfigurationError([RETIRED_ROOT_REGISTRY_VARIABLE]);
+      throw new WorkerConfigurationError([RETIRED_OBJECT_WRAP_ROOTS_VARIABLE]);
     }
-    const purposeRoots = roots[record.purpose];
-    if (purposeRoots.length >= MAX_RETIRED_AI_ROOTS_PER_PURPOSE) {
-      throw new WorkerConfigurationError([RETIRED_ROOT_REGISTRY_VARIABLE]);
-    }
-    purposeRoots.push(record.arn);
-    allRetiredArns.add(record.arn);
+    objectWrapRoots.push(entry);
+    allRetiredArns.add(entry);
   }
 
   return {
     ai_assisted: {
-      content_mac: Object.freeze([...roots.content_mac]),
-      object_wrap: Object.freeze([...roots.object_wrap])
+      object_wrap: Object.freeze(objectWrapRoots)
     }
   };
 }
@@ -565,13 +558,11 @@ function awsKeyBoundary(environment: WorkerEnvironment): AwsWorkerKeyBoundary {
   const region = required(environment, "UNFILED_AWS_REGION");
   const roleArn = required(environment, "UNFILED_AWS_ROLE_ARN");
   const aiObjectWrapKmsKeyArn = required(environment, "UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN");
-  const aiContentMacKmsKeyArn = required(environment, "UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN");
   const expectedOidcSubject = required(environment, "UNFILED_WORKER_EXPECTED_OIDC_SUBJECT");
   const vercelProjectId = required(environment, "UNFILED_WORKER_PROJECT_ID");
 
   const role = /^arn:(aws(?:-us-gov|-cn)?):iam::(\d{12}):role\/[A-Za-z0-9+=,.@_/-]+$/.exec(roleArn);
   const objectWrapArn = KMS_KEY_ARN_PATTERN.exec(aiObjectWrapKmsKeyArn);
-  const contentMacArn = KMS_KEY_ARN_PATTERN.exec(aiContentMacKmsKeyArn);
   const validSubject =
     expectedOidcSubject.length <= 512 &&
     expectedOidcSubject.endsWith(":environment:production") &&
@@ -583,10 +574,6 @@ function awsKeyBoundary(environment: WorkerEnvironment): AwsWorkerKeyBoundary {
   if (!/^[a-z]{2}(?:-gov)?-[a-z]+-\d$/.test(region)) invalid.push("UNFILED_AWS_REGION");
   if (role === null) invalid.push("UNFILED_AWS_ROLE_ARN");
   if (objectWrapArn === null) invalid.push("UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN");
-  if (contentMacArn === null) invalid.push("UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN");
-  if (aiObjectWrapKmsKeyArn === aiContentMacKmsKeyArn) {
-    invalid.push("UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN", "UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN");
-  }
   if (!validSubject) invalid.push("UNFILED_WORKER_EXPECTED_OIDC_SUBJECT");
   if (!/^prj_[A-Za-z0-9]+$/.test(vercelProjectId) || actualProjectId !== vercelProjectId) {
     invalid.push("UNFILED_WORKER_PROJECT_ID", "VERCEL_PROJECT_ID");
@@ -594,19 +581,12 @@ function awsKeyBoundary(environment: WorkerEnvironment): AwsWorkerKeyBoundary {
   if (
     role !== null &&
     objectWrapArn !== null &&
-    contentMacArn !== null &&
-    (role[1] !== objectWrapArn[1] ||
-      role[2] !== objectWrapArn[3] ||
-      region !== objectWrapArn[2] ||
-      role[1] !== contentMacArn[1] ||
-      role[2] !== contentMacArn[3] ||
-      region !== contentMacArn[2])
+    (role[1] !== objectWrapArn[1] || role[2] !== objectWrapArn[3] || region !== objectWrapArn[2])
   ) {
     invalid.push(
       "UNFILED_AWS_ROLE_ARN",
       "UNFILED_AWS_REGION",
-      "UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN",
-      "UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN"
+      "UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN"
     );
   }
   const rolePartition = role?.[1];
@@ -615,20 +595,18 @@ function awsKeyBoundary(environment: WorkerEnvironment): AwsWorkerKeyBoundary {
     invalid.length > 0 ||
     rolePartition === undefined ||
     roleAccountId === undefined ||
-    objectWrapArn === null ||
-    contentMacArn === null
+    objectWrapArn === null
   ) {
     throw new WorkerConfigurationError([...new Set(invalid)]);
   }
-  const retiredRoots = parseRetiredAiRoots(environment, {
+  const retiredRoots = parseRetiredAiObjectWrapRoots(environment, {
     accountId: roleAccountId,
-    activeArns: [aiObjectWrapKmsKeyArn, aiContentMacKmsKeyArn],
+    activeArn: aiObjectWrapKmsKeyArn,
     partition: rolePartition,
     region
   });
 
   return {
-    aiContentMacKmsKeyArn,
     aiObjectWrapKmsKeyArn,
     expectedOidcSubject,
     kind: "aws-oidc",
@@ -645,6 +623,8 @@ export function loadWorkerConfig(environment: WorkerEnvironment = process.env): 
   rejectCapabilities(environment, STATIC_AWS_CREDENTIALS);
   rejectCapabilities(environment, PRIVATE_MANUAL_CAPABILITIES);
   rejectCapabilities(environment, LEGACY_SINGULAR_KEY_VARIABLES);
+  rejectCapabilities(environment, FORBIDDEN_AI_CONTENT_MAC_CAPABILITIES);
+  rejectAiContentMacCapabilities(environment);
   rejectCapabilities(environment, USER_SESSION_CAPABILITIES);
   rejectAmbientDatabaseCapabilities(environment);
 

@@ -6,8 +6,8 @@ import {
   type KMSClientConfig
 } from "@aws-sdk/client-kms";
 
-import { KeyManagementErrorCode, keyManagementFailure, type KeyWorkload } from "./types";
-import { assertAwsRegion, assertAwsRoleArn, assertWorkload } from "./validation";
+import { KeyManagementErrorCode, keyManagementFailure, type KeyWorkload } from "./types.js";
+import { assertAwsRegion, assertAwsRoleArn, assertWorkload } from "./validation.js";
 
 export type KmsEncryptionContext = Readonly<Record<string, string>>;
 

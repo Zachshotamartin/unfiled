@@ -1,6 +1,6 @@
 import { importKeyEncryptionKey, type KeyEncryptionKey } from "@unfiled/content-crypto";
 
-import { decodeBase64Url } from "./base64url";
+import { decodeBase64Url } from "./base64url.js";
 import {
   KeyManagementError,
   KeyManagementErrorCode,
@@ -14,13 +14,13 @@ import {
   type ManagedContentMacKey,
   type ManagedObjectWrappingKey,
   type OwnerBoundKeyResolver
-} from "./types";
+} from "./types.js";
 import {
   assertWorkload,
   assertWorkloadCanAccess,
   parseKeyReference,
   parseKeySelector
-} from "./validation";
+} from "./validation.js";
 
 const LOCAL_KEY_RING_VARIABLE = "UNFILED_LOCAL_KEY_RING_V1";
 const LOCAL_MODE_VARIABLE = "UNFILED_KEY_CUSTODIAN";
@@ -234,8 +234,10 @@ export async function createLocalEnvironmentKeyResolver(
   const cryptoImplementation = runtimeCrypto(options.crypto);
   const entries = parseKeyRing(environment[LOCAL_KEY_RING_VARIABLE]);
   if (
-    options.workload === "organization_worker" &&
-    entries.some((entry) => entry.keyClass === "private_manual")
+    (options.workload === "organization_worker" &&
+      entries.some((entry) => entry.keyClass === "private_manual")) ||
+    (options.workload === "index_worker" &&
+      entries.some((entry) => entry.keyClass !== "ai_assisted" || entry.purpose !== "object_wrap"))
   ) {
     failConfiguration();
   }
@@ -250,12 +252,12 @@ export async function createLocalEnvironmentKeyResolver(
   );
 
   function getById(selector: KeySelector): ImportedLocalKey | null {
-    assertWorkloadCanAccess(options.workload, selector.keyClass);
+    assertWorkloadCanAccess(options.workload, selector.keyClass, selector.purpose);
     return byId.get(selectorIdentity(selector)) ?? null;
   }
 
   function getActive(binding: KeyBinding): ImportedLocalKey {
-    assertWorkloadCanAccess(options.workload, binding.keyClass);
+    assertWorkloadCanAccess(options.workload, binding.keyClass, binding.purpose);
     const item = active.get(bindingIdentity(binding));
     if (item === undefined) {
       keyManagementFailure(KeyManagementErrorCode.KEY_NOT_FOUND, "Active key is unavailable");
@@ -303,7 +305,7 @@ export async function createLocalEnvironmentKeyResolver(
     },
     contentKeyResolver(bindingValue) {
       const binding = bindingWithPurpose(bindingValue, "object_wrap");
-      assertWorkloadCanAccess(options.workload, binding.keyClass);
+      assertWorkloadCanAccess(options.workload, binding.keyClass, binding.purpose);
       return (keyId: string): Promise<KeyEncryptionKey | null> => {
         return Promise.resolve().then(() => {
           const item = getById(parseKeySelector({ ...binding, keyId }));

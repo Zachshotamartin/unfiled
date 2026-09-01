@@ -23,8 +23,6 @@ function production(overrides: WorkerEnvironment = {}): WorkerEnvironment {
   return {
     UNFILED_AWS_REGION: "us-west-2",
     UNFILED_AWS_ROLE_ARN: "arn:aws:iam::123456789012:role/unfiled-worker-production",
-    UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN:
-      "arn:aws:kms:us-west-2:123456789012:key/66666666-7777-4888-9999-aaaaaaaaaaaa",
     UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN:
       "arn:aws:kms:us-west-2:123456789012:key/11111111-2222-4333-8444-555555555555",
     UNFILED_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT:
@@ -35,7 +33,7 @@ function production(overrides: WorkerEnvironment = {}): WorkerEnvironment {
     UNFILED_TRUSTED_SOURCE_WEB_PROJECT_NAME: "unfiled-web",
     UNFILED_EMBEDDING_DIMENSIONS: "1536",
     UNFILED_EMBEDDING_MODEL_ID: "text-embedding-3-small",
-    UNFILED_OPENAI_EMBEDDING_API_KEY: "sk-test-production-key-with-sufficient-length",
+    UNFILED_OPENAI_EMBEDDING_API_KEY: "test-openai-production-key-with-sufficient-length",
     UNFILED_WORKER_DATABASE_CA_PEM_BASE64: Buffer.from(DATABASE_CA).toString("base64"),
     UNFILED_WORKER_DATABASE_EXPECTED_HOST: DATABASE_HOST,
     UNFILED_WORKER_DATABASE_PROJECT_REF: PROJECT_REF,
@@ -64,6 +62,9 @@ describe("worker environment validation", () => {
     expect(WORKER_CAPABILITIES).toEqual({
       acceptsUserSessions: false,
       decryptKeyClasses: ["ai_assisted"],
+      decryptKeyPurposes: ["object_wrap"],
+      generateDataKeyClasses: ["ai_assisted"],
+      generateDataKeyPurposes: ["object_wrap"],
       rendersUserInterface: false
     });
   });
@@ -104,8 +105,6 @@ describe("worker environment validation", () => {
       }
     });
     expect(config.keyBoundary).toEqual({
-      aiContentMacKmsKeyArn:
-        "arn:aws:kms:us-west-2:123456789012:key/66666666-7777-4888-9999-aaaaaaaaaaaa",
       aiObjectWrapKmsKeyArn:
         "arn:aws:kms:us-west-2:123456789012:key/11111111-2222-4333-8444-555555555555",
       expectedOidcSubject: "owner:team-example:project:unfiled-worker:environment:production",
@@ -113,7 +112,7 @@ describe("worker environment validation", () => {
       keyClass: "ai_assisted",
       oidcAudience: "sts.amazonaws.com",
       region: "us-west-2",
-      retiredRoots: { ai_assisted: { content_mac: [], object_wrap: [] } },
+      retiredRoots: { ai_assisted: { object_wrap: [] } },
       roleArn: "arn:aws:iam::123456789012:role/unfiled-worker-production",
       vercelProjectId: "prj_example"
     });
@@ -128,6 +127,10 @@ describe("worker environment validation", () => {
       "AWS_SHARED_CREDENTIALS_FILE",
       "AWS_SESSION_TOKEN",
       "UNFILED_AI_KMS_KEY_ID",
+      "UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN",
+      "UNFILED_RETIRED_AI_CONTENT_MAC_ROOTS_JSON",
+      "UNFILED_RETIRED_AI_ROOT_REGISTRY_JSON",
+      "UNFILED_WORKER_AI_CONTENT_MAC_ROOT_REGISTRY_JSON",
       "UNFILED_PRIVATE_CONTENT_MAC_KMS_KEY_ARN",
       "UNFILED_PRIVATE_KMS_KEY_ID",
       "UNFILED_PRIVATE_OBJECT_WRAP_KMS_KEY_ARN",
@@ -204,12 +207,12 @@ describe("worker environment validation", () => {
         })
       )
     ).toThrow("UNFILED_WORKER_TIMEOUT_MS");
-    expect(() => loadWorkerConfig(production({ UNFILED_WORKER_TIMEOUT_MS: "43249" }))).toThrow(
+    expect(() => loadWorkerConfig(production({ UNFILED_WORKER_TIMEOUT_MS: "39249" }))).toThrow(
       "UNFILED_WORKER_TIMEOUT_MS"
     );
     expect(
-      loadWorkerConfig(production({ UNFILED_WORKER_TIMEOUT_MS: "43250" })).requestTimeoutMs
-    ).toBe(43_250);
+      loadWorkerConfig(production({ UNFILED_WORKER_TIMEOUT_MS: "39250" })).requestTimeoutMs
+    ).toBe(39_250);
     expect(
       loadWorkerConfig(
         production({
@@ -284,19 +287,12 @@ describe("worker environment validation", () => {
         UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN:
           "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-4333-8444-555555555555"
       },
-      {
-        UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN: "alias/unfiled/ai-assisted/content-mac"
-      },
       { UNFILED_WORKER_EXPECTED_OIDC_SUBJECT: "owner:team_example:environment:preview" },
       {
         UNFILED_WORKER_EXPECTED_OIDC_SUBJECT:
           "owner:team_example:project:prj_example:environment:production"
       },
-      { VERCEL_PROJECT_ID: "prj_somewhere_else" },
-      {
-        UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN:
-          "arn:aws:kms:us-west-2:123456789012:key/11111111-2222-4333-8444-555555555555"
-      }
+      { VERCEL_PROJECT_ID: "prj_somewhere_else" }
     ];
 
     for (const invalid of invalidCases) {
@@ -333,115 +329,71 @@ describe("worker environment validation", () => {
     });
   });
 
-  it("requires two full KMS key ARNs rather than aliases or raw IDs", () => {
+  it("requires one full object-wrap KMS key ARN rather than an alias or raw ID", () => {
     expect(() =>
       loadWorkerConfig(
         production({ UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN: "alias/unfiled/ai-assisted/object-wrap" })
       )
     ).toThrow("UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN");
     expect(() =>
-      loadWorkerConfig(
-        production({
-          UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN: "66666666-7777-4888-9999-aaaaaaaaaaaa"
-        })
-      )
-    ).toThrow("UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN");
+      loadWorkerConfig(production({ UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN: "11111111" }))
+    ).toThrow("UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN");
   });
 
   it("accepts UUID-shaped AWS KMS key IDs without RFC version or variant constraints", () => {
     const documentedShape =
       "arn:aws:kms:us-west-2:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab";
-    const nonRfcVersionAndVariant =
-      "arn:aws:kms:us-west-2:123456789012:key/abcdef12-3456-f890-1234-567890abcdef";
-
     expect(
       loadWorkerConfig(
         production({
-          UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN: nonRfcVersionAndVariant,
           UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN: documentedShape
         })
       ).keyBoundary
     ).toMatchObject({
-      aiContentMacKmsKeyArn: nonRfcVersionAndVariant,
       aiObjectWrapKmsKeyArn: documentedShape
     });
   });
 
-  it("accepts only bounded, exact AI-assisted retired-root registry records", () => {
+  it("accepts only a bounded exact list of retired AI object-wrap roots", () => {
     const retiredObjectWrap =
       "arn:aws:kms:us-west-2:123456789012:key/77777777-7777-4777-8777-777777777777";
-    const retiredContentMac =
-      "arn:aws:kms:us-west-2:123456789012:key/88888888-8888-4888-8888-888888888888";
-    const registry = [
-      {
-        arn: retiredObjectWrap,
-        keyClass: "ai_assisted",
-        purpose: "object_wrap",
-        status: "retired"
-      },
-      {
-        arn: retiredContentMac,
-        keyClass: "ai_assisted",
-        purpose: "content_mac",
-        status: "retired"
-      }
-    ];
+    const registry = [retiredObjectWrap];
 
     expect(
       loadWorkerConfig(
-        production({ UNFILED_RETIRED_AI_ROOT_REGISTRY_JSON: JSON.stringify(registry) })
+        production({ UNFILED_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON: JSON.stringify(registry) })
       ).keyBoundary
     ).toMatchObject({
       retiredRoots: {
         ai_assisted: {
-          content_mac: [retiredContentMac],
           object_wrap: [retiredObjectWrap]
         }
       }
     });
 
     const activeObjectWrap = production().UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN;
-    const tooMany = Array.from({ length: 21 }, (_value, index) => ({
-      arn: `arn:aws:kms:us-west-2:123456789012:key/${String(index + 1).padStart(8, "0")}-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
-      keyClass: "ai_assisted",
-      purpose: "object_wrap",
-      status: "retired"
-    }));
+    const tooMany = Array.from(
+      { length: 21 },
+      (_value, index) =>
+        `arn:aws:kms:us-west-2:123456789012:key/${String(index + 1).padStart(8, "0")}-0000-4000-8000-${String(index + 1).padStart(12, "0")}`
+    );
     const invalidRegistries: readonly unknown[] = [
       "not-json",
       {},
-      [{ ...registry[0], extra: "not-allowed" }],
-      [{ ...registry[0], keyClass: "private_manual" }],
-      [{ ...registry[0], status: "staged" }],
-      [{ ...registry[0], purpose: "private" }],
-      [{ ...registry[0], arn: activeObjectWrap }],
-      [{ ...registry[0], arn: retiredContentMac }, { ...registry[1] }],
-      [
-        {
-          ...registry[0],
-          arn: "arn:aws:kms:us-east-1:123456789012:key/77777777-7777-4777-8777-777777777777"
-        }
-      ],
-      [
-        {
-          ...registry[0],
-          arn: "arn:aws:kms:us-west-2:999999999999:key/77777777-7777-4777-8777-777777777777"
-        }
-      ],
-      [
-        {
-          ...registry[0],
-          arn: "arn:aws-cn:kms:us-west-2:123456789012:key/77777777-7777-4777-8777-777777777777"
-        }
-      ],
+      [{ arn: retiredObjectWrap }],
+      [activeObjectWrap],
+      [retiredObjectWrap, retiredObjectWrap],
+      ["arn:aws:kms:us-east-1:123456789012:key/77777777-7777-4777-8777-777777777777"],
+      ["arn:aws:kms:us-west-2:999999999999:key/77777777-7777-4777-8777-777777777777"],
+      ["arn:aws-cn:kms:us-west-2:123456789012:key/77777777-7777-4777-8777-777777777777"],
       tooMany
     ];
 
     for (const invalid of invalidRegistries) {
       const raw = typeof invalid === "string" ? invalid : JSON.stringify(invalid);
       expect(() =>
-        loadWorkerConfig(production({ UNFILED_RETIRED_AI_ROOT_REGISTRY_JSON: raw }))
-      ).toThrow("UNFILED_RETIRED_AI_ROOT_REGISTRY_JSON");
+        loadWorkerConfig(production({ UNFILED_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON: raw }))
+      ).toThrow("UNFILED_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON");
     }
   });
 });

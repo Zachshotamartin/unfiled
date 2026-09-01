@@ -24,9 +24,20 @@ variables {
   key_administrator_arns = [
     "arn:aws:iam::123456789012:role/unfiled-kms-admin",
   ]
-  vercel_team_slug    = "unfiled-team"
-  web_project_name    = "unfiled-web"
-  worker_project_name = "unfiled-worker"
+  vercel_team_slug      = "unfiled-team"
+  web_project_name      = "unfiled-web"
+  worker_project_name   = "unfiled-worker"
+  verifier_project_name = "unfiled-verifier"
+}
+
+run "reject_verifier_project_identity_reuse" {
+  command = plan
+
+  variables {
+    verifier_project_name = "unfiled-worker"
+  }
+
+  expect_failures = [var.verifier_project_name]
 }
 
 run "reject_second_active_generation" {

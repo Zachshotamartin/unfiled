@@ -45,6 +45,40 @@ importers:
         specifier: 4.1.11
         version: 4.1.11(@types/node@26.4.0)(@vitest/coverage-v8@4.1.11)(vite@8.2.2(@types/node@26.4.0)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.13)(yaml@2.9.0))
 
+  apps/verifier:
+    dependencies:
+      '@aws-sdk/client-kms':
+        specifier: 3.1121.0
+        version: 3.1121.0
+      '@unfiled/content-crypto':
+        specifier: workspace:*
+        version: link:../../packages/content-crypto
+      '@unfiled/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@unfiled/key-management':
+        specifier: workspace:*
+        version: link:../../packages/key-management
+      '@unfiled/search':
+        specifier: workspace:*
+        version: link:../../packages/search
+      '@vercel/oidc':
+        specifier: 3.8.5
+        version: 3.8.5
+      '@vercel/oidc-aws-credentials-provider':
+        specifier: 3.3.5
+        version: 3.3.5
+      pg:
+        specifier: 8.23.0
+        version: 8.23.0
+    devDependencies:
+      '@types/pg':
+        specifier: 8.23.1
+        version: 8.23.1
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
+
   apps/web:
     dependencies:
       '@phosphor-icons/react':
@@ -139,6 +173,9 @@ importers:
       '@types/pg':
         specifier: 8.23.1
         version: 8.23.1
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
 
   packages/ai-routing:
     dependencies:

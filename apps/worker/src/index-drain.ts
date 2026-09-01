@@ -10,19 +10,19 @@ import {
   PrivateRagValidationError
 } from "@unfiled/search";
 
-import type { WorkerDrainPort } from "./drain";
-import type { EmbeddingProvider, EmbeddingProviderErrorCode } from "./embedding-provider";
-import { EmbeddingProviderError } from "./embedding-provider";
-import type { IndexCryptoFactory } from "./index-crypto";
+import type { WorkerDrainPort } from "./drain.js";
+import type { EmbeddingProvider, EmbeddingProviderErrorCode } from "./embedding-provider.js";
+import { EmbeddingProviderError } from "./embedding-provider.js";
+import type { IndexCryptoFactory } from "./index-crypto.js";
 import type {
   ClaimedNoteIndexJob,
   CommitNoteRagIndexInput,
   NoteIndexRepository,
   SafeErrorCode
-} from "./index-database";
-import { prepareIndexText } from "./index-text";
-import type { AiAssistedKeyAuthority } from "./key-management-adapter";
-import { WorkerUnavailableError } from "./errors";
+} from "./index-database.js";
+import { prepareIndexText } from "./index-text.js";
+import type { AiAssistedKeyAuthority } from "./key-management-adapter.js";
+import { WorkerUnavailableError } from "./errors.js";
 
 type JobOutcome = "abandoned" | "completed" | "failed" | "retryScheduled";
 

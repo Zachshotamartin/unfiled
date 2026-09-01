@@ -100,6 +100,47 @@ function positiveTimeout(value: number): number {
   return value;
 }
 
+function abortable<T>(operation: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const cleanup = (): void => {
+      signal.removeEventListener("abort", onAbort);
+    };
+    const resolveOnce = (value: T): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const rejectOnce = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const onAbort = (): void => {
+      rejectOnce(new IndexWorkerInvocationError());
+    };
+
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+
+    let pending: Promise<T>;
+    try {
+      pending = Promise.resolve(operation());
+    } catch (error: unknown) {
+      rejectOnce(error instanceof Error ? error : new IndexWorkerInvocationError());
+      return;
+    }
+    void pending.then(resolveOnce, (error: unknown) => {
+      rejectOnce(error instanceof Error ? error : new IndexWorkerInvocationError());
+    });
+  });
+}
+
 async function boundedJson(response: Response, signal: AbortSignal): Promise<unknown> {
   const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim();
   const declared = response.headers.get("content-length");
@@ -110,14 +151,15 @@ async function boundedJson(response: Response, signal: AbortSignal): Promise<unk
       (!/^\d{1,10}$/u.test(declared) || Number(declared) > MAX_RESPONSE_BYTES)) ||
     response.body === null
   ) {
-    void response.body?.cancel();
+    if (response.body !== null) void response.body.cancel().catch(() => undefined);
     throw new IndexWorkerInvocationError();
   }
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
+  let bytes: Uint8Array | undefined;
   let total = 0;
   const cancel = (): void => {
-    void reader.cancel();
+    void reader.cancel().catch(() => undefined);
   };
   signal.addEventListener("abort", cancel, { once: true });
   try {
@@ -131,24 +173,25 @@ async function boundedJson(response: Response, signal: AbortSignal): Promise<unk
       chunks.push(part.value);
       part = await reader.read();
     }
-    const bytes = new Uint8Array(total);
-    try {
-      let offset = 0;
-      for (const chunk of chunks) {
-        bytes.set(chunk, offset);
-        offset += chunk.byteLength;
-      }
-      return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
-    } catch (error: unknown) {
-      if (error instanceof IndexWorkerInvocationError) throw error;
-      throw new IndexWorkerInvocationError();
-    } finally {
-      bytes.fill(0);
-      for (const chunk of chunks) chunk.fill(0);
+    bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
     }
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
+  } catch (error: unknown) {
+    if (error instanceof IndexWorkerInvocationError) throw error;
+    throw new IndexWorkerInvocationError();
   } finally {
     signal.removeEventListener("abort", cancel);
-    reader.releaseLock();
+    bytes?.fill(0);
+    for (const chunk of chunks) chunk.fill(0);
+    try {
+      reader.releaseLock();
+    } catch {
+      // Cleanup failure must not expose transport details or replace the redacted result.
+    }
   }
 }
 
@@ -172,7 +215,7 @@ export function createIndexWorkerClient(
       let response: Response;
       try {
         if (signal.aborted) throw new IndexWorkerInvocationError();
-        const oidcToken = await token();
+        const oidcToken = await abortable(token, signal);
         if (
           oidcToken.length < 32 ||
           oidcToken.length > 16_384 ||

@@ -62,11 +62,17 @@ jobs:
       - name: Unit and contract coverage
         run: pnpm test:coverage
 
+      - name: Verifier production capacity gate
+        run: pnpm --filter @unfiled/verifier test:capacity
+
       - name: Deterministic routing evaluation
         run: pnpm eval:routing
 
-      - name: Build web, worker, and shared packages
+      - name: Build web, worker, verifier, and shared packages
         run: pnpm build
+
+      - name: Smoke built worker and verifier servers
+        run: pnpm --filter @unfiled/worker --filter @unfiled/verifier test:built-server
 
       - name: Install Supabase CLI
         id: supabase-cli

@@ -4,12 +4,13 @@ import {
   KeyManagementError,
   KeyManagementErrorCode,
   assertAiAssistedKmsReadiness,
+  assertIndexWorkerKmsReadiness,
   type AwsKmsTransport,
   type DecryptDataKeyRequest,
   type GenerateDataKeyRequest,
   type KmsTransportOperationOptions
 } from "../src/index";
-import { AI_ROOTS, ROOTS, rawKey } from "./fixtures";
+import { AI_ROOTS, INDEX_ROOTS, ROOTS, rawKey } from "./fixtures";
 
 function expectCode(code: string): (error: unknown) => boolean {
   return (error: unknown) => error instanceof KeyManagementError && error.code === code;
@@ -20,6 +21,43 @@ function seedForRoot(rootKeyArn: string): number {
 }
 
 describe("AI-assisted KMS readiness", () => {
+  it("proves only the index worker object-wrap root and rejects a content-MAC-bearing set", async () => {
+    const generateDataKey = vi.fn((input: GenerateDataKeyRequest) =>
+      Promise.resolve({
+        CiphertextBlob: new Uint8Array([17]),
+        KeyId: input.KeyId,
+        Plaintext: rawKey(17)
+      })
+    );
+    const decryptDataKey = vi.fn((input: DecryptDataKeyRequest) =>
+      Promise.resolve({ KeyId: input.KeyId, Plaintext: rawKey(17) })
+    );
+
+    await expect(
+      assertIndexWorkerKmsReadiness({
+        activeRoots: INDEX_ROOTS,
+        transport: { decryptDataKey, generateDataKey }
+      })
+    ).resolves.toBeUndefined();
+
+    expect(generateDataKey).toHaveBeenCalledOnce();
+    expect(decryptDataKey).toHaveBeenCalledOnce();
+    expect(generateDataKey.mock.calls[0]?.[0]).toMatchObject({
+      EncryptionContext: {
+        UnfiledKeyClass: "ai_assisted",
+        UnfiledKeyPurpose: "object_wrap"
+      },
+      KeyId: ROOTS.ai_assisted.object_wrap
+    });
+    await expect(
+      assertIndexWorkerKmsReadiness({
+        activeRoots: AI_ROOTS,
+        transport: { decryptDataKey, generateDataKey }
+      })
+    ).rejects.toSatisfy(expectCode(KeyManagementErrorCode.CONFIGURATION_INVALID));
+    expect(generateDataKey).toHaveBeenCalledOnce();
+  });
+
   it("proves GenerateDataKey and Decrypt on both AI roots with exact contexts and cancellation", async () => {
     const returnedPlaintexts: Uint8Array[] = [];
     const returnedCiphertexts: Uint8Array[] = [];

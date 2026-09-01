@@ -158,6 +158,28 @@ describe("encrypted index worker caller", () => {
     }
   });
 
+  it("redacts mid-body stream failures", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"claimed":'));
+        controller.error(new TypeError("private-canary-stream-failure"));
+      }
+    });
+    const client = createIndexWorkerClient({
+      fetchImplementation: vi.fn().mockResolvedValue(
+        new Response(body, {
+          headers: { "content-type": "application/json" }
+        })
+      ),
+      getOidcToken: () => Promise.resolve(TOKEN),
+      origin: ORIGIN
+    });
+
+    const reason = await client.drain("manual").catch((error: unknown) => error);
+    expect(reason).toBeInstanceOf(IndexWorkerInvocationError);
+    expect(String(reason)).not.toContain("private-canary");
+  });
+
   it("honors pre-aborted requests without minting or sending a token", async () => {
     const controller = new AbortController();
     controller.abort();
@@ -174,5 +196,92 @@ describe("encrypted index worker caller", () => {
     );
     expect(getOidcToken).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("applies the caller timeout while a token provider remains pending", async () => {
+    vi.useFakeTimers();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), milliseconds);
+      return controller.signal;
+    });
+    try {
+      const getOidcToken = vi.fn(() => new Promise<string>(() => undefined));
+      const request = vi.fn();
+      const client = createIndexWorkerClient({
+        fetchImplementation: request,
+        getOidcToken,
+        origin: ORIGIN
+      });
+      let outcome: "pending" | "rejected" | "resolved" = "pending";
+      const drain = client.drain("schedule").then(
+        (value) => {
+          outcome = "resolved";
+          return value;
+        },
+        (error: unknown) => {
+          outcome = "rejected";
+          throw error;
+        }
+      );
+      const rejection = expect(drain).rejects.toBeInstanceOf(IndexWorkerInvocationError);
+
+      await vi.advanceTimersByTimeAsync(49_999);
+      expect(outcome).toBe("pending");
+      await vi.advanceTimersByTimeAsync(1);
+
+      await rejection;
+      expect(outcome).toBe("rejected");
+      expect(timeout).toHaveBeenCalledWith(50_000);
+      expect(getOidcToken).toHaveBeenCalledOnce();
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      timeout.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("honors an external abort during token acquisition and handles a late token rejection", async () => {
+    vi.useFakeTimers();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), milliseconds);
+      return controller.signal;
+    });
+    try {
+      const controller = new AbortController();
+      let rejectToken: ((error: Error) => void) | undefined;
+      const getOidcToken = vi.fn(
+        () =>
+          new Promise<string>((_resolve, reject) => {
+            rejectToken = reject;
+          })
+      );
+      const request = vi.fn();
+      const client = createIndexWorkerClient({
+        fetchImplementation: request,
+        getOidcToken,
+        origin: ORIGIN
+      });
+      const drain = client.drain("recovery", controller.signal);
+      const rejection = expect(drain).rejects.toBeInstanceOf(IndexWorkerInvocationError);
+
+      setTimeout(() => controller.abort(), 250);
+      await vi.advanceTimersByTimeAsync(249);
+      expect(request).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+
+      await rejection;
+      expect(timeout).toHaveBeenCalledWith(50_000);
+      expect(getOidcToken).toHaveBeenCalledOnce();
+      expect(request).not.toHaveBeenCalled();
+      rejectToken?.(new Error("late-private-token-error"));
+      vi.runAllTicks();
+      await Promise.resolve();
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      timeout.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });

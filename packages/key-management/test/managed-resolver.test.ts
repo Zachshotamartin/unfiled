@@ -258,8 +258,11 @@ describe("managed owner-bound key resolver", () => {
     const resolver = createManagedKeyResolver({
       custodian: fakeCustodian(),
       store: { findActive, findById },
-      workload: "organization_worker"
+      workload: "index_worker"
     });
+    await expect(
+      resolver.activeContentMacKey({ ownerId: OWNER_A, keyClass: "ai_assisted" })
+    ).rejects.toSatisfy(expectCode(KeyManagementErrorCode.ACCESS_DENIED));
     await expect(
       resolver.activeObjectWrappingKey({ ownerId: OWNER_A, keyClass: "private_manual" })
     ).rejects.toSatisfy(expectCode(KeyManagementErrorCode.ACCESS_DENIED));
@@ -269,6 +272,13 @@ describe("managed owner-bound key resolver", () => {
     } catch (error: unknown) {
       expect(error).toSatisfy(expectCode(KeyManagementErrorCode.ACCESS_DENIED));
     }
+    await expect(
+      resolver.resolveContentMacKey({
+        ownerId: OWNER_A,
+        keyClass: "ai_assisted",
+        keyId: "ai.mac.v1"
+      })
+    ).rejects.toSatisfy(expectCode(KeyManagementErrorCode.ACCESS_DENIED));
     await expect(
       resolver.resolveContentMacKey({
         ownerId: OWNER_A,
