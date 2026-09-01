@@ -279,7 +279,12 @@ export type OpenIdempotencyResponseForVerificationInput<ResponsePayload> = Reado
 }>;
 
 export type AggregateVerificationSurface =
-  "capture_receipt" | "note_content" | "note_mutation" | "idempotency_response";
+  | "capture_receipt"
+  | "note_content"
+  | "note_mutation"
+  | "organization_decision"
+  | "review_item"
+  | "idempotency_response";
 
 export type CaptureReceiptVerificationMacInput = Readonly<{
   surface: "capture_receipt";
@@ -301,6 +306,20 @@ export type NoteMutationVerificationMacInput = Readonly<{
   payload: NoteMutationPayload;
 }>;
 
+export type OrganizationDecisionVerificationMacInput = Readonly<{
+  surface: "organization_decision";
+  decisionId: EntityId<"dec">;
+  payload: OrganizationDecisionPayload;
+}>;
+
+export type ReviewVerificationMacInput = Readonly<{
+  surface: "review_item";
+  reviewId: EntityId<"rvw">;
+  recordVersion: number;
+  sourcePrivacy: PrivacyMode;
+  payload: ReviewPayload;
+}>;
+
 export type IdempotencyResponseVerificationMacInput<Payload> = Readonly<{
   surface: "idempotency_response";
   idempotencyKey: string;
@@ -313,6 +332,8 @@ export type AggregateVerificationMacInput<Payload = never> =
   | CaptureReceiptVerificationMacInput
   | NoteContentVerificationMacInput
   | NoteMutationVerificationMacInput
+  | OrganizationDecisionVerificationMacInput
+  | ReviewVerificationMacInput
   | IdempotencyResponseVerificationMacInput<Payload>;
 
 type BackfillSurfaceInput<Surface extends AggregateContentKind, Input> = Readonly<{

@@ -68,11 +68,11 @@ jobs:
       - name: Deterministic routing evaluation
         run: pnpm eval:routing
 
-      - name: Build web, worker, verifier, and shared packages
+      - name: Build web, worker, verifier, organizer, and shared packages
         run: pnpm build
 
-      - name: Smoke built worker and verifier servers
-        run: pnpm --filter @unfiled/worker --filter @unfiled/verifier test:built-server
+      - name: Smoke built isolated servers
+        run: pnpm --filter @unfiled/worker --filter @unfiled/verifier --filter @unfiled/organizer test:built-server
 
       - name: Install Supabase CLI
         id: supabase-cli
@@ -91,6 +91,9 @@ jobs:
 
       - name: Run database tests
         run: supabase test db
+
+      - name: Run organizer lock-order concurrency regression
+        run: pnpm test:db:concurrency
 
       - name: Run deterministic local HTTP E2E
         run: bash .github/workflows/scripts/milestone-b-http-e2e.sh

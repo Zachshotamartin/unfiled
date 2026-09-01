@@ -1,5 +1,5 @@
 output "vercel_oidc_provider_arn" {
-  description = "AWS IAM OIDC provider trusted by the three exact production subjects."
+  description = "AWS IAM OIDC provider trusted by the four exact production subjects."
   value       = aws_iam_openid_connect_provider.vercel.arn
 }
 
@@ -18,6 +18,11 @@ output "verifier_oidc_subject" {
   value       = local.verifier_subject
 }
 
+output "organizer_oidc_subject" {
+  description = "Exact Vercel production subject trusted by the AI-assisted organizer role."
+  value       = local.organizer_subject
+}
+
 output "web_role_arn" {
   description = "Set as UNFILED_AWS_ROLE_ARN only in the interactive web/API Vercel project."
   value       = aws_iam_role.web.arn
@@ -33,13 +38,18 @@ output "verifier_role_arn" {
   value       = aws_iam_role.verifier.arn
 }
 
+output "organizer_role_arn" {
+  description = "Set as UNFILED_AWS_ROLE_ARN only in the isolated organizer Vercel project."
+  value       = aws_iam_role.organizer.arn
+}
+
 output "ai_assisted_object_wrap_kms_key_arn" {
-  description = "Active AI-assisted object-wrapping root ARN available to web and worker roles and decrypt-only to the verifier role."
+  description = "Active AI-assisted object-wrapping root ARN available to web, index-worker, and organizer roles and decrypt-only to the verifier role."
   value       = aws_kms_key.root[local.active_generation_id_by_pair["ai_assisted_object_wrap"]].arn
 }
 
 output "ai_assisted_content_mac_kms_key_arn" {
-  description = "Active AI-assisted content-MAC root ARN available only to the interactive web role."
+  description = "Active AI-assisted content-MAC root ARN available to the interactive web and isolated organizer roles."
   value       = aws_kms_key.root[local.active_generation_id_by_pair["ai_assisted_content_mac"]].arn
 }
 
@@ -114,6 +124,35 @@ output "verifier_root_key_registry" {
       kms_key_arn = aws_kms_key.root[registry_id].arn
     } if generation.key_class == "ai_assisted" && generation.purpose == "object_wrap"
   }
+}
+
+output "organizer_root_key_registry" {
+  description = "AI-assisted object-wrap and content-MAC active, staged, and retired registry available to the organizer; no private identifiers are included."
+  value = {
+    for registry_id, generation in local.root_key_generations : registry_id => {
+      key_class   = generation.key_class
+      purpose     = generation.purpose
+      generation  = generation.generation
+      status      = generation.status
+      kms_key_arn = aws_kms_key.root[registry_id].arn
+    } if generation.key_class == "ai_assisted"
+  }
+}
+
+output "organizer_retired_ai_object_wrap_roots_json" {
+  description = "Exact JSON value for the organizer's retired AI-assisted object-wrap root allowlist."
+  value = jsonencode([
+    for registry_id in sort(keys(local.root_key_generations)) : aws_kms_key.root[registry_id].arn
+    if local.root_key_generations[registry_id].key_class == "ai_assisted" && local.root_key_generations[registry_id].purpose == "object_wrap" && local.root_key_generations[registry_id].status == "retired"
+  ])
+}
+
+output "organizer_retired_ai_content_mac_roots_json" {
+  description = "Exact JSON value for the organizer's retired AI-assisted content-MAC root allowlist."
+  value = jsonencode([
+    for registry_id in sort(keys(local.root_key_generations)) : aws_kms_key.root[registry_id].arn
+    if local.root_key_generations[registry_id].key_class == "ai_assisted" && local.root_key_generations[registry_id].purpose == "content_mac" && local.root_key_generations[registry_id].status == "retired"
+  ])
 }
 
 output "verifier_retired_ai_object_wrap_roots_json" {

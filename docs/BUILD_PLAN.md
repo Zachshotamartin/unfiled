@@ -2,7 +2,7 @@
 
 Product and repository name: **Unfiled**. Trademark, App Store, package-name, social-handle, and domain review remain required before public launch.
 
-Implementation status: **The server/web portions of Milestones A–C are complete; [ADR-0010](./decisions/ADR-0010-native-ios-client-replacement.md) makes `apps/ios` the canonical phone client and reopens native release evidence. C.5a custody/expansion, C.5b encrypted aggregates, and the C.5c encrypted index, shadow-generation controller, and isolated verifier are implemented in code.** Private-manual encrypted capture is executable, while a fresh AI-assisted write deliberately fails closed until the separate organizer can commit an encrypted create-or-append result atomically. The production repository factory has not switched to the new adapters. Account-bound Vercel/AWS/database, CloudTrail, rotation, restore, native SQLCipher, Apple signing, archive, and physical-device evidence remain human gates. The C.5c organizer, C.5d plaintext contraction, and the native release gate remain launch-blocking, so the current product is not yet eligible for a complete encrypted-at-rest or native-release claim.
+Implementation status: **The server/web portions of Milestones A–C are complete; [ADR-0010](./decisions/ADR-0010-native-ios-client-replacement.md) makes `apps/ios` the canonical phone client and reopens native release evidence. C.5a custody/expansion, C.5b encrypted aggregates, and the C.5c encrypted index, shadow-generation controller, isolated verifier, and isolated organizer are implemented and locally verified in code.** Private-manual encrypted capture is executable. The organizer's production planner/cipher remain deliberately unavailable until Milestone D, and the production repository factory has not switched to the new adapters pending C.5d. Account-bound Vercel/AWS/database, CloudTrail, rotation, restore, native SQLCipher, Apple signing, archive, and physical-device evidence remain human gates. C.5d plaintext contraction, Milestone D production routing, and the native release gate remain launch-blocking, so the current product is not yet eligible for a complete encrypted-at-rest or native-release claim.
 
 This plan is the spine of a full documentation set; see [docs/README.md](./README.md) for reading order. Companion documents:
 
@@ -10,7 +10,7 @@ This plan is the spine of a full documentation set; see [docs/README.md](./READM
 - [AI_ROUTING_SPEC.md](./AI_ROUTING_SPEC.md): pipeline contracts, prompt, schemas, scoring, provider/effort settings, and evaluation corpus
 - [DATA_MODEL.md](./DATA_MODEL.md): full DDL, RLS policies, transactional functions, structured-data schemas, retention
 - [SECURITY_AND_PRIVACY.md](./SECURITY_AND_PRIVACY.md): threat model, BYOK key custody, disclosure, deletion pipeline, incident handling
-- [ENCRYPTION_ARCHITECTURE.md](./ENCRYPTION_ARCHITECTURE.md): implemented capture, custody, aggregate, and encrypted-index foundations plus the remaining organizer/C.5d boundary
+- [ENCRYPTION_ARCHITECTURE.md](./ENCRYPTION_ARCHITECTURE.md): implemented capture, custody, aggregate, encrypted-index, verifier, and organizer foundations plus the remaining C.5d cutover boundary
 - [OPERATIONS_TEST_PLAN.md](./OPERATIONS_TEST_PLAN.md): environments, CI, enumerated test inventory, release checklists, backups, monitoring
 - [DESIGN_SYSTEM.md](./DESIGN_SYSTEM.md): tokens, components, states, accessibility rules (skeleton; completed during Milestone 0)
 - [BRAND_SYSTEM_UNFILED.md](./BRAND_SYSTEM_UNFILED.md): identity, voice, in-app, Lock Screen, signed-in web, and marketing-site application
@@ -1075,7 +1075,7 @@ Each case includes expected candidate set, permitted decisions, forbidden destin
 - **Auth, database, storage, realtime:** Supabase
 - **Database:** PostgreSQL with Row Level Security; encrypted content envelopes and encrypted per-user retrieval documents
 - **Key custody:** managed KMS/HSM in production through a provider interface; environment-backed keys are local/synthetic-preview only
-- **Durable background processing:** Vercel Workflows behind an internal `OrganizationJobRunner` port
+- **Durable background processing:** authoritative PostgreSQL leases/queues with separately deployed Vercel organizer, index-worker, and verifier adapters
 - **AI:** official OpenAI JavaScript SDK, Responses API, strict Structured Outputs
 - **Validation:** Zod at application boundaries plus database constraints
 - **Web styling:** Tailwind CSS with semantic CSS variables
@@ -1108,14 +1108,20 @@ Native SwiftUI iPhone app             Next.js web app
                         |
                  auth and rate limits
                         |
-              capture and note services
-                  |              |
-          Supabase Postgres      durable organization workflow
-          RLS, ciphertext, jobs      |
-                  |                  +-> managed KMS authorization
-                  |                  +-> OpenAI structured plan
-                  |                  +-> validated mutation transaction
+              authenticated web/API
+                  |         |
+                  |         +-> isolated organizer (49 s maximum)
+                  |               | exact Trusted Source + organizer OIDC
+                  |               | AI object-wrap/content-MAC only
+                  |               +-> atomic create/append + index job
                   |
+          Supabase Postgres <----+---- isolated index worker
+          RLS, ciphertext, jobs  |       | AI object-wrap + embeddings
+                  |              |       +-> encrypted RAG document
+                  |              |
+                  |              +---- isolated strict verifier
+                  |                      | decrypt-only AI object-wrap
+                  |                      +-> generation attestation
           realtime receipt events
                         |
                 both clients refresh
@@ -1137,13 +1143,15 @@ Lock Screen WidgetKit extension
 3. Server validates auth, limits, content size, and workspace ownership.
 4. Database transaction inserts the capture and workflow record once.
 5. API returns `202 Accepted` with the capture and job status.
-6. Durable workflow selects candidates, calls the model if required, validates, applies, and emits a receipt.
-7. Clients receive a realtime change or poll the status endpoint.
-8. The local outbox marks the capture synced only after server acknowledgement.
+6. In Production, web makes a content-free Trusted Sources call to the isolated organizer; Local and Preview may use the deterministic in-process adapter for synthetic data only.
+7. The organizer derives ownership from the leased job, opens only eligible AI-assisted ciphertext, revalidates disclosure, authorizes the plan, obtains database-owned IDs/reservations, and atomically commits the encrypted result, receipt, and content-free index job.
+8. Index work proceeds independently through its own durable queue and recovery schedule; it is never chained onto the organizer's 49-second response budget.
+9. Clients receive a realtime change or poll the status endpoint.
+10. The local outbox marks the capture synced only after server acknowledgement.
 
 ### 10.5 Why durable workflows
 
-Organization includes database reads, an external model call, validation, a conditional write, indexing, and receipt emission. It must survive deployment, timeout, and transient provider failure. Vercel Workflows is the selected hosted adapter because the web and API already deploy to Vercel. Keep the port narrow so Supabase Queues, another workflow service, or a self-hosted worker can replace it if operational evidence requires a change.
+Organization includes database reads, an external model call, validation, a conditional write, indexing, and receipt emission. It must survive deployment, timeout, and transient provider failure. PostgreSQL job/lease state is authoritative; Vercel supplies four isolated deployment identities rather than one request-lifetime transaction. The organizer, index worker, and verifier keep narrow ports so another queue/runtime can replace them without weakening the database capability boundaries. A lost `after()` wake-up or organizer response cannot lose committed work because separate authenticated recovery schedules drain the organization and index queues.
 
 ## 11. Repository Layout
 
@@ -1151,7 +1159,9 @@ Organization includes database reads, an external model call, validation, a cond
 unfiled/
   apps/
     web/                    # marketing, authenticated app, owner-authorized API
-    worker/                 # separately deployed organization/index worker; AI-only KMS role
+    organizer/              # isolated encrypted create-or-append runtime; AI-only KMS role
+    worker/                 # separately deployed encrypted index worker; AI-only KMS role
+    verifier/               # separately deployed strict-decrypt generation verifier
     ios/                    # native SwiftUI iPhone application and generated Xcode project
       Config/               # checked build settings for each environment
       Shared/               # extension-safe App Group and brand primitives
@@ -1196,7 +1206,7 @@ unfiled/
 Dependency direction:
 
 ```text
-contracts <- domain <- application services <- web/worker adapters
+contracts <- domain <- application services <- web/organizer/worker/verifier adapters
                          ^
                          |-- database adapter
                          |-- workflow adapter
@@ -1651,6 +1661,7 @@ Trusted enforcement points include:
 - organization-plan schema validation
 - transactional mutation functions
 - workflow idempotency
+- exact Vercel Trusted Sources/OIDC identities and separate organizer/index/verifier database capabilities
 
 ### 16.2 Authentication and authorization
 
@@ -1889,7 +1900,9 @@ Never point preview deployments at production user data.
 
 ### Web and backend
 
-- Deploy `apps/web` to Vercel.
+- Deploy `apps/web`, `apps/organizer`, `apps/worker`, and `apps/verifier` as four distinct Vercel projects with exact Production OIDC subjects.
+- Allow only web Production as a Trusted Source for each isolated workload; prove each exact `*.vercel.app` alias belongs to its recorded project before an OIDC-bearing call.
+- Keep organizer, worker, and verifier database logins, AWS roles, environment settings, and recovery schedules separate. None receives a global Supabase service-role/secret key.
 - Keep API routes and workflows in the same region as the primary database where practical.
 - Protect internal workflow callbacks.
 - Use migration checks before production promotion.
@@ -2030,21 +2043,26 @@ Gate:
 
 This security milestone is a hard prerequisite for Milestone D. It implements [ADR-0006](./decisions/ADR-0006-application-encrypted-library-and-private-rag.md), [ADR-0007](./decisions/ADR-0007-dedicated-worker-database-capability-and-root-rewrap.md), and [ADR-0008](./decisions/ADR-0008-encrypted-aggregate-rollout-and-replay.md); until the complete C.5 gate is green, documentation and product copy must not claim that the note library is fully encrypted.
 
-Current status: C.5a's credential-free custody/expansion boundary, C.5b's encrypted aggregate/managed adapters, and C.5c's production index worker, resumable shadow-generation lifecycle, and isolated strict-decrypt verifier are present in code. The production factory is still on the legacy repository; no owner rollout has been enabled. A private-manual encrypted capture is executable, but a fresh AI-assisted capture intentionally fails closed with `encrypted_organizer_write_unavailable` until the separate organizer's atomic encrypted writer lands. The organizer, C.5d contraction, and the production account evidence in `HUMAN_SETUP.md` remain launch-blocking. Legacy plaintext columns and read/search paths are deliberately preserved for C.5d.
+Current status: C.5a's credential-free custody/expansion boundary, C.5b's encrypted aggregate/managed adapters, and C.5c's isolated organizer, production index worker, resumable shadow-generation lifecycle, and strict-decrypt verifier are present in code. The production factory is still on the legacy repository; no owner rollout has been enabled. A private-manual encrypted capture is executable. The organizer now has an atomic encrypted create-or-append boundary, but its production planner and content-mutation cipher remain deliberately unavailable until Milestone D, so fresh AI-assisted capture still fails closed. C.5d contraction and the production account evidence in `HUMAN_SETUP.md` remain launch-blocking. Legacy plaintext columns and read/search paths are deliberately preserved for C.5d.
 
-[ADR-0009](./decisions/ADR-0009-private-rag-runtime-and-organizer-capability.md) resolves the C.5c runtime capability boundary: the index identity remains limited to the six RAG functions from ADR-0007, those functions may return only byte-bounded owner/revision-bound AI-assisted ciphertext and wrapped-key projections needed for their named operation, and atomic organization receives a separate non-bypass database identity and explicit RPC vocabulary. The two AI pipelines do not share a database credential, neither receives `service_role`, and production isolation is not claimed until the legacy web `after()`/cron organizer is retired.
+[ADR-0009](./decisions/ADR-0009-private-rag-runtime-and-organizer-capability.md) resolves the C.5c runtime capability boundary: the index identity remains limited to the six RAG functions from ADR-0007, those functions may return only byte-bounded owner/revision-bound AI-assisted ciphertext and wrapped-key projections needed for their named operation, and atomic organization receives the separate non-bypass `unfiled_organizer_worker` identity with exactly eight RPCs. The two AI pipelines do not share a database credential and neither receives `service_role`. Production web `after()` and recovery cron now invoke the isolated organizer with a content-free Trusted Sources request; only Local and Preview retain the deterministic in-process adapter for synthetic data.
 
-The implemented C.5c index slice includes encrypted lease/commit/read projections; canonical generation attestation and activation gates; strict float32 payload encoding; bounded exact-scan retrieval and deterministic hybrid ranking; stale-coverage repair and cache zeroization; and a production-composed worker. Its database session is hostname/certificate verified, pinned to the exact `unfiled_index_worker` identity, and restricted in code to the six reviewed RPCs. Processing orders `open → disclosure heartbeat → embed → strict build/seal → publication heartbeat → commit`, wipes embedding buffers, and exactly replays ambiguous terminal requests once. A bounded web controller creates, resumes, replaces, seeds, drains, verifies, and activates shadow generations through service-only RPCs. The separate `apps/verifier` deployment has a distinct exact database login and decrypt-only AWS identity, strictly opens every note-derived encrypted index document, and can call only the exact page-read and attestation RPCs. Its fixed admission capacity is 1,000 notes: 33 fixed pages, a 50-row ceiling, and a fixed 8 MiB ciphertext budget provide 1,023 physical slots at 31 database-maximum rows per page, deliberately capped at the accepted retrieval gate. A separate fixed four-key-record limit bounds KMS work. Larger owners are content-free deferred before creation, and an over-cap building generation is failed once rather than churned. Increasing either limit requires a reviewed incremental-verification design and performance evidence, not an environment override. Current focused evidence is 158 worker tests, 436 web tests, 168 verifier unit tests plus the dedicated 1,000-document capacity gate, 13 Terraform tests, and a clean 23-file / 1,185-assertion database run. Production identities and calls remain unclaimed until the account steps in `HUMAN_SETUP.md` pass.
+The implemented C.5c index slice includes encrypted lease/commit/read projections; canonical generation attestation and activation gates; strict float32 payload encoding; bounded exact-scan retrieval and deterministic hybrid ranking; stale-coverage repair and cache zeroization; and a production-composed worker. Its database session is hostname/certificate verified, pinned to the exact `unfiled_index_worker` identity, and restricted in code to the six reviewed RPCs. Processing orders `open → disclosure heartbeat → embed → strict build/seal → publication heartbeat → commit`, wipes embedding buffers, and exactly replays ambiguous terminal requests once. A bounded web controller creates, resumes, replaces, seeds, drains, verifies, and activates shadow generations through service-only RPCs. The separate `apps/verifier` deployment has a distinct exact database login and decrypt-only AWS identity, strictly opens every note-derived encrypted index document, and can call only the exact page-read and attestation RPCs. Its fixed admission capacity is 1,000 notes: 33 fixed pages, a 50-row ceiling, and a fixed 8 MiB ciphertext budget provide 1,023 physical slots at 31 database-maximum rows per page, deliberately capped at the accepted retrieval gate. A separate fixed four-key-record limit bounds KMS work. Larger owners are content-free deferred before creation, and an over-cap building generation is failed once rather than churned. Increasing either limit requires a reviewed incremental-verification design and performance evidence, not an environment override. Historical C.5c-2 focused evidence is 158 worker tests, 436 web tests, 168 verifier unit tests plus the dedicated 1,000-document capacity gate, 13 Terraform tests, and a clean 23-file / 1,185-assertion database run.
+
+The implemented C.5c organizer slice adds `apps/organizer` as a fourth exact Vercel/OIDC/KMS trust domain. Its maximum request deadline is 49 seconds. Production accepts only an exact web Production Trusted Source and a body containing a bounded drain trigger; it rejects browser/user authorization, cookies, bypass credentials, owner IDs, global Supabase credentials, static AWS credentials, provider keys, and every private-manual identifier. Its AWS role can use only AI-assisted object-wrap and content-MAC roots. The `unfiled_organizer_worker` TLS login has no relation/private-schema capability and exactly eight RPCs: claim, heartbeat/revalidate, candidate projection, prepare create, prepare append, atomic commit, fail, and recovery. Database leases derive owner scope, issue stable IDs/reservations, and linearize disclosure and commit. Unknown plans are authorized against the candidate manifest before preparation and materialized only with database-issued IDs. A stale append can replan once; a second conflict becomes Review. The atomic commit also creates index work, but Production does not chain the index drain onto the organizer request; independent recovery owns it.
+
+The final C.5c-3 credential-free evidence passes 449 web, 159 worker, 168 verifier, and 132 organizer tests. Organizer coverage is 87.01% statements / 83.29% branches / 93.29% functions / 90.17% lines. A clean database rebuild and zero-finding lint accompany 24 pgTAP files / 1,227 assertions, including 42/42 focused organizer assertions. A separate real-PostgreSQL lane proves six rollout-lock behaviors without deadlock or fixture residue, the fixed 1,000-document verifier capacity lane completes in 8.18 seconds, the production dependency audit reports zero known vulnerabilities, and the unsigned native gate passes 81 Swift tests. This evidence does not satisfy the production planner/cipher, C.5d cutover, account-bound cloud, signing, or physical-device gates.
 
 Deliver:
 
 - **C.5a custody/expansion — implemented in code, account evidence pending:** a production managed-KMS resolver using short-lived workload identity; independent object-wrap/content-MAC purposes; per-user intermediate keys; owner/class/purpose/key-bound resolution; and separate AI-assisted/private key classes
-- a separately deployed `apps/worker` Vercel project with an exact OIDC subject and AI-only AWS role; a dedicated `unfiled_index_worker` database role that starts `NOLOGIN`/`NOBYPASSRLS` with exactly six RAG RPCs and no table or administrative capability; and a distinct interactive web/API subject, role, and service-only root-rewrap CAS path. The current same-deployment `after()`/cron organizer is retired before production isolation is claimed
+- separately deployed `apps/organizer`, `apps/worker`, and `apps/verifier` Vercel projects with exact OIDC subjects and least-privilege AI-only AWS roles; dedicated `unfiled_organizer_worker`, `unfiled_index_worker`, and `unfiled_rag_verifier` database roles that start `NOLOGIN`/`NOBYPASSRLS` with exactly eight, six, and two RPCs respectively and no table or administrative capability; and a distinct interactive web/API subject, role, and service-only root-rewrap CAS path
 - **C.5b encrypted aggregate — implemented in code, production wiring pending:** server-side domain operations plus service-only envelope/CAS RPCs and a database rollout state `expanded → dual_write → encrypted_read → encrypted_only → contracted`; this slice implements only the safe transitions through `encrypted_read`, while C.5d owns `encrypted_only` and `contracted`
 - versioned AES-256-GCM envelopes for note title/body/structured data, revisions, generated blocks, organization/review payloads, mutation and idempotency snapshots, and routing-rule content
 - server-side typed mutation/CAS/idempotency RPCs that atomically persist encrypted current state, history, receipts, and a content-free index job
 - a resumable expand/backfill/verify/cutover/contract migration that removes legacy plaintext columns, functions, indexes, and `note_chunks`
 - content-free resource references for encrypted idempotency responses and sticky private classification for revisions/mutations spanning a privacy transition
+- **C.5c atomic organizer — secure substrate implemented; Milestone D planner pending:** separate 49-second runtime, exact Trusted Source, AI-only object-wrap/content-MAC custody, eight-RPC lease/prepare/commit database surface, canonical plan authorization/materialization, one-replan-then-Review policy, and atomic note/decision/receipt/index-work publication
 - **C.5c private RAG:** paged encrypted exact scan with bounded concurrency/memory, strict versioned float32 embedding encoding, shadow-generation activation, stale-index repair, and incomplete-coverage fail-safe
 - `rag_index_generations`, encrypted one-document-per-note `note_rag_index`, and content-free leased `note_index_jobs`
 - hybrid lexical/trigram/semantic/recency/title ranking by exact per-user in-memory scan, with stale-index repair and incomplete-coverage fail-safe

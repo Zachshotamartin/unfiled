@@ -2,7 +2,8 @@ aws_region          = "us-west-2"
 vercel_team_slug    = "replace-with-exact-team-slug"
 web_project_name    = "unfiled-web"
 worker_project_name = "unfiled-worker"
-verifier_project_name = "unfiled-verifier"
+verifier_project_name  = "unfiled-verifier"
+organizer_project_name = "unfiled-organizer"
 
 key_administrator_arns = [
   "arn:aws:iam::123456789012:role/replace-with-dedicated-kms-admin",

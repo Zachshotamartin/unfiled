@@ -13,13 +13,15 @@ The four stable aliases are:
 
 The `root_key_generations` registry is append-only after first apply. Its canonical IDs have the form `<key_class>_<purpose>_v<generation>`. Exactly one generation per pair is active, and every alias targets that active generation.
 
-| Generation status | Alias target | `GenerateDataKey`          | `Decrypt`                  | Web root rewrap | Index worker access             | Verifier access              |
-| ----------------- | ------------ | -------------------------- | -------------------------- | --------------- | ------------------------------- | ---------------------------- |
-| `staged`          | No           | Denied                     | Denied                     | Denied          | Describe AI object-wrap only    | Describe AI object-wrap only |
-| `active`          | Yes          | Allowed with exact context | Allowed with exact context | `ReEncryptTo`   | Generate/decrypt AI object-wrap | Decrypt AI object-wrap       |
-| `retired`         | No           | Denied                     | Allowed with exact context | `ReEncryptFrom` | Decrypt AI object-wrap          | Decrypt AI object-wrap       |
+| Generation status | Alias target | `GenerateDataKey`          | `Decrypt`                  | Web root rewrap | Index worker access             | Verifier access              | Organizer access                  |
+| ----------------- | ------------ | -------------------------- | -------------------------- | --------------- | ------------------------------- | ---------------------------- | --------------------------------- |
+| `staged`          | No           | Denied                     | Denied                     | Denied          | Describe AI object-wrap only    | Describe AI object-wrap only | Describe both AI purposes only    |
+| `active`          | Yes          | Allowed with exact context | Allowed with exact context | `ReEncryptTo`   | Generate/decrypt AI object-wrap | Decrypt AI object-wrap       | Generate/decrypt both AI purposes |
+| `retired`         | No           | Denied                     | Allowed with exact context | `ReEncryptFrom` | Decrypt AI object-wrap          | Decrypt AI object-wrap       | Decrypt both AI purposes          |
 
 AI content-MAC and private-manual generations never name the index worker as a key-policy principal and never appear in its filtered registry. Its IAM policy explicitly denies every AI content-MAC and private-manual generation. The verifier receives no `GenerateDataKey`, `ReEncryptFrom`, or `ReEncryptTo`; it can only decrypt active or retired AI object-wrap intermediate keys while validating a shadow generation.
+
+The organizer is a fourth, independently attributable workload. Its exact production OIDC subject can generate/decrypt active and decrypt retired AI-assisted object-wrap and content-MAC roots because atomic encrypted decisions, Review payloads, receipts, and note writes need both purposes. It can only describe staged AI roots. Its registry excludes every private-manual identifier, its IAM policy explicitly denies every private-manual generation, and explicit denies prevent grant creation and root rewrap even if another identity policy changes. It has no key-administration or index/verifier authority.
 
 Every cryptographic permission is bound to exactly these non-secret encryption-context fields:
 
@@ -36,7 +38,7 @@ Every KMS key has `lifecycle.prevent_destroy = true`, a 30-day deletion window, 
 
 1. Create at least one dedicated KMS administrator role or user in the target account. Two independent, monitored recovery roles are recommended. Do not use either runtime role.
 2. Assume one of the listed administrator principals for the first apply. That session also needs identity permissions to create the IAM/OIDC/KMS resources in this root. Confirm it with `aws sts get-caller-identity`.
-3. In the web, index-worker, and verifier Vercel projects, enable **Team Issuer** under Settings → Security → OIDC.
+3. In the web, index-worker, verifier, and organizer Vercel projects, enable **Team Issuer** under Settings → Security → OIDC.
 4. Copy `terraform.tfvars.example` to the ignored `terraform.tfvars`. Replace the account, region, exact Vercel team slug, exact project names, administrator ARNs, and tags. Persist the entire generation registry in reviewed configuration; do not rely on memory of its default.
 5. Configure an encrypted, access-controlled remote Terraform backend with locking for this root before production. The backend is account-specific and intentionally is not checked in here.
 6. Do not create static AWS access keys for either Vercel runtime role.
@@ -64,7 +66,7 @@ terraform apply unfiled-kms.tfplan
 terraform output
 ```
 
-Reject any initial plan that contains anything other than the expected OIDC provider, three runtime roles and policies, four v1 KMS keys, and four stable aliases. On every later plan, reject any KMS-key destroy or replacement.
+Reject any initial plan that contains anything other than the expected OIDC provider, four runtime roles and policies, four v1 KMS keys, and four stable aliases. On every later plan, reject any KMS-key destroy or replacement.
 
 ## Application configuration
 
@@ -83,10 +85,14 @@ The rotation-aware outputs are:
 - `web_root_key_registry`: complete active, staged, and retired configuration;
 - `worker_root_key_registry`: an operator/audit inventory filtered to AI-assisted object-wrap roots only;
 - `verifier_root_key_registry`: the equivalent operator/audit inventory for the verifier's decrypt-only role;
+- `organizer_root_key_registry`: AI-assisted object-wrap and content-MAC generations only;
 - `verifier_retired_ai_object_wrap_roots_json`: exact retired object-wrap ARN JSON for
   `UNFILED_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON`;
 - `worker_retired_ai_object_wrap_roots_json`: exact retired object-wrap ARN JSON accepted by the
   worker's `UNFILED_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON` setting.
+- `organizer_retired_ai_object_wrap_roots_json` and
+  `organizer_retired_ai_content_mac_roots_json`: exact retired-root allowlists for the organizer's
+  two AI-assisted key purposes.
 
 The verifier deployment consumes exactly `verifier_role_arn`, `verifier_oidc_subject`,
 `ai_assisted_object_wrap_kms_key_arn`, and
@@ -95,7 +101,7 @@ production KMS, database-role, and caller-identity readiness must be proved by t
 verification and denial procedures below. `verifier_root_key_registry` is review inventory, not a
 verifier environment value.
 
-Set `UNFILED_AWS_ROLE_ARN` from `web_role_arn`, `worker_role_arn`, or `verifier_role_arn` only in its matching Vercel project. Set `UNFILED_AWS_REGION` in all three. The index worker and verifier each receive `ai_assisted_object_wrap_kms_key_arn` as `UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN` plus only their matching retired-roots JSON output. Keep the three registry outputs as reviewed rotation inventories; do not pass a broad registry, AI content-MAC ARN, or private ARN into either isolated workload.
+Set `UNFILED_AWS_ROLE_ARN` from `web_role_arn`, `worker_role_arn`, `verifier_role_arn`, or `organizer_role_arn` only in its matching Vercel project. Set `UNFILED_AWS_REGION` in all four. The index worker and verifier each receive `ai_assisted_object_wrap_kms_key_arn` as `UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN` plus only their matching retired-roots JSON output. The organizer receives the two active AI-assisted root ARNs and only its two exact retired-root JSON outputs; never give it the web registry or either private ARN. Keep all registry outputs as reviewed rotation inventories rather than broad runtime configuration.
 
 The runtime parsers accept at most 20 retired roots for each exact class/purpose pair, and Terraform
 enforces the same limit. A 21st promotion is intentionally blocked. Before that point, define and
@@ -114,8 +120,8 @@ Rotate one class/purpose pair at a time unless an incident requires otherwise. T
 2. Add the canonical v2 entry for that same pair with `generation = 2` and `status = "staged"`. Do not rename or remove v1.
 3. Run the full validation suite and save a plan. The plan may create v2 and update describe/deny policy lists, but it must not change the existing alias, demote v1, replace a key, or destroy anything.
 4. Apply the saved plan.
-5. Export and deploy the updated registries. Web may receive the complete registry. The index worker and verifier receive only their object-wrap-only registries.
-6. With production OIDC sessions, prove that web can `DescribeKey` on v2 and that the worker and verifier can describe an AI object-wrap v2 only. Prove `GenerateDataKey`, `Decrypt`, and both rewrap directions are denied on every staged root. Prove neither isolated workload has a configured AI content-MAC/private v2 identifier and controlled direct forbidden-key probes return `AccessDenied`.
+5. Export and deploy the updated registries. Web may receive the complete registry. The index worker and verifier receive only their object-wrap-only registries; the organizer receives only AI-assisted object-wrap/content-MAC entries.
+6. With production OIDC sessions, prove that web can `DescribeKey` on v2, worker and verifier can describe an AI object-wrap v2 only, and organizer can describe both AI-purpose v2 roots only. Prove `GenerateDataKey`, `Decrypt`, and both rewrap directions are denied on every staged root. Prove index/verifier have no AI content-MAC/private identifier, organizer has no private identifier, and controlled direct forbidden-key probes return `AccessDenied`.
 7. Confirm in CloudTrail that the exact production subjects were used and that the stable alias and all new writes still resolve to v1.
 
 Do not write or rewrap any application record under a staged root. A staged root is intentionally unusable beyond readiness description.
@@ -126,8 +132,8 @@ Do not write or rewrap any application record under a staged root. A staged root
 2. In one reviewed registry change, set v1 to `retired` and v2 to `active`.
 3. Save and inspect the plan. It must create and destroy zero KMS keys. It should update the two key policies/tags, move the stable alias to v2, and update workload policies and outputs.
 4. Apply the saved plan, deploy the promoted registry outputs, and keep writes paused during this fail-closed configuration window.
-5. Verify that `GenerateDataKey` succeeds only on v2 and returns the expected full v2 key ARN; v1 generation is denied; both roots can decrypt ciphertext created under their own ARN/context; worker and verifier private probes remain denied; the verifier cannot generate a data key; and a web-only v1 → v2 `ReEncrypt` probe succeeds with the exact context.
-6. Resume writes and the worker only after every gate passes.
+5. Verify that `GenerateDataKey` succeeds only on v2 and returns the expected full v2 key ARN; v1 generation is denied; both roots can decrypt ciphertext created under their own ARN/context; worker, verifier, and organizer private probes remain denied; verifier cannot generate a data key; organizer can generate only for the two active AI purposes and cannot rewrap/create grants; and a web-only v1 → v2 `ReEncrypt` probe succeeds with the exact context.
+6. Resume writes and the isolated workers only after every gate passes.
 
 ### Rewrap retained intermediate keys
 
@@ -154,10 +160,11 @@ The role-separation probe and CloudTrail management events must prove:
 1. only the exact web production subject can use private-manual roots;
 2. the exact worker production subject can generate/decrypt the active AI object-wrap root, decrypt retired AI object-wrap roots, and only describe staged AI object-wrap roots;
 3. the exact verifier production subject can decrypt active/retired AI object-wrap roots, only describe staged AI object-wrap roots, and cannot generate or rewrap keys;
-4. worker and verifier attempts against every AI content-MAC and private generation return `AccessDenied`;
-5. wrong owner, class, purpose, key-record ID, missing context key, extra context key, wrong audience, preview subject, and other project subjects are denied;
-6. staged roots cannot generate, decrypt, or rewrap;
-7. disabling any required root makes the application fail closed without persisting plaintext.
+4. the exact organizer production subject can generate/decrypt active and decrypt retired AI object-wrap/content-MAC roots, only describe staged AI roots, and cannot use private roots, rewrap, or create grants;
+5. worker and verifier attempts against every AI content-MAC and private generation, plus organizer attempts against every private generation, return `AccessDenied`;
+6. wrong owner, class, purpose, key-record ID, missing context key, extra context key, wrong audience, preview subject, and other project subjects are denied;
+7. staged roots cannot generate, decrypt, or rewrap;
+8. disabling any required root makes the application fail closed without persisting plaintext.
 
 KMS cryptographic operations such as `GenerateDataKey`, `Decrypt`, and `ReEncrypt` are CloudTrail **management** events. The trail must include read and write management events and must not exclude KMS events. Encryption-context values appear in those logs, so they must contain opaque identifiers only.
 

@@ -182,7 +182,13 @@ function replayMacMessage<Payload>(
 }
 
 type AggregateVerificationCoordinates = Readonly<{
-  surface: "capture_receipt" | "note_content" | "note_mutation" | "idempotency_response";
+  surface:
+    | "capture_receipt"
+    | "note_content"
+    | "note_mutation"
+    | "organization_decision"
+    | "review_item"
+    | "idempotency_response";
   resourceId: string;
   recordVersion: number;
   keyClass: KeyClass;
@@ -692,6 +698,27 @@ export function createEncryptedAggregateService(
           after: payload.afterSnapshot.privacy
         }),
         payload
+      });
+    }
+    if (input.surface === "organization_decision") {
+      assertEntityId(input.decisionId, "dec");
+      return Object.freeze({
+        surface: input.surface,
+        resourceId: input.decisionId,
+        recordVersion: 1,
+        keyClass: "ai_assisted",
+        payload: parsePayload(OrganizationDecisionPayloadSchema, input.payload)
+      });
+    }
+    if (input.surface === "review_item") {
+      assertEntityId(input.reviewId, "rvw");
+      assertRecordVersion(input.recordVersion);
+      return Object.freeze({
+        surface: input.surface,
+        resourceId: input.reviewId,
+        recordVersion: input.recordVersion,
+        keyClass: parsePrivacy(input.sourcePrivacy),
+        payload: parsePayload(ReviewPayloadSchema, input.payload)
       });
     }
     return Object.freeze({

@@ -24,10 +24,11 @@ variables {
   key_administrator_arns = [
     "arn:aws:iam::123456789012:role/unfiled-kms-admin",
   ]
-  vercel_team_slug      = "unfiled-team"
-  web_project_name      = "unfiled-web"
-  worker_project_name   = "unfiled-worker"
-  verifier_project_name = "unfiled-verifier"
+  vercel_team_slug       = "unfiled-team"
+  web_project_name       = "unfiled-web"
+  worker_project_name    = "unfiled-worker"
+  verifier_project_name  = "unfiled-verifier"
+  organizer_project_name = "unfiled-organizer"
 }
 
 run "reject_verifier_project_identity_reuse" {
@@ -38,6 +39,16 @@ run "reject_verifier_project_identity_reuse" {
   }
 
   expect_failures = [var.verifier_project_name]
+}
+
+run "reject_organizer_project_identity_reuse" {
+  command = plan
+
+  variables {
+    organizer_project_name = "unfiled-worker"
+  }
+
+  expect_failures = [var.organizer_project_name]
 }
 
 run "reject_second_active_generation" {
@@ -302,6 +313,18 @@ run "reject_runtime_role_as_key_administrator" {
   variables {
     key_administrator_arns = [
       "arn:aws:iam::123456789012:role/unfiled-production-worker",
+    ]
+  }
+
+  expect_failures = [aws_iam_openid_connect_provider.vercel]
+}
+
+run "reject_organizer_role_as_key_administrator" {
+  command = plan
+
+  variables {
+    key_administrator_arns = [
+      "arn:aws:iam::123456789012:role/unfiled-production-organizer",
     ]
   }
 
