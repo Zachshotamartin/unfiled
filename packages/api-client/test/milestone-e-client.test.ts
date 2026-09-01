@@ -108,7 +108,7 @@ describe("Milestone E/F API client", () => {
       note: mutation.note,
       revision: mutation.revision,
       mutationId: mutation.mutationId,
-      undo: mutation.undo
+      undo: { eligible: false, expiresAt: null }
     };
     const batch = { members: [member], replayed: false } as const;
     const fetcher = vi

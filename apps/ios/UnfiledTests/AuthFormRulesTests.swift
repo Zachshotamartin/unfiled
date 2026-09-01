@@ -77,4 +77,9 @@ final class AuthFormRulesTests: XCTestCase {
 
         XCTAssertEqual(Set(identifiers).count, identifiers.count)
     }
+
+    func testSignInActionUsesAVisiblySeparateControlGap() {
+        XCTAssertGreaterThan(UnfiledTheme.formActionSpacing, UnfiledTheme.controlStackSpacing)
+        XCTAssertGreaterThanOrEqual(UnfiledTheme.minimumTouchTarget, 44)
+    }
 }

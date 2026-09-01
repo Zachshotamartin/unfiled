@@ -209,10 +209,12 @@ function readHarness() {
       currentRevision: 4,
       parentId: PARENT_SPACE,
       displayCipher: encrypted("space_display", SPACE, 4),
+      displayMac: mac("private_manual"),
       parent: Object.freeze({
         spaceId: PARENT_SPACE,
         currentRevision: 2,
-        displayCipher: encrypted("space_display", PARENT_SPACE, 2)
+        displayCipher: encrypted("space_display", PARENT_SPACE, 2),
+        displayMac: mac("private_manual")
       })
     }),
     tags: [
@@ -220,7 +222,8 @@ function readHarness() {
         tagId: TAG,
         currentRevision: 5,
         createdAt: CREATED_AT,
-        displayCipher: encrypted("tag_display", TAG, 5)
+        displayCipher: encrypted("tag_display", TAG, 5),
+        displayMac: mac("private_manual")
       })
     ],
     links: [
@@ -443,7 +446,9 @@ function writeHarness(options: WriteHarnessOptions = {}) {
   );
   const openNoteRevision = vi.fn<EncryptedAggregateService["openNoteRevision"]>((_access, record) =>
     Promise.resolve(
-      payloads.get(payloadKey(record as EncryptedAggregateRecord<"note_revision">)) as never
+      payloads.get(
+        payloadKey((record as { encrypted: EncryptedAggregateRecord<"note_revision"> }).encrypted)
+      ) as never
     )
   );
   const openNoteMutation = vi.fn<EncryptedAggregateService["openNoteMutation"]>(
@@ -606,7 +611,10 @@ describe("encrypted note aggregate repository", () => {
     ]);
     expect(harness.openTagDisplay).toHaveBeenCalledWith(
       expect.anything(),
-      harness.row.tags[0]?.displayCipher,
+      {
+        encrypted: harness.row.tags[0]?.displayCipher,
+        contentMac: harness.row.tags[0]?.displayMac
+      },
       { tagId: TAG, currentRevision: 5 }
     );
   });
@@ -644,11 +652,15 @@ describe("encrypted note aggregate repository", () => {
 
     const [revision] = await repository({ aggregate, reads }).listRevisions(NOTE);
 
-    expect(openNoteRevision).toHaveBeenCalledWith(expect.anything(), revisionRow.snapshotCipher, {
-      revisionId: ORIGINAL_REVISION,
-      revision: 2,
-      transition: { before: "private_manual", after: "ai_assisted" }
-    });
+    expect(openNoteRevision).toHaveBeenCalledWith(
+      expect.anything(),
+      { encrypted: revisionRow.snapshotCipher, contentMac: revisionRow.snapshotMac },
+      {
+        revisionId: ORIGINAL_REVISION,
+        revision: 2,
+        transition: { before: "private_manual", after: "ai_assisted" }
+      }
+    );
     expect(revision?.contentHash).toBe(REVISION_MAC_VALUE);
   });
 
@@ -1044,13 +1056,15 @@ describe("encrypted note aggregate repository", () => {
         revisionId: ORIGINAL_REVISION,
         revision: 1,
         privacy: "ai_assisted" as const,
-        snapshotCipher: encrypted("note_revision", ORIGINAL_REVISION, 1, "ai_assisted")
+        snapshotCipher: encrypted("note_revision", ORIGINAL_REVISION, 1, "ai_assisted"),
+        snapshotMac: mac("ai_assisted")
       }),
       afterSnapshot: Object.freeze({
         revisionId: REVISION,
         revision: 2,
         privacy: "private_manual" as const,
-        snapshotCipher: encrypted("note_revision", REVISION, 2, "private_manual")
+        snapshotCipher: encrypted("note_revision", REVISION, 2, "private_manual"),
+        snapshotMac: mac("private_manual")
       })
     }) satisfies EncryptedNoteMutationRead;
     const harness = writeHarness({

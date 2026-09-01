@@ -132,4 +132,30 @@ describe("stored capture receipt payload invariants", () => {
     expect(CaptureReceiptPayloadSchema.parse(legacyWithoutUndo)).toEqual(legacyWithoutUndo);
     expectInvalid({ ...legacyWithoutUndo, schemaVersion: 2, undoTargets: [] });
   });
+
+  it("allows only an explicitly terminal restored route to omit undo authority", () => {
+    const restoredRoute = {
+      ...storedReceipt,
+      schemaVersion: 2,
+      outcome: "added_to_note",
+      actions: storedReceipt.actions.filter((action) => action.type !== "undo"),
+      reasonCodes: ["user_undo"],
+      undoTargets: []
+    } as const;
+    expect(CaptureReceiptPayloadSchema.parse(restoredRoute)).toEqual(restoredRoute);
+    expectInvalid({
+      ...restoredRoute,
+      actions: storedReceipt.actions,
+      undoTargets: [
+        {
+          noteId: storedReceipt.destination.noteId,
+          mutationId: storedReceipt.mutationId,
+          expectedRevision: 2
+        }
+      ]
+    });
+    expectInvalid({ ...restoredRoute, outcome: "created_note" });
+    expectInvalid({ ...restoredRoute, reasonCodes: ["user_undo", "semantic_match"] });
+    expectInvalid({ ...restoredRoute, actions: restoredRoute.actions.slice(0, 1) });
+  });
 });

@@ -67,12 +67,16 @@ select is(
           'note_links', 'feedback_events', 'user_events',
           'api_idempotency_records', 'organization_mutation_attempts', 'capture_receipts',
           'auth_otp_quota_events', 'organization_job_ai_settings',
-          'organization_job_rule_matches', 'feedback_event_mutations'
+          'organization_job_rule_matches', 'feedback_event_mutations',
+          'encrypted_owner_interaction_claims',
+          'encrypted_owner_interaction_members',
+          'encrypted_owner_interaction_reservations',
+          'encrypted_mutation_batches', 'encrypted_mutation_batch_members'
         ]
       )
       and relation.relrowsecurity
   ),
-  26::bigint,
+  31::bigint,
   'RLS is enabled on every exposed or service-owned table'
 );
 select is(

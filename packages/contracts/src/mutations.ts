@@ -21,23 +21,31 @@ export const MutationResultSchema = z.strictObject({
 export type MutationResult = z.infer<typeof MutationResultSchema>;
 
 export const MutationBatchUndoMemberSchema = MutationResultSchema.omit({
-  replayed: true
-}).superRefine((member, context) => {
-  if (member.note.id !== member.revision.noteId) {
-    context.addIssue({
-      code: "custom",
-      message: "A batch undo member revision must belong to its note",
-      path: ["revision", "noteId"]
-    });
-  }
-  if (member.note.currentRevision !== member.revision.revision) {
-    context.addIssue({
-      code: "custom",
-      message: "A batch undo member must return the note's current revision",
-      path: ["revision", "revision"]
-    });
-  }
-});
+  replayed: true,
+  undo: true
+})
+  .extend({
+    undo: z.strictObject({
+      eligible: z.literal(false),
+      expiresAt: z.null()
+    })
+  })
+  .superRefine((member, context) => {
+    if (member.note.id !== member.revision.noteId) {
+      context.addIssue({
+        code: "custom",
+        message: "A batch undo member revision must belong to its note",
+        path: ["revision", "noteId"]
+      });
+    }
+    if (member.note.currentRevision !== member.revision.revision) {
+      context.addIssue({
+        code: "custom",
+        message: "A batch undo member must return the note's current revision",
+        path: ["revision", "revision"]
+      });
+    }
+  });
 export type MutationBatchUndoMember = z.infer<typeof MutationBatchUndoMemberSchema>;
 
 export const MutationBatchUndoResponseSchema = z

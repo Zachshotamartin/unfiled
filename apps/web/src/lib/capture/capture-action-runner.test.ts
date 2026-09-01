@@ -81,6 +81,7 @@ function transport(overrides: Partial<CaptureActionTransport> = {}): CaptureActi
     deleteCapture: () => Promise.reject(new Error("Unexpected delete")),
     retryCapture: () => Promise.reject(new Error("Unexpected retry")),
     undoMutation: () => Promise.reject(new Error("Unexpected undo")),
+    undoMutationBatch: () => Promise.reject(new Error("Unexpected batch undo")),
     ...overrides
   };
 }
@@ -306,33 +307,37 @@ describe("durable browser capture actions", () => {
       firstStore,
       PROFILE_A,
       intent,
-      transport({ undoMutation: () => Promise.reject(new Error("Response lost")) }),
+      transport({ undoMutationBatch: () => Promise.reject(new Error("Response lost")) }),
       100,
       () => DELETE_KEY
     );
 
     const reloadedStore = createCaptureLocalStore(persistence, crypto);
+    const undoMutationBatch = vi.fn<CaptureActionTransport["undoMutationBatch"]>(() =>
+      Promise.resolve({})
+    );
     const undoMutation = vi.fn<CaptureActionTransport["undoMutation"]>(() => Promise.resolve({}));
     await replayPendingCaptureActions(
       reloadedStore,
       PROFILE_A,
-      transport({ undoMutation }),
+      transport({ undoMutation, undoMutationBatch }),
       1_100,
       () => DELETE_KEY
     );
     await replayPendingCaptureActions(
       reloadedStore,
       PROFILE_A,
-      transport({ undoMutation }),
+      transport({ undoMutation, undoMutationBatch }),
       2_100,
       () => DELETE_KEY
     );
 
-    expect(undoMutation).toHaveBeenCalledTimes(1);
-    expect(undoMutation).toHaveBeenCalledWith(MUTATION_ID, {
+    expect(undoMutationBatch).toHaveBeenCalledTimes(1);
+    expect(undoMutationBatch).toHaveBeenCalledWith(MUTATION_ID, {
       expectedRevision: 4,
       idempotencyKey: UNDO_KEY
     });
+    expect(undoMutation).not.toHaveBeenCalled();
     expect(await reloadedStore.listActions(PROFILE_A)).toEqual([
       expect.objectContaining({ actionType: "undo_mutation", state: "consumed" })
     ]);

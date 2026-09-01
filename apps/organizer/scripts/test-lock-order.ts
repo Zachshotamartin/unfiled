@@ -7,6 +7,8 @@ const OTHER_OWNER_ID = "11111111-1111-4111-8111-111111111111";
 const CAPTURE_ID = "cap_78000000000000000000000001";
 const JOB_ID = "job_78000000000000000000000001";
 const NOTE_ID = "note_78000000000000000000000001";
+const MUTATION_ID = "mut_78000000000000000000000001";
+const OWNER_INTERACTION_KEY = "lock-order-e1-batch";
 const OBJECT_KEY_ID = "c5c3.lock_order.object.v1";
 const MAC_KEY_ID = "c5c3.lock_order.mac.v1";
 const CLAIM_APPLICATION = "unfiled-organizer-lock-order-claim";
@@ -46,7 +48,7 @@ function clientConfig(applicationName: string): ClientConfig {
 
 function envelope(
   resourceId: string,
-  kind: "capture" | "note_content",
+  kind: "capture" | "note_content" | "note_mutation",
   keyId: string
 ): Readonly<Record<string, unknown>> {
   return {
@@ -89,6 +91,20 @@ async function close(client: Client): Promise<void> {
 async function removeFixture(client: Client): Promise<void> {
   await client.query("begin");
   try {
+    await client.query(
+      `delete from public.content_key_operation_reservations as reservation
+       using public.encrypted_owner_interaction_reservations as binding
+       where binding.user_id = $1
+         and binding.idempotency_key = $2
+         and reservation.user_id = binding.user_id
+         and reservation.reservation_id = binding.reservation_id`,
+      [OWNER_ID, OWNER_INTERACTION_KEY]
+    );
+    await client.query(
+      `delete from public.encrypted_owner_interaction_claims
+       where user_id = $1 and idempotency_key = $2`,
+      [OWNER_ID, OWNER_INTERACTION_KEY]
+    );
     await client.query("delete from public.organization_jobs where id = $1", [JOB_ID]);
     await client.query("delete from public.captures where id = $1", [CAPTURE_ID]);
     await client.query("delete from public.notes where id = $1", [NOTE_ID]);
@@ -295,6 +311,55 @@ async function proveOwnerChangeRejectsBeforeAdvisory(
   }
 }
 
+async function proveOwnerInteractionAdvisoryFirst(
+  adminClient: Client,
+  blockerClient: Client,
+  interactionClient: Client
+): Promise<void> {
+  await adminClient.query(
+    "update public.content_encryption_rollouts set state = 'encrypted_only' where user_id = $1",
+    [OWNER_ID]
+  );
+  await blockerClient.query("begin");
+  try {
+    await blockerClient.query("set local lock_timeout = '750ms'");
+    await blockerClient.query("set local statement_timeout = '3s'");
+    await acquireRolloutAdvisory(blockerClient, OWNER_ID);
+
+    const interactionPid = await interactionClient.query<{ pid: number }>(
+      "select pg_catalog.pg_backend_pid() as pid"
+    );
+    const pid = interactionPid.rows[0]?.pid;
+    assert(typeof pid === "number");
+    const pendingPreparation = interactionClient.query<{
+      result: Readonly<{ members: readonly unknown[]; scope: string }>;
+    }>(`select public.get_encrypted_mutation_batch($1, $2, 1, $3) as result`, [
+      OWNER_ID,
+      MUTATION_ID,
+      OWNER_INTERACTION_KEY
+    ]);
+
+    await waitForBlockedAdvisory(adminClient, pid);
+    const noteLock = await blockerClient.query<{ id: string }>(
+      "select id from public.notes where id = $1 for update",
+      [NOTE_ID]
+    );
+    assert.equal(noteLock.rows[0]?.id, NOTE_ID);
+    await blockerClient.query("commit");
+
+    const preparation = await pendingPreparation;
+    const prepared = preparation.rows[0];
+    assert(prepared !== undefined);
+    assert.equal(prepared.result.scope, "encrypted_mutation_batch_undo");
+    assert.equal(prepared.result.members.length, 1);
+    process.stdout.write(
+      "E1 batch preparation rollout advisory -> sorted note lock order passed\n"
+    );
+  } finally {
+    await rollback(blockerClient);
+  }
+}
+
 const admin = new Client(clientConfig("unfiled-organizer-lock-order-admin"));
 const blocker = new Client(clientConfig("unfiled-organizer-lock-order-blocker"));
 const claim = new Client(clientConfig(CLAIM_APPLICATION));
@@ -390,6 +455,26 @@ try {
        )`,
       [JOB_ID, CAPTURE_ID, OWNER_ID]
     );
+    await admin.query(
+      `insert into public.note_mutations (
+         id, user_id, note_id, idempotency_key, before_revision,
+         after_revision, operations, inverse, created_at,
+         mutation_envelope, mutation_key_id, mutation_key_class,
+         mutation_key_purpose, mutation_key_version
+       ) values (
+         $1, $2, $3, 'lock-order-e1-anchor', 0, 1,
+         '[]'::jsonb, '[]'::jsonb, clock_timestamp(), $4::jsonb,
+         $5, 'ai_assisted', 'object_wrap', $6
+       )`,
+      [
+        MUTATION_ID,
+        OWNER_ID,
+        NOTE_ID,
+        envelope(MUTATION_ID, "note_mutation", objectKey.keyId),
+        objectKey.keyId,
+        objectKey.keyVersion
+      ]
+    );
     await admin.query("commit");
   } catch (error) {
     await rollback(admin);
@@ -430,6 +515,90 @@ try {
       row.definition.includes("content_encryption_rollout_busy")
   );
   assert(jobGuard !== undefined, "The organization-job guard is not fail-fast.");
+
+  const ownerInteractionContract = await admin.query<{
+    definition: string;
+    function_name: string;
+  }>(
+    `select
+       procedure.proname as function_name,
+       pg_catalog.lower(pg_catalog.pg_get_functiondef(procedure.oid)) as definition
+     from pg_catalog.pg_proc as procedure
+     join pg_catalog.pg_namespace as namespace on namespace.oid = procedure.pronamespace
+     where namespace.nspname = 'public'
+       and procedure.proname = any(array[
+         'prepare_encrypted_decision_correction',
+         'commit_encrypted_decision_correction',
+         'prepare_encrypted_review_resolution',
+         'commit_encrypted_review_resolution',
+         'get_encrypted_mutation_batch',
+         'undo_encrypted_mutation_batch'
+       ])`
+  );
+  assert.equal(ownerInteractionContract.rowCount, 6);
+  for (const contract of ownerInteractionContract.rows) {
+    // Every encrypted command family shares this first advisory. Reusing the
+    // note-write namespace serializes cross-table idempotency absence checks;
+    // a Review-specific advisory would let note/taxonomy/capture claims race.
+    const interactionAdvisory = contract.definition.indexOf(":encrypted-note-write:");
+    const rolloutAdvisory = contract.definition.indexOf(":content-encryption-rollout");
+    const firstRowLock = contract.definition.indexOf("for update");
+    assert(
+      interactionAdvisory >= 0,
+      `${contract.function_name} omits the shared encrypted-write advisory.`
+    );
+    assert(
+      rolloutAdvisory > interactionAdvisory,
+      `${contract.function_name} takes its rollout advisory out of order.`
+    );
+    assert(
+      firstRowLock > rolloutAdvisory,
+      `${contract.function_name} locks a row before owner advisories.`
+    );
+  }
+
+  for (const functionName of [
+    "commit_encrypted_decision_correction",
+    "undo_encrypted_mutation_batch"
+  ]) {
+    const contract = ownerInteractionContract.rows.find(
+      (candidate) => candidate.function_name === functionName
+    );
+    assert(contract !== undefined);
+    const noteLock = contract.definition.indexOf("order by note.id for update");
+    const mutationLock = contract.definition.indexOf("order by mutation.id for update");
+    assert(noteLock >= 0, `${functionName} omits sorted note locking.`);
+    assert(
+      mutationLock > noteLock,
+      `${functionName} does not lock target mutations after sorted notes.`
+    );
+  }
+  const reviewCommit = ownerInteractionContract.rows.find(
+    (candidate) => candidate.function_name === "commit_encrypted_review_resolution"
+  );
+  assert(reviewCommit !== undefined);
+  assert(
+    reviewCommit.definition.indexOf("order by note.id for update") <
+      reviewCommit.definition.indexOf("from public.review_items"),
+    "Review commit does not lock sorted notes before the Review row."
+  );
+
+  const legacyUndoContract = await admin.query<{ definition: string }>(
+    `select pg_catalog.lower(pg_catalog.pg_get_functiondef(procedure.oid)) as definition
+     from pg_catalog.pg_proc as procedure
+     join pg_catalog.pg_namespace as namespace on namespace.oid = procedure.pronamespace
+     where namespace.nspname = 'public'
+       and procedure.proname = 'apply_encrypted_note_mutation'
+       and pg_catalog.pg_get_function_identity_arguments(procedure.oid) =
+         'p_owner_id uuid, p_note_id text, p_expected_revision integer, p_idempotency_key text, p_command jsonb'`
+  );
+  const legacyUndoDefinition = legacyUndoContract.rows[0]?.definition;
+  assert(legacyUndoDefinition !== undefined);
+  assert(
+    legacyUndoDefinition.indexOf("encrypted_mutation_batch_members") <
+      legacyUndoDefinition.indexOf("for update"),
+    "Legacy single-note undo checks E1 batch membership too late."
+  );
 
   await proveRowFirstFailsFast(admin, blocker, writer, {
     id: NOTE_ID,
@@ -498,6 +667,8 @@ try {
   );
   assert.deepEqual(finalRows.rows[0], { capture_status: "processing", job_state: "running" });
   process.stdout.write("organizer rollout advisory -> job -> capture lock order passed\n");
+
+  await proveOwnerInteractionAdvisoryFirst(admin, blocker, claim);
 } catch (error) {
   runFailed = true;
   runFailure = error;
@@ -514,6 +685,20 @@ try {
   try {
     if (originalRollout !== undefined) {
       await admin.query("begin");
+      await admin.query(
+        `delete from public.content_key_operation_reservations as reservation
+         using public.encrypted_owner_interaction_reservations as binding
+         where binding.user_id = $1
+           and binding.idempotency_key = $2
+           and reservation.user_id = binding.user_id
+           and reservation.reservation_id = binding.reservation_id`,
+        [OWNER_ID, OWNER_INTERACTION_KEY]
+      );
+      await admin.query(
+        `delete from public.encrypted_owner_interaction_claims
+         where user_id = $1 and idempotency_key = $2`,
+        [OWNER_ID, OWNER_INTERACTION_KEY]
+      );
       await admin.query("delete from public.organization_jobs where id = $1", [JOB_ID]);
       await admin.query("delete from public.captures where id = $1", [CAPTURE_ID]);
       await admin.query("delete from public.notes where id = $1", [NOTE_ID]);

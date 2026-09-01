@@ -7,6 +7,7 @@ import {
   NoteSchema,
   NoteSnapshotSchema,
   NoteTypeSchema,
+  PrivacyModeSchema,
   ProjectChecklistItemSchema,
   ProjectStructuredDataSchema,
   UserOperationSchema,
@@ -16,6 +17,7 @@ import {
   type EntityKind,
   type ModelOperation,
   type NoteSnapshot,
+  type PrivacyMode,
   type UserOperation
 } from "@unfiled/contracts";
 import {
@@ -133,6 +135,24 @@ export type ApplyMaterializedAppendOrganizationCommandInput = Readonly<{
 
 export type ApplyMaterializedOrganizationCommandInput =
   ApplyMaterializedCreateOrganizationCommandInput | ApplyMaterializedAppendOrganizationCommandInput;
+
+export type ApplyOwnerAuthorizedCreateOrganizationCommandInput =
+  ApplyMaterializedCreateOrganizationCommandInput &
+    Readonly<{
+      sourcePrivacy: null;
+      targetPrivacy: PrivacyMode;
+    }>;
+
+export type ApplyOwnerAuthorizedAppendOrganizationCommandInput =
+  ApplyMaterializedAppendOrganizationCommandInput &
+    Readonly<{
+      sourcePrivacy: PrivacyMode;
+      targetPrivacy: PrivacyMode;
+    }>;
+
+export type ApplyOwnerAuthorizedMaterializedOrganizationCommandInput =
+  | ApplyOwnerAuthorizedCreateOrganizationCommandInput
+  | ApplyOwnerAuthorizedAppendOrganizationCommandInput;
 
 export type OrganizationNoteContentPayload = Readonly<{
   schemaVersion: 1;
@@ -543,13 +563,14 @@ function buildDraft(
   initial: NoteSnapshot,
   exactCaptureText: string,
   occurredAt: string,
-  idFactory: EntityIdFactory
+  idFactory: EntityIdFactory,
+  targetPrivacy: PrivacyMode
 ): NoteSnapshot {
   const draft = cloneSnapshot(initial);
   for (const operation of operations) {
     applyOperation(draft, command.noteId, operation, exactCaptureText, occurredAt, idFactory);
   }
-  draft.privacy = "ai_assisted";
+  draft.privacy = targetPrivacy;
   draft.isOpen = openStateForStructuredNote(draft.type, draft.structuredData, draft.isOpen);
   return NoteSnapshotSchema.parse(draft);
 }
@@ -557,13 +578,15 @@ function buildDraft(
 function currentNote(
   value: unknown,
   command: MaterializedAppendOrganizationCommand,
-  expectedOwnerId: string
+  expectedOwnerId: string,
+  expectedPrivacy: PrivacyMode,
+  ownerAuthorized: boolean
 ): Note {
   if (typeof value !== "object" || value === null || !("userId" in value)) {
     return fail(OrganizationApplicationErrorCode.INVALID_NOTE_STATE);
   }
   const record = value as Readonly<Record<string, unknown>>;
-  if (record.privacy === "private_manual") {
+  if (!ownerAuthorized && record.privacy === "private_manual") {
     return fail(OrganizationApplicationErrorCode.PRIVATE_NOTE_FORBIDDEN);
   }
   const { userId: actualOwnerId, ...noteRecord } = record;
@@ -576,7 +599,7 @@ function currentNote(
     parsed.data.currentRevision !== command.expectedRevision ||
     parsed.data.currentRevision + 1 !== command.afterRevision ||
     parsed.data.type !== command.noteType ||
-    parsed.data.privacy !== "ai_assisted" ||
+    parsed.data.privacy !== expectedPrivacy ||
     !parsed.data.isOpen ||
     parsed.data.archivedAt !== null ||
     parsed.data.deletedAt !== null
@@ -586,7 +609,10 @@ function currentNote(
   return deepFreeze({ ...parsed.data, userId: expectedOwnerId });
 }
 
-function emptyCreateSnapshot(command: MaterializedCreateOrganizationCommand): NoteSnapshot {
+function emptyCreateSnapshot(
+  command: MaterializedCreateOrganizationCommand,
+  targetPrivacy: PrivacyMode
+): NoteSnapshot {
   if (!NoteTypeSchema.safeParse(command.noteType).success) {
     return fail(OrganizationApplicationErrorCode.INVALID_COMMAND);
   }
@@ -598,7 +624,7 @@ function emptyCreateSnapshot(command: MaterializedCreateOrganizationCommand): No
     structuredData: defaultStructuredData(command.noteType),
     isOpen: true,
     pinnedAt: null,
-    privacy: "ai_assisted",
+    privacy: targetPrivacy,
     archivedAt: null,
     deletedAt: null,
     tagIds: [],
@@ -671,12 +697,29 @@ function assertCommandBindings(command: RoutedCommand): void {
   }
 }
 
-export function applyMaterializedOrganizationCommand(
-  input: ApplyMaterializedOrganizationCommandInput
+type ApplicationAuthority = Readonly<{
+  ownerAuthorized: boolean;
+  sourcePrivacy: PrivacyMode | null;
+  targetPrivacy: PrivacyMode;
+}>;
+
+function applyWithAuthority(
+  input: ApplyMaterializedOrganizationCommandInput,
+  authority: ApplicationAuthority
 ): AppliedOrganizationCommand {
   try {
     const command = input.command;
     assertCommandBindings(command);
+    if (
+      !PrivacyModeSchema.safeParse(authority.targetPrivacy).success ||
+      (authority.sourcePrivacy !== null &&
+        !PrivacyModeSchema.safeParse(authority.sourcePrivacy).success) ||
+      (command.kind === "create"
+        ? authority.sourcePrivacy !== null
+        : authority.sourcePrivacy === null)
+    ) {
+      return fail(OrganizationApplicationErrorCode.INVALID_COMMAND);
+    }
     const exactCaptureText = captureText(input.captureText);
     const exactOwnerId = ownerId(input.ownerId);
     const parsedOccurredAt = UtcInstantSchema.safeParse(input.occurredAt);
@@ -697,7 +740,7 @@ export function applyMaterializedOrganizationCommand(
     }
 
     if (command.kind === "create") {
-      const initial = emptyCreateSnapshot(command);
+      const initial = emptyCreateSnapshot(command, authority.targetPrivacy);
       const idFactory = commandIdFactory(command, input.idFactory, initial);
       const draft = buildDraft(
         command,
@@ -705,14 +748,15 @@ export function applyMaterializedOrganizationCommand(
         initial,
         exactCaptureText,
         occurredAt,
-        idFactory
+        idFactory,
+        authority.targetPrivacy
       );
       const created = createInitialNote({
         id: command.noteId,
         userId: exactOwnerId,
         title: draft.title,
         type: draft.type,
-        privacy: "ai_assisted",
+        privacy: authority.targetPrivacy,
         now: occurredAt,
         spaceId: draft.spaceId,
         bodyMarkdown: draft.bodyMarkdown,
@@ -737,7 +781,13 @@ export function applyMaterializedOrganizationCommand(
       });
     }
 
-    const current = currentNote(input.currentNote, command, exactOwnerId);
+    const current = currentNote(
+      input.currentNote,
+      command,
+      exactOwnerId,
+      authority.sourcePrivacy ?? fail(OrganizationApplicationErrorCode.INVALID_COMMAND),
+      authority.ownerAuthorized
+    );
     const beforeSnapshot = noteSnapshot(current);
     const idFactory = commandIdFactory(command, input.idFactory, beforeSnapshot);
     const draft = buildDraft(
@@ -746,7 +796,8 @@ export function applyMaterializedOrganizationCommand(
       beforeSnapshot,
       exactCaptureText,
       occurredAt,
-      idFactory
+      idFactory,
+      authority.targetPrivacy
     );
     const applied = applyNoteOperations(current, {
       expectedRevision: command.expectedRevision,
@@ -757,7 +808,7 @@ export function applyMaterializedOrganizationCommand(
       actor: "organizer"
     });
     if (
-      applied.note.privacy !== "ai_assisted" ||
+      applied.note.privacy !== authority.targetPrivacy ||
       applied.note.currentRevision !== command.afterRevision ||
       applied.revision.id !== command.revisionId ||
       applied.mutation.id !== command.mutationId
@@ -779,4 +830,34 @@ export function applyMaterializedOrganizationCommand(
     }
     return fail(OrganizationApplicationErrorCode.INVALID_COMMAND);
   }
+}
+
+/**
+ * Applies an AI-organizer command inside its fixed AI-assisted boundary.
+ * Private notes remain impossible to pass through this entry point.
+ */
+export function applyMaterializedOrganizationCommand(
+  input: ApplyMaterializedOrganizationCommandInput
+): AppliedOrganizationCommand {
+  return applyWithAuthority(input, {
+    ownerAuthorized: false,
+    sourcePrivacy: input.command.kind === "create" ? null : "ai_assisted",
+    targetPrivacy: "ai_assisted"
+  });
+}
+
+/**
+ * Applies the same source-preserving materialized command after an authenticated
+ * owner action has already authorized the exact source and target privacy classes.
+ * This is intentionally separate from the organizer entry point so model-driven
+ * routing cannot opt itself into private-manual access.
+ */
+export function applyOwnerAuthorizedMaterializedOrganizationCommand(
+  input: ApplyOwnerAuthorizedMaterializedOrganizationCommandInput
+): AppliedOrganizationCommand {
+  return applyWithAuthority(input, {
+    ownerAuthorized: true,
+    sourcePrivacy: input.sourcePrivacy,
+    targetPrivacy: input.targetPrivacy
+  });
 }

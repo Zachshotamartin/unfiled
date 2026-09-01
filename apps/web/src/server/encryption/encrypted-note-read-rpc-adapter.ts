@@ -16,12 +16,16 @@ import type {
 } from "@unfiled/encrypted-aggregate";
 import type { KeyClass } from "@unfiled/key-management";
 
+import { canonicalUtcTimestampFromMicros } from "./canonical-rpc-timestamp";
 import { ServiceRpcError, ServiceRpcErrorCode, type ServiceRpcClient } from "./service-rpc-client";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const KEY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const MAC_PATTERN = /^[0-9a-f]{64}$/u;
 const SAFE_ACTOR_PATTERN = /^[a-z_]+:[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/u;
+const ORGANIZER_CREATE_IDEMPOTENCY_PATTERN = /^organizer:job_[0-9A-HJKMNP-TV-Z]{26}$/u;
+const OWNER_INTERACTION_CREATE_IDEMPOTENCY_PATTERN =
+  /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}:member:(?:[0-9]|1[0-5])$/u;
 const TIMESTAMP_PATTERN =
   /^(\d{4})-(0[1-9]|1[0-2])-([0-2]\d|3[01])T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.(\d{1,6}))?(Z|([+-])([01]\d|2[0-3]):([0-5]\d))$/u;
 const DATE_PATTERN = /^(\d{4})-(0[1-9]|1[0-2])-([0-2]\d|3[01])$/u;
@@ -82,6 +86,7 @@ export type EncryptedNoteSpaceParent = Readonly<{
   spaceId: EntityId<"spc">;
   currentRevision: number;
   displayCipher: EncryptedAggregateRecord<"space_display">;
+  displayMac: KeyedMacRecord;
 }>;
 
 export type EncryptedNoteSpace = Readonly<{
@@ -89,6 +94,7 @@ export type EncryptedNoteSpace = Readonly<{
   currentRevision: number;
   parentId: EntityId<"spc"> | null;
   displayCipher: EncryptedAggregateRecord<"space_display">;
+  displayMac: KeyedMacRecord;
   parent: EncryptedNoteSpaceParent | null;
 }>;
 
@@ -97,6 +103,7 @@ export type EncryptedNoteTag = Readonly<{
   currentRevision: number;
   createdAt: EncryptedNoteReadTimestamp;
   displayCipher: EncryptedAggregateRecord<"tag_display">;
+  displayMac: KeyedMacRecord;
 }>;
 
 export type EncryptedNoteLink = Readonly<{
@@ -151,6 +158,7 @@ export type EncryptedNoteMutationSnapshot = Readonly<{
   revision: number;
   privacy: PrivacyMode;
   snapshotCipher: EncryptedAggregateRecord<"note_revision">;
+  snapshotMac: KeyedMacRecord;
 }>;
 
 export type EncryptedNoteMutationRead = Readonly<{
@@ -367,8 +375,7 @@ function timestampMicros(value: unknown, failure: Failure): bigint {
 }
 
 function timestamp(value: unknown, failure: Failure): EncryptedNoteReadTimestamp {
-  timestampMicros(value, failure);
-  return value as string;
+  return canonicalUtcTimestampFromMicros(timestampMicros(value, failure), failure);
 }
 
 function nullableTimestamp(value: unknown, failure: Failure): EncryptedNoteReadTimestamp | null {
@@ -550,7 +557,7 @@ function parseSpace(
   }
   const record = exactRecord(
     value,
-    ["spaceId", "currentRevision", "parentId", "displayCipher", "parent"],
+    ["spaceId", "currentRevision", "parentId", "displayCipher", "displayMac", "parent"],
     failure
   );
   const spaceId = entityId(record.spaceId, "spc", failure);
@@ -565,43 +572,47 @@ function parseSpace(
   } else {
     const parentRecord = exactRecord(
       record.parent,
-      ["spaceId", "currentRevision", "displayCipher"],
+      ["spaceId", "currentRevision", "displayCipher", "displayMac"],
       failure
     );
     const parsedParentId = entityId(parentRecord.spaceId, "spc", failure);
     if (parsedParentId !== parentId) return failure();
     const parentRevision = positiveInteger(parentRecord.currentRevision, failure);
-    parent = Object.freeze({
-      spaceId: parsedParentId,
-      currentRevision: parentRevision,
-      displayCipher: parseStoredCipher(
-        parentRecord.displayCipher,
-        {
-          ownerId,
-          resourceId: parsedParentId,
-          recordVersion: parentRevision,
-          kind: "space_display",
-          keyClass: "private_manual"
-        },
-        failure
-      )
-    });
-  }
-  return Object.freeze({
-    spaceId,
-    currentRevision,
-    parentId,
-    displayCipher: parseStoredCipher(
-      record.displayCipher,
+    const displayCipher = parseStoredCipher(
+      parentRecord.displayCipher,
       {
         ownerId,
-        resourceId: spaceId,
-        recordVersion: currentRevision,
+        resourceId: parsedParentId,
+        recordVersion: parentRevision,
         kind: "space_display",
         keyClass: "private_manual"
       },
       failure
-    ),
+    );
+    parent = Object.freeze({
+      spaceId: parsedParentId,
+      currentRevision: parentRevision,
+      displayCipher,
+      displayMac: parseStoredMac(parentRecord.displayMac, displayCipher.keyClass, failure)
+    });
+  }
+  const displayCipher = parseStoredCipher(
+    record.displayCipher,
+    {
+      ownerId,
+      resourceId: spaceId,
+      recordVersion: currentRevision,
+      kind: "space_display",
+      keyClass: "private_manual"
+    },
+    failure
+  );
+  return Object.freeze({
+    spaceId,
+    currentRevision,
+    parentId,
+    displayCipher,
+    displayMac: parseStoredMac(record.displayMac, displayCipher.keyClass, failure),
     parent
   });
 }
@@ -613,28 +624,30 @@ function parseTags(value: unknown, ownerId: string, failure: Failure): readonly 
     value.map((item) => {
       const record = exactRecord(
         item,
-        ["tagId", "currentRevision", "createdAt", "displayCipher"],
+        ["tagId", "currentRevision", "createdAt", "displayCipher", "displayMac"],
         failure
       );
       const tagId = entityId(record.tagId, "tag", failure);
       if (previousId !== null && previousId >= tagId) return failure();
       previousId = tagId;
       const currentRevision = positiveInteger(record.currentRevision, failure);
+      const displayCipher = parseStoredCipher(
+        record.displayCipher,
+        {
+          ownerId,
+          resourceId: tagId,
+          recordVersion: currentRevision,
+          kind: "tag_display",
+          keyClass: "private_manual"
+        },
+        failure
+      );
       return Object.freeze({
         tagId,
         currentRevision,
         createdAt: timestamp(record.createdAt, failure),
-        displayCipher: parseStoredCipher(
-          record.displayCipher,
-          {
-            ownerId,
-            resourceId: tagId,
-            recordVersion: currentRevision,
-            kind: "tag_display",
-            keyClass: "private_manual"
-          },
-          failure
-        )
+        displayCipher,
+        displayMac: parseStoredMac(record.displayMac, displayCipher.keyClass, failure)
       });
     })
   );
@@ -921,7 +934,7 @@ function parseMutationSnapshot(
 ): EncryptedNoteMutationSnapshot {
   const record = exactRecord(
     value,
-    ["revisionId", "revision", "privacy", "snapshotCipher"],
+    ["revisionId", "revision", "privacy", "snapshotCipher", "snapshotMac"],
     failure
   );
   const revisionId = entityId(record.revisionId, "rev", failure);
@@ -936,7 +949,13 @@ function parseMutationSnapshot(
   if (parsedPrivacy === "private_manual" && snapshotCipher.keyClass !== "private_manual") {
     return failure();
   }
-  return Object.freeze({ revisionId, revision, privacy: parsedPrivacy, snapshotCipher });
+  return Object.freeze({
+    revisionId,
+    revision,
+    privacy: parsedPrivacy,
+    snapshotCipher,
+    snapshotMac: parseStoredMac(record.snapshotMac, snapshotCipher.keyClass, failure)
+  });
 }
 
 function parseMutationResult(
@@ -1007,7 +1026,15 @@ function parseMutationResult(
     return projectionFailure();
   }
   const decisionId = nullableEntityId(record.decisionId, "dec", projectionFailure);
-  if (beforeRevision === 0 && decisionId !== null) return projectionFailure();
+  const parsedIdempotencyKey = boundedString(record.idempotencyKey, 1, 200, projectionFailure);
+  if (
+    beforeRevision === 0 &&
+    decisionId !== null &&
+    !ORGANIZER_CREATE_IDEMPOTENCY_PATTERN.test(parsedIdempotencyKey) &&
+    !OWNER_INTERACTION_CREATE_IDEMPOTENCY_PATTERN.test(parsedIdempotencyKey)
+  ) {
+    return projectionFailure();
+  }
   const createdAt = timestamp(record.createdAt, projectionFailure);
   const undoneAt = nullableTimestamp(record.undoneAt, projectionFailure);
   if (
@@ -1022,7 +1049,7 @@ function parseMutationResult(
     mutationId,
     noteId,
     decisionId,
-    idempotencyKey: boundedString(record.idempotencyKey, 1, 200, projectionFailure),
+    idempotencyKey: parsedIdempotencyKey,
     beforeRevision,
     afterRevision,
     undoneAt,

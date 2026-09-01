@@ -67,6 +67,18 @@ function noStore(value: unknown, status = 200): Response {
   return jsonResponse(value, { status, headers: { "cache-control": "no-store" } });
 }
 
+function privateNoStore(value: unknown): Response {
+  return jsonResponse(value, {
+    headers: { "cache-control": "private, no-store", pragma: "no-cache" }
+  });
+}
+
+function privateNoStoreResponse(response: Response): Response {
+  response.headers.set("cache-control", "private, no-store");
+  response.headers.set("pragma", "no-cache");
+  return response;
+}
+
 export function createCaptureHandlers(dependencies: CaptureHandlerDependencies) {
   const authenticate = dependencies.authenticate ?? authenticateRequest;
   const scheduleDrain = dependencies.scheduleDrain ?? (() => undefined);
@@ -136,12 +148,13 @@ export function createCaptureHandlers(dependencies: CaptureHandlerDependencies) 
       });
     },
 
-    getReceipt(request: Request, parameters: RouteParameters) {
-      return run(request, async (repository, context) => {
+    async getReceipt(request: Request, parameters: RouteParameters) {
+      const response = await run(request, async (repository, context) => {
         const result = await repository.getReceipt(context, captureId(parameters.captureId));
         scheduleDrain();
-        return noStore(result);
+        return privateNoStore(result);
       });
+      return privateNoStoreResponse(response);
     },
 
     retryCapture(request: Request, parameters: RouteParameters) {

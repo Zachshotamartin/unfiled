@@ -1,8 +1,11 @@
 import {
   authorizeAggregateOwner,
   createEncryptedAggregateService,
+  EncryptedAggregateError,
+  EncryptedAggregateErrorCode,
   type AuthorizedOwnerAccess,
-  type EncryptedAggregateService
+  type EncryptedAggregateService,
+  type ObjectWrapReservation
 } from "@unfiled/encrypted-aggregate";
 import { createManagedKeyResolver } from "@unfiled/key-management";
 
@@ -17,6 +20,14 @@ import type { InteractiveWebKeyRuntime } from "./web-key-runtime";
 
 export type OwnerEncryptedAggregateRuntime = Readonly<{
   access: AuthorizedOwnerAccess;
+  createPreparedService(
+    reservations: readonly ObjectWrapReservation[]
+  ): PreparedOwnerEncryptedAggregateService;
+  service: EncryptedAggregateService;
+}>;
+
+export type PreparedOwnerEncryptedAggregateService = Readonly<{
+  assertConsumed(): void;
   service: EncryptedAggregateService;
 }>;
 
@@ -30,11 +41,65 @@ function aggregateRuntime(
   client: ServiceRpcClient
 ): OwnerEncryptedAggregateRuntime {
   const store = createManagedKeyRpcStore(client);
+  const createPreparedService = (
+    reservations: readonly ObjectWrapReservation[]
+  ): PreparedOwnerEncryptedAggregateService => {
+    const plan = reservations.map((reservation) =>
+      Object.freeze({
+        reservationId: reservation.reservationId,
+        reference: Object.freeze({ ...reservation.reference }),
+        ...(reservation.groupUse === undefined
+          ? {}
+          : { groupUse: Object.freeze({ ...reservation.groupUse }) })
+      })
+    ) as readonly ObjectWrapReservation[];
+    let index = 0;
+    let asserted = false;
+    const service = createEncryptedAggregateService({
+      keyResolver,
+      objectWrapReservations: Object.freeze({
+        reserveObjectWrappingKey(): Promise<ObjectWrapReservation> {
+          if (asserted || index >= plan.length) {
+            return Promise.reject(
+              new EncryptedAggregateError(
+                EncryptedAggregateErrorCode.RESERVATION_INVALID,
+                "Prepared reservation plan is unavailable"
+              )
+            );
+          }
+          const reservation = plan[index];
+          if (reservation === undefined) {
+            return Promise.reject(
+              new EncryptedAggregateError(
+                EncryptedAggregateErrorCode.RESERVATION_INVALID,
+                "Prepared reservation plan is unavailable"
+              )
+            );
+          }
+          index += 1;
+          return Promise.resolve(reservation);
+        }
+      })
+    });
+    return Object.freeze({
+      service,
+      assertConsumed(): void {
+        if (asserted || index !== plan.length) {
+          throw new EncryptedAggregateError(
+            EncryptedAggregateErrorCode.RESERVATION_INVALID,
+            "Prepared reservation plan was not consumed exactly"
+          );
+        }
+        asserted = true;
+      }
+    });
+  };
   return Object.freeze({
     access: authorizeAggregateOwner({
       authenticatedOwnerId: ownerId,
       resourceOwnerId: ownerId
     }),
+    createPreparedService,
     service: createEncryptedAggregateService({
       keyResolver,
       objectWrapReservations: createObjectWrapReservationPort(client, store)

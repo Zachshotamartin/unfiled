@@ -8,6 +8,172 @@ final class InteractionContractTests: XCTestCase {
         super.tearDown()
     }
 
+    func testActiveNoteMembershipCannotResurrectRemovedNotes() {
+        let removed = "note_00000000000000000000000000"
+        let survivor = "note_11111111111111111111111111"
+
+        var afterDelete = ActiveNoteMembership()
+        afterDelete.replace(with: [removed, survivor])
+        afterDelete.update(noteID: removed, isActive: false)
+        afterDelete.update(noteID: survivor, isActive: true)
+        XCTAssertEqual(afterDelete.ids, [survivor])
+
+        var afterAuthoritativeRefresh = ActiveNoteMembership()
+        afterAuthoritativeRefresh.replace(with: [removed, survivor])
+        afterAuthoritativeRefresh.replace(with: [survivor])
+        afterAuthoritativeRefresh.update(noteID: survivor, isActive: true)
+        XCTAssertEqual(afterAuthoritativeRefresh.ids, [survivor])
+    }
+
+    func testReviewQueueGenerationRejectsSupersededAndInvalidatedResults() {
+        var generation = ReviewQueueGeneration()
+
+        let firstRefresh = generation.beginRequest()
+        XCTAssertTrue(generation.accepts(firstRefresh))
+
+        let newerRefresh = generation.beginRequest()
+        XCTAssertFalse(generation.accepts(firstRefresh))
+        XCTAssertTrue(generation.accepts(newerRefresh))
+
+        generation.invalidate()
+        XCTAssertFalse(generation.accepts(newerRefresh))
+
+        let postMutationRefresh = generation.beginRequest()
+        XCTAssertTrue(generation.accepts(postMutationRefresh))
+    }
+
+    func testBatchUndoFocusesReviewOnlyForPersistedConflict() {
+        XCTAssertTrue(
+            AppModel.shouldFocusReviewAfterUndo(
+                status: 409,
+                code: .conflictRequiresReview
+            )
+        )
+
+        for status in [400, 408, 425, 500] {
+            XCTAssertFalse(
+                AppModel.shouldFocusReviewAfterUndo(
+                    status: status,
+                    code: .conflictRequiresReview
+                )
+            )
+        }
+
+        for code in [APIErrorCode.staleRevision, .structureConflict] {
+            XCTAssertFalse(AppModel.shouldFocusReviewAfterUndo(status: 409, code: code))
+            let message = AppModel.interactionFailureMessage(
+                APIClientError.http(
+                    status: 409,
+                    code: code,
+                    requestId: "req-e1-regression",
+                    retryAfterSeconds: nil
+                ),
+                fallback: "fallback"
+            )
+            XCTAssertTrue(message.localizedCaseInsensitiveContains("refresh"))
+            XCTAssertFalse(message.localizedCaseInsensitiveContains("review"))
+            XCTAssertFalse(message.localizedCaseInsensitiveContains("saved"))
+        }
+    }
+
+    func testBatchUndoRefreshesTheAnchorRevisionSoLaterEditsReachReview() {
+        XCTAssertEqual(
+            AppModel.undoRequestExpectedRevision(
+                receiptExpectedRevision: 2,
+                currentRevision: 2
+            ),
+            2
+        )
+        XCTAssertEqual(
+            AppModel.undoRequestExpectedRevision(
+                receiptExpectedRevision: 2,
+                currentRevision: 5
+            ),
+            5,
+            "A later note edit must be sent as the current CAS revision so the server can save a focused Review"
+        )
+        XCTAssertNil(
+            AppModel.undoRequestExpectedRevision(
+                receiptExpectedRevision: 5,
+                currentRevision: 2
+            )
+        )
+    }
+
+    func testBatchUndoReviewFocusComesOnlyFromExactAuthoritativeReceipt() {
+        let captureID = "cap_00000000000000000000000000"
+        let reviewID = "rvw_00000000000000000000000000"
+
+        func receipt(
+            id: String = "cap_00000000000000000000000000",
+            outcome: CaptureReceiptOutcome? = .needsReview,
+            reviewItemID: String? = "rvw_00000000000000000000000000",
+            actions: [ReceiptActionPresentation] = []
+        ) -> ReceiptPresentation {
+            ReceiptPresentation(
+                id: id,
+                category: "REVIEW",
+                time: "NOW",
+                headline: "Needs review",
+                original: "captured text",
+                outcome: outcome,
+                destinationNoteID: nil,
+                destinationTitle: nil,
+                reviewItemID: reviewItemID,
+                insertedContent: [],
+                actions: actions,
+                pending: false,
+                retryable: false
+            )
+        }
+
+        XCTAssertEqual(
+            AppModel.authoritativeReviewFocusID(
+                captureID: captureID,
+                refreshedReceipt: receipt()
+            ),
+            reviewID
+        )
+        XCTAssertNil(
+            AppModel.authoritativeReviewFocusID(
+                captureID: captureID,
+                refreshedReceipt: receipt(id: "cap_11111111111111111111111111")
+            )
+        )
+        XCTAssertNil(
+            AppModel.authoritativeReviewFocusID(
+                captureID: captureID,
+                refreshedReceipt: receipt(outcome: .addedToNote)
+            )
+        )
+        XCTAssertNil(
+            AppModel.authoritativeReviewFocusID(
+                captureID: captureID,
+                refreshedReceipt: receipt(reviewItemID: nil)
+            )
+        )
+        XCTAssertNil(
+            AppModel.authoritativeReviewFocusID(
+                captureID: captureID,
+                refreshedReceipt: receipt(reviewItemID: "rvw_invalid")
+            )
+        )
+        XCTAssertNil(
+            AppModel.authoritativeReviewFocusID(
+                captureID: captureID,
+                refreshedReceipt: receipt(
+                    actions: [.open(noteID: "note_00000000000000000000000000")]
+                )
+            )
+        )
+        XCTAssertNil(
+            AppModel.authoritativeReviewFocusID(
+                captureID: captureID,
+                refreshedReceipt: nil
+            )
+        )
+    }
+
     func testEveryReviewProposalVariantDecodesStrictly() throws {
         let decoder = APIJSON.makeDecoder()
         let noteA = "note_00000000000000000000000000"
@@ -72,10 +238,30 @@ final class InteractionContractTests: XCTestCase {
                 invalid
             )
         }
+
+        let normalized = try decoder.decode(
+            ReviewResolution.self,
+            from: Data(
+                #"{"type":"create","title":"  Training Log  ","noteType":"log","spaceId":null}"#.utf8
+            )
+        )
+        XCTAssertEqual(
+            normalized,
+            .create(title: "Training Log", noteType: .log, spaceId: nil)
+        )
     }
 
     func testReviewRequestConstructionRejectsInvalidRevisionsAndTitles() throws {
         let note = try NoteID(validating: "note_00000000000000000000000000")
+
+        for idempotencyKey in ["", " bad key", String(repeating: "a", count: 81)] {
+            XCTAssertThrowsError(
+                try ReviewResolveRequest(
+                    idempotencyKey: idempotencyKey,
+                    resolution: .dismiss
+                )
+            )
+        }
 
         for revision in [0, -1] {
             XCTAssertThrowsError(
@@ -118,6 +304,34 @@ final class InteractionContractTests: XCTestCase {
                 )
             )
         )
+
+        let normalizedRequest = try ReviewResolveRequest(
+            idempotencyKey: "review-create-trimmed",
+            resolution: .create(title: "  Training Log  ", noteType: .log, spaceId: nil)
+        )
+        XCTAssertEqual(
+            normalizedRequest.resolution,
+            .create(title: "Training Log", noteType: .log, spaceId: nil)
+        )
+        let normalizedObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: APIJSON.makeEncoder().encode(normalizedRequest))
+                as? [String: Any]
+        )
+        let normalizedResolution = try XCTUnwrap(
+            normalizedObject["resolution"] as? [String: Any]
+        )
+        XCTAssertEqual(normalizedResolution["title"] as? String, "Training Log")
+
+        let decoder = APIJSON.makeDecoder()
+        for invalid in [
+            #"{"idempotencyKey":"bad key","resolution":{"type":"dismiss"}}"#,
+            #"{"idempotencyKey":"review-dismiss","resolution":{"type":"dismiss"},"extra":true}"#
+        ] {
+            XCTAssertThrowsError(
+                try decoder.decode(ReviewResolveRequest.self, from: Data(invalid.utf8)),
+                invalid
+            )
+        }
 
         let proposalNote = try ReviewProposalNote(noteId: note, revision: 1)
         XCTAssertThrowsError(
@@ -236,12 +450,22 @@ final class InteractionContractTests: XCTestCase {
             of: #""revision":5,"source""#,
             with: #""revision":4,"source""#
         )
+        let recursivelyEligible = Self.batchUndoMemberJSON.replacingOccurrences(
+            of: #""eligible":false"#,
+            with: #""eligible":true"#
+        )
+        let recursiveExpiry = Self.batchUndoMemberJSON.replacingOccurrences(
+            of: #""expiresAt":null"#,
+            with: #""expiresAt":"2026-09-01T12:06:00Z""#
+        )
         for invalid in [
             #"{"members":[],"replayed":false}"#,
             duplicate,
             #"{"members":[\#(nestedReplay)],"replayed":false}"#,
             #"{"members":[\#(wrongRevisionNote)],"replayed":false}"#,
-            #"{"members":[\#(staleRevision)],"replayed":false}"#
+            #"{"members":[\#(staleRevision)],"replayed":false}"#,
+            #"{"members":[\#(recursivelyEligible)],"replayed":false}"#,
+            #"{"members":[\#(recursiveExpiry)],"replayed":false}"#
         ] {
             XCTAssertThrowsError(
                 try decoder.decode(MutationBatchUndoResponse.self, from: Data(invalid.utf8)),
@@ -292,6 +516,13 @@ final class InteractionContractTests: XCTestCase {
                 state: "resolved",
                 resolution: #"{"type":"accept_expansion"}"#,
                 resolvedAt: #""2026-09-01T12:01:00Z""#
+            ),
+            fixture(
+                type: "failed_job",
+                proposal: failed,
+                state: "resolved",
+                resolution: #"{"type":"keep_inbox"}"#,
+                resolvedAt: #""2026-09-01T12:01:00Z""#
             )
         ] {
             XCTAssertNoThrow(try decoder.decode(ReviewItem.self, from: Data(valid.utf8)), valid)
@@ -319,6 +550,20 @@ final class InteractionContractTests: XCTestCase {
                 proposal: failed,
                 state: "resolved",
                 resolution: #"{"type":"keep_both"}"#,
+                resolvedAt: #""2026-09-01T12:01:00Z""#
+            ),
+            fixture(
+                type: "failed_job",
+                proposal: failed,
+                state: "resolved",
+                resolution: #"{"type":"route","noteId":"note_00000000000000000000000000","expectedRevision":1}"#,
+                resolvedAt: #""2026-09-01T12:01:00Z""#
+            ),
+            fixture(
+                type: "failed_job",
+                proposal: failed,
+                state: "resolved",
+                resolution: #"{"type":"create","title":"Retry","noteType":"generic","spaceId":null}"#,
                 resolvedAt: #""2026-09-01T12:01:00Z""#
             )
         ] {

@@ -316,29 +316,53 @@ export const CaptureReceiptPayloadSchema = z
         });
       }
       if (receipt.schemaVersion === 2) {
-        if (receipt.undoTargets.length === 0) {
+        const undo = receipt.actions.find((action) => action.type === "undo");
+        const hasUserUndoReason = receipt.reasonCodes.includes("user_undo");
+        const terminalUndoReceipt =
+          receipt.outcome === "added_to_note" &&
+          receipt.reasonCodes.length === 1 &&
+          receipt.reasonCodes[0] === "user_undo" &&
+          receipt.actions.length === 2 &&
+          receipt.actions.some((action) => action.type === "open") &&
+          receipt.actions.some((action) => action.type === "move");
+        if (hasUserUndoReason && !terminalUndoReceipt) {
+          context.addIssue({
+            code: "custom",
+            message: "A user-undo receipt must use the exact restored-route shape",
+            path: ["reasonCodes"]
+          });
+        }
+        if (terminalUndoReceipt) {
+          if (undo !== undefined || receipt.undoTargets.length > 0) {
+            context.addIssue({
+              code: "custom",
+              message: "A restored route cannot advertise undo-of-undo authority",
+              path: ["undoTargets"]
+            });
+          }
+        } else if (receipt.undoTargets.length === 0) {
           context.addIssue({
             code: "custom",
             message: "A routed v2 receipt requires authenticated undo targets",
             path: ["undoTargets"]
           });
-        }
-        const primary = receipt.undoTargets.find(
-          (target) =>
-            target.noteId === receipt.destination?.noteId &&
-            target.mutationId === receipt.mutationId
-        );
-        const undo = receipt.actions.find((action) => action.type === "undo");
-        if (
-          primary === undefined ||
-          undo?.mutationId !== primary.mutationId ||
-          undo.expectedRevision !== primary.expectedRevision
-        ) {
-          context.addIssue({
-            code: "custom",
-            message: "The primary undo action must match an authenticated v2 undo target",
-            path: ["undoTargets"]
-          });
+        } else {
+          const primary = receipt.undoTargets.find(
+            (target) =>
+              target.noteId === receipt.destination?.noteId &&
+              target.mutationId === receipt.mutationId
+          );
+          if (
+            primary === undefined ||
+            undo?.mutationId !== primary.mutationId ||
+            undo.expectedRevision !== primary.expectedRevision
+          ) {
+            context.addIssue({
+              code: "custom",
+              message: "The primary undo action must match an authenticated v2 undo target",
+              path: ["undoTargets"]
+            });
+          }
         }
       }
     } else {

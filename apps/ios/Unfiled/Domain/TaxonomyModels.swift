@@ -289,8 +289,6 @@ public struct ReviewItem: Codable, Equatable, Sendable {
              (.revisionConflict, .route),
              (.revisionConflict, .create),
              (.revisionConflict, .keepInbox),
-             (.failedJob, .route),
-             (.failedJob, .create),
              (.failedJob, .keepInbox),
              (.structureConflict, .route),
              (.structureConflict, .create),

@@ -874,12 +874,17 @@ select ok(
         and decision_envelope is not null
     )
     and exists (
-      select 1 from public.capture_receipts
-      where capture_id = 'cap_77000000000000000000000001'
-        and outcome = 'created_note'
-        and receipt_envelope is not null
+      select 1
+      from public.capture_receipts as receipt
+      join public.captures as capture
+        on capture.id = receipt.capture_id
+        and capture.user_id = receipt.user_id
+      where receipt.capture_id = 'cap_77000000000000000000000001'
+        and receipt.outcome = 'created_note'
+        and receipt.receipt_envelope is not null
+        and receipt.created_at = capture.client_created_at
     ),
-  'create commit atomically publishes encrypted note, decision, receipt, and terminal job'
+  'create commit publishes an encrypted receipt at its capture occurrence time'
 );
 select is(
   (

@@ -56,6 +56,12 @@ const MAX_CAPTURE_SOURCE_NOTES = 100;
 const MAX_CAPTURE_UNDO_NOTES = 16;
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/u;
 
+function captureProjectionDiagnostic(stage: string): void {
+  if (process.env.UNFILED_E1_HTTP_DIAGNOSTICS === "1") {
+    process.stderr.write(`[unfiled-e1-capture-projection] ${stage}\n`);
+  }
+}
+
 const EncryptedCaptureUndoNoteStateSchema = z.strictObject({
   spaceId: entityIdSchema("spc").nullable(),
   type: NoteTypeSchema,
@@ -1599,6 +1605,7 @@ export function createEncryptedCaptureRpcAdapter(
     },
 
     async getCaptureReceipt(input) {
+      captureProjectionDiagnostic("receipt.input");
       const parsedInput = exactRecord(input, ["ownerId", "captureId"], inputFailure);
       const ownerId = canonicalOwnerId(parsedInput.ownerId, inputFailure);
       const captureId = entityId(parsedInput.captureId, "cap", inputFailure);
@@ -1610,7 +1617,10 @@ export function createEncryptedCaptureRpcAdapter(
         ["receipt"],
         projectionFailure
       );
-      return parseReceipt(response.receipt, ownerId, captureId, projectionFailure);
+      captureProjectionDiagnostic("receipt.rpc-returned");
+      const receipt = parseReceipt(response.receipt, ownerId, captureId, projectionFailure);
+      captureProjectionDiagnostic("receipt.parsed");
+      return receipt;
     },
 
     async getGeneratedBlocks(input) {

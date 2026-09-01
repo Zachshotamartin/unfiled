@@ -486,7 +486,10 @@ export class EncryptedNoteAggregateRepository {
             const [space, parent] = await Promise.all([
               this.dependencies.aggregate.openSpaceDisplay(
                 this.dependencies.access,
-                spaceRow.displayCipher,
+                Object.freeze({
+                  encrypted: spaceRow.displayCipher,
+                  contentMac: spaceRow.displayMac
+                }),
                 {
                   spaceId: spaceRow.spaceId,
                   currentRevision: spaceRow.currentRevision
@@ -496,7 +499,10 @@ export class EncryptedNoteAggregateRepository {
                 ? Promise.resolve(null)
                 : this.dependencies.aggregate.openSpaceDisplay(
                     this.dependencies.access,
-                    spaceRow.parent.displayCipher,
+                    Object.freeze({
+                      encrypted: spaceRow.parent.displayCipher,
+                      contentMac: spaceRow.parent.displayMac
+                    }),
                     {
                       spaceId: spaceRow.parent.spaceId,
                       currentRevision: spaceRow.parent.currentRevision
@@ -510,7 +516,7 @@ export class EncryptedNoteAggregateRepository {
         row.tags.map(async (tag) => {
           const display = await this.dependencies.aggregate.openTagDisplay(
             this.dependencies.access,
-            tag.displayCipher,
+            Object.freeze({ encrypted: tag.displayCipher, contentMac: tag.displayMac }),
             { tagId: tag.tagId, currentRevision: tag.currentRevision }
           );
           return Object.freeze({
@@ -628,7 +634,7 @@ export class EncryptedNoteAggregateRepository {
       rows.slice(page.offset, page.offset + page.limit).map(async (row) => {
         const payload = await this.dependencies.aggregate.openNoteRevision(
           this.dependencies.access,
-          row.snapshotCipher,
+          Object.freeze({ encrypted: row.snapshotCipher, contentMac: row.snapshotMac }),
           {
             revisionId: row.revisionId,
             revision: row.revision,

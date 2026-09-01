@@ -252,7 +252,7 @@ export async function executeEncryptedNoteWrite<RequestPayload, ResponsePayload>
       currentRevision: afterRevision,
       privacy: claim.targetPrivacy
     }),
-    dependencies.aggregate.openNoteRevision(dependencies.access, revision.encrypted, {
+    dependencies.aggregate.openNoteRevision(dependencies.access, revision, {
       revisionId: claim.revisionId,
       revision: afterRevision,
       transition
@@ -356,7 +356,7 @@ export async function executeEncryptedNoteWrite<RequestPayload, ResponsePayload>
   ]);
 
   const mutationProjection =
-    claim.commandProjection === "encrypted_only"
+    claim.commandProjection === "encrypted_only" && claim.scope !== "create_encrypted_note"
       ? encryptedOnlyMutationProjection(claim.targetPrivacy)
       : Object.freeze({
           operations: mutationPayload.operations,

@@ -93,7 +93,8 @@ const rules: Readonly<Record<string, BoundaryRule>> = Object.freeze({
       "@anthropic-ai",
       "@unfiled/web",
       "@unfiled/worker",
-      "@unfiled/verifier"
+      "@unfiled/verifier",
+      "@unfiled/ai-routing/application"
     ],
     sourceRoots: ["src", "api"]
   }
@@ -232,6 +233,16 @@ function assertScannerSelfTest(): void {
   );
   if (organizerFixture.length !== 1) {
     throw new Error("Boundary scanner self-test failed: organizer violations were not detected");
+  }
+  const ownerApplicationFixture = sourceViolations(
+    "apps/organizer/src/fixture.ts",
+    'import { applyOwnerAuthorizedMaterializedOrganizationCommand } from "@unfiled/ai-routing/application";\nvoid applyOwnerAuthorizedMaterializedOrganizationCommand;',
+    organizerRule.forbidden
+  );
+  if (ownerApplicationFixture.length !== 1) {
+    throw new Error(
+      "Boundary scanner self-test failed: organizer owner-application access was not detected"
+    );
   }
 }
 

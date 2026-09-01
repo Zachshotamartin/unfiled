@@ -212,6 +212,46 @@ final class LocalDatabaseTests: XCTestCase {
         XCTAssertEqual(remainingProfileNotes.count, 1)
     }
 
+    func testCachedNotePruningUsesAuthoritativeIDsAndRemainsProfileScoped() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try LocalDatabase.open(
+            bundleIdentifier: "com.unfiled.tests.note-cache-pruning",
+            keyProvider: FixedDatabaseKeyProvider(byte: 0x32),
+            directoryURL: directory
+        )
+        let removed = "note_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+        let retained = "note_01BX5ZZKBKACTAV9WEVGEMMVRZ"
+
+        for noteID in [removed, retained] {
+            try await database.cacheNote(
+                CachedNote(
+                    id: noteID,
+                    profileID: profileA,
+                    currentRevision: 1,
+                    payload: Data("profile-a-\(noteID)".utf8),
+                    cachedAt: timestamp
+                )
+            )
+        }
+        try await database.cacheNote(
+            CachedNote(
+                id: removed,
+                profileID: profileB,
+                currentRevision: 1,
+                payload: Data("profile-b-retained".utf8),
+                cachedAt: timestamp
+            )
+        )
+
+        try await database.pruneCachedNotes(profileID: profileA, retaining: [retained])
+
+        let profileANotes = try await database.cachedNotes(profileID: profileA)
+        let profileBNotes = try await database.cachedNotes(profileID: profileB)
+        XCTAssertEqual(profileANotes.map(\.id), [retained])
+        XCTAssertEqual(profileBNotes.map(\.id), [removed])
+    }
+
     func testLeaseMustMatchBeforeStateTransition() async throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -25,6 +25,7 @@ export interface CaptureActionTransport {
   ): Promise<CaptureDeleteResponse>;
   retryCapture(captureId: EntityId<"cap">, input: CaptureRetryRequest): Promise<unknown>;
   undoMutation(mutationId: EntityId<"mut">, input: MutationUndoRequest): Promise<unknown>;
+  undoMutationBatch(mutationId: EntityId<"mut">, input: MutationUndoRequest): Promise<unknown>;
 }
 
 export type CaptureActionRunResult = Readonly<{
@@ -102,7 +103,13 @@ export async function runCaptureAction(
     return { action, status: "skipped" };
   }
   try {
-    await transport.undoMutation(action.mutationId, action.request);
+    if (action.source === "receipt") {
+      // A receipt mutation can anchor a multi-note correction. The server must
+      // derive and undo the complete batch; clients may never choose members.
+      await transport.undoMutationBatch(action.mutationId, action.request);
+    } else {
+      await transport.undoMutation(action.mutationId, action.request);
+    }
     const consumed: UndoMutationIntent = {
       ...action,
       errorCode: null,

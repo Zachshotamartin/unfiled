@@ -1009,9 +1009,17 @@ select ok(
   and public.get_encrypted_note(
     '11111111-1111-4111-8111-111111111111',
     (select value ->> 'noteId' from c5b_values where key = 'create-claim')
+  ) #>> '{space,displayMac,keyPurpose}' = 'content_mac'
+  and public.get_encrypted_note(
+    '11111111-1111-4111-8111-111111111111',
+    (select value ->> 'noteId' from c5b_values where key = 'create-claim')
   ) #>> '{tags,0,currentRevision}' = (
     select value ->> 'recordVersion' from c5b_values where key = 'tag-candidate'
   )
+  and public.get_encrypted_note(
+    '11111111-1111-4111-8111-111111111111',
+    (select value ->> 'noteId' from c5b_values where key = 'create-claim')
+  ) #>> '{tags,0,displayMac,keyPurpose}' = 'content_mac'
   and public.get_encrypted_note(
     '11111111-1111-4111-8111-111111111111',
     (select value ->> 'noteId' from c5b_values where key = 'create-claim')
@@ -1028,7 +1036,11 @@ select ok(
   and public.get_encrypted_note_mutation(
     '11111111-1111-4111-8111-111111111111',
     (select value ->> 'mutationId' from c5b_values where key = 'create-claim')
-  ) #>> '{afterSnapshot,privacy}' = 'ai_assisted',
+  ) #>> '{afterSnapshot,privacy}' = 'ai_assisted'
+  and public.get_encrypted_note_mutation(
+    '11111111-1111-4111-8111-111111111111',
+    (select value ->> 'mutationId' from c5b_values where key = 'create-claim')
+  ) #>> '{afterSnapshot,snapshotMac,keyPurpose}' = 'content_mac',
   'mutation reads expose transition privacy and null create-before snapshots'
 );
 select is(

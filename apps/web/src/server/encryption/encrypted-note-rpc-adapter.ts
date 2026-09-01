@@ -30,6 +30,7 @@ import type {
 } from "@unfiled/encrypted-aggregate";
 import type { KeyClass } from "@unfiled/key-management";
 
+import { canonicalUtcTimestampFromMicros } from "./canonical-rpc-timestamp";
 import { ServiceRpcError, ServiceRpcErrorCode, type ServiceRpcClient } from "./service-rpc-client";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -583,7 +584,7 @@ function parseClaimProjection(
     historyKeyClass,
     revisionId: entityId(value.revisionId, "rev", failure),
     mutationId: entityId(value.mutationId, "mut", failure),
-    occurredAt: offsetDateTime(value.occurredAt, failure),
+    occurredAt: rpcOffsetDateTime(value.occurredAt, failure),
     commandProjection: value.commandProjection,
     requestMacKey
   });
@@ -654,7 +655,7 @@ function parseNormalizedClaim(
     historyKeyClass,
     revisionId: entityId(value.revisionId, "rev", failure),
     mutationId: entityId(value.mutationId, "mut", failure),
-    occurredAt: offsetDateTime(value.occurredAt, failure),
+    occurredAt: rpcOffsetDateTime(value.occurredAt, failure),
     commandProjection: value.commandProjection,
     requestMacKey
   });
@@ -749,6 +750,11 @@ function validOffsetDateTime(value: unknown): value is string {
 function offsetDateTime(value: unknown, failure: Failure): string {
   if (!validOffsetDateTime(value)) return failure();
   return value;
+}
+
+function rpcOffsetDateTime(value: unknown, failure: Failure): string {
+  const micros = offsetDateTimeMicros(value);
+  return micros === null ? failure() : canonicalUtcTimestampFromMicros(micros, failure);
 }
 
 function nullableOffsetDateTime(value: unknown, failure: Failure): string | null {
@@ -872,6 +878,24 @@ function parseUserOperations(value: unknown, failure: Failure): readonly UserOpe
   );
 }
 
+function parseEncryptedOnlyMutationProjection(
+  value: unknown,
+  privacyValue: PrivacyMode,
+  failure: Failure
+): readonly UserOperation[] {
+  if (
+    !Array.isArray(value) ||
+    value.length !== 1 ||
+    !isRecord(value[0]) ||
+    !hasExactKeys(value[0], ["type", "privacy"]) ||
+    value[0].type !== "set_privacy" ||
+    value[0].privacy !== privacyValue
+  ) {
+    return failure();
+  }
+  return Object.freeze([Object.freeze({ type: "set_privacy" as const, privacy: privacyValue })]);
+}
+
 function parseCommand(
   value: unknown,
   claim: IncompleteEncryptedNoteWriteClaim,
@@ -938,7 +962,13 @@ function parseCommand(
     if (
       value.mutation.decisionId !== null ||
       value.mutation.undoTargetMutationId !== null ||
-      source.data === "undo" ||
+      source.data === "undo"
+    ) {
+      return failure();
+    }
+    decisionId = null;
+    undoTargetMutationId = null;
+    if (
       !Array.isArray(value.mutation.operations) ||
       value.mutation.operations.length !== 1 ||
       !isRecord(value.mutation.operations[0]) ||
@@ -950,8 +980,6 @@ function parseCommand(
     ) {
       return failure();
     }
-    decisionId = null;
-    undoTargetMutationId = null;
     operations = CREATE_NOTE_OPERATIONS;
     inverse = CREATE_NOTE_INVERSE;
   } else {
@@ -969,8 +997,18 @@ function parseCommand(
     ) {
       return failure();
     }
-    operations = parseUserOperations(value.mutation.operations, failure);
-    inverse = parseUserOperations(value.mutation.inverse, failure);
+    operations =
+      claim.commandProjection === "encrypted_only"
+        ? parseEncryptedOnlyMutationProjection(
+            value.mutation.operations,
+            claim.targetPrivacy,
+            failure
+          )
+        : parseUserOperations(value.mutation.operations, failure);
+    inverse =
+      claim.commandProjection === "encrypted_only"
+        ? parseEncryptedOnlyMutationProjection(value.mutation.inverse, claim.targetPrivacy, failure)
+        : parseUserOperations(value.mutation.inverse, failure);
   }
 
   return Object.freeze({

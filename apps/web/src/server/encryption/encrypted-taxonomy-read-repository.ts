@@ -113,9 +113,10 @@ export class EncryptedTaxonomyReadRepository {
     const rows = await readCompleteSurface(this.dependencies, "space_display");
     const decrypted = await Promise.all(
       rows.map(async (row) => {
+        if (row.contentMac === null) return unavailable();
         const display = await this.dependencies.aggregate.openSpaceDisplay(
           this.dependencies.access,
-          row.encrypted,
+          Object.freeze({ encrypted: row.encrypted, contentMac: row.contentMac }),
           {
             spaceId: row.resourceId as EntityId<"spc">,
             currentRevision: row.recordVersion
@@ -152,9 +153,10 @@ export class EncryptedTaxonomyReadRepository {
     return Object.freeze(
       await Promise.all(
         rows.map(async (row): Promise<TagRecord> => {
+          if (row.contentMac === null) return unavailable();
           const display = await this.dependencies.aggregate.openTagDisplay(
             this.dependencies.access,
-            row.encrypted,
+            Object.freeze({ encrypted: row.encrypted, contentMac: row.contentMac }),
             {
               tagId: row.resourceId as EntityId<"tag">,
               currentRevision: row.recordVersion

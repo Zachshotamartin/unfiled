@@ -35,6 +35,7 @@ const JOB = "job_01J6M9Q7G4BMKB33GSG3NJ6D1X" as const;
 const DECISION = "dec_01J6M9Q7G4BMKB33GSG3NJ6D1X" as const;
 const MUTATION = "mut_01J6M9Q7G4BMKB33GSG3NJ6D1X" as const;
 const NOTE = "note_01J6M9Q7G4BMKB33GSG3NJ6D1X" as const;
+const REVIEW = "rvw_01J6M9Q7G4BMKB33GSG3NJ6D1X" as const;
 const BEFORE_REVISION = "rev_01J6M9Q7G4BMKB33GSG3NJ6D1W" as const;
 const AFTER_REVISION = "rev_01J6M9Q7G4BMKB33GSG3NJ6D1X" as const;
 const ITEM = "itm_01J6M9Q7G4BMKB33GSG3NJ6D1X" as const;
@@ -571,6 +572,112 @@ describe("encrypted capture aggregate repository", () => {
     expect(JSON.stringify(result)).not.toMatch(/contentCipher|contentMac|envelope|keyId/u);
   });
 
+  it("opens authenticated organizer reasons behind the strict coarse SQL sentinel", async () => {
+    const organizerPayload: CaptureReceiptPayload = Object.freeze({
+      schemaVersion: 1,
+      captureId: CAPTURE,
+      jobId: JOB,
+      decisionId: DECISION,
+      reviewItemId: null,
+      mutationId: MUTATION,
+      outcome: "added_to_note",
+      headline: "Added to Shopping",
+      destination: Object.freeze({ noteId: NOTE, title: "Shopping" }),
+      insertedContentReferences: [{ type: "captured" as const, itemId: null }],
+      actions: [{ type: "open" as const, noteId: NOTE }],
+      reasonCodes: ["explicit_shopping_intent", "type_match"],
+      createdAt: RECEIVED_AT
+    });
+    const organizerReceipt = receiptRow("ai_assisted", {
+      decisionId: DECISION,
+      mutationId: MUTATION,
+      outcome: "added_to_note",
+      destinationNoteId: NOTE,
+      reasonCodes: ["encrypted_organizer"]
+    });
+    const aggregate = aggregateMocks({ receiptPayload: organizerPayload });
+    const result = await repository(
+      aggregate.aggregate,
+      adapter({
+        getCaptureDetail: vi.fn(() =>
+          Promise.resolve(
+            detail("ai_assisted", {
+              status: "done",
+              receiptAvailable: true,
+              receipt: organizerReceipt
+            })
+          )
+        )
+      })
+    ).getCapture(context, CAPTURE);
+
+    expect(result.capture.receipt).toMatchObject({
+      outcome: "added_to_note",
+      reasonCodes: ["explicit_shopping_intent", "type_match"]
+    });
+  });
+
+  it("rejects arbitrary reason mismatches and organizer sentinels outside routed mutations", async () => {
+    const mismatchedRoutedPayload: CaptureReceiptPayload = Object.freeze({
+      schemaVersion: 1,
+      captureId: CAPTURE,
+      jobId: JOB,
+      decisionId: DECISION,
+      reviewItemId: null,
+      mutationId: MUTATION,
+      outcome: "added_to_note",
+      headline: "Added to Shopping",
+      destination: Object.freeze({ noteId: NOTE, title: "Shopping" }),
+      insertedContentReferences: [{ type: "captured" as const, itemId: null }],
+      actions: [{ type: "open" as const, noteId: NOTE }],
+      reasonCodes: ["semantic_match"],
+      createdAt: RECEIVED_AT
+    });
+    const arbitraryMismatch = receiptRow("ai_assisted", {
+      decisionId: DECISION,
+      mutationId: MUTATION,
+      outcome: "added_to_note",
+      destinationNoteId: NOTE,
+      reasonCodes: ["explicit_destination"]
+    });
+    await expectServiceError(
+      repository(
+        aggregateMocks({ receiptPayload: mismatchedRoutedPayload }).aggregate,
+        adapter({ getCaptureReceipt: vi.fn(() => Promise.resolve(arbitraryMismatch)) })
+      ).getReceipt(context, CAPTURE),
+      ServiceRpcErrorCode.PROVIDER_UNAVAILABLE
+    );
+
+    const reviewPayload: CaptureReceiptPayload = Object.freeze({
+      schemaVersion: 1,
+      captureId: CAPTURE,
+      jobId: JOB,
+      decisionId: DECISION,
+      reviewItemId: REVIEW,
+      mutationId: null,
+      outcome: "needs_review",
+      headline: "Needs review",
+      destination: null,
+      insertedContentReferences: [],
+      actions: [],
+      reasonCodes: ["ambiguous_intent"],
+      createdAt: RECEIVED_AT
+    });
+    const reviewSentinel = receiptRow("ai_assisted", {
+      decisionId: DECISION,
+      reviewItemId: REVIEW,
+      outcome: "needs_review",
+      reasonCodes: ["encrypted_organizer"]
+    });
+    await expectServiceError(
+      repository(
+        aggregateMocks({ receiptPayload: reviewPayload }).aggregate,
+        adapter({ getCaptureReceipt: vi.fn(() => Promise.resolve(reviewSentinel)) })
+      ).getReceipt(context, CAPTURE),
+      ServiceRpcErrorCode.PROVIDER_UNAVAILABLE
+    );
+  });
+
   it("hydrates direct receipt reads and bounds list output to decrypted public summaries", async () => {
     const aggregate = aggregateMocks({ receiptPayload: inboxPayload() });
     const row = captureRow("private_manual", { status: "inbox", receiptAvailable: true });
@@ -898,12 +1005,15 @@ describe("encrypted capture aggregate repository", () => {
       openNoteRevision: vi.fn(
         (
           _access: Parameters<EncryptedAggregateService["openNoteRevision"]>[0],
-          record: EncryptedAggregateRecord<"note_revision">
+          record: Readonly<{
+            encrypted: EncryptedAggregateRecord<"note_revision">;
+            contentMac: KeyedMacRecord;
+          }>
         ) => {
-          if (record.resourceId === BEFORE_REVISION) {
+          if (record.encrypted.resourceId === BEFORE_REVISION) {
             return Promise.resolve({ schemaVersion: 1 as const, snapshot: beforeSnapshot });
           }
-          if (record.resourceId === AFTER_REVISION) {
+          if (record.encrypted.resourceId === AFTER_REVISION) {
             return Promise.resolve({ schemaVersion: 1 as const, snapshot: afterSnapshot });
           }
           return Promise.resolve(sealedRevisionPayload);
@@ -1001,13 +1111,15 @@ describe("encrypted capture aggregate repository", () => {
         revisionId: BEFORE_REVISION,
         revision: 1,
         privacy: "ai_assisted",
-        snapshotCipher: encrypted("note_revision", BEFORE_REVISION, "ai_assisted", 1)
+        snapshotCipher: encrypted("note_revision", BEFORE_REVISION, "ai_assisted", 1),
+        snapshotMac: mac("ai_assisted")
       }),
       afterSnapshot: Object.freeze({
         revisionId: AFTER_REVISION,
         revision: 2,
         privacy: "ai_assisted",
-        snapshotCipher: encrypted("note_revision", AFTER_REVISION, "ai_assisted", 2)
+        snapshotCipher: encrypted("note_revision", AFTER_REVISION, "ai_assisted", 2),
+        snapshotMac: mac("ai_assisted")
       })
     });
     const noteReads: EncryptedNoteReadRpcAdapter = Object.freeze({

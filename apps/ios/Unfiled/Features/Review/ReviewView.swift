@@ -6,6 +6,18 @@ enum ReviewNavigation: Sendable {
     }
 }
 
+enum ReviewAccessibilityIdentifier {
+    static func choice(reviewID: String, noteID: String) -> String {
+        "review.choice.\(reviewID).\(noteID)"
+    }
+
+    static func chooseNote(_ reviewID: String) -> String { "review.chooseNote.\(reviewID)" }
+    static func newNote(_ reviewID: String) -> String { "review.newNote.\(reviewID)" }
+    static func keepInbox(_ reviewID: String) -> String { "review.keepInbox.\(reviewID)" }
+    static func dismiss(_ reviewID: String) -> String { "review.dismiss.\(reviewID)" }
+    static func keepBoth(_ reviewID: String) -> String { "review.keepBoth.\(reviewID)" }
+}
+
 struct ReviewQueueSummary: Equatable, Sendable {
     let count: Int
 
@@ -22,21 +34,35 @@ struct ReviewView: View {
     let items: [ReviewPresentation]
     let isLoading: Bool
     let errorMessage: String?
+    let submittingInteractionIDs: Set<String>
+    let interactionErrors: [String: String]
+    let requestedFocusID: String?
     let onRefresh: @MainActor () async -> Void
     let onOpenRelatedNote: @MainActor (String) -> Void
+    let onAction: @MainActor (String, ReviewUserAction) -> Void
+
+    @AccessibilityFocusState private var focusedReviewID: String?
 
     init(
         items: [ReviewPresentation],
         isLoading: Bool,
         errorMessage: String? = nil,
+        submittingInteractionIDs: Set<String> = [],
+        interactionErrors: [String: String] = [:],
+        requestedFocusID: String? = nil,
         onRefresh: @escaping @MainActor () async -> Void = {},
-        onOpenRelatedNote: @escaping @MainActor (String) -> Void
+        onOpenRelatedNote: @escaping @MainActor (String) -> Void,
+        onAction: @escaping @MainActor (String, ReviewUserAction) -> Void = { _, _ in }
     ) {
         self.items = items
         self.isLoading = isLoading
         self.errorMessage = errorMessage
+        self.submittingInteractionIDs = submittingInteractionIDs
+        self.interactionErrors = interactionErrors
+        self.requestedFocusID = requestedFocusID
         self.onRefresh = onRefresh
         self.onOpenRelatedNote = onOpenRelatedNote
+        self.onAction = onAction
     }
 
     var body: some View {
@@ -51,6 +77,15 @@ struct ReviewView: View {
             .padding(.bottom, 110)
         }
         .refreshable { await onRefresh() }
+        .onAppear { focusRequestedItem() }
+        .onChange(of: requestedFocusID) { _, _ in focusRequestedItem() }
+        .onChange(of: items.map(\.id)) { previous, current in
+            if let focusedReviewID, !current.contains(focusedReviewID) {
+                self.focusedReviewID = current.first
+            } else if previous != current {
+                focusRequestedItem()
+            }
+        }
         .unfiledScreen()
     }
 
@@ -62,7 +97,7 @@ struct ReviewView: View {
                 .tracking(-1.2)
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityIdentifier("review.title")
-            Text("Inspect captures that need a decision. Native resolution controls are not available in this build.")
+            Text("Resolve only the captures that need your decision. Everything else stays out of the way.")
                 .font(.body)
                 .foregroundStyle(UnfiledTheme.fog)
                 .fixedSize(horizontal: false, vertical: true)
@@ -93,9 +128,7 @@ struct ReviewView: View {
     private var queueContent: some View {
         if let error = normalizedError {
             ReviewErrorLedgerView(message: error, onRetry: onRefresh)
-            if !items.isEmpty {
-                SectionRule()
-            }
+            if !items.isEmpty { SectionRule() }
         }
 
         if items.isEmpty {
@@ -106,7 +139,7 @@ struct ReviewView: View {
             } else {
                 EmptyLedgerView(
                     title: "Everything has a place",
-                    message: "Captures that need your decision will wait here."
+                    message: "Captures that still need a decision are safe in Inbox and will wait here."
                 )
                 .accessibilityIdentifier("review.empty")
             }
@@ -116,9 +149,13 @@ struct ReviewView: View {
                     item: item,
                     position: index + 1,
                     total: items.count,
+                    isSubmitting: submittingInteractionIDs.contains("review.\(item.id)"),
+                    errorMessage: interactionErrors["review.\(item.id)"],
                     actionsDisabled: isLoading,
-                    onOpenRelatedNote: onOpenRelatedNote
+                    onOpenRelatedNote: onOpenRelatedNote,
+                    onAction: onAction
                 )
+                .accessibilityFocused($focusedReviewID, equals: item.id)
                 SectionRule()
             }
         }
@@ -130,14 +167,23 @@ struct ReviewView: View {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private func focusRequestedItem() {
+        guard let requestedFocusID, items.contains(where: { $0.id == requestedFocusID }) else {
+            return
+        }
+        focusedReviewID = requestedFocusID
+    }
 }
 
 private struct ReviewLedgerRow: View {
     let item: ReviewPresentation
     let position: Int
     let total: Int
+    let isSubmitting: Bool
+    let errorMessage: String?
     let actionsDisabled: Bool
     let onOpenRelatedNote: @MainActor (String) -> Void
+    let onAction: @MainActor (String, ReviewUserAction) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
@@ -159,63 +205,42 @@ private struct ReviewLedgerRow: View {
                 .accessibilityLabel("Original capture: \(item.original)")
 
             VStack(alignment: .leading, spacing: 12) {
-                Text("PROPOSED DESTINATION")
-                    .font(.caption.weight(.medium).monospaced())
-                    .tracking(0.9)
+                EditorialEyebrow(text: "Why it stopped")
+                Text(item.actionSummary)
+                    .font(.body)
                     .foregroundStyle(UnfiledTheme.fog)
-
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Image(systemName: "arrow.turn.down.right")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(UnfiledTheme.persimmon)
-                        .accessibilityHidden(true)
-                    Text(item.proposedDestination)
-                        .font(.title3.weight(.semibold))
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 8)
-                }
+                    .fixedSize(horizontal: false, vertical: true)
+                Label(item.proposedDestination, systemImage: "arrow.turn.down.right")
+                    .font(.title3.weight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.vertical, 18)
             .overlay(alignment: .top) { SectionRule() }
             .overlay(alignment: .bottom) { SectionRule() }
 
-            VStack(alignment: .leading, spacing: 12) {
-                Text("ACTION SUMMARY")
-                    .font(.caption.weight(.medium).monospaced())
-                    .tracking(0.9)
-                    .foregroundStyle(UnfiledTheme.fog)
-
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Circle()
-                        .fill(UnfiledTheme.persimmon)
-                        .frame(width: 9, height: 9)
-                        .accessibilityHidden(true)
-                    Text(item.actionSummary)
-                        .font(.body)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+            if !item.relatedNotes.isEmpty {
+                relatedNotes
             }
 
-            if let noteID = item.noteID {
-                Button {
-                    onOpenRelatedNote(noteID)
-                } label: {
-                    Text("Open related note")
-                        .font(.body.weight(.semibold))
-                        .frame(maxWidth: .infinity, minHeight: 52)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(ReviewOpenButtonStyle())
-                .disabled(actionsDisabled)
-                .accessibilityLabel("Open related note")
-                .accessibilityHint("Opens the note without resolving this review item")
-                .accessibilityIdentifier(ReviewNavigation.identifier(for: item.id))
-            } else {
-                Text("This item remains in the review queue. Nothing is moved or dismissed from this screen.")
-                    .font(.caption)
+            if item.allows(.route) {
+                destinationChoices
+            }
+
+            if item.type == .pendingExpansion {
+                Text("The proposed text has not been added to a note. Dismiss removes only this Review hold.")
+                    .font(.footnote)
                     .foregroundStyle(UnfiledTheme.fog)
                     .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("review.readOnly.\(item.id)")
+            }
+
+            actionControls
+
+            if let errorMessage {
+                Label(errorMessage, systemImage: "exclamationmark.circle")
+                    .font(.footnote)
+                    .foregroundStyle(UnfiledTheme.paper)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("review.error.\(item.id)")
             }
 
             Label("Original preserved", systemImage: "doc.badge.clock")
@@ -226,26 +251,169 @@ private struct ReviewLedgerRow: View {
         .padding(.vertical, 26)
         .accessibilityIdentifier("review.item.\(item.id)")
     }
-}
 
-private struct ReviewOpenButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(UnfiledTheme.ink)
-            .background(UnfiledTheme.persimmon)
-            .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
-            .opacity(configuration.isPressed ? 0.72 : 1)
+    private var relatedNotes: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            EditorialEyebrow(text: "Related notes")
+            ForEach(item.relatedNotes) { note in
+                Button {
+                    onOpenRelatedNote(note.id)
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(note.title)
+                                .font(.body.weight(.semibold))
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text("Revision \(note.revision)")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(UnfiledTheme.fog)
+                        }
+                        Spacer(minLength: 8)
+                        Image(systemName: "arrow.right")
+                            .font(.caption.weight(.bold))
+                            .accessibilityHidden(true)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(allActionsDisabled)
+                .accessibilityLabel("Open \(note.title)")
+                .accessibilityIdentifier("review.related.\(item.id).\(note.id)")
+            }
+        }
+    }
+
+    private var destinationChoices: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            EditorialEyebrow(text: "Suggested destinations")
+            ForEach(item.suggestedDestinations.prefix(3)) { destination in
+                Button {
+                    onAction(item.id, .route(noteID: destination.id))
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "arrow.turn.down.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(UnfiledTheme.persimmon)
+                            .accessibilityHidden(true)
+                        Text(destination.title)
+                            .font(.body.weight(.semibold))
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 8)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .background(UnfiledTheme.graphite)
+                    .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
+                }
+                .buttonStyle(.plain)
+                .disabled(allActionsDisabled)
+                .accessibilityLabel("File in \(destination.title)")
+                .accessibilityIdentifier(
+                    ReviewAccessibilityIdentifier.choice(
+                        reviewID: item.id,
+                        noteID: destination.id
+                    )
+                )
+            }
+
+            Button {
+                onAction(item.id, .chooseDestination)
+            } label: {
+                Text(item.suggestedDestinations.isEmpty ? "Choose a note" : "Choose another note")
+                    .font(.body.weight(.semibold))
+                    .frame(minHeight: UnfiledTheme.minimumTouchTarget)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(UnfiledTheme.persimmon)
+            .disabled(allActionsDisabled)
+            .accessibilityIdentifier(ReviewAccessibilityIdentifier.chooseNote(item.id))
+        }
+    }
+
+    private var actionControls: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if isSubmitting {
+                Label("Saving your choice", systemImage: "clock")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(UnfiledTheme.fog)
+                    .frame(minHeight: UnfiledTheme.minimumTouchTarget)
+                    .accessibilityIdentifier("review.submitting.\(item.id)")
+            }
+
+            if item.allows(.create) {
+                reviewButton(
+                    title: item.suggestedNewNote.map { "New note: \($0.title)" } ?? "New note",
+                    systemImage: "plus",
+                    prominence: .primary,
+                    identifier: ReviewAccessibilityIdentifier.newNote(item.id)
+                ) { onAction(item.id, .createNote) }
+            }
+
+            if item.allows(.keepInbox) {
+                reviewButton(
+                    title: "Keep in Inbox",
+                    systemImage: "tray",
+                    prominence: .secondary,
+                    identifier: ReviewAccessibilityIdentifier.keepInbox(item.id)
+                ) { onAction(item.id, .keepInbox) }
+            }
+
+            if item.allows(.keepBoth) {
+                reviewButton(
+                    title: "Keep both notes",
+                    systemImage: "doc.on.doc",
+                    prominence: .primary,
+                    identifier: ReviewAccessibilityIdentifier.keepBoth(item.id)
+                ) { onAction(item.id, .keepBoth) }
+            }
+
+            if item.allows(.dismiss) {
+                reviewButton(
+                    title: "Dismiss",
+                    systemImage: "xmark",
+                    prominence: .secondary,
+                    identifier: ReviewAccessibilityIdentifier.dismiss(item.id)
+                ) { onAction(item.id, .dismiss) }
+            }
+        }
+    }
+
+    private enum Prominence { case primary, secondary }
+
+    private func reviewButton(
+        title: String,
+        systemImage: String,
+        prominence: Prominence,
+        identifier: String,
+        action: @escaping @MainActor () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.body.weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 52)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(prominence == .primary ? UnfiledTheme.ink : UnfiledTheme.paper)
+        .background(prominence == .primary ? UnfiledTheme.persimmon : UnfiledTheme.graphite)
+        .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
+        .disabled(allActionsDisabled)
+        .opacity(allActionsDisabled && !isSubmitting ? 0.5 : 1)
+        .accessibilityIdentifier(identifier)
+    }
+
+    private var allActionsDisabled: Bool {
+        actionsDisabled || isSubmitting
     }
 }
 
 private struct ReviewLoadingLedgerView: View {
     var body: some View {
         HStack(spacing: 14) {
-            ProgressView()
-                .tint(UnfiledTheme.persimmon)
+            ProgressView().tint(UnfiledTheme.persimmon)
             VStack(alignment: .leading, spacing: 4) {
-                Text("Loading review queue")
-                    .font(.headline)
+                Text("Loading review queue").font(.headline)
                 Text("Checking for captures that need your decision.")
                     .font(.body)
                     .foregroundStyle(UnfiledTheme.fog)
@@ -279,7 +447,6 @@ private struct ReviewErrorLedgerView: View {
                     .foregroundStyle(UnfiledTheme.persimmon)
                     .frame(minHeight: UnfiledTheme.minimumTouchTarget)
             }
-            .accessibilityHint("Reloads the review queue")
             .accessibilityIdentifier("review.retry")
         }
         .frame(maxWidth: .infinity, alignment: .leading)

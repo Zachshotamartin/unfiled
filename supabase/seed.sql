@@ -520,7 +520,7 @@ values
     '11111111-1111-4111-8111-111111111111',
     '{"candidateIds":["note_00000000000000000000000003","note_00000000000000000000000004"]}'::jsonb,
     '{"topCandidatesClose":true}'::jsonb,
-    '{"schemaVersion":1,"decision":"needs_review"}'::jsonb,
+    '{"schemaVersion":1,"captureKind":"principle","decision":"needs_review","destination":{"candidateId":null,"newNote":null},"operations":[{"type":"append_raw","content":"Roosevelt method: tell people you can do it, then figure out how."}],"generatedExpansion":null,"alternatives":["note_00000000000000000000000003","note_00000000000000000000000004"],"reasonCodes":["ambiguous_intent"]}'::jsonb,
     'review',
     0.720,
     0.080,
@@ -625,6 +625,7 @@ on conflict (capture_id, note_id, mutation_id) do nothing;
 insert into public.review_items (
   id,
   user_id,
+  capture_id,
   note_id,
   type,
   choices,
@@ -634,6 +635,7 @@ insert into public.review_items (
 values (
   'rvw_00000000000000000000000001',
   '11111111-1111-4111-8111-111111111111',
+  'cap_00000000000000000000000002',
   'note_00000000000000000000000003',
   'low_confidence',
   '[{"noteId":"note_00000000000000000000000003","label":"Mindset"},{"noteId":"note_00000000000000000000000004","label":"Unfiled app"}]'::jsonb,

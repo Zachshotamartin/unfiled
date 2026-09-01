@@ -216,9 +216,10 @@ export class EncryptedOwnerExportSource implements OwnerExportSource {
     const opened = await Promise.all(
       rows.map(async (row) => {
         throwIfAborted(this.dependencies.signal);
+        if (row.contentMac === null) unavailable();
         const display = await this.dependencies.aggregate.openSpaceDisplay(
           this.dependencies.access,
-          row.encrypted,
+          Object.freeze({ encrypted: row.encrypted, contentMac: row.contentMac }),
           {
             spaceId: row.resourceId as EntityId<"spc">,
             currentRevision: row.recordVersion
@@ -273,9 +274,10 @@ export class EncryptedOwnerExportSource implements OwnerExportSource {
       const tags = await Promise.all(
         page.items.map(async (row): Promise<AccountExportTag> => {
           throwIfAborted(this.dependencies.signal);
+          if (row.contentMac === null) unavailable();
           const display = await this.dependencies.aggregate.openTagDisplay(
             this.dependencies.access,
-            row.encrypted,
+            Object.freeze({ encrypted: row.encrypted, contentMac: row.contentMac }),
             {
               tagId: row.resourceId as EntityId<"tag">,
               currentRevision: row.recordVersion

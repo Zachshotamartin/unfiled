@@ -480,6 +480,13 @@ public struct MutationBatchUndoMember: Codable, Equatable, Sendable {
                 debugDescription: "Batch undo revision must be the returned note's current revision"
             )
         }
+        guard !undo.eligible, undo.expiresAt == nil else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .undo,
+                in: container,
+                debugDescription: "A batch undo result cannot itself be eligible for undo"
+            )
+        }
     }
 }
 

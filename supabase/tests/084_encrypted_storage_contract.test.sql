@@ -230,6 +230,22 @@ select ok(
 select is(
   (
     select count(*)
+    from unnest(array[
+      'public.prepare_encrypted_decision_correction(uuid,text,text,jsonb)',
+      'public.commit_encrypted_decision_correction(uuid,text,text,jsonb)',
+      'public.prepare_encrypted_review_resolution(uuid,text,text,jsonb)',
+      'public.commit_encrypted_review_resolution(uuid,text,text,jsonb)',
+      'public.get_encrypted_mutation_batch(uuid,text,integer,text)',
+      'public.undo_encrypted_mutation_batch(uuid,text,integer,text,jsonb)'
+    ]) as expected(signature)
+    where to_regprocedure(expected.signature) is not null
+  ),
+  6::bigint,
+  'all six E1 interaction RPCs remain compiled after zero-owner contraction'
+);
+select is(
+  (
+    select count(*)
     from private.encrypted_storage_contract_receipts
     where contract_version = 1
       and readiness_digest = (

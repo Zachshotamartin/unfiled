@@ -102,7 +102,9 @@ struct EmailOTPSignInView: View {
                         accessibilityIdentifier: AuthAccessibilityIdentifier.emailSubmit,
                         action: requestCode
                     )
-                    .padding(.top, UnfiledTheme.controlStackSpacing)
+                    // The field and submit action are separate controls in one form group.
+                    // Keep enough negative space that their rounded silhouettes never fuse.
+                    .padding(.top, UnfiledTheme.formActionSpacing)
                 }
                 .padding(.top, 9)
 

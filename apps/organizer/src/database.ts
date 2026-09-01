@@ -33,7 +33,8 @@ const MUTATION = new RegExp(`^mut_${ENTITY_SUFFIX}$`, "u");
 const REVIEW = new RegExp(`^rvw_${ENTITY_SUFFIX}$`, "u");
 const REVISION = new RegExp(`^rev_${ENTITY_SUFFIX}$`, "u");
 const NOTE_TYPES = ["generic", "list", "log", "principle", "project"] as const;
-const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/u;
+const TIMESTAMP =
+  /^(\d{4})-(0[1-9]|1[0-2])-([0-2]\d|3[01])T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.(\d{1,6}))?(Z|([+-])([01]\d|2[0-3]):([0-5]\d))$/u;
 const DATE = /^\d{4}-\d{2}-\d{2}$/u;
 const MODEL_ID = /^[\x21-\x7e]{1,200}$/u;
 const SOURCE_BYTE_BUDGET = 8_388_608;
@@ -120,14 +121,78 @@ function integer(value: unknown, minimum = 0, maximum = Number.MAX_SAFE_INTEGER)
   return Number(value);
 }
 function timestamp(value: unknown): string {
+  if (typeof value !== "string" || value.length > 40) reject();
+  const match = TIMESTAMP.exec(value);
+  if (match === null) reject();
+  const [
+    ,
+    yearValue,
+    monthValue,
+    dayValue,
+    hourValue,
+    minuteValue,
+    secondValue,
+    fraction,
+    zone,
+    sign,
+    zoneHourValue,
+    zoneMinuteValue
+  ] = match;
   if (
-    typeof value !== "string" ||
-    value.length > 40 ||
-    !TIMESTAMP.test(value) ||
-    !Number.isFinite(Date.parse(value))
+    yearValue === undefined ||
+    monthValue === undefined ||
+    dayValue === undefined ||
+    hourValue === undefined ||
+    minuteValue === undefined ||
+    secondValue === undefined ||
+    zone === undefined
   )
     reject();
-  return value;
+
+  const year = Number(yearValue);
+  const month = Number(monthValue);
+  const day = Number(dayValue);
+  const hour = Number(hourValue);
+  const minute = Number(minuteValue);
+  const second = Number(secondValue);
+  const local = new Date(0);
+  local.setUTCFullYear(year, month - 1, day);
+  local.setUTCHours(hour, minute, second, 0);
+  if (
+    local.getUTCFullYear() !== year ||
+    local.getUTCMonth() !== month - 1 ||
+    local.getUTCDate() !== day ||
+    local.getUTCHours() !== hour ||
+    local.getUTCMinutes() !== minute ||
+    local.getUTCSeconds() !== second
+  )
+    reject();
+
+  let offsetMinutes = 0;
+  if (zone !== "Z") {
+    if (sign === undefined || zoneHourValue === undefined || zoneMinuteValue === undefined)
+      reject();
+    offsetMinutes =
+      (Number(zoneHourValue) * 60 + Number(zoneMinuteValue)) * (sign === "+" ? 1 : -1);
+  }
+  const micros =
+    BigInt(local.valueOf() - offsetMinutes * 60_000) * 1_000n +
+    BigInt((fraction ?? "").padEnd(6, "0"));
+  const wholeSeconds = micros >= 0n ? micros / 1_000_000n : (micros - 999_999n) / 1_000_000n;
+  const fractionalMicros = micros - wholeSeconds * 1_000_000n;
+  const milliseconds = wholeSeconds * 1_000n;
+  if (
+    milliseconds > BigInt(Number.MAX_SAFE_INTEGER) ||
+    milliseconds < BigInt(Number.MIN_SAFE_INTEGER)
+  )
+    reject();
+  const instant = new Date(Number(milliseconds));
+  if (!Number.isFinite(instant.valueOf())) reject();
+  const iso = instant.toISOString();
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(iso)) reject();
+  const microsDigits = fractionalMicros.toString().padStart(6, "0");
+  const canonicalFraction = `${microsDigits.slice(0, 3)}${microsDigits.slice(3).replace(/0+$/u, "")}`;
+  return `${iso.slice(0, 19)}.${canonicalFraction}Z`;
 }
 function nullableTimestamp(value: unknown): string | null {
   return value === null ? null : timestamp(value);
@@ -319,13 +384,7 @@ function claimResult(value: unknown, limit: number): readonly ClaimedOrganizerJo
       const ownerId = string(row.ownerId, UUID);
       const attempt = integer(row.attempt, 1, 100);
       const replanCount = integer(row.replanCount, 0, 1) as 0 | 1;
-      if (
-        ids.has(jobId) ||
-        typeof row.leaseExpiresAt !== "string" ||
-        !TIMESTAMP.test(row.leaseExpiresAt) ||
-        !Number.isFinite(Date.parse(row.leaseExpiresAt))
-      )
-        reject();
+      if (ids.has(jobId)) reject();
       ids.add(jobId);
       const promptVersion = string(row.promptVersion, /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/u);
       const schemaVersion = integer(row.schemaVersion, 1, 2_147_483_647);
@@ -347,7 +406,7 @@ function claimResult(value: unknown, limit: number): readonly ClaimedOrganizerJo
         clientTimezone: row.clientTimezone,
         controls,
         jobId,
-        leaseExpiresAt: row.leaseExpiresAt,
+        leaseExpiresAt: timestamp(row.leaseExpiresAt),
         leaseToken: string(row.leaseToken, UUID),
         occurredAt: timestamp(row.occurredAt),
         ownerId,
@@ -948,10 +1007,7 @@ function heartbeatResult(
     if (
       row.jobId !== expected.jobId ||
       row.disclosureAuthorized !== true ||
-      row.candidateCount !== expected.candidateCount ||
-      typeof row.leaseExpiresAt !== "string" ||
-      !TIMESTAMP.test(row.leaseExpiresAt) ||
-      !Number.isFinite(Date.parse(row.leaseExpiresAt))
+      row.candidateCount !== expected.candidateCount
     )
       reject();
     const currentRevision = row.currentRevision === null ? null : integer(row.currentRevision, 1);
@@ -960,7 +1016,7 @@ function heartbeatResult(
       currentRevision,
       disclosureAuthorized: true,
       jobId: expected.jobId,
-      leaseExpiresAt: row.leaseExpiresAt,
+      leaseExpiresAt: timestamp(row.leaseExpiresAt),
       outcome: "authorized",
       replanCount: integer(row.replanCount, 0, 1) as 0 | 1
     });

@@ -166,8 +166,10 @@ public enum ReviewResolution: Codable, Equatable, Sendable {
                 from: decoder
             )
             let title = try container.decode(String.self, forKey: .title)
-            guard (1 ... 200).contains(title.trimmingCharacters(in: .whitespacesAndNewlines).utf16.count)
-            else { throw Self.invalid(.title, in: container) }
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard (1 ... 200).contains(title.utf16.count) else {
+                throw Self.invalid(.title, in: container)
+            }
             let spaceId = try container.decode(RequiredNullable<SpaceID>.self, forKey: .spaceId)
             self = .create(
                 title: title,
@@ -195,9 +197,9 @@ public enum ReviewResolution: Codable, Equatable, Sendable {
     }
 
     public func encode(to encoder: Encoder) throws {
-        try validateForRequest()
+        let normalized = try normalizedForRequest()
         var container = encoder.container(keyedBy: CodingKeys.self)
-        switch self {
+        switch normalized {
         case let .route(noteId, expectedRevision):
             try container.encode("route", forKey: .type)
             try container.encode(noteId, forKey: .noteId)
@@ -217,21 +219,28 @@ public enum ReviewResolution: Codable, Equatable, Sendable {
     }
 
     fileprivate func validateForRequest() throws {
+        _ = try normalizedForRequest()
+    }
+
+    fileprivate func normalizedForRequest() throws -> ReviewResolution {
         switch self {
-        case let .route(_, expectedRevision):
+        case let .route(noteID, expectedRevision):
             guard expectedRevision > 0 else {
                 throw DomainValidationError.invalidValue(
                     "Review resolution revision must be positive"
                 )
             }
-        case let .create(title, _, _):
-            guard Self.isValidTitle(title) else {
+            return .route(noteId: noteID, expectedRevision: expectedRevision)
+        case let .create(title, noteType, spaceID):
+            let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard Self.isValidTitle(normalizedTitle) else {
                 throw DomainValidationError.invalidValue(
                     "Review resolution title must contain between 1 and 200 characters"
                 )
             }
+            return .create(title: normalizedTitle, noteType: noteType, spaceId: spaceID)
         case .keepInbox, .dismiss, .keepBoth, .acceptExpansion, .rejectExpansion:
-            break
+            return self
         }
     }
 
@@ -262,10 +271,52 @@ public struct ReviewResolveRequest: Codable, Equatable, Sendable {
     public let idempotencyKey: String
     public let resolution: ReviewResolution
 
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case idempotencyKey, resolution
+    }
+
     public init(idempotencyKey: String, resolution: ReviewResolution) throws {
-        try resolution.validateForRequest()
+        let resolution = try resolution.normalizedForRequest()
+        guard IdempotencyKeyContract.isValid(idempotencyKey) else {
+            throw DomainValidationError.invalidValue(
+                "Review resolution request violates the API contract"
+            )
+        }
         self.idempotencyKey = idempotencyKey
         self.resolution = resolution
+    }
+
+    public init(from decoder: Decoder) throws {
+        try StrictJSONKey.requireExactKeys(CodingKeys.allCases.map(\.rawValue), from: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        do {
+            try self.init(
+                idempotencyKey: container.decode(String.self, forKey: .idempotencyKey),
+                resolution: container.decode(ReviewResolution.self, forKey: .resolution)
+            )
+        } catch {
+            throw DecodingError.dataCorruptedError(
+                forKey: .resolution,
+                in: container,
+                debugDescription: "Review resolution request violates the API contract"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        let resolution = try resolution.normalizedForRequest()
+        guard IdempotencyKeyContract.isValid(idempotencyKey) else {
+            throw EncodingError.invalidValue(
+                idempotencyKey,
+                .init(
+                    codingPath: encoder.codingPath,
+                    debugDescription: "Review resolution request violates the API contract"
+                )
+            )
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(idempotencyKey, forKey: .idempotencyKey)
+        try container.encode(resolution, forKey: .resolution)
     }
 }
 
