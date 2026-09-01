@@ -1097,7 +1097,12 @@ describe("production organizer cipher", () => {
         }),
         { recordVersion: 1, reviewId: IDS.review, sourcePrivacy: "ai_assisted" }
       )
-    ).resolves.toEqual({ choices: [], resolution: null, schemaVersion: 1, state: "open" });
+    ).resolves.toEqual({
+      proposal: { type: "route_capture", plan: reviewPlan(rawContent).validatedPlan },
+      resolution: null,
+      schemaVersion: 2,
+      state: "open"
+    });
     await expect(
       crypto.aggregate.openCaptureReceipt(
         crypto.access,
@@ -1110,6 +1115,50 @@ describe("production organizer cipher", () => {
       )
     ).resolves.toMatchObject({ outcome: "needs_review", reviewItemId: IDS.review });
   });
+
+  it.each([
+    ["revision_conflict", "revision_conflict", { type: "conflict", reason: "revision" }],
+    [
+      "explicit_destination_unavailable",
+      "structure_conflict",
+      { type: "conflict", reason: "candidate_eligibility" }
+    ],
+    ["expansion_pending", "pending_expansion", { type: "conflict", reason: "consent_controls" }]
+  ] as const)(
+    "writes typed v2 Review payloads for %s",
+    async (reviewReason, reviewType, proposal) => {
+      const rawContent = `Typed review payload for ${reviewReason}.`;
+      const command = await createProductionOrganizerCipher().sealCommand({
+        activeReplanCount: 0,
+        authority: AUTHORITY,
+        candidates: [],
+        capture: capture(rawContent),
+        controls: CONTROLS,
+        destination: null,
+        job: job(),
+        plan: reviewPlan(rawContent),
+        preparation: preparation("create", null),
+        ragGenerationId: null,
+        reviewReason,
+        routingDecision: null,
+        signal: SIGNAL,
+        stableIds: stableIds("review")
+      });
+      expect(command.review).toMatchObject({ type: reviewType });
+      const sealed = sealedSurface<"review_item">(command.review);
+      await expect(
+        crypto.aggregate.openReview(
+          crypto.access,
+          rpcRecord(sealed.cipher, {
+            kind: "review_item",
+            recordVersion: 1,
+            resourceId: IDS.review
+          }),
+          { recordVersion: 1, reviewId: IDS.review, sourcePrivacy: "ai_assisted" }
+        )
+      ).resolves.toEqual({ proposal, resolution: null, schemaVersion: 2, state: "open" });
+    }
+  );
 
   it("rejects stale or cross-bound preparation, stable-ID, control, and generation inputs before custody", async () => {
     const rawContent = "Preparation binding canary.";

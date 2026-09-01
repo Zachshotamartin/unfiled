@@ -323,7 +323,7 @@ describe("Milestone B API client", () => {
       captureId: null,
       noteId: NOTE_ID,
       type: "structure_conflict",
-      choices: [],
+      proposal: { type: "conflict", reason: "structure" },
       state: "open",
       resolution: null,
       createdAt: "2026-08-30T18:30:00.000Z",
@@ -341,6 +341,7 @@ describe("Milestone B API client", () => {
     expect(requestUrl(fetcher.mock.calls[0]?.[0] ?? "")).toBe(
       "https://example.test/api/v1/review-items?state=open&limit=30"
     );
+    expect(fetcher.mock.calls[0]?.[1]?.cache).toBe("no-store");
   });
 
   it("validates inputs before fetch and decodes stable API errors", async () => {

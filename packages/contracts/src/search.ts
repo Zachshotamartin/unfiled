@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { ArchiveFilterSchema, NoteTypeSchema } from "./enums.js";
+import { ArchiveFilterSchema, NoteTypeSchema, PrivacyModeSchema } from "./enums.js";
 import { entityIdSchema } from "./ids.js";
 import { CursorSchema, PageInfoSchema } from "./pagination.js";
 
@@ -33,12 +33,39 @@ export const RAG_GENERATION_VERIFICATION_MAX_DISTINCT_KEYS = 4 as const;
  * Keep this schema strict so query-string-era fields cannot be accepted by
  * accident during the cutover.
  */
-export const SearchNotesRequestSchema = z.strictObject({
-  query: z.string().trim().min(1).max(200),
-  archive: ArchiveFilterSchema.default("exclude"),
-  cursor: CursorSchema.optional(),
-  limit: z.number().int().min(1).max(100).default(30)
-});
+export const SearchNotesRequestSchema = z
+  .strictObject({
+    query: z.string().trim().min(1).max(200),
+    archive: ArchiveFilterSchema.default("exclude"),
+    type: NoteTypeSchema.optional(),
+    spaceId: entityIdSchema("spc").nullable().optional(),
+    tagIds: z.array(entityIdSchema("tag")).min(1).max(20).optional(),
+    updatedFrom: z.iso.datetime({ offset: true }).optional(),
+    updatedTo: z.iso.datetime({ offset: true }).optional(),
+    privacy: PrivacyModeSchema.optional(),
+    cursor: CursorSchema.optional(),
+    limit: z.number().int().min(1).max(100).default(30)
+  })
+  .superRefine(({ tagIds, updatedFrom, updatedTo }, context) => {
+    if (tagIds !== undefined && new Set(tagIds).size !== tagIds.length) {
+      context.addIssue({
+        code: "custom",
+        message: "Search tag filters must be unique",
+        path: ["tagIds"]
+      });
+    }
+    if (
+      updatedFrom !== undefined &&
+      updatedTo !== undefined &&
+      Date.parse(updatedFrom) >= Date.parse(updatedTo)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "updatedFrom must be earlier than updatedTo",
+        path: ["updatedFrom"]
+      });
+    }
+  });
 export type SearchNotesRequest = z.input<typeof SearchNotesRequestSchema>;
 
 export const SearchNoteResultSchema = z.strictObject({

@@ -7,6 +7,8 @@ import {
   NoteStructuredDataSchema,
   NoteTypeSchema,
   OrganizationPlanSchema,
+  ReviewProposalSchema,
+  ReviewResolutionSchema,
   ReviewStateSchema,
   UserOperationSchema,
   entityIdSchema
@@ -121,12 +123,50 @@ export const GeneratedBlockPayloadSchema = z.strictObject({
 });
 export type GeneratedBlockPayload = z.infer<typeof GeneratedBlockPayloadSchema>;
 
-export const ReviewPayloadSchema = z.strictObject({
+export const ReviewPayloadV1Schema = z.strictObject({
   schemaVersion: z.literal(1),
   choices: z.array(z.json()).max(100),
   state: ReviewStateSchema,
   resolution: JsonObjectSchema.nullable()
 });
+export type ReviewPayloadV1 = z.infer<typeof ReviewPayloadV1Schema>;
+
+export const ReviewPayloadV2Schema = z
+  .strictObject({
+    schemaVersion: z.literal(2),
+    proposal: ReviewProposalSchema,
+    state: ReviewStateSchema,
+    resolution: ReviewResolutionSchema.nullable()
+  })
+  .superRefine(({ resolution, state }, context) => {
+    if (state === "open" && resolution !== null) {
+      context.addIssue({
+        code: "custom",
+        message: "An open Review proposal cannot have a resolution",
+        path: ["resolution"]
+      });
+    }
+    if (state === "resolved" && (resolution === null || resolution.type === "dismiss")) {
+      context.addIssue({
+        code: "custom",
+        message: "A resolved Review proposal requires a non-dismiss resolution",
+        path: ["resolution"]
+      });
+    }
+    if (state === "dismissed" && resolution?.type !== "dismiss") {
+      context.addIssue({
+        code: "custom",
+        message: "A dismissed Review proposal requires a dismiss resolution",
+        path: ["resolution"]
+      });
+    }
+  });
+export type ReviewPayloadV2 = z.infer<typeof ReviewPayloadV2Schema>;
+
+export const ReviewPayloadSchema = z.discriminatedUnion("schemaVersion", [
+  ReviewPayloadV1Schema,
+  ReviewPayloadV2Schema
+]);
 export type ReviewPayload = z.infer<typeof ReviewPayloadSchema>;
 
 export const RoutingRulePayloadSchema = z.strictObject({

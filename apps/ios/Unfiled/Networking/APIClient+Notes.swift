@@ -63,6 +63,26 @@ extension APIClient {
         try await get("/notes/\(id.rawValue)/links")
     }
 
+    public func listNoteSources(
+        _ id: NoteID,
+        query: NoteSourcesQuery = .init()
+    ) async throws -> NoteSourcesResponse {
+        try await get(
+            "/notes/\(id.rawValue)/sources",
+            query: pageItems(cursor: query.cursor, limit: query.limit)
+        )
+    }
+
+    public func listNoteBacklinks(
+        _ id: NoteID,
+        query: NoteBacklinksQuery = .init()
+    ) async throws -> NoteBacklinksResponse {
+        try await get(
+            "/notes/\(id.rawValue)/backlinks",
+            query: pageItems(cursor: query.cursor, limit: query.limit)
+        )
+    }
+
     public func createNoteLink(_ id: NoteID, request: NoteLinkMutationRequest) async throws -> MutationResult {
         try await post("/notes/\(id.rawValue)/links", body: request, idempotencyKey: request.idempotencyKey)
     }
@@ -81,6 +101,17 @@ extension APIClient {
 
     public func undoMutation(_ id: MutationID, request: MutationUndoRequest) async throws -> MutationResult {
         try await post("/mutations/\(id.rawValue)/undo", body: request, idempotencyKey: request.idempotencyKey)
+    }
+
+    public func undoMutationBatch(
+        _ id: MutationID,
+        request: MutationUndoRequest
+    ) async throws -> MutationBatchUndoResponse {
+        try await post(
+            "/mutation-batches/\(id.rawValue)/undo",
+            body: request,
+            idempotencyKey: request.idempotencyKey
+        )
     }
 }
 

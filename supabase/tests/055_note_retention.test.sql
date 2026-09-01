@@ -237,7 +237,8 @@ values (
 );
 
 insert into public.feedback_events (
-  id, user_id, decision_id, action, old_destination_note_id, new_destination_note_id
+  id, user_id, decision_id, action, old_destination_note_id,
+  new_destination_note_id, idempotency_key
 )
 values (
   'fbk_75000000000000000000000001',
@@ -245,7 +246,8 @@ values (
   'dec_75000000000000000000000001',
   'accepted',
   'note_75000000000000000000000001',
-  'note_75000000000000000000000001'
+  'note_75000000000000000000000001',
+  'retention-feedback-accepted'
 );
 
 insert into public.api_idempotency_records (

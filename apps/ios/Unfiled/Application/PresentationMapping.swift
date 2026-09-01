@@ -82,11 +82,11 @@ enum PresentationMapping {
     }
 
     static func review(_ value: ReviewItem) -> ReviewPresentation {
-        let choiceText = value.choices.compactMap(choiceLabel)
+        let summary = reviewProposalSummary(value.proposal)
         return ReviewPresentation(
             id: value.id.rawValue,
-            original: choiceText.first ?? "A capture needs a destination decision.",
-            proposedDestination: choiceText.dropFirst().first ?? "Unfiled",
+            original: summary.original,
+            proposedDestination: summary.destination,
             actionSummary: reviewTypeLabel(value.type),
             captureID: value.captureId?.rawValue,
             noteID: value.noteId?.rawValue
@@ -193,15 +193,32 @@ enum PresentationMapping {
         return names.reversed().joined(separator: " / ")
     }
 
-    private static func choiceLabel(_ value: JSONValue) -> String? {
-        switch value {
-        case let .string(text): return text
-        case let .object(object):
-            for key in ["title", "label", "name", "reason", "summary"] {
-                if case let .string(text)? = object[key], !text.isEmpty { return text }
-            }
-            return nil
-        case .array, .number, .bool, .null: return nil
+    private static func reviewProposalSummary(
+        _ proposal: ReviewProposal
+    ) -> (original: String, destination: String) {
+        switch proposal {
+        case let .routeCapture(plan):
+            let destination = plan.destination.newNote?.title
+                ?? plan.destination.candidateId?.rawValue
+                ?? "Unfiled"
+            return ("A capture needs a destination decision.", destination)
+        case .generatedBlock:
+            return ("An AI-generated expansion is waiting for approval.", "Generated block")
+        case let .duplicateNotes(notes):
+            return ("These notes may describe the same thing.", "Compare \(notes.count) notes")
+        case let .conflict(reason):
+            return ("A safe automatic change could not be completed.", conflictLabel(reason))
+        case let .failedJob(errorCode):
+            return ("The capture remains safe and unfiled.", errorCode.rawValue)
+        }
+    }
+
+    private static func conflictLabel(_ reason: ReviewConflictReason) -> String {
+        switch reason {
+        case .revision: "The destination changed"
+        case .candidateEligibility: "The destination is unavailable"
+        case .consentControls: "Your settings require confirmation"
+        case .structure: "The note structure needs attention"
         }
     }
 

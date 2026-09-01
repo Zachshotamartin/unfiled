@@ -192,12 +192,10 @@ export class InMemoryManualNotesRepository implements ManualNotesRepository {
           expectRevision(current, input.expectedRevision);
         } catch (error) {
           if (error instanceof HttpError && error.code === ApiErrorCode.STALE_REVISION) {
-            this.#reviewQueue.record(context.userId, noteId, "revision_conflict", [
-              {
-                expectedRevision: input.expectedRevision,
-                currentRevision: current.currentRevision
-              }
-            ]);
+            this.#reviewQueue.record(context.userId, noteId, "revision_conflict", {
+              type: "conflict",
+              reason: "revision"
+            });
           }
           throw error;
         }
@@ -209,9 +207,10 @@ export class InMemoryManualNotesRepository implements ManualNotesRepository {
           transition = runDomain(() => apply(toDomainNote(current), timestamp, idFactory));
         } catch (error) {
           if (error instanceof HttpError && error.code === ApiErrorCode.STRUCTURE_CONFLICT) {
-            this.#reviewQueue.record(context.userId, noteId, "structure_conflict", [
-              { expectedRevision: input.expectedRevision }
-            ]);
+            this.#reviewQueue.record(context.userId, noteId, "structure_conflict", {
+              type: "conflict",
+              reason: "structure"
+            });
           }
           throw error;
         }

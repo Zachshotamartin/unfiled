@@ -500,6 +500,8 @@ The user can always:
 
 When the user says `Always put "groceries" in my Shopping list`, or corrects the same pattern repeatedly, store an explicit routing rule. Evaluate these rules before calling a model. Rules are visible, editable, and removable.
 
+Rule-condition plaintext stays in the owner-authorized web trust domain under the private-manual key class. Web evaluates it while accepting the capture and binds only a content-free rule ID/revision/destination snapshot to the job; the organizer never receives the condition. Repeated corrections create a disabled proposal only, and every learned rule requires explicit confirmation before activation.
+
 ### 3.8 No silent expansion
 
 Generated summaries, interpretations, or recommendations are marked as generated. The system may automatically format clearly structured facts, such as list items or workout sets, but it must not silently turn a short opinion into a long essay inside the user's note.
@@ -1014,20 +1016,20 @@ Never train a global model on private note content without a separate explicit p
 
 ### 9.7 Model and provider boundary
 
-Create an `OrganizationModel` port owned by the domain-facing AI package, with a provider registry behind it holding two adapters:
+Create an `OrganizationModel` port owned by the domain-facing AI package, with a gated provider registry behind it. Current and planned adapters are:
 
-- **OpenAI adapter:** Responses API with strict Structured Outputs and `store: false`.
-- **Anthropic adapter:** Messages API with a forced tool call whose input schema is the organization schema, which yields strictly validated JSON.
+- **OpenAI adapter — implemented in D; live/account gate pending:** Responses API with strict Structured Outputs and `store: false`.
+- **Anthropic adapter — planned and hidden:** Messages API with a forced tool call whose input schema is the organization schema, which yields strictly validated JSON. It is not selectable until its adapter and provider×tier evaluation pass.
 
 Keep model IDs and per-effort model tiers in versioned server configuration so routing evaluation can select current cost-appropriate models per provider without changing domain code.
 
-The credential used per request resolves in this order: the user's own stored key for their selected provider (bring-your-own-key), otherwise the application's key for the default provider. BYOK requests bypass the application's per-user model budget, since the spend is the user's, but keep all rate limits, payload caps, and validation. An invalid or revoked user key sends captures to Inbox with `provider_key_invalid` and a settings banner; there is no silent fallback to the application key unless the user explicitly enables fallback.
+The current D runtime uses only its dedicated application-owned OpenAI key and rejects user BYOK. After E4, the credential used per request resolves from one live lease: the user's Vault-held key for the selected provider or the application key selected by the immutable non-secret job snapshot. BYOK requests bypass the application's per-user model budget, since the spend is the user's, but keep all rate limits, payload caps, and validation. An invalid or revoked user key sends captures to Inbox with `provider_key_invalid` and a settings banner; there is no fallback to the application key unless that job's snapshot records the user's explicit choice.
 
 User-facing effort settings shape each call (full mapping in `AI_ROUTING_SPEC.md`): routing effort selects the model tier and candidate budget; expansion style controls whether and how long generated expansions may be.
 
 Send the minimum candidate context. Record token counts, latency, provider, prompt version, schema version, and response status, but keep raw note text and API keys out of all logs.
 
-Both provider APIs support schema-constrained output; reconfirm exact SDK and model behavior against current official documentation when implementation starts.
+The selected provider API must support the pinned schema-constrained contract. Reconfirm exact SDK/model behavior against current official documentation and rerun the full provider×tier gate before exposing a provider or version.
 
 ### 9.8 Prompt injection and untrusted note content
 
@@ -1240,12 +1242,13 @@ Every user-owned table includes `user_id`, timestamps, and database constraints.
 - `id`
 - `user_id`
 - provider: openai or anthropic
-- encrypted key reference (Supabase Vault secret ID or app-layer AES-256-GCM ciphertext; never plaintext)
+- Supabase Vault secret binding (never plaintext, never application-layer provider-key ciphertext)
 - key last-four for display
 - status: active, invalid, revoked
-- validated and created timestamps
+- monotonic credential revision
+- validated, created, and updated timestamps
 
-The ciphertext or vault reference is not readable by clients; decryption happens only inside the organization workflow. Full custody rules live in `SECURITY_AND_PRIVACY.md`.
+The Vault binding is not readable by clients. Exact owner CRUD runs only through the authenticated web service, and credential disclosure happens only through a live organizer lease after E4 lands. The current D organizer rejects user BYOK. [ADR-0012](./decisions/ADR-0012-vault-only-lease-bound-byok-credentials.md) supersedes the former application-ciphertext fallback and defines the full custody boundary.
 
 #### `spaces`
 
@@ -1380,7 +1383,7 @@ This table backs the Generated block domain entity in Section 8. A proposed bloc
 - source: explicit or correction-suggested
 - created and updated timestamps
 
-An inferred pattern is not activated as a rule without an explicit confirmation unless it is a narrow alias learned through repeated accepted corrections and the product makes that behavior clear.
+An inferred pattern is never activated as a rule without explicit owner confirmation. Repeated accepted corrections may create a disabled proposal, including a narrow alias proposal, but they do not silently enable it.
 
 Aliases referenced by search and candidate retrieval are routing rules with rule type `alias`; there is no separate alias store.
 
@@ -1426,9 +1429,11 @@ Content-bearing note columns and dependent snapshots become authenticated envelo
 
 #### `feedback_events`
 
+- stable prepared feedback event ID
 - decision ID
 - action: accepted, moved, undone, expansion accepted, expansion rejected
 - old and new destination
+- old-side and new-side mutation references for a correction; both reference the same feedback event
 - optional reason code
 - created timestamp
 
@@ -1686,7 +1691,7 @@ Milestone C.5 application-encrypts both modes at rest. Production object DEKs ar
 ### 16.4 Secrets and logging
 
 - OpenAI, Anthropic, and Supabase application secrets exist only in server or build-secret stores.
-- User-supplied provider keys are encrypted at rest, decrypted only inside the workflow, displayed only as last-four, and never logged or returned to clients.
+- User-supplied provider keys, when E4 is enabled, live only in Supabase Vault, are disclosed only through one live organizer lease, display only last-four/status metadata, and never enter jobs, application ciphertext, logs, exports, or client responses.
 - Do not log request bodies, note text, capture text, generated text, auth tokens, magic links, or service keys.
 - Logs use user-independent trace IDs or a one-way pseudonymous identifier.
 - Sentry breadcrumbs and replay features are configured to redact text fields.
@@ -2095,7 +2100,7 @@ Deliver:
 - OpenAI Embeddings and Responses adapters with bounded inputs/outputs, caller cancellation, absolute deadlines, narrow retries, strict Structured Outputs, no tools, and `store: false` on Responses
 - deterministic scoring policy with privacy, stale-index, explicit-destination, ambiguity, duplicate, and failure overrides
 - deterministic create-note, append-raw, list, log, principle, and project application with database-issued stable IDs and encrypted aggregate sealing
-- encrypted Review publication for ambiguity, conflicts, unavailable explicit destinations, and generated expansion pending acceptance
+- encrypted Review publication for ambiguity, conflicts, and unavailable explicit destinations. A returned `generatedExpansion` is currently discarded; D does not preserve proposed expansion text or satisfy pending-expansion acceptance
 - a 175-case deterministic evaluation harness covering sparse libraries, same/cross-day lists, workout shorthand, journals, principles, projects, ambiguity, duplicates, hostile output/injection, stale revisions, private exclusion, index races, cross-tenant retrieval, and multilingual input
 - a separate deterministic production-component retrieval-through-application seam with an explicit exercised/excluded/simulated scope report, plus an optional explicit-key OpenAI runner fixed at three samples per eligible frozen synthetic case and content-free status/latency/token/cost/version/hash/decision telemetry
 
@@ -2118,23 +2123,41 @@ The live OpenAI evaluation and deployed canary have not been run from this repos
 
 ### Milestone E: Correction, undo, and personalization, 1-2 weeks
 
+**Foundation status (2026-09-01): E0 implemented and locally verified; E1-E4 product capabilities pending.** The shared strict contracts, OpenAPI/client surfaces, Vault-only schema preconditions, immutable settings-only job snapshots, lifecycle invariants, fail-closed legacy Review reads, typed Review V2 writes, correction outcome/batch-undo response contracts, and native Swift models are in place. Decrypted Review and personal-rule responses are private/no-store. The E0 database gate passes 34 pgTAP files / 1,512 assertions, lint, reset, and concurrency checks; the native suite passes 112 tests. [ADR-0011](./decisions/ADR-0011-encrypted-owner-interactions-and-personal-rules.md) keeps correction, Review resolution, rule plaintext, and generated-block resolution in the owner-authorized web trust domain. [ADR-0012](./decisions/ADR-0012-vault-only-lease-bound-byok-credentials.md) makes Supabase Vault the sole BYOK store and adds one lease-bound organizer credential capability only in E4. These foundations do not claim that the E1-E4 handlers, database capabilities, UI actions, or organizer provider lease are implemented.
+
+Implementation lanes are dependency-ordered at the shared contract, then may proceed independently without migration/RPC collisions:
+
+| Lane                     | Reserved migration                                                        | Frozen capability boundary                                                                                                                                                                                                    |
+| ------------------------ | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| E1 correction/Review     | `20260901000002_encrypted_decision_corrections.sql`                       | `prepare_encrypted_decision_correction`, `commit_encrypted_decision_correction`, `prepare_encrypted_review_resolution`, `commit_encrypted_review_resolution`, `get_encrypted_mutation_batch`, `undo_encrypted_mutation_batch` |
+| E2 rules/personalization | `20260901000003_encrypted_routing_rules_and_personalization.sql`          | `prepare_encrypted_routing_rule_write`, `commit_encrypted_routing_rule_write`, `delete_encrypted_routing_rule`                                                                                                                |
+| E3 expansions/duplicates | `20260901000004_encrypted_generated_blocks_and_duplicate_suggestions.sql` | extend existing organizer prepare/commit payloads; add `resolve_encrypted_generated_block`                                                                                                                                    |
+| E4 settings/BYOK         | `20260901000005_vault_byok_and_ai_settings.sql`                           | `get_owner_ai_settings`, `update_owner_ai_settings`, `get_user_provider_key_status`, `put_user_provider_key`, `delete_user_provider_key`, `get_lease_bound_organizer_provider_credential`                                     |
+
+`20260901000001_milestone_e0_interaction_contracts.sql` implements the shared Milestone E foundation and must not be reused by a parallel lane. E4 changes the organizer allowlist from ten to eleven RPCs only when its migration, exact-role denial tests, and deployed Vault evidence are green.
+
 Deliver:
 
-- correction flow
-- mutation history and safe inverse operations
-- editable routing rules
-- bring-your-own-key management and model-effort settings
-- duplicate-note suggestion
-- generated expansion acceptance or rejection
-- feedback metrics
+- owner-authorized two-phase correction and Review resolution with request MACs, one feedback event, sorted multi-note locks, and all validation before the first write
+- mutation-batch history and exact safe inverse operations; an incompatible inverse changes no note and enters Review
+- editable encrypted routing rules whose plaintext is evaluated only by web; the organizer receives only a content-free rule ID/revision/destination snapshot
+- learned-rule proposals that require explicit confirmation before any prefix, phrase, alias, or destination rule is enabled
+- Vault-only bring-your-own-key management, immutable non-secret per-job settings snapshots, and model-effort settings; Anthropic/tier choices stay hidden until adapter and eval gates pass
+- duplicate-note suggestions that never merge, delete, archive, or rewrite a note automatically
+- separately encrypted generated-expansion proposals with accept/reject behavior; E3 closes D's current discard gap
+- one feedback event that anchors both sides of a correction plus content-free feedback metrics
 
 Gate:
 
 - every AI-applied mutation in scope can be undone or restored through revision history
 - stale revisions cannot overwrite manual edits
 - a correction affects later matching through visible rules or tested preference features
+- cross-owner, replay, stale-revision, reservation/MAC substitution, lock-order, partial-failure, private-key-denial, Vault-deletion, lease-expiry, and plaintext-canary gates pass
+- the organizer has exactly ten RPCs before E4 and exactly eleven after E4; no role can directly enumerate provider keys or Vault secrets
 
 ### Milestone F: Hybrid search and polish, 1-2 weeks
+
+The accepted user search path remains owner-authorized lexical search. Semantic query embedding is blocked on a separate ADR/trust review and separately deployable search service. That service may not reuse organizer or index-worker workload keys: no database password, provider API key, OIDC credential, KMS grant, runtime secret, or plaintext cache may be copied; the review must decide explicitly whether a new principal may be separately authorized to open existing AI-assisted index envelopes.
 
 Deliver:
 
@@ -2251,8 +2274,8 @@ The plan proceeds with these defaults so implementation can start without waitin
 | Undo retention             | full revision history kept; one-tap AI undo guaranteed 30 days                                                          | storage metrics justify pruning                                                                      |
 | Organization               | rules, retrieval, strict model plan, policy                                                                             | evaluation shows a simpler path performs better                                                      |
 | Automation                 | balanced mode with Review for ambiguity                                                                                 | beta users choose cautious or automatic behavior                                                     |
-| AI provider                | OpenAI and Anthropic adapters behind one port; app key default, BYOK supported                                          | privacy, cost, quality, or availability evidence                                                     |
-| BYOK custody               | Supabase Vault encrypted storage; server-side decryption only; no silent fallback                                       | Vault limits or key-rotation evidence                                                                |
+| AI provider                | OpenAI adapter implemented; provider/tier options are hidden until their adapter and full eval gate pass                | privacy, cost, quality, or availability evidence                                                     |
+| BYOK custody               | Supabase Vault only; lease-bound server disclosure; no application-ciphertext fallback; E4 pending                      | a new accepted ADR after custody evidence—not Vault unavailability alone                             |
 | Content-key custody        | per-object DEKs, per-user intermediate keys, and managed production KMS/HSM through short-lived workload identity       | independent review changes the hierarchy or local-first becomes the thesis                           |
 | Retrieval storage          | encrypted exact per-user index scan; no persisted plaintext FTS or vectors                                              | 1,000-note latency gate fails; any replacement requires a new ADR and privacy review                 |
 | Hosting                    | Vercel plus Supabase                                                                                                    | operational limits or cost justify migration                                                         |

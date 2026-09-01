@@ -268,7 +268,7 @@ describe("Milestone B manual-note contracts", () => {
       captureId: null,
       noteId: manualNoteFixtures.note.id,
       type: "structure_conflict",
-      choices: [{ label: "Keep draft", action: "manual" }],
+      proposal: { type: "conflict", reason: "structure" },
       state: "open",
       resolution: null,
       createdAt: "2026-08-30T18:30:00.000Z",
@@ -283,9 +283,9 @@ describe("Milestone B manual-note contracts", () => {
         pageInfo: { hasMore: false, nextCursor: null }
       })
     ).toHaveProperty("items.0.type", "structure_conflict");
-    expect(ReviewItemDtoSchema.safeParse({ ...reviewItem, choices: [undefined] }).success).toBe(
-      false
-    );
+    expect(
+      ReviewItemDtoSchema.safeParse({ ...reviewItem, proposal: { type: "unknown" } }).success
+    ).toBe(false);
   });
 
   it("exports reusable pagination and bounded log field schemas", () => {
@@ -324,7 +324,7 @@ describe("Milestone B manual-note contracts", () => {
     }
   });
 
-  it("exposes only checklist toggles through the public B operations request", () => {
+  it("exposes checklist toggles and bounded log-field edits through interactive operations", () => {
     const toggle = manualNoteFixtures.userOperations.find(
       (operation) => operation.type === "toggle_item_checked"
     );
@@ -334,6 +334,20 @@ describe("Milestone B manual-note contracts", () => {
         expectedRevision: 1,
         idempotencyKey,
         operations: [toggle]
+      }).success
+    ).toBe(true);
+    expect(
+      InteractiveOperationsRequestSchema.safeParse({
+        expectedRevision: 1,
+        idempotencyKey,
+        operations: [
+          {
+            type: "update_log_field",
+            entryId: "ent_01J6M9Q7G4BMKB33GSG3NJ6D1X",
+            fieldPath: ["weight"],
+            value: 225
+          }
+        ]
       }).success
     ).toBe(true);
     expect(
@@ -449,6 +463,22 @@ describe("Milestone B manual-note contracts", () => {
     expect(
       openApiDocument.paths["/search"].post.responses["200"].headers["Cache-Control"].schema
     ).toEqual({ type: "string", const: "private, no-store" });
+    const privateResponseHeaders = [
+      openApiDocument.paths["/review-items"].get.responses["200"].headers,
+      openApiDocument.paths["/review-items"].get.responses["400"].headers,
+      openApiDocument.paths["/review-items/{reviewItemId}/resolve"].post.responses["200"].headers,
+      openApiDocument.paths["/routing-rules"].get.responses["200"].headers,
+      openApiDocument.paths["/routing-rules"].post.responses["201"].headers,
+      openApiDocument.paths["/routing-rules/{routingRuleId}"].patch.responses["200"].headers,
+      openApiDocument.paths["/routing-rules/{routingRuleId}"].delete.responses["200"].headers
+    ];
+    for (const headers of privateResponseHeaders) {
+      expect(headers["Cache-Control"].schema).toEqual({
+        type: "string",
+        const: "private, no-store"
+      });
+      expect(headers.Pragma.schema).toEqual({ type: "string", const: "no-cache" });
+    }
     expect(openApiDocument.paths["/review-items"].get.parameters).toContainEqual(
       expect.objectContaining({ in: "query", name: "state" })
     );

@@ -84,7 +84,9 @@ AC: optional controls set an explicit destination note, mark the capture private
 **REQ-C5 (M): Capture deletion.**
 AC: deleting a capture removes the capture; content already routed into a note remains with provenance marked source-removed; the confirmation offers to also remove the inserted blocks as an undoable mutation.
 
-### E3 — Organization and routing (Milestone D)
+### E3 — Organization and routing (Milestones D/E)
+
+Implementation note: Milestone D implements create-or-append inference, explicit-destination handling, encrypted retrieval, and conservative policy. Stored personal routing-rule CRUD/evaluation remains Milestone E2; the requirements below retain their stable IDs but must not be cited as D evidence.
 
 **REQ-R1 (M): Deterministic rules run first.**
 AC:
@@ -134,21 +136,23 @@ AC: with the model provider unreachable, captures accumulate in Inbox with a sta
 
 ### E5 — Review, correction, and undo (Milestones D/E)
 
+Implementation note: Milestone D can publish ambiguity/conflict Review outcomes, but it currently discards model-returned generated-expansion text. Duplicate suggestions, persisted proposed expansions, and the interactive resolution/correction capabilities below remain Milestone E work; an ADR or schema placeholder is not acceptance evidence.
+
 **REQ-V1 (M): Review queue.**
 AC: Review lists low-confidence routes, conflicts, failed jobs, duplicate suggestions, and pending expansions; resolving any item updates the source capture's state; the empty state explains that captures are safe in Inbox.
 
 **REQ-V2 (M): Correction (Move).**
-AC: Move re-homes the routed content to a chosen note transactionally (old note reverts, new note gains content, both get revisions); a feedback event records old and new destination; the correction visibly influences the next similar capture (rule suggestion or ranking change per AI spec §8).
+AC: Move re-homes the routed content only when the original mutation's exact typed inverse is safe against the current source note. One transaction locks affected notes in sorted order, validates every member before writing, reverts the old note, updates the new note, gives both new revisions, and anchors both mutations to one feedback event. If exact safety cannot be proven, neither note changes and the correction enters Review. A successful correction visibly influences the next similar capture through a rule proposal or tested ranking change per AI spec §8.
 
 **REQ-V3 (M): Undo.**
 AC:
 
 - Undo within the guaranteed window reverses the mutation via its inverse and creates a new revision; the note content equals the before state (hash-verified in tests).
-- If later edits depend on the mutated content, undo shows a focused diff and allows removing only the affected material.
+- If later edits make the exact inverse unsafe, undo changes nothing and opens a focused Review; any later removal is an explicit owner action, never a fuzzy text deletion.
 - Undo of an undo is possible via revision restore.
 
 **REQ-V4 (M): Rule creation from correction.**
-AC: after the same correction pattern twice, the product offers a rule (`Always put X in Y?`); accepting creates a visible, editable, deletable rule; declining suppresses the offer for that pattern; no rule is created silently except narrow aliases as documented in BUILD_PLAN §12.1.
+AC: after the same correction pattern twice, the product offers a rule (`Always put X in Y?`); accepting creates a visible, editable, deletable rule; declining suppresses the offer for that pattern; no prefix, phrase, alias, or destination rule is activated without explicit confirmation.
 
 **REQ-V5 (M): Expansion acceptance.**
 AC: a proposed generated block renders visibly pending; accept keeps it marked as AI-generated with provenance; reject removes it; neither touches user-authored text.
@@ -226,9 +230,12 @@ AC:
 - The user can paste an OpenAI or Anthropic API key; it is validated with a minimal test call before saving, and a failed validation stores nothing and shows a safe error.
 - After saving, the UI shows only provider, key last-four, and status; no API response ever returns the key; a canary-key log-audit test proves the key appears in no logs, Sentry events, or exports.
 - The key is stored encrypted per [SECURITY_AND_PRIVACY.md](./SECURITY_AND_PRIVACY.md) §7.1; the key table has zero client access (tested).
+- Supabase Vault is the only accepted credential store. Vault unavailability disables BYOK; there is no application-layer provider-key ciphertext fallback.
 - Deleting the key destroys the stored secret and immediately stops its use; subsequent captures use the app key or Inbox per the fallback setting.
 - A key rejected at runtime marks status `invalid`, routes captures to Inbox with `provider_key_invalid`, and banners settings; no silent fallback unless the user enabled fallback.
 - BYOK usage bypasses the app's per-user model budget but keeps all rate limits and payload caps.
+- Every organization job freezes non-secret provider/effort/expansion/fallback settings at capture acceptance; no job or export contains a provider key or Vault secret ID.
+- Provider and tier controls remain hidden until that exact adapter and provider×tier evaluation gate is green; Anthropic is not currently available.
 
 **REQ-T5 (M): Model effort settings.**
 AC:

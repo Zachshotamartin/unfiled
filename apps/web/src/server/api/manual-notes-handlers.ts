@@ -64,7 +64,7 @@ export type ManualNotesDependencies = Readonly<{
 }>;
 
 const MAX_PRIVATE_SEARCH_REQUEST_BYTES = 4_096;
-const PRIVATE_SEARCH_CACHE_CONTROL = "private, no-store";
+const PRIVATE_OWNER_CONTENT_CACHE_CONTROL = "private, no-store";
 const PRIVATE_SEARCH_CURSOR_DOMAIN = "unfiled/private-search-cursor/hmac-sha256/v1";
 const PRIVATE_SEARCH_CURSOR_KEY_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 const PRIVATE_SEARCH_CURSOR_NONCE_BYTES = 16;
@@ -341,8 +341,8 @@ function positiveLimit(value: string | null): number {
   return parsed;
 }
 
-function privateSearchResponse(response: Response): Response {
-  response.headers.set("cache-control", PRIVATE_SEARCH_CACHE_CONTROL);
+function privateOwnerContentResponse(response: Response): Response {
+  response.headers.set("cache-control", PRIVATE_OWNER_CONTENT_CACHE_CONTROL);
   response.headers.set("pragma", "no-cache");
   return response;
 }
@@ -889,8 +889,8 @@ export function createManualNotesHandlers(dependencies: ManualNotesDependencies)
       });
     },
 
-    listReviewItems(request: Request) {
-      return run(request, async (repository, context) => {
+    async listReviewItems(request: Request) {
+      const response = await run(request, async (repository, context) => {
         const url = new URL(request.url);
         const input = parse(ReviewItemListQuerySchema, {
           ...(url.searchParams.has("state") ? { state: url.searchParams.get("state") } : {}),
@@ -905,6 +905,7 @@ export function createManualNotesHandlers(dependencies: ManualNotesDependencies)
         });
         return jsonResponse(pageWindow(items, input.limit, offset, scope));
       });
+      return privateOwnerContentResponse(response);
     },
 
     async search(request: Request) {
@@ -938,7 +939,7 @@ export function createManualNotesHandlers(dependencies: ManualNotesDependencies)
           cursorKey.fill(0);
         }
       });
-      return privateSearchResponse(response);
+      return privateOwnerContentResponse(response);
     }
   });
 }

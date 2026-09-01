@@ -33,7 +33,12 @@ extension APIClient {
     public func searchNotes(_ request: SearchNotesRequest) async throws -> SearchNotesResponse {
         guard (1 ... 200).contains(request.query.utf16.count),
               (1 ... 100).contains(request.limit),
-              request.cursor.map({ (1 ... 512).contains($0.utf16.count) }) ?? true else {
+              request.cursor.map({ (1 ... 512).contains($0.utf16.count) }) ?? true,
+              request.tagIds.count <= 20,
+              Set(request.tagIds).count == request.tagIds.count,
+              request.updatedFrom.map({ from in
+                  request.updatedTo.map({ from < $0 }) ?? true
+              }) ?? true else {
             throw APIClientError.invalidRequest
         }
         return try await post("/search", body: request)

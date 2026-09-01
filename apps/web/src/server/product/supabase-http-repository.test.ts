@@ -2,6 +2,7 @@ import type { EntityId } from "@unfiled/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SupabaseHttpManualNotesRepository } from "./supabase-http-repository";
+import { mapReviewItem } from "./supabase-http-mappers";
 
 const NOTE_ID = "note_01J6M9Q7G4BMKB33GSG3NJ6D1X" as EntityId<"note">;
 const TARGET_ID = "note_01J6M9Q7G4BMKB33GSG3NJ6D1Y" as EntityId<"note">;
@@ -69,6 +70,40 @@ afterEach(() => {
 });
 
 describe("Supabase manual-note repository", () => {
+  it("fails closed instead of inventing typed semantics for legacy failed Review items", () => {
+    const legacy = {
+      id: "rvw_01J6M9Q7G4BMKB33GSG3NJ6D1X",
+      capture_id: "cap_01J6M9Q7G4BMKB33GSG3NJ6D1X",
+      note_id: null,
+      type: "failed_job",
+      choices: ["retry"],
+      state: "open",
+      resolution: null,
+      created_at: NOW,
+      resolved_at: null
+    };
+
+    expect(() => mapReviewItem(legacy)).toThrow(/invalid review item/u);
+    expect(() =>
+      mapReviewItem({
+        ...legacy,
+        type: "structure_conflict",
+        state: "resolved",
+        resolution: { type: "keep_inbox" },
+        resolved_at: NOW
+      })
+    ).toThrow(/invalid legacy review item/u);
+    expect(
+      mapReviewItem({
+        ...legacy,
+        proposal: { type: "failed_job", errorCode: "provider_unavailable" }
+      })
+    ).toMatchObject({
+      type: "failed_job",
+      proposal: { type: "failed_job", errorCode: "provider_unavailable" }
+    });
+  });
+
   it("returns the RPC-stored snapshot when an old mutation key is replayed after a later edit", async () => {
     configure();
     const responses = [

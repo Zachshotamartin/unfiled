@@ -66,12 +66,13 @@ select is(
           'routing_rules', 'review_items', 'note_chunks', 'tags', 'note_tags',
           'note_links', 'feedback_events', 'user_events',
           'api_idempotency_records', 'organization_mutation_attempts', 'capture_receipts',
-          'auth_otp_quota_events'
+          'auth_otp_quota_events', 'organization_job_ai_settings',
+          'organization_job_rule_matches', 'feedback_event_mutations'
         ]
       )
       and relation.relrowsecurity
   ),
-  23::bigint,
+  26::bigint,
   'RLS is enabled on every exposed or service-owned table'
 );
 select is(

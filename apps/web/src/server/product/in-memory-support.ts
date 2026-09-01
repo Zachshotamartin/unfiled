@@ -6,6 +6,7 @@ import type {
   NoteStructuredData,
   NoteType,
   ReviewItemDto,
+  ReviewProposal,
   ReviewState,
   ReviewType
 } from "@unfiled/contracts";
@@ -172,7 +173,7 @@ export class InMemoryReviewQueue {
     userId: string,
     noteId: EntityId<"note"> | null,
     type: Extract<ReviewType, "revision_conflict" | "structure_conflict">,
-    choices: readonly unknown[]
+    proposal: ReviewProposal
   ): void {
     const existing = [...this.#items.values()].find(
       (item) =>
@@ -189,7 +190,7 @@ export class InMemoryReviewQueue {
       captureId: null,
       noteId,
       type,
-      choices: clone(choices) as ReviewItemDto["choices"],
+      proposal: clone(proposal),
       state: "open",
       resolution: null,
       createdAt: this.#now(),
@@ -215,7 +216,7 @@ export class InMemoryReviewQueue {
         captureId: item.captureId,
         noteId: item.noteId,
         type: item.type,
-        choices: item.choices,
+        proposal: item.proposal,
         state: item.state,
         resolution: item.resolution,
         createdAt: item.createdAt,

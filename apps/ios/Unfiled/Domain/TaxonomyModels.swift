@@ -74,11 +74,68 @@ public typealias TagDeleteRequest = RevisionMutationRequest
 public struct TagMutationResult: Codable, Equatable, Sendable { public let tag: Tag; public let replayed: Bool }
 public struct DeleteMutationResult: Codable, Equatable, Sendable { public let deletedId: String; public let replayed: Bool }
 
+public enum SearchSpaceFilter: Equatable, Sendable {
+    case any
+    case root
+    case space(SpaceID)
+}
+
 public struct SearchNotesRequest: Encodable, Equatable, Sendable {
-    public let query: String; public let archive: ArchiveFilter; public let cursor: String?; public let limit: Int
-    public init(query: String, archive: ArchiveFilter = .exclude, cursor: String? = nil, limit: Int = 30) {
+    public let query: String
+    public let archive: ArchiveFilter
+    public let type: NoteType?
+    public let space: SearchSpaceFilter
+    public let tagIds: [TagID]
+    public let updatedFrom: Date?
+    public let updatedTo: Date?
+    public let privacy: PrivacyMode?
+    public let cursor: String?
+    public let limit: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case query, archive, type, spaceId, tagIds, updatedFrom, updatedTo, privacy, cursor, limit
+    }
+
+    public init(
+        query: String,
+        archive: ArchiveFilter = .exclude,
+        type: NoteType? = nil,
+        space: SearchSpaceFilter = .any,
+        tagIds: [TagID] = [],
+        updatedFrom: Date? = nil,
+        updatedTo: Date? = nil,
+        privacy: PrivacyMode? = nil,
+        cursor: String? = nil,
+        limit: Int = 30
+    ) {
         self.query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.archive = archive; self.cursor = cursor; self.limit = limit
+        self.archive = archive
+        self.type = type
+        self.space = space
+        self.tagIds = tagIds
+        self.updatedFrom = updatedFrom
+        self.updatedTo = updatedTo
+        self.privacy = privacy
+        self.cursor = cursor
+        self.limit = limit
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(query, forKey: .query)
+        try container.encode(archive, forKey: .archive)
+        try container.encodeIfPresent(type, forKey: .type)
+        switch space {
+        case .any: break
+        case .root: try container.encodeNil(forKey: .spaceId)
+        case let .space(id): try container.encode(id, forKey: .spaceId)
+        }
+        if !tagIds.isEmpty { try container.encode(tagIds, forKey: .tagIds) }
+        try container.encodeIfPresent(updatedFrom, forKey: .updatedFrom)
+        try container.encodeIfPresent(updatedTo, forKey: .updatedTo)
+        try container.encodeIfPresent(privacy, forKey: .privacy)
+        try container.encodeIfPresent(cursor, forKey: .cursor)
+        try container.encode(limit, forKey: .limit)
     }
 }
 public struct SearchNoteResult: Codable, Equatable, Sendable {
@@ -141,9 +198,108 @@ public enum ReviewType: String, Codable, CaseIterable, Sendable {
 }
 public enum ReviewState: String, Codable, CaseIterable, Sendable { case open, resolved, dismissed }
 public struct ReviewItem: Codable, Equatable, Sendable {
-    public let id: ReviewID; @RequiredNullable public var captureId: CaptureID?; @RequiredNullable public var noteId: NoteID?
-    public let type: ReviewType; public let choices: [JSONValue]; public let state: ReviewState
-    @RequiredNullable public var resolution: [String: JSONValue]?; public let createdAt: Date; @RequiredNullable public var resolvedAt: Date?
+    public let id: ReviewID
+    @RequiredNullable public var captureId: CaptureID?
+    @RequiredNullable public var noteId: NoteID?
+    public let type: ReviewType
+    public let proposal: ReviewProposal
+    public let state: ReviewState
+    @RequiredNullable public var resolution: ReviewResolution?
+    public let createdAt: Date
+    @RequiredNullable public var resolvedAt: Date?
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case id, captureId, noteId, type, proposal, state, resolution, createdAt, resolvedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        try StrictJSONKey.requireExactKeys(CodingKeys.allCases.map(\.rawValue), from: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(ReviewID.self, forKey: .id)
+        _captureId = try container.decode(RequiredNullable<CaptureID>.self, forKey: .captureId)
+        _noteId = try container.decode(RequiredNullable<NoteID>.self, forKey: .noteId)
+        type = try container.decode(ReviewType.self, forKey: .type)
+        proposal = try container.decode(ReviewProposal.self, forKey: .proposal)
+        state = try container.decode(ReviewState.self, forKey: .state)
+        _resolution = try container.decode(
+            RequiredNullable<ReviewResolution>.self,
+            forKey: .resolution
+        )
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        _resolvedAt = try container.decode(RequiredNullable<Date>.self, forKey: .resolvedAt)
+
+        let validState = switch state {
+        case .open:
+            resolution == nil && resolvedAt == nil
+        case .resolved:
+            resolution != nil && resolution?.isDismissal == false && resolvedAt != nil
+        case .dismissed:
+            resolution?.isDismissal == true && resolvedAt != nil
+        }
+        guard Self.proposalMatches(type: type, proposal: proposal),
+              Self.resolutionMatches(type: type, proposal: proposal, resolution: resolution),
+              validState else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .resolution,
+                in: container,
+                debugDescription: "Review type, proposal, state, and resolution do not agree"
+            )
+        }
+    }
+
+    private static func proposalMatches(type: ReviewType, proposal: ReviewProposal) -> Bool {
+        switch (type, proposal) {
+        case (.lowConfidence, .routeCapture):
+            true
+        case (.revisionConflict, .conflict(reason: .revision)):
+            true
+        case (.failedJob, .failedJob):
+            true
+        case (.duplicateSuggestion, .duplicateNotes):
+            true
+        case (.pendingExpansion, .generatedBlock),
+             (.pendingExpansion, .conflict(reason: .consentControls)):
+            true
+        case (.structureConflict, .conflict(reason: .candidateEligibility)),
+             (.structureConflict, .conflict(reason: .structure)):
+            true
+        default:
+            false
+        }
+    }
+
+    private static func resolutionMatches(
+        type: ReviewType,
+        proposal: ReviewProposal,
+        resolution: ReviewResolution?
+    ) -> Bool {
+        guard let resolution else { return true }
+        if case .dismiss = resolution { return true }
+
+        switch (type, resolution) {
+        case (.duplicateSuggestion, .keepBoth):
+            return true
+        case (.pendingExpansion, .acceptExpansion),
+             (.pendingExpansion, .rejectExpansion):
+            if case .generatedBlock = proposal { return true }
+            return false
+        case (.lowConfidence, .route),
+             (.lowConfidence, .create),
+             (.lowConfidence, .keepInbox),
+             (.revisionConflict, .route),
+             (.revisionConflict, .create),
+             (.revisionConflict, .keepInbox),
+             (.failedJob, .route),
+             (.failedJob, .create),
+             (.failedJob, .keepInbox),
+             (.structureConflict, .route),
+             (.structureConflict, .create),
+             (.structureConflict, .keepInbox):
+            return true
+        default:
+            return false
+        }
+    }
 }
 public struct ReviewItemListQuery: Equatable, Sendable {
     public let state: ReviewState; public let cursor: String?; public let limit: Int
@@ -152,7 +308,17 @@ public struct ReviewItemListQuery: Equatable, Sendable {
     }
 }
 public struct ListReviewItemsResponse: Codable, Equatable, Sendable {
-    public let items: [ReviewItem]; public let pageInfo: PageInfo
+    public let items: [ReviewItem]
+    public let pageInfo: PageInfo
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case items, pageInfo }
+
+    public init(from decoder: Decoder) throws {
+        try StrictJSONKey.requireExactKeys(CodingKeys.allCases.map(\.rawValue), from: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        items = try container.decode([ReviewItem].self, forKey: .items)
+        pageInfo = try container.decode(PageInfo.self, forKey: .pageInfo)
+    }
 }
 
 public typealias ReviewItemDto = ReviewItem

@@ -6,14 +6,14 @@ set local search_path = public, extensions;
 -- Complete the synthetic second-user graph inside this transaction so every
 -- user-owned table has an owned row and a cross-user row to probe.
 insert into public.user_provider_keys (
-  id, user_id, provider, key_ciphertext, key_last4, created_at, updated_at
+  id, user_id, provider, vault_secret_id, key_last4, created_at, updated_at
 )
 values
   (
     'key_70000000000000000000000001',
     '11111111-1111-4111-8111-111111111111',
     'openai',
-    'synthetic-ciphertext-a',
+    '70000000-0000-4000-8000-000000000001',
     '0001',
     '2026-08-30 22:00:00+00',
     '2026-08-30 22:00:00+00'
@@ -22,7 +22,7 @@ values
     'key_70000000000000000000000009',
     '22222222-2222-4222-8222-222222222222',
     'openai',
-    'synthetic-ciphertext-b',
+    '70000000-0000-4000-8000-000000000009',
     '0009',
     '2026-08-30 22:00:00+00',
     '2026-08-30 22:00:00+00'
@@ -252,7 +252,7 @@ values
 
 insert into public.feedback_events (
   id, user_id, decision_id, action, old_destination_note_id,
-  new_destination_note_id, reason_code, created_at
+  new_destination_note_id, reason_code, idempotency_key, created_at
 )
 values
   (
@@ -263,6 +263,7 @@ values
     null,
     'note_00000000000000000000000001',
     'visibility_fixture',
+    'visibility-feedback-owned',
     '2026-08-30 22:08:00+00'
   ),
   (
@@ -273,6 +274,7 @@ values
     null,
     'note_00000000000000000000000009',
     'visibility_fixture',
+    'visibility-feedback-other',
     '2026-08-30 22:08:00+00'
   );
 

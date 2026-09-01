@@ -2,6 +2,7 @@ import {
   ApiErrorCode,
   NoteStructuredDataSchema,
   ReviewItemDtoSchema,
+  ReviewProposalSchema,
   type EntityId,
   type NoteStructuredData,
   type ReviewItemDto
@@ -224,14 +225,41 @@ export function mapRevision(value: unknown): RevisionRecord {
 
 export function mapReviewItem(value: unknown): ReviewItemDto {
   const row = asObject(value);
+  const type = field(row, "type");
+  const explicitProposal = field(row, "proposal");
+  const legacyChoices = field(row, "choices");
+  const state = field(row, "state");
+  const resolution = field(row, "resolution") ?? null;
+  const duplicate = ReviewProposalSchema.safeParse({
+    type: "duplicate_notes",
+    notes: Array.isArray(legacyChoices) ? legacyChoices : []
+  });
+  const legacyProposal =
+    type === "revision_conflict"
+      ? { type: "conflict", reason: "revision" }
+      : type === "structure_conflict"
+        ? { type: "conflict", reason: "structure" }
+        : type === "pending_expansion"
+          ? { type: "conflict", reason: "consent_controls" }
+          : type === "duplicate_suggestion" && duplicate.success
+            ? duplicate.data
+            : undefined;
+  const proposal = explicitProposal === undefined ? legacyProposal : explicitProposal;
+  if (explicitProposal === undefined && (state !== "open" || resolution !== null)) {
+    throw new HttpError(
+      503,
+      ApiErrorCode.PROVIDER_UNAVAILABLE,
+      "The data service returned an invalid legacy review item."
+    );
+  }
   const parsed = ReviewItemDtoSchema.safeParse({
     id: field(row, "id"),
     captureId: field(row, "captureId", "capture_id") ?? null,
     noteId: field(row, "noteId", "note_id") ?? null,
-    type: field(row, "type"),
-    choices: field(row, "choices"),
-    state: field(row, "state"),
-    resolution: field(row, "resolution") ?? null,
+    type,
+    proposal,
+    state,
+    resolution,
     createdAt: field(row, "createdAt", "created_at"),
     resolvedAt: field(row, "resolvedAt", "resolved_at") ?? null
   });

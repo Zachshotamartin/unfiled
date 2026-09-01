@@ -685,7 +685,7 @@ final class AppModel: ObservableObject {
         do {
             let result = try await runtime.authenticatedAPI.undoMutation(
                 id,
-                request: .init(
+                request: try .init(
                     expectedRevision: expectedRevision,
                     idempotencyKey: UUID().uuidString.lowercased()
                 )
