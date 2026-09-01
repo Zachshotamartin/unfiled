@@ -9,14 +9,17 @@ import {
   type ReviewResolveRequest,
   type ReviewResolveResponse
 } from "@unfiled/contracts";
+import { RoutingRuleCapacityError } from "@unfiled/ai-routing/routing-rules";
 import { DomainError } from "@unfiled/domain";
-import { EncryptedAggregateError } from "@unfiled/encrypted-aggregate";
+import { CapturePayloadSchema, EncryptedAggregateError } from "@unfiled/encrypted-aggregate";
 
 import { HttpError } from "@/server/api/errors";
 import {
   EncryptedOwnerInteractionCoordinator,
   type EncryptedOwnerInteractionCoordinatorDependencies
 } from "@/server/owner-interactions/encrypted-owner-interaction-coordinator";
+import { EncryptedRoutingRuleCoordinator } from "@/server/routing-rules/encrypted-routing-rule-coordinator";
+import { EncryptedRoutingRuleReader } from "@/server/routing-rules/encrypted-routing-rule-reader";
 import type {
   OwnerInteractionRepository,
   OwnerInteractionRepositoryContext
@@ -30,6 +33,12 @@ import {
   createEncryptedOwnerInteractionRpcAdapter,
   encryptedOwnerInteractionRpcFunctions
 } from "./encrypted-owner-interaction-rpc-adapter";
+import { createEncryptedCaptureRpcAdapter } from "./encrypted-capture-rpc-adapter";
+import { createEncryptedLibraryRpcStore } from "./encrypted-library-rpc-store";
+import {
+  createEncryptedRoutingRuleRpcAdapter,
+  encryptedRoutingRuleRpcFunctions
+} from "./encrypted-routing-rule-rpc-adapter";
 import {
   mappedEncryptedAggregateHttpError,
   mappedServiceRpcHttpError
@@ -47,11 +56,15 @@ const OWNER_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const MAX_ACCESS_TOKEN_LENGTH = 16_384;
 const MAX_OPERATION_SCOPE_MS = 60_000;
+const ROUTING_RULE_OBSERVATION_RESPONSE_MARGIN_MS = 5_000;
 
 /** Exact service-role capability set for one owner-interaction request. */
 export const managedEncryptedOwnerInteractionRpcFunctions = Object.freeze([
   ...encryptedAggregateRuntimeRpcFunctions,
-  ...encryptedOwnerInteractionRpcFunctions
+  ...encryptedOwnerInteractionRpcFunctions,
+  "get_encrypted_capture_detail",
+  "list_encrypted_library_objects",
+  ...encryptedRoutingRuleRpcFunctions
 ] as const);
 
 export type ManagedEncryptedOwnerInteractionRepositoryOptions = Readonly<{
@@ -62,6 +75,7 @@ export type ManagedEncryptedOwnerInteractionRepositoryOptions = Readonly<{
 
 type ScopedSignal = Readonly<{
   close(): void;
+  routingRuleObservationDeadlineAt: number;
   signal: AbortSignal;
 }>;
 
@@ -132,11 +146,14 @@ function authenticatedOwner(context: OwnerInteractionRepositoryContext): string 
 function scopedSignal(parent: AbortSignal | undefined): ScopedSignal {
   const controller = new AbortController();
   const abort = () => controller.abort();
+  const startedAt = Date.now();
   const timeout = setTimeout(abort, MAX_OPERATION_SCOPE_MS);
   if (parent?.aborted === true) abort();
   else parent?.addEventListener("abort", abort, { once: true });
   let closed = false;
   return Object.freeze({
+    routingRuleObservationDeadlineAt:
+      startedAt + MAX_OPERATION_SCOPE_MS - ROUTING_RULE_OBSERVATION_RESPONSE_MARGIN_MS,
     signal: controller.signal,
     close() {
       if (closed) return;
@@ -205,12 +222,61 @@ export class ManagedEncryptedOwnerInteractionRepository implements OwnerInteract
           ownerId,
           { signal: scope.signal },
           async ({ access, createPreparedService, service }) => {
+            const captureAdapter = createEncryptedCaptureRpcAdapter(client);
+            const routingRuleReader = new EncryptedRoutingRuleReader({
+              ownerId,
+              access,
+              aggregate: service,
+              store: createEncryptedLibraryRpcStore(client),
+              signal: scope.signal
+            });
+            const routingRuleCoordinator = new EncryptedRoutingRuleCoordinator({
+              ownerId,
+              access,
+              aggregate: service,
+              createPreparedService,
+              adapter: createEncryptedRoutingRuleRpcAdapter(client),
+              reader: routingRuleReader,
+              signal: scope.signal
+            });
             const dependencies: EncryptedOwnerInteractionCoordinatorDependencies = {
               ownerId,
               access,
               aggregate: service,
               createPreparedService,
               adapter: createEncryptedOwnerInteractionRpcAdapter(client),
+              observeRoutingRuleCorrection: async (input) => {
+                let captureText = input.captureText;
+                if (captureText === null) {
+                  const capture = await captureAdapter.getCaptureDetail({
+                    ownerId,
+                    captureId: input.captureId
+                  });
+                  const opened = await service.openCapture(
+                    access,
+                    Object.freeze({
+                      encrypted: capture.contentCipher,
+                      contentMac: capture.contentMac
+                    }),
+                    {
+                      captureId: capture.captureId,
+                      recordVersion: capture.recordVersion,
+                      privacy: capture.privacy
+                    }
+                  );
+                  const parsed = CapturePayloadSchema.safeParse(opened);
+                  if (!parsed.success || parsed.data.rawContent.length !== capture.contentLength) {
+                    throw new ServiceRpcError(ServiceRpcErrorCode.PROVIDER_UNAVAILABLE);
+                  }
+                  captureText = parsed.data.rawContent;
+                }
+                await routingRuleCoordinator.observeCorrection({
+                  feedbackEventId: input.feedbackEventId,
+                  captureText,
+                  destination: input.destination
+                });
+              },
+              routingRuleObservationDeadlineAt: scope.routingRuleObservationDeadlineAt,
               signal: scope.signal
             };
             return use(new EncryptedOwnerInteractionCoordinator(dependencies));
@@ -224,6 +290,13 @@ export class ManagedEncryptedOwnerInteractionRepository implements OwnerInteract
         throw mappedEncryptedAggregateHttpError(error);
       }
       if (error instanceof DomainError) throw domainErrorToHttpError(error);
+      if (error instanceof RoutingRuleCapacityError) {
+        throw new HttpError(
+          429,
+          ApiErrorCode.RATE_LIMITED,
+          "This account has reached its routing-rule limit."
+        );
+      }
       throw error;
     } finally {
       scope.close();

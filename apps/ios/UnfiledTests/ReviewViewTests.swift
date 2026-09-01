@@ -417,6 +417,7 @@ final class ReviewViewTests: XCTestCase {
             spaceID: nil,
             currentRevision: 2,
             isOpen: isOpen,
+            privacy: .aiAssisted,
             archived: archived,
             deleted: deleted,
             pinned: false

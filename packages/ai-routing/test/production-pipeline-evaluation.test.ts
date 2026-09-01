@@ -186,6 +186,12 @@ describe("production-component-seam deterministic routing evaluation", () => {
       "structuredData",
       "title"
     ]);
+    expect(plannerInput.controls).toEqual({
+      expansionDisabled: true,
+      explicitDestinationNoteId: null,
+      ruleMatch: null
+    });
+    expect(plannerInput.capture.controls).toBe(plannerInput.controls);
     const serializedPlannerInput = JSON.stringify(plannerInput);
     for (const forbidden of [
       "expected",

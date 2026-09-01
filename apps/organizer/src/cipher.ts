@@ -46,7 +46,8 @@ import type {
 } from "./drain.js";
 import { OrganizerUnavailableError } from "./errors.js";
 import { custodianForOrganizerAuthority, type OrganizerKeyAuthority } from "./key-management.js";
-import type { DecryptedCandidate } from "./planner.js";
+import { organizerLocalDate } from "./local-date.js";
+import { sameOrganizerCaptureControls, type DecryptedCandidate } from "./planner.js";
 
 const CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const INDEXABLE_HEADING = /^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/u;
@@ -389,26 +390,6 @@ function currentNote(
   }
 }
 
-function localDate(occurredAt: string, timezone: string): string | null {
-  try {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      day: "2-digit",
-      month: "2-digit",
-      timeZone: timezone,
-      year: "numeric"
-    }).formatToParts(new Date(occurredAt));
-    const values = new Map(parts.map(({ type, value }) => [type, value]));
-    const year = values.get("year");
-    const month = values.get("month");
-    const day = values.get("day");
-    return year === undefined || month === undefined || day === undefined
-      ? null
-      : `${year}-${month}-${day}`;
-  } catch {
-    return null;
-  }
-}
-
 function emptyStructuredData(type: EncryptedCandidate["noteType"]): JsonValue {
   if (type === "list") return { items: [], schemaVersion: 1 };
   if (type === "log") return { entries: [], schemaVersion: 1 };
@@ -422,7 +403,7 @@ function dailyDate(
 ): string | null {
   if (input.destination !== null) return input.destination.encrypted.dailyDate;
   if (applied.note.type !== "list" && applied.note.type !== "log") return null;
-  return localDate(input.job.occurredAt, input.job.clientTimezone);
+  return organizerLocalDate(input.job.occurredAt, input.job.clientTimezone);
 }
 
 function publicNoteState(
@@ -697,10 +678,8 @@ function assertPreparationBinding(input: Parameters<OrganizerCipher["sealCommand
     stableIds.decisionId !== preparation.ids.decisionId ||
     stableIds.decisionId !== plan.decisionId ||
     stableIds.generatedBlockId !== (plan.generatedBlock?.blockId ?? null) ||
-    input.controls.expansionDisabled !== input.capture.controls.expansionDisabled ||
-    input.controls.explicitDestinationNoteId !== input.capture.controls.explicitDestinationNoteId ||
-    input.controls.expansionDisabled !== input.job.controls.expansionDisabled ||
-    input.controls.explicitDestinationNoteId !== input.job.controls.explicitDestinationNoteId
+    !sameOrganizerCaptureControls(input.controls, input.capture.controls) ||
+    !sameOrganizerCaptureControls(input.controls, input.job.controls)
   ) {
     unavailable();
   }

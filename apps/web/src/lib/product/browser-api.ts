@@ -1,6 +1,10 @@
 "use client";
 
-import { ApiClientError, createApiClient } from "@unfiled/api-client";
+import {
+  ApiClientError,
+  ApiClientMalformedResponseError,
+  createApiClient
+} from "@unfiled/api-client";
 
 import { ProductApiError } from "./client";
 
@@ -26,4 +30,24 @@ export function isStaleRevision(reason: unknown): boolean {
     (reason instanceof ApiClientError && reason.error.code === "stale_revision") ||
     (reason instanceof ProductApiError && reason.body.code === "stale_revision")
   );
+}
+
+export function isAmbiguousProductMutationFailure(reason: unknown): boolean {
+  if (reason instanceof TypeError || reason instanceof ApiClientMalformedResponseError) return true;
+  if (reason instanceof ApiClientError) {
+    return (
+      reason.status >= 500 ||
+      reason.error.code === "offline" ||
+      reason.error.code === "provider_unavailable"
+    );
+  }
+  if (reason instanceof ProductApiError) {
+    return (
+      reason.status === 0 ||
+      reason.status >= 500 ||
+      reason.body.code === "offline" ||
+      reason.body.code === "provider_unavailable"
+    );
+  }
+  return false;
 }

@@ -704,7 +704,7 @@ final class InteractionContractTests: XCTestCase {
 
     func testRoutingAndGeneratedBlockModelsFailClosed() throws {
         let decoder = APIJSON.makeDecoder()
-        let rule = #"{"id":"rule_00000000000000000000000000","revision":1,"enabled":true,"ruleType":"prefix","condition":"gym:","destination":{"type":"note","noteId":"note_00000000000000000000000000"},"priority":10,"normalizedCondition":"gym:","aliases":[],"source":"explicit","lastFiredAt":null,"createdAt":"2026-09-01T12:00:00Z","updatedAt":"2026-09-01T12:00:00Z"}"#
+        let rule = #"{"id":"rule_00000000000000000000000000","revision":1,"enabled":true,"ruleType":"prefix","condition":"gym:","destination":{"type":"note","noteId":"note_00000000000000000000000000"},"priority":10,"normalizedCondition":"gym","aliases":[],"source":"explicit","proposalState":null,"destinationStatus":"active","lastFiredAt":null,"createdAt":"2026-09-01T12:00:00Z","updatedAt":"2026-09-01T12:00:00Z"}"#
         XCTAssertNoThrow(try decoder.decode(RoutingRule.self, from: Data(rule.utf8)))
         XCTAssertThrowsError(
             try decoder.decode(
@@ -830,7 +830,7 @@ final class InteractionContractTests: XCTestCase {
         XCTAssertEqual(resolved.block.state, .accepted)
     }
 
-    private static let routingRuleJSON = #"{"id":"rule_00000000000000000000000000","revision":1,"enabled":true,"ruleType":"prefix","condition":"gym:","destination":{"type":"note","noteId":"note_11111111111111111111111111"},"priority":10,"normalizedCondition":"gym:","aliases":[],"source":"explicit","lastFiredAt":null,"createdAt":"2026-09-01T12:00:00Z","updatedAt":"2026-09-01T12:00:00Z"}"#
+    private static let routingRuleJSON = #"{"id":"rule_00000000000000000000000000","revision":1,"enabled":true,"ruleType":"prefix","condition":"gym:","destination":{"type":"note","noteId":"note_11111111111111111111111111"},"priority":10,"normalizedCondition":"gym","aliases":[],"source":"explicit","proposalState":null,"destinationStatus":"active","lastFiredAt":null,"createdAt":"2026-09-01T12:00:00Z","updatedAt":"2026-09-01T12:00:00Z"}"#
 
     private static let correctionResponseJSON = #"{"outcome":"applied","decisionId":"dec_00000000000000000000000000","source":{"noteId":"note_00000000000000000000000000","currentRevision":3,"mutationId":"mut_00000000000000000000000000"},"destination":{"type":"existing_note","noteId":"note_11111111111111111111111111","currentRevision":5,"mutationId":"mut_11111111111111111111111111"},"replayed":false}"#
 

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { manualNoteFixtures } from "@unfiled/contracts";
 
-import { createApiClient } from "../src/index.js";
+import { ApiClientMalformedResponseError, createApiClient } from "../src/index.js";
 
 const NOTE_A = "note_01J6M9Q7G4BMKB33GSG3NJ6D1X";
 const NOTE_B = "note_01J6M9Q7G4BMKB33GSG3NJ6D1Y";
@@ -40,7 +40,108 @@ function requestJsonBody(fetcher: ReturnType<typeof vi.fn<typeof fetch>>, index:
   return JSON.parse(body) as unknown;
 }
 
+function oversizedStreamResponse(status: number, onCancel: () => void): Response {
+  const chunk = new Uint8Array(1024 * 1024);
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      cancel: onCancel,
+      start(controller) {
+        for (let index = 0; index < 9; index += 1) controller.enqueue(chunk);
+      }
+    }),
+    { status }
+  );
+}
+
+async function expectRoutingRuleMutationsToBoundStreamedResponse(status: number): Promise<void> {
+  const fetcher = vi.fn<typeof fetch>();
+  const client = makeClient(fetcher);
+  const mutations = [
+    () =>
+      client.createRoutingRule({
+        idempotencyKey: "rule-create-bound-01",
+        enabled: true,
+        ruleType: "phrase",
+        condition: "groceries",
+        destination: { type: "note", noteId: NOTE_A },
+        priority: 100
+      }),
+    () =>
+      client.updateRoutingRule(RULE_ID, {
+        expectedRevision: 1,
+        idempotencyKey: "rule-update-bound-01",
+        priority: 110
+      }),
+    () =>
+      client.deleteRoutingRule(RULE_ID, {
+        expectedRevision: 2,
+        idempotencyKey: "rule-delete-bound-01"
+      })
+  ];
+
+  for (const mutate of mutations) {
+    const cancellation = vi.fn();
+    fetcher.mockResolvedValueOnce(oversizedStreamResponse(status, cancellation));
+    await expect(mutate()).rejects.toMatchObject({
+      name: "ApiClientMalformedResponseError",
+      status
+    });
+    expect(cancellation).toHaveBeenCalledOnce();
+  }
+}
+
 describe("Milestone E/F API client", () => {
+  it("retries an ambiguous correction with the exact idempotency key and body", async () => {
+    const correctionInput = {
+      idempotencyKey: "correct-observation-retry-01",
+      source: { noteId: NOTE_A, expectedRevision: 4 },
+      destination: { type: "existing_note", noteId: NOTE_B, expectedRevision: 2 }
+    } as const;
+    const correction = {
+      outcome: "applied",
+      decisionId: DECISION_ID,
+      source: { noteId: NOTE_A, currentRevision: 5, mutationId: MUTATION_A },
+      destination: {
+        type: "existing_note",
+        noteId: NOTE_B,
+        currentRevision: 3,
+        mutationId: MUTATION_B
+      },
+      replayed: true
+    } as const;
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            code: "provider_unavailable",
+            message: "Unfiled could not complete that request. Try again.",
+            requestId: "request-observation-retry"
+          },
+          503
+        )
+      )
+      .mockResolvedValueOnce(jsonResponse(correction));
+    const client = makeClient(fetcher);
+
+    await expect(client.correctDecision(DECISION_ID, correctionInput)).rejects.toMatchObject({
+      status: 503,
+      error: {
+        code: "provider_unavailable",
+        requestId: "request-observation-retry"
+      }
+    });
+    await expect(client.correctDecision(DECISION_ID, correctionInput)).resolves.toEqual(correction);
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(requestJsonBody(fetcher, 0)).toEqual(correctionInput);
+    expect(requestJsonBody(fetcher, 1)).toEqual(correctionInput);
+    expect(fetcher.mock.calls.map(([, init]) => init?.headers)).toEqual([
+      expect.objectContaining({ "idempotency-key": correctionInput.idempotencyKey }),
+      expect.objectContaining({ "idempotency-key": correctionInput.idempotencyKey })
+    ]);
+  });
+
   it("sends atomic correction and typed Review resolution requests", async () => {
     const correction = {
       outcome: "applied",
@@ -151,8 +252,10 @@ describe("Milestone E/F API client", () => {
       normalizedCondition: "groceries",
       aliases: [],
       destination: { type: "note", noteId: NOTE_A },
+      destinationStatus: "active",
       priority: 100,
       source: "explicit",
+      proposalState: null,
       lastFiredAt: null,
       createdAt: NOW,
       updatedAt: NOW
@@ -172,7 +275,9 @@ describe("Milestone E/F API client", () => {
     } as const;
     const fetcher = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse({ items: [rule] }))
+      .mockResolvedValueOnce(
+        jsonResponse({ items: [rule], pageInfo: { hasMore: false, nextCursor: null } })
+      )
       .mockResolvedValueOnce(jsonResponse({ rule, replayed: false }, 201))
       .mockResolvedValueOnce(jsonResponse({ rule: { ...rule, revision: 2 }, replayed: false }))
       .mockResolvedValueOnce(jsonResponse({ ruleId: RULE_ID, deleted: true, replayed: false }))
@@ -218,6 +323,103 @@ describe("Milestone E/F API client", () => {
       [`https://example.test/api/v1/generated-blocks/${BLOCK_ID}/resolve`, "POST"]
     ]);
     expect(fetcher.mock.calls.every(([, init]) => init?.cache === "no-store")).toBe(true);
+  });
+
+  it("aggregates every bounded routing-rule page without losing retained rules", async () => {
+    const rule = (index: number) => {
+      const id = `rule_${String(index).padStart(26, "0")}`;
+      return {
+        id,
+        revision: 1,
+        enabled: false,
+        ruleType: "phrase",
+        condition: `rule ${index}`,
+        normalizedCondition: `rule ${index}`,
+        aliases: [],
+        destination: { type: "note", noteId: NOTE_A },
+        destinationStatus: "active",
+        priority: 100,
+        source: "explicit",
+        proposalState: null,
+        lastFiredAt: null,
+        createdAt: NOW,
+        updatedAt: NOW
+      } as const;
+    };
+    const first = Array.from({ length: 50 }, (_, index) => rule(index));
+    const second = [rule(50)];
+    const cursor = first.at(-1)?.id;
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ items: first, pageInfo: { hasMore: true, nextCursor: cursor } })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ items: second, pageInfo: { hasMore: false, nextCursor: null } })
+      );
+
+    const response = await makeClient(fetcher).listAllRoutingRules();
+    expect(response.items).toHaveLength(51);
+    expect(response.items[0]).toEqual(first[0]);
+    expect(response.items[50]).toEqual(second[0]);
+    expect(requestUrl(fetcher.mock.calls[1]?.[0] ?? "")).toBe(
+      `https://example.test/api/v1/routing-rules?cursor=${cursor}`
+    );
+  });
+
+  it("exports a sanitized ambiguous error for malformed successes and error envelopes", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ items: "secret malformed success" }))
+      .mockResolvedValueOnce(
+        new Response("<html>secret gateway body</html>", {
+          headers: { "content-type": "text/html" },
+          status: 503
+        })
+      );
+    const client = makeClient(fetcher);
+
+    for (const expectedStatus of [200, 503]) {
+      try {
+        await client.listRoutingRules();
+        expect.unreachable("Expected malformed response rejection");
+      } catch (error) {
+        expect(error).toBeInstanceOf(ApiClientMalformedResponseError);
+        expect(error).toMatchObject({ status: expectedStatus });
+        expect(String(error)).not.toContain("secret");
+      }
+    }
+  });
+
+  it("cuts off declared and chunked routing pages above the eight-MiB wire bound", async () => {
+    const oversized = 8 * 1024 * 1024 + 1;
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response("{}", { headers: { "content-length": String(oversized) } })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new Uint8Array(oversized));
+              controller.close();
+            }
+          })
+        )
+      );
+    const client = makeClient(fetcher);
+
+    await expect(client.listRoutingRules()).rejects.toBeInstanceOf(ApiClientMalformedResponseError);
+    await expect(client.listRoutingRules()).rejects.toBeInstanceOf(ApiClientMalformedResponseError);
+  });
+
+  it("cuts off streamed routing-rule mutation successes above eight MiB", async () => {
+    await expectRoutingRuleMutationsToBoundStreamedResponse(200);
+  });
+
+  it("cuts off streamed routing-rule mutation errors above eight MiB", async () => {
+    await expectRoutingRuleMutationsToBoundStreamedResponse(500);
   });
 
   it("updates settings and keeps provider secrets out of decoded metadata", async () => {

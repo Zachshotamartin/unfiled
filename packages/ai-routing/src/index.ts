@@ -25,3 +25,4 @@ export * from "./materialization.js";
 export * from "./model.js";
 export * from "./policy.js";
 export * from "./preservation.js";
+export * from "./routing-rules.js";

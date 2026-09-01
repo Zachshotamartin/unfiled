@@ -14,6 +14,7 @@ export const OrganizationDecisionSchema = z.enum([
 export const AllowedReasonCodeSchema = z.enum([
   "explicit_shopping_intent",
   "explicit_destination",
+  "routing_rule_match",
   "open_daily_list",
   "same_day_log",
   "alias_match",
@@ -26,6 +27,27 @@ export const AllowedReasonCodeSchema = z.enum([
   "low_information",
   "parser_override"
 ]);
+
+const RoutingRuleMatchSnapshotFields = {
+  ruleId: entityIdSchema("rule"),
+  ruleRevision: z.number().int().positive(),
+  priority: z.number().int().min(0).max(10_000),
+  matched: z.literal(true)
+} as const;
+
+export const RoutingRuleMatchSnapshotSchema = z.discriminatedUnion("destinationKind", [
+  z.strictObject({
+    ...RoutingRuleMatchSnapshotFields,
+    destinationKind: z.literal("note"),
+    destinationId: entityIdSchema("note")
+  }),
+  z.strictObject({
+    ...RoutingRuleMatchSnapshotFields,
+    destinationKind: z.literal("space"),
+    destinationId: entityIdSchema("spc")
+  })
+]);
+export type RoutingRuleMatchSnapshot = z.infer<typeof RoutingRuleMatchSnapshotSchema>;
 
 export const OrganizationPlanSchema = z.strictObject({
   schemaVersion: z.literal(1),

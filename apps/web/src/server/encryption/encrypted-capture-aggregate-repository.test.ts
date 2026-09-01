@@ -1,3 +1,4 @@
+import { createEntityId, type RoutingRuleMatchSnapshot } from "@unfiled/contracts";
 import type { ContentEnvelopeV1 } from "@unfiled/content-crypto";
 import {
   authorizeAggregateOwner,
@@ -353,7 +354,10 @@ function repository(
     listRevisions: vi.fn(() => Promise.reject(new Error("unexpected_note_read"))),
     getMutation: vi.fn(() => Promise.reject(new Error("unexpected_note_read")))
   },
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  routingRules?: Readonly<{
+    match(captureText: string): Promise<RoutingRuleMatchSnapshot | null>;
+  }>
 ): EncryptedCaptureAggregateRepository {
   return new EncryptedCaptureAggregateRepository({
     ownerId: OWNER,
@@ -361,6 +365,7 @@ function repository(
     aggregate,
     adapter: captureAdapter,
     noteReads,
+    ...(routingRules === undefined ? {} : { routingRules }),
     ...(signal === undefined ? {} : { signal }),
     createJobId: () => JOB,
     now: () => new Date("2026-08-31T18:00:00.123Z")
@@ -448,6 +453,72 @@ describe("encrypted capture aggregate repository", () => {
     });
     expect(aggregate.sealCaptureReceipt).not.toHaveBeenCalled();
     expect(aggregate.openCaptureReceipt).not.toHaveBeenCalled();
+  });
+
+  it("re-evaluates one stale private rule snapshot before atomic capture admission", async () => {
+    const aggregate = aggregateMocks();
+    const snapshot = {
+      ruleId: createEntityId("rule"),
+      ruleRevision: 3,
+      destinationKind: "note" as const,
+      destinationId: NOTE,
+      priority: 900,
+      matched: true as const
+    };
+    const routingRules = {
+      match: vi.fn().mockResolvedValueOnce(snapshot).mockResolvedValueOnce(null)
+    };
+    const createCapture = vi
+      .fn<EncryptedCaptureRpcAdapter["createCapture"]>()
+      .mockRejectedValueOnce(new ServiceRpcError(ServiceRpcErrorCode.ROUTING_RULE_MATCH_STALE))
+      .mockResolvedValueOnce({ captureId: CAPTURE, jobId: JOB, replayed: false });
+
+    await expect(
+      repository(
+        aggregate.aggregate,
+        adapter({ createCapture }),
+        undefined,
+        undefined,
+        routingRules
+      ).createCapture(context, input("ai_assisted"))
+    ).resolves.toMatchObject({ replayed: false, capture: { status: "queued" } });
+
+    expect(routingRules.match).toHaveBeenCalledTimes(2);
+    expect(createCapture).toHaveBeenCalledTimes(2);
+    expect(createCapture.mock.calls[0]?.[0].capture.routingRuleMatch).toEqual(snapshot);
+    expect(createCapture.mock.calls[1]?.[0].capture.routingRuleMatch).toBeNull();
+  });
+
+  it("does not evaluate private-manual or explicit-destination captures", async () => {
+    const aggregate = aggregateMocks();
+    const routingRules = { match: vi.fn() };
+    const createCapture = vi.fn<EncryptedCaptureRpcAdapter["createCapture"]>(() =>
+      Promise.resolve({ captureId: CAPTURE, jobId: JOB, replayed: false })
+    );
+
+    await repository(
+      aggregate.aggregate,
+      adapter({ createCapture }),
+      undefined,
+      undefined,
+      routingRules
+    ).createCapture(context, input("private_manual"));
+    await repository(
+      aggregate.aggregate,
+      adapter({ createCapture }),
+      undefined,
+      undefined,
+      routingRules
+    ).createCapture(context, {
+      ...input("ai_assisted"),
+      clientCaptureId: createEntityId("cap"),
+      explicitDestinationNoteId: NOTE
+    });
+
+    expect(routingRules.match).not.toHaveBeenCalled();
+    expect(
+      createCapture.mock.calls.every(([command]) => command.capture.routingRuleMatch === null)
+    ).toBe(true);
   });
 
   it("recovers an exact lost-response replay before resealing and preserves the stored acceptance time", async () => {

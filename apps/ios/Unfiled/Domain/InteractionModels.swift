@@ -760,6 +760,14 @@ public enum RoutingRuleSource: String, Codable, CaseIterable, Sendable {
     case correctionSuggested = "correction_suggested"
 }
 
+public enum RoutingRuleProposalState: String, Codable, CaseIterable, Sendable {
+    case offered, accepted
+}
+
+public enum RoutingRuleDestinationStatus: String, Codable, CaseIterable, Sendable {
+    case active, archived, deleted, missing
+}
+
 public enum RoutingRuleDestination: Codable, Equatable, Sendable {
     case note(NoteID)
     case space(SpaceID)
@@ -808,13 +816,16 @@ public struct RoutingRule: Codable, Equatable, Sendable {
     public let normalizedCondition: String
     public let aliases: [String]
     public let source: RoutingRuleSource
+    @RequiredNullable public var proposalState: RoutingRuleProposalState?
+    public let destinationStatus: RoutingRuleDestinationStatus
     @RequiredNullable public var lastFiredAt: Date?
     public let createdAt: Date
     public let updatedAt: Date
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case id, revision, enabled, ruleType, condition, destination, priority
-        case normalizedCondition, aliases, source, lastFiredAt, createdAt, updatedAt
+        case normalizedCondition, aliases, source, proposalState, destinationStatus
+        case lastFiredAt, createdAt, updatedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -830,15 +841,29 @@ public struct RoutingRule: Codable, Equatable, Sendable {
         normalizedCondition = try container.decode(String.self, forKey: .normalizedCondition)
         aliases = try container.decode([String].self, forKey: .aliases)
         source = try container.decode(RoutingRuleSource.self, forKey: .source)
+        _proposalState = try container.decode(
+            RequiredNullable<RoutingRuleProposalState>.self,
+            forKey: .proposalState
+        )
+        destinationStatus = try container.decode(
+            RoutingRuleDestinationStatus.self,
+            forKey: .destinationStatus
+        )
         _lastFiredAt = try container.decode(RequiredNullable<Date>.self, forKey: .lastFiredAt)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        let trimmedCondition = RoutingRuleConditionCanonicalizer.trimUnicodeWhitespace(condition)
         guard revision > 0,
-              (1 ... 500).contains(condition.trimmingCharacters(in: .whitespacesAndNewlines).utf16.count),
+              condition.utf16.count <= 500,
+              condition == trimmedCondition,
+              RoutingRuleConditionCanonicalizer.isValidRequestCondition(condition),
+              RoutingRuleConditionCanonicalizer.normalize(condition) == normalizedCondition,
               (1 ... 500).contains(normalizedCondition.utf16.count),
               (0 ... 10_000).contains(priority),
               aliases.count <= 100,
-              aliases.allSatisfy({ (1 ... 200).contains($0.utf16.count) }) else {
+              aliases.allSatisfy({ (1 ... 200).contains($0.utf16.count) }),
+              (source == .explicit) == (proposalState == nil),
+              !(proposalState == .offered && enabled) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .condition,
                 in: container,
@@ -850,14 +875,22 @@ public struct RoutingRule: Codable, Equatable, Sendable {
 
 public struct RoutingRuleListResponse: Codable, Equatable, Sendable {
     public let items: [RoutingRule]
+    public let pageInfo: PageInfo
 
-    private enum CodingKeys: String, CodingKey, CaseIterable { case items }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case items, pageInfo }
 
     public init(from decoder: Decoder) throws {
         try StrictJSONKey.requireExactKeys(CodingKeys.allCases.map(\.rawValue), from: decoder)
         let container = try decoder.container(keyedBy: CodingKeys.self)
         items = try container.decode([RoutingRule].self, forKey: .items)
-        guard items.count <= 10_000 else {
+        pageInfo = try container.decode(PageInfo.self, forKey: .pageInfo)
+        let cursorIsBound = !pageInfo.hasMore || (
+            items.count == 50 && pageInfo.nextCursor == items.last?.id.rawValue
+        )
+        guard items.count <= 50,
+              Set(items.map { $0.id.rawValue }).count == items.count,
+              pageInfo.hasMore == (pageInfo.nextCursor != nil),
+              cursorIsBound else {
             throw DecodingError.dataCorruptedError(
                 forKey: .items,
                 in: container,
@@ -883,14 +916,16 @@ public struct RoutingRuleCreateRequest: Codable, Equatable, Sendable {
         destination: RoutingRuleDestination,
         priority: Int
     ) throws {
-        guard (1 ... 500).contains(condition.trimmingCharacters(in: .whitespacesAndNewlines).utf16.count),
+        let normalizedCondition = RoutingRuleConditionCanonicalizer.trimUnicodeWhitespace(condition)
+        guard IdempotencyKeyContract.isValid(idempotencyKey),
+              RoutingRuleConditionCanonicalizer.isValidRequestCondition(condition),
               (0 ... 10_000).contains(priority) else {
             throw DomainValidationError.invalidValue("Routing rule violates the API contract")
         }
         self.idempotencyKey = idempotencyKey
         self.enabled = enabled
         self.ruleType = ruleType
-        self.condition = condition
+        self.condition = normalizedCondition
         self.destination = destination
         self.priority = priority
     }
@@ -914,9 +949,13 @@ public struct RoutingRuleUpdateRequest: Encodable, Equatable, Sendable {
         destination: RoutingRuleDestination? = nil,
         priority: Int? = nil
     ) throws {
+        let normalizedCondition = condition.map(
+            RoutingRuleConditionCanonicalizer.trimUnicodeWhitespace
+        )
         guard expectedRevision > 0,
+              IdempotencyKeyContract.isValid(idempotencyKey),
               enabled != nil || ruleType != nil || condition != nil || destination != nil || priority != nil,
-              condition.map({ (1 ... 500).contains($0.trimmingCharacters(in: .whitespacesAndNewlines).utf16.count) }) ?? true,
+              condition.map(RoutingRuleConditionCanonicalizer.isValidRequestCondition) ?? true,
               priority.map({ (0 ... 10_000).contains($0) }) ?? true else {
             throw DomainValidationError.invalidValue("Routing-rule update violates the API contract")
         }
@@ -924,7 +963,7 @@ public struct RoutingRuleUpdateRequest: Encodable, Equatable, Sendable {
         self.idempotencyKey = idempotencyKey
         self.enabled = enabled
         self.ruleType = ruleType
-        self.condition = condition
+        self.condition = normalizedCondition
         self.destination = destination
         self.priority = priority
     }

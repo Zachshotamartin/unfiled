@@ -652,7 +652,7 @@ select ok(
       'private.enforce_encrypted_idempotency_namespace()'
     )
   ) and (
-    select count(*) = 4
+    select count(*) = 5
     from pg_catalog.pg_trigger as trigger
     where trigger.tgfoid = to_regprocedure(
         'private.enforce_encrypted_idempotency_namespace()'

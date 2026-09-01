@@ -85,7 +85,8 @@ const RESERVATIONS = Object.freeze({
 });
 const CONTROLS: OrganizerCaptureControls = Object.freeze({
   expansionDisabled: false,
-  explicitDestinationNoteId: null
+  explicitDestinationNoteId: null,
+  ruleMatch: null
 });
 
 function managedKey(
@@ -1207,6 +1208,20 @@ describe("production organizer cipher", () => {
       Object.freeze({
         ...base,
         controls: Object.freeze({ ...CONTROLS, expansionDisabled: true })
+      }),
+      Object.freeze({
+        ...base,
+        controls: Object.freeze({
+          ...CONTROLS,
+          ruleMatch: Object.freeze({
+            destinationId: IDS.candidateNote,
+            destinationKind: "note" as const,
+            matched: true as const,
+            priority: 500,
+            ruleId: "rule_01ARZ3NDEKTSV4RRFFQ69G5FAE" as const,
+            ruleRevision: 2
+          })
+        })
       })
     ];
 

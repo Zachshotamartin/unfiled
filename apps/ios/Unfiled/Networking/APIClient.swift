@@ -22,7 +22,7 @@ public final class APIClient: Sendable {
     public struct Limits: Equatable, Sendable {
         public let requestBodyBytes: Int
         public let responseBodyBytes: Int
-        public init(requestBodyBytes: Int = 1_048_576, responseBodyBytes: Int = 2_097_152) {
+        public init(requestBodyBytes: Int = 1_048_576, responseBodyBytes: Int = 8_388_608) {
             self.requestBodyBytes = requestBodyBytes
             self.responseBodyBytes = responseBodyBytes
         }
@@ -54,10 +54,12 @@ public final class APIClient: Sendable {
 
     func get<Response: Decodable>(_ path: String, query: [URLQueryItem] = [], authenticated: Bool = true,
                                   explicitToken: String? = nil,
+                                  maximumResponseBytes: Int? = nil,
                                   as: Response.Type = Response.self) async throws -> Response {
         let auth: Authentication = explicitToken.map(Authentication.explicit) ?? (authenticated ? .required : .none)
         return try await send("GET", path: path, query: query, body: Optional<NoBody>.none,
-                              authentication: auth, response: Response.self)
+                              authentication: auth, maximumResponseBytes: maximumResponseBytes,
+                              response: Response.self)
     }
 
     func authenticatedArchiveStream(_ path: String) async throws -> AsyncThrowingStream<Data, any Error> {
@@ -139,7 +141,8 @@ public final class APIClient: Sendable {
 
     private func send<Response: Decodable, Body: Encodable>(
         _ method: String, path: String, query: [URLQueryItem] = [], body: Body?,
-        idempotencyKey: String? = nil, authentication: Authentication, response: Response.Type
+        idempotencyKey: String? = nil, authentication: Authentication,
+        maximumResponseBytes: Int? = nil, response: Response.Type
     ) async throws -> Response {
         let firstCredential: AccessTokenCredential?
         let firstToken: String?
@@ -161,7 +164,8 @@ public final class APIClient: Sendable {
         }
 
         let first = try await perform(method, path: path, query: query, body: body,
-                                      idempotencyKey: idempotencyKey, token: firstToken)
+                                      idempotencyKey: idempotencyKey, token: firstToken,
+                                      maximumResponseBytes: maximumResponseBytes)
         if first.http.statusCode == 401, case .required = authentication, let tokenProvider,
            let rejectedCredential = firstCredential {
             let refreshed: AccessTokenCredential
@@ -176,14 +180,16 @@ public final class APIClient: Sendable {
                 throw APIClientError.authenticationRequired
             }
             let retry = try await perform(method, path: path, query: query, body: body,
-                                          idempotencyKey: idempotencyKey, token: refreshed.token)
+                                          idempotencyKey: idempotencyKey, token: refreshed.token,
+                                          maximumResponseBytes: maximumResponseBytes)
             return try decode(retry.data, response: retry.http, as: Response.self)
         }
         return try decode(first.data, response: first.http, as: Response.self)
     }
 
     private func perform<Body: Encodable>(_ method: String, path: String, query: [URLQueryItem],
-                                           body: Body?, idempotencyKey: String?, token: String?) async throws
+                                           body: Body?, idempotencyKey: String?, token: String?,
+                                           maximumResponseBytes: Int?) async throws
         -> (data: Data, http: HTTPURLResponse) {
         guard !path.contains(".."), var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             throw APIClientError.invalidRequest
@@ -215,7 +221,9 @@ public final class APIClient: Sendable {
             request.httpBody = encoded
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
-        do { return try await transport.data(for: request, maxResponseBytes: limits.responseBodyBytes) }
+        let responseLimit = min(maximumResponseBytes ?? limits.responseBodyBytes, limits.responseBodyBytes)
+        guard responseLimit > 0 else { throw APIClientError.invalidRequest }
+        do { return try await transport.data(for: request, maxResponseBytes: responseLimit) }
         catch let error as APIClientError { throw error }
         catch { throw APIClientError.transportFailure }
     }

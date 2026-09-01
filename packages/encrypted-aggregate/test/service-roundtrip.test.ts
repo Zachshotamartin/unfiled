@@ -397,9 +397,9 @@ describe("encrypted aggregate round trips", () => {
 
     const routingPayload = {
       schemaVersion: 1 as const,
-      condition: "starts with shop:",
-      normalizedCondition: "shop:",
-      aliases: ["groceries"]
+      condition: "\uFEFFstarts with shop\uFEFF",
+      normalizedCondition: "\uFEFFstarts with shop\uFEFF",
+      aliases: ["\uFEFFgroceries\uFEFF"]
     };
     const routing = await harness.service.sealRoutingRule(harness.accessA, {
       ruleId: IDS.rule,

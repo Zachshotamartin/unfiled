@@ -12,6 +12,7 @@ enum PresentationMapping {
             spaceID: value.spaceId?.rawValue,
             currentRevision: value.currentRevision,
             isOpen: value.isOpen,
+            privacy: value.privacy,
             archived: value.archivedAt != nil,
             deleted: value.deletedAt != nil,
             pinned: value.pinnedAt != nil
@@ -29,6 +30,7 @@ enum PresentationMapping {
             spaceID: value.spaceId?.rawValue,
             currentRevision: value.currentRevision,
             isOpen: value.isOpen,
+            privacy: value.privacy,
             archived: value.archivedAt != nil,
             deleted: value.deletedAt != nil,
             pinned: value.pinnedAt != nil

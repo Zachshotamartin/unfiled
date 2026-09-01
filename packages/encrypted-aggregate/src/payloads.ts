@@ -171,9 +171,9 @@ export type ReviewPayload = z.infer<typeof ReviewPayloadSchema>;
 
 export const RoutingRulePayloadSchema = z.strictObject({
   schemaVersion: z.literal(1),
-  condition: z.string().trim().min(1).max(500),
-  normalizedCondition: z.string().trim().min(1).max(500),
-  aliases: z.array(z.string().trim().min(1).max(200)).max(100)
+  condition: z.string().min(1).max(500),
+  normalizedCondition: z.string().min(1).max(500),
+  aliases: z.array(z.string().min(1).max(200)).max(100)
 });
 export type RoutingRulePayload = z.infer<typeof RoutingRulePayloadSchema>;
 

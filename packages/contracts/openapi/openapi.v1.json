@@ -3027,8 +3027,18 @@
     "/routing-rules": {
       "get": {
         "operationId": "listRoutingRules",
-        "summary": "List visible personal routing rules",
+        "summary": "List visible explicit, offered, and accepted personal routing rules",
+        "description": "Returns a fixed page of at most 50 rules and at most 8 MiB. Follow pageInfo.nextCursor until hasMore is false.",
         "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "The last routing-rule ID returned by the previous fixed 50-item page.",
+            "schema": { "type": "string", "pattern": "^rule_[0-9A-HJKMNP-TV-Z]{26}$" }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Personal routing rules",
@@ -3086,7 +3096,7 @@
               }
             }
           },
-          "404": {
+          "429": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
@@ -3104,7 +3114,25 @@
               }
             }
           },
-          "409": {
+          "500": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "503": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
@@ -3207,6 +3235,24 @@
               }
             }
           },
+          "403": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
           "404": {
             "description": "Stable API error",
             "content": {
@@ -3242,6 +3288,78 @@
                 "schema": { "type": "string", "const": "no-cache" }
               }
             }
+          },
+          "413": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "429": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "500": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "503": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
           }
         }
       }
@@ -3249,7 +3367,7 @@
     "/routing-rules/{routingRuleId}": {
       "patch": {
         "operationId": "updateRoutingRule",
-        "summary": "Update a personal routing rule",
+        "summary": "Update a personal routing rule or confirm an offered learned rule",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -3336,6 +3454,24 @@
               }
             }
           },
+          "403": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
           "404": {
             "description": "Stable API error",
             "content": {
@@ -3371,12 +3507,84 @@
                 "schema": { "type": "string", "const": "no-cache" }
               }
             }
+          },
+          "413": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "429": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "500": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "503": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
           }
         }
       },
       "delete": {
         "operationId": "deleteRoutingRule",
-        "summary": "Delete a personal routing rule",
+        "summary": "Delete a personal routing rule or decline an offered learned rule",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -3463,6 +3671,24 @@
               }
             }
           },
+          "403": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
           "404": {
             "description": "Stable API error",
             "content": {
@@ -3482,6 +3708,78 @@
             }
           },
           "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "413": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "429": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "500": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "503": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
@@ -9776,6 +10074,7 @@
                           "enum": [
                             "explicit_shopping_intent",
                             "explicit_destination",
+                            "routing_rule_match",
                             "open_daily_list",
                             "same_day_log",
                             "alias_match",
@@ -10176,6 +10475,7 @@
                       "enum": [
                         "explicit_shopping_intent",
                         "explicit_destination",
+                        "routing_rule_match",
                         "open_daily_list",
                         "same_day_log",
                         "alias_match",
@@ -10632,6 +10932,7 @@
                                 "enum": [
                                   "explicit_shopping_intent",
                                   "explicit_destination",
+                                  "routing_rule_match",
                                   "open_daily_list",
                                   "same_day_log",
                                   "alias_match",
@@ -11215,6 +11516,7 @@
                               "enum": [
                                 "explicit_shopping_intent",
                                 "explicit_destination",
+                                "routing_rule_match",
                                 "open_daily_list",
                                 "same_day_log",
                                 "alias_match",
@@ -11453,7 +11755,9 @@
             "type": "string",
             "enum": ["prefix", "phrase", "alias", "destination_mention"]
           },
-          "condition": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "condition": {
+            "description": "After NFKC normalization, Unicode lowercase, Unicode White_Space collapsing, trimming, and trailing Unicode punctuation removal, the condition must contain 1 to 500 UTF-16 code units."
+          },
           "destination": {
             "oneOf": [
               {
@@ -11484,6 +11788,13 @@
             "items": { "type": "string", "minLength": 1, "maxLength": 200 }
           },
           "source": { "type": "string", "enum": ["explicit", "correction_suggested"] },
+          "proposalState": {
+            "anyOf": [{ "type": "string", "enum": ["offered", "accepted"] }, { "type": "null" }]
+          },
+          "destinationStatus": {
+            "type": "string",
+            "enum": ["active", "archived", "deleted", "missing"]
+          },
           "lastFiredAt": {
             "anyOf": [
               {
@@ -11516,17 +11827,50 @@
           "normalizedCondition",
           "aliases",
           "source",
+          "proposalState",
+          "destinationStatus",
           "lastFiredAt",
           "createdAt",
           "updatedAt"
         ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": { "properties": { "source": { "const": "explicit" } }, "required": ["source"] },
+            "then": { "properties": { "proposalState": { "type": "null" } } }
+          },
+          {
+            "if": {
+              "properties": { "source": { "const": "correction_suggested" } },
+              "required": ["source"]
+            },
+            "then": {
+              "properties": {
+                "proposalState": { "type": "string", "enum": ["offered", "accepted"] }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": { "proposalState": { "const": "offered" } },
+              "required": ["proposalState"]
+            },
+            "then": { "properties": { "enabled": { "const": false } } }
+          }
+        ]
+      },
+      "RoutingRuleListQuery": {
+        "type": "object",
+        "properties": {
+          "cursor": { "type": "string", "pattern": "^rule_[0-9A-HJKMNP-TV-Z]{26}$" }
+        },
         "additionalProperties": false
       },
       "RoutingRuleListResponse": {
         "type": "object",
         "properties": {
           "items": {
-            "maxItems": 10000,
+            "maxItems": 50,
             "type": "array",
             "items": {
               "type": "object",
@@ -11542,7 +11886,7 @@
                   "type": "string",
                   "enum": ["prefix", "phrase", "alias", "destination_mention"]
                 },
-                "condition": { "type": "string", "minLength": 1, "maxLength": 500 },
+                "condition": {},
                 "destination": {
                   "oneOf": [
                     {
@@ -11573,6 +11917,16 @@
                   "items": { "type": "string", "minLength": 1, "maxLength": 200 }
                 },
                 "source": { "type": "string", "enum": ["explicit", "correction_suggested"] },
+                "proposalState": {
+                  "anyOf": [
+                    { "type": "string", "enum": ["offered", "accepted"] },
+                    { "type": "null" }
+                  ]
+                },
+                "destinationStatus": {
+                  "type": "string",
+                  "enum": ["active", "archived", "deleted", "missing"]
+                },
                 "lastFiredAt": {
                   "anyOf": [
                     {
@@ -11605,15 +11959,31 @@
                 "normalizedCondition",
                 "aliases",
                 "source",
+                "proposalState",
+                "destinationStatus",
                 "lastFiredAt",
                 "createdAt",
                 "updatedAt"
               ],
               "additionalProperties": false
             }
+          },
+          "pageInfo": {
+            "type": "object",
+            "properties": {
+              "hasMore": { "type": "boolean" },
+              "nextCursor": {
+                "anyOf": [
+                  { "type": "string", "minLength": 1, "maxLength": 512 },
+                  { "type": "null" }
+                ]
+              }
+            },
+            "required": ["hasMore", "nextCursor"],
+            "additionalProperties": false
           }
         },
-        "required": ["items"],
+        "required": ["items", "pageInfo"],
         "additionalProperties": false
       },
       "RoutingRuleCreateRequest": {
@@ -11630,7 +12000,9 @@
             "type": "string",
             "enum": ["prefix", "phrase", "alias", "destination_mention"]
           },
-          "condition": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "condition": {
+            "description": "After NFKC normalization, Unicode lowercase, Unicode White_Space collapsing, trimming, and trailing Unicode punctuation removal, the condition must contain 1 to 500 UTF-16 code units."
+          },
           "destination": {
             "oneOf": [
               {
@@ -11684,7 +12056,9 @@
             "type": "string",
             "enum": ["prefix", "phrase", "alias", "destination_mention"]
           },
-          "condition": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "condition": {
+            "description": "After NFKC normalization, Unicode lowercase, Unicode White_Space collapsing, trimming, and trailing Unicode punctuation removal, the condition must contain 1 to 500 UTF-16 code units."
+          },
           "destination": {
             "oneOf": [
               {
@@ -11710,7 +12084,14 @@
           "priority": { "type": "integer", "minimum": 0, "maximum": 10000 }
         },
         "required": ["expectedRevision", "idempotencyKey"],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "anyOf": [
+          { "required": ["enabled"] },
+          { "required": ["ruleType"] },
+          { "required": ["condition"] },
+          { "required": ["destination"] },
+          { "required": ["priority"] }
+        ]
       },
       "RoutingRuleDeleteRequest": {
         "type": "object",
@@ -11743,7 +12124,7 @@
                 "type": "string",
                 "enum": ["prefix", "phrase", "alias", "destination_mention"]
               },
-              "condition": { "type": "string", "minLength": 1, "maxLength": 500 },
+              "condition": {},
               "destination": {
                 "oneOf": [
                   {
@@ -11774,6 +12155,13 @@
                 "items": { "type": "string", "minLength": 1, "maxLength": 200 }
               },
               "source": { "type": "string", "enum": ["explicit", "correction_suggested"] },
+              "proposalState": {
+                "anyOf": [{ "type": "string", "enum": ["offered", "accepted"] }, { "type": "null" }]
+              },
+              "destinationStatus": {
+                "type": "string",
+                "enum": ["active", "archived", "deleted", "missing"]
+              },
               "lastFiredAt": {
                 "anyOf": [
                   {
@@ -11806,6 +12194,8 @@
               "normalizedCondition",
               "aliases",
               "source",
+              "proposalState",
+              "destinationStatus",
               "lastFiredAt",
               "createdAt",
               "updatedAt"
@@ -11826,6 +12216,58 @@
         },
         "required": ["ruleId", "deleted", "replayed"],
         "additionalProperties": false
+      },
+      "RoutingRuleMatchSnapshot": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "ruleId": { "type": "string", "pattern": "^rule_[0-9A-HJKMNP-TV-Z]{26}$" },
+              "ruleRevision": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "priority": { "type": "integer", "minimum": 0, "maximum": 10000 },
+              "matched": { "type": "boolean", "const": true },
+              "destinationKind": { "type": "string", "const": "note" },
+              "destinationId": { "type": "string", "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$" }
+            },
+            "required": [
+              "ruleId",
+              "ruleRevision",
+              "priority",
+              "matched",
+              "destinationKind",
+              "destinationId"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "ruleId": { "type": "string", "pattern": "^rule_[0-9A-HJKMNP-TV-Z]{26}$" },
+              "ruleRevision": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "priority": { "type": "integer", "minimum": 0, "maximum": 10000 },
+              "matched": { "type": "boolean", "const": true },
+              "destinationKind": { "type": "string", "const": "space" },
+              "destinationId": { "type": "string", "pattern": "^spc_[0-9A-HJKMNP-TV-Z]{26}$" }
+            },
+            "required": [
+              "ruleId",
+              "ruleRevision",
+              "priority",
+              "matched",
+              "destinationKind",
+              "destinationId"
+            ],
+            "additionalProperties": false
+          }
+        ]
       },
       "GeneratedBlockDto": {
         "type": "object",

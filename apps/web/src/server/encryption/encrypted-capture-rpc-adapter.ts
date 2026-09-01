@@ -6,6 +6,7 @@ import {
   NoteStructuredDataSchema,
   NoteTypeSchema,
   PrivacyModeSchema,
+  RoutingRuleMatchSnapshotSchema,
   UserOperationSchema,
   entityIdSchema,
   parseEntityId,
@@ -13,7 +14,8 @@ import {
   type CaptureProcessingState,
   type CaptureSource,
   type EntityId,
-  type PrivacyMode
+  type PrivacyMode,
+  type RoutingRuleMatchSnapshot
 } from "@unfiled/contracts";
 import { parseContentEnvelope, serializeContentEnvelope } from "@unfiled/content-crypto";
 import { stickyKeyClass } from "@unfiled/encrypted-aggregate";
@@ -153,6 +155,7 @@ const CREATE_CAPTURE_KEYS = [
   "clientTimezone",
   "privacy",
   "explicitDestinationNoteId",
+  "routingRuleMatch",
   "expansionDisabled",
   "privateReceiptCipher",
   "privateReceiptVerificationMac"
@@ -355,6 +358,7 @@ export type CreateEncryptedCaptureCommand = Readonly<{
     clientTimezone: string;
     privacy: PrivacyMode;
     explicitDestinationNoteId: EntityId<"note"> | null;
+    routingRuleMatch: RoutingRuleMatchSnapshot | null;
     expansionDisabled: boolean;
     privateReceiptCipher: EncryptedFieldRpcValue<"capture_receipt"> | null;
     privateReceiptVerificationMac: KeyedMacRpcValue | null;
@@ -969,6 +973,24 @@ function parseCreateCommand(input: CreateEncryptedCaptureCommand): CreateEncrypt
     inputFailure
   );
   const contentMac = parseMacForRpc(row.contentMac, parsedPrivacy, inputFailure);
+  const explicitDestinationNoteId = nullableEntityId(
+    row.explicitDestinationNoteId,
+    "note",
+    inputFailure
+  );
+  const parsedRoutingRuleMatch =
+    row.routingRuleMatch === null
+      ? null
+      : RoutingRuleMatchSnapshotSchema.safeParse(row.routingRuleMatch);
+  if (
+    parsedRoutingRuleMatch !== null &&
+    (!parsedRoutingRuleMatch.success ||
+      parsedPrivacy !== "ai_assisted" ||
+      explicitDestinationNoteId !== null)
+  ) {
+    return inputFailure();
+  }
+  const routingRuleMatch = parsedRoutingRuleMatch === null ? null : parsedRoutingRuleMatch.data;
   let receiptCipher: EncryptedFieldRpcValue<"capture_receipt"> | null = null;
   let receiptMac: KeyedMacRpcValue | null = null;
   if (parsedPrivacy === "private_manual") {
@@ -1002,11 +1024,8 @@ function parseCreateCommand(input: CreateEncryptedCaptureCommand): CreateEncrypt
       clientCreatedAt: timestamp(row.clientCreatedAt, inputFailure),
       clientTimezone: timezone,
       privacy: parsedPrivacy,
-      explicitDestinationNoteId: nullableEntityId(
-        row.explicitDestinationNoteId,
-        "note",
-        inputFailure
-      ),
+      explicitDestinationNoteId,
+      routingRuleMatch,
       expansionDisabled: row.expansionDisabled,
       privateReceiptCipher: receiptCipher,
       privateReceiptVerificationMac: receiptMac

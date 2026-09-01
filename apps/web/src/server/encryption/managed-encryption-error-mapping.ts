@@ -55,6 +55,21 @@ const SERVICE_RPC_HTTP_MAPPING = {
     code: ApiErrorCode.RATE_LIMITED,
     message: "Try again later."
   },
+  [ServiceRpcErrorCode.ROUTING_RULE_DESTINATION_INVALID]: {
+    status: 400,
+    code: ApiErrorCode.VALIDATION_FAILED,
+    message: "Choose an active destination and try again."
+  },
+  [ServiceRpcErrorCode.ROUTING_RULE_MATCH_STALE]: {
+    status: 503,
+    code: ApiErrorCode.PROVIDER_UNAVAILABLE,
+    message: "Encrypted storage could not complete that action. Try again."
+  },
+  [ServiceRpcErrorCode.ROUTING_RULE_OBSERVATION_STALE]: {
+    status: 503,
+    code: ApiErrorCode.PROVIDER_UNAVAILABLE,
+    message: "Encrypted storage could not complete that action. Try again."
+  },
   [ServiceRpcErrorCode.STALE_MAINTENANCE_CURSOR]: {
     status: 503,
     code: ApiErrorCode.PROVIDER_UNAVAILABLE,
@@ -146,7 +161,7 @@ function httpError(mapping: HttpMapping): HttpError {
 
 export function mappedServiceRpcHttpError(
   error: ServiceRpcError,
-  subject: "capture" | "note"
+  subject: "capture" | "note" | "routing rule"
 ): HttpError {
   if (error.code === ServiceRpcErrorCode.STALE_REVISION) {
     return new HttpError(

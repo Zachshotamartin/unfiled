@@ -1,8 +1,30 @@
-import type { EntityId, NoteDto, NoteRevisionDto, NoteType, PrivacyMode } from "@unfiled/contracts";
+import type {
+  EntityId,
+  NoteDto,
+  NoteRevisionDto,
+  NoteType,
+  PrivacyMode,
+  RoutingRuleType
+} from "@unfiled/contracts";
 
 export type SessionUser = Readonly<{
   email: string;
   id: string;
+}>;
+
+export type RoutingRuleDraft = Readonly<{
+  condition: string;
+  destinationId: string;
+  destinationKind: "note" | "space";
+  enabled: boolean;
+  priority: string;
+  ruleType: RoutingRuleType;
+}>;
+
+export type RoutingRuleDraftErrors = Readonly<{
+  condition?: string;
+  destinationId?: string;
+  priority?: string;
 }>;
 
 export type SpaceRecord = Readonly<{

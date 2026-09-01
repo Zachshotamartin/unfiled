@@ -65,6 +65,14 @@ final class AppModel: ObservableObject {
         let epoch: UInt64
     }
 
+    private enum RoutingRuleAttempt: Sendable {
+        case create(RoutingRuleFormDraft, RoutingRuleCreateRequest)
+        case save(RoutingRuleFormDraft, RoutingRuleUpdateRequest)
+        case toggle(revision: Int, enabled: Bool, request: RoutingRuleUpdateRequest)
+        case accept(revision: Int, request: RoutingRuleUpdateRequest)
+        case remove(revision: Int, request: RoutingRuleDeleteRequest)
+    }
+
     @Published private(set) var phase: AppPhase = .booting
     @Published var authStep: AuthStep = .email
     @Published private(set) var currentUser: AuthUser?
@@ -74,6 +82,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var receipts: [ReceiptPresentation] = []
     @Published private(set) var captureDetails: [String: ReceiptPresentation] = [:]
     @Published private(set) var reviewItems: [ReviewPresentation] = []
+    @Published private(set) var routingRules: [RoutingRule] = []
     @Published private(set) var searchResults: [SearchResultPresentation] = []
     @Published private(set) var archiveNotes: [NotePresentation] = []
     @Published private(set) var deletedNotes: [NotePresentation] = []
@@ -84,6 +93,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var isLoadingReview = false
     @Published private(set) var searchError: String?
     @Published private(set) var reviewError: String?
+    @Published private(set) var isLoadingRoutingRules = false
+    @Published private(set) var hasLoadedRoutingRules = false
+    @Published private(set) var routingRulesError: String?
+    @Published private(set) var routingRuleSubmittingIDs: Set<String> = []
     @Published private(set) var captureDetailLoadingIDs: Set<String> = []
     @Published private(set) var captureDetailErrors: [String: String] = [:]
     @Published private(set) var submittingInteractionIDs: Set<String> = []
@@ -104,10 +117,13 @@ final class AppModel: ObservableObject {
     private var reviewCapturesByID: [String: CaptureDetail] = [:]
     private var captureDetailEpochs: [String: UInt64] = [:]
     private var reviewItemsByID: [String: ReviewItem] = [:]
+    private var routingRuleCollection = RoutingRuleCollection()
+    private var routingRulesEpoch: UInt64 = 0
     private var reviewQueueGeneration = ReviewQueueGeneration()
     private var correctionAttempts: [String: DecisionCorrectionRequest] = [:]
     private var reviewAttempts: [String: ReviewResolveRequest] = [:]
     private var undoAttempts: [String: MutationUndoRequest] = [:]
+    private var routingRuleAttempts: [String: RoutingRuleAttempt] = [:]
     private var didBootstrap = false
     private var accountEpoch: UInt64 = 0
     private var refreshEpoch: UInt64 = 0
@@ -637,6 +653,382 @@ final class AppModel: ObservableObject {
         navigationPath = []
         selectedTab = .review
         requestedReviewFocusID = reviewID
+    }
+
+    func loadRoutingRules() async {
+        guard let runtime, let user = currentUser else { return }
+        let context = currentAccountContext(for: user)
+        routingRulesEpoch &+= 1
+        let operationEpoch = routingRulesEpoch
+        isLoadingRoutingRules = true
+        routingRulesError = nil
+        defer {
+            if isCurrent(context), routingRulesEpoch == operationEpoch {
+                isLoadingRoutingRules = false
+                hasLoadedRoutingRules = true
+            }
+        }
+        do {
+            let items = try await Self.fetchAllRoutingRules(api: runtime.authenticatedAPI)
+            guard isCurrent(context), routingRulesEpoch == operationEpoch else { return }
+            routingRuleCollection.replace(with: items)
+            routingRules = routingRuleCollection.items
+        } catch {
+            guard isCurrent(context), routingRulesEpoch == operationEpoch else { return }
+            routingRulesError = Self.routingRuleFailureMessage(error, action: .load)
+        }
+    }
+
+    func saveRoutingRule(_ draft: RoutingRuleFormDraft) async -> Bool {
+        guard let runtime, let user = currentUser else { return false }
+        let context = currentAccountContext(for: user)
+        let operationID = draft.existingRuleID?.rawValue ?? "new"
+        guard routingRuleSubmittingIDs.insert(operationID).inserted else { return false }
+        routingRulesError = nil
+        defer {
+            if isCurrent(context) { routingRuleSubmittingIDs.remove(operationID) }
+        }
+        var reconcilingReplay = false
+        do {
+            let response: RoutingRuleMutationResponse
+            if let ruleID = draft.existingRuleID {
+                response = try await runtime.authenticatedAPI.updateRoutingRule(
+                    ruleID,
+                    request: try routingRuleSaveRequest(
+                        for: draft,
+                        operationID: operationID
+                    )
+                )
+            } else {
+                response = try await runtime.authenticatedAPI.createRoutingRule(
+                    try routingRuleCreateRequest(
+                        for: draft,
+                        operationID: operationID
+                    )
+                )
+            }
+            if response.replayed {
+                reconcilingReplay = true
+                let items = try await Self.fetchAllRoutingRules(api: runtime.authenticatedAPI)
+                guard isCurrent(context) else { return false }
+                routingRuleAttempts.removeValue(forKey: operationID)
+                applyRoutingRuleSnapshot(items)
+                return true
+            }
+            if draft.existingRuleID != nil {
+                guard let ruleID = draft.existingRuleID,
+                      let expectedRevision = draft.expectedRevision,
+                      response.rule.id == ruleID,
+                      response.rule.revision > expectedRevision,
+                      response.rule.source == draft.source,
+                      response.rule.proposalState == draft.proposalState else {
+                    throw APIClientError.malformedResponse(status: 200)
+                }
+            } else {
+                guard response.rule.source == .explicit,
+                      response.rule.proposalState == nil else {
+                    throw APIClientError.malformedResponse(status: 200)
+                }
+            }
+            guard isCurrent(context) else { return false }
+            routingRuleAttempts.removeValue(forKey: operationID)
+            applyRoutingRuleMutation(response.rule)
+            return true
+        } catch {
+            guard isCurrent(context) else { return false }
+            if Self.isStaleRoutingRuleFailure(error) {
+                try? await refreshRoutingRuleSnapshot(api: runtime.authenticatedAPI, context: context)
+            }
+            if !reconcilingReplay, !Self.isAmbiguousInteractionFailure(error) {
+                routingRuleAttempts.removeValue(forKey: operationID)
+            }
+            routingRulesError = Self.routingRuleFailureMessage(error, action: .save)
+            return false
+        }
+    }
+
+    func setRoutingRuleEnabled(ruleID: String, enabled: Bool) async {
+        guard let runtime,
+              let user = currentUser,
+              let id = RuleID(rawValue: ruleID),
+              let current = routingRules.first(where: { $0.id == id }),
+              current.proposalState != .offered,
+              !enabled || current.destinationStatus == .active,
+              routingRuleSubmittingIDs.insert(ruleID).inserted else { return }
+        let context = currentAccountContext(for: user)
+        routingRulesError = nil
+        defer {
+            if isCurrent(context) { routingRuleSubmittingIDs.remove(ruleID) }
+        }
+        var reconcilingReplay = false
+        do {
+            let request = try routingRuleToggleRequest(
+                current: current,
+                enabled: enabled,
+                operationID: ruleID
+            )
+            let response = try await runtime.authenticatedAPI.updateRoutingRule(
+                id,
+                request: request
+            )
+            if response.replayed {
+                reconcilingReplay = true
+                let items = try await Self.fetchAllRoutingRules(api: runtime.authenticatedAPI)
+                guard isCurrent(context) else { return }
+                routingRuleAttempts.removeValue(forKey: ruleID)
+                applyRoutingRuleSnapshot(items)
+                return
+            }
+            guard isCurrent(context),
+                  response.rule.id == id,
+                  response.rule.revision > current.revision,
+                  response.rule.enabled == enabled,
+                  response.rule.source == current.source,
+                  response.rule.proposalState == current.proposalState else {
+                throw APIClientError.malformedResponse(status: 200)
+            }
+            routingRuleAttempts.removeValue(forKey: ruleID)
+            applyRoutingRuleMutation(response.rule)
+        } catch {
+            guard isCurrent(context) else { return }
+            if Self.isStaleRoutingRuleFailure(error) {
+                try? await refreshRoutingRuleSnapshot(api: runtime.authenticatedAPI, context: context)
+            }
+            if !reconcilingReplay, !Self.isAmbiguousInteractionFailure(error) {
+                routingRuleAttempts.removeValue(forKey: ruleID)
+            }
+            routingRulesError = Self.routingRuleFailureMessage(error, action: .toggle)
+        }
+    }
+
+    func acceptRoutingRuleProposal(ruleID: String) async {
+        guard let runtime,
+              let user = currentUser,
+              let id = RuleID(rawValue: ruleID),
+              let current = routingRules.first(where: { $0.id == id }),
+              current.proposalState == .offered,
+              current.destinationStatus == .active,
+              routingRuleSubmittingIDs.insert(ruleID).inserted else { return }
+        let context = currentAccountContext(for: user)
+        routingRulesError = nil
+        defer {
+            if isCurrent(context) { routingRuleSubmittingIDs.remove(ruleID) }
+        }
+        var reconcilingReplay = false
+        do {
+            let request = try routingRuleAcceptRequest(
+                current: current,
+                operationID: ruleID
+            )
+            let response = try await runtime.authenticatedAPI.updateRoutingRule(
+                id,
+                request: request
+            )
+            if response.replayed {
+                reconcilingReplay = true
+                let items = try await Self.fetchAllRoutingRules(api: runtime.authenticatedAPI)
+                guard isCurrent(context) else { return }
+                routingRuleAttempts.removeValue(forKey: ruleID)
+                applyRoutingRuleSnapshot(items)
+                return
+            }
+            guard isCurrent(context),
+                  response.rule.id == id,
+                  response.rule.revision > current.revision,
+                  response.rule.source == .correctionSuggested,
+                  response.rule.proposalState == .accepted,
+                  response.rule.enabled else {
+                throw APIClientError.malformedResponse(status: 200)
+            }
+            routingRuleAttempts.removeValue(forKey: ruleID)
+            applyRoutingRuleMutation(response.rule)
+        } catch {
+            guard isCurrent(context) else { return }
+            if Self.isStaleRoutingRuleFailure(error) {
+                try? await refreshRoutingRuleSnapshot(api: runtime.authenticatedAPI, context: context)
+            }
+            if !reconcilingReplay, !Self.isAmbiguousInteractionFailure(error) {
+                routingRuleAttempts.removeValue(forKey: ruleID)
+            }
+            routingRulesError = Self.routingRuleFailureMessage(error, action: .accept)
+        }
+    }
+
+    func removeRoutingRule(ruleID: String) async {
+        guard let runtime,
+              let user = currentUser,
+              let id = RuleID(rawValue: ruleID),
+              let current = routingRules.first(where: { $0.id == id }),
+              routingRuleSubmittingIDs.insert(ruleID).inserted else { return }
+        let context = currentAccountContext(for: user)
+        routingRulesError = nil
+        defer {
+            if isCurrent(context) { routingRuleSubmittingIDs.remove(ruleID) }
+        }
+        var reconcilingReplay = false
+        do {
+            let response = try await runtime.authenticatedAPI.deleteRoutingRule(
+                id,
+                request: routingRuleRemovalRequest(
+                    current: current,
+                    operationID: ruleID
+                )
+            )
+            guard isCurrent(context), response.ruleId == id, response.deleted else {
+                throw APIClientError.malformedResponse(status: 200)
+            }
+            if response.replayed {
+                reconcilingReplay = true
+                let items = try await Self.fetchAllRoutingRules(api: runtime.authenticatedAPI)
+                guard isCurrent(context) else { return }
+                routingRuleAttempts.removeValue(forKey: ruleID)
+                applyRoutingRuleSnapshot(items)
+                return
+            }
+            routingRuleAttempts.removeValue(forKey: ruleID)
+            applyRoutingRuleRemoval(id)
+        } catch {
+            guard isCurrent(context) else { return }
+            if Self.isStaleRoutingRuleFailure(error) {
+                try? await refreshRoutingRuleSnapshot(api: runtime.authenticatedAPI, context: context)
+            }
+            if !reconcilingReplay, !Self.isAmbiguousInteractionFailure(error) {
+                routingRuleAttempts.removeValue(forKey: ruleID)
+            }
+            routingRulesError = Self.routingRuleFailureMessage(
+                error,
+                action: current.proposalState == .offered ? .decline : .delete
+            )
+        }
+    }
+
+    func isSubmittingRoutingRule(_ ruleID: String) -> Bool {
+        routingRuleSubmittingIDs.contains(ruleID)
+    }
+
+    private func applyRoutingRuleMutation(_ rule: RoutingRule) {
+        routingRulesEpoch &+= 1
+        isLoadingRoutingRules = false
+        hasLoadedRoutingRules = true
+        routingRuleCollection.upsert(rule)
+        routingRules = routingRuleCollection.items
+    }
+
+    private func applyRoutingRuleSnapshot(_ items: [RoutingRule]) {
+        routingRulesEpoch &+= 1
+        isLoadingRoutingRules = false
+        hasLoadedRoutingRules = true
+        routingRuleCollection.replace(with: items)
+        routingRules = routingRuleCollection.items
+    }
+
+    private func refreshRoutingRuleSnapshot(api: APIClient, context: AccountContext) async throws {
+        let items = try await Self.fetchAllRoutingRules(api: api)
+        guard isCurrent(context) else { return }
+        applyRoutingRuleSnapshot(items)
+    }
+
+    private func applyRoutingRuleRemoval(_ ruleID: RuleID) {
+        routingRulesEpoch &+= 1
+        isLoadingRoutingRules = false
+        hasLoadedRoutingRules = true
+        routingRuleCollection.remove(ruleID: ruleID)
+        routingRules = routingRuleCollection.items
+    }
+
+    private func routingRuleCreateRequest(
+        for draft: RoutingRuleFormDraft,
+        operationID: String
+    ) throws -> RoutingRuleCreateRequest {
+        if case let .create(previousDraft, request) = routingRuleAttempts[operationID],
+           previousDraft == draft {
+            return request
+        }
+        let request = try draft.createRequest(
+            idempotencyKey: UUID().uuidString.lowercased()
+        )
+        routingRuleAttempts[operationID] = .create(draft, request)
+        return request
+    }
+
+    private func routingRuleSaveRequest(
+        for draft: RoutingRuleFormDraft,
+        operationID: String
+    ) throws -> RoutingRuleUpdateRequest {
+        if case let .save(previousDraft, request) = routingRuleAttempts[operationID],
+           previousDraft == draft {
+            return request
+        }
+        let request = try draft.updateRequest(
+            idempotencyKey: UUID().uuidString.lowercased(),
+            expectedRevision: draft.existingRuleID.flatMap { ruleID in
+                routingRules.first(where: { $0.id == ruleID })?.revision
+            }
+        )
+        routingRuleAttempts[operationID] = .save(draft, request)
+        return request
+    }
+
+    private func routingRuleToggleRequest(
+        current: RoutingRule,
+        enabled: Bool,
+        operationID: String
+    ) throws -> RoutingRuleUpdateRequest {
+        if case let .toggle(revision, previousEnabled, request) = routingRuleAttempts[operationID],
+           revision == current.revision,
+           previousEnabled == enabled {
+            return request
+        }
+        let request = try RoutingRuleUpdateRequest(
+            expectedRevision: current.revision,
+            idempotencyKey: UUID().uuidString.lowercased(),
+            enabled: enabled
+        )
+        routingRuleAttempts[operationID] = .toggle(
+            revision: current.revision,
+            enabled: enabled,
+            request: request
+        )
+        return request
+    }
+
+    private func routingRuleAcceptRequest(
+        current: RoutingRule,
+        operationID: String
+    ) throws -> RoutingRuleUpdateRequest {
+        if case let .accept(revision, request) = routingRuleAttempts[operationID],
+           revision == current.revision {
+            return request
+        }
+        let request = try RoutingRuleUpdateRequest(
+            expectedRevision: current.revision,
+            idempotencyKey: UUID().uuidString.lowercased(),
+            enabled: true
+        )
+        routingRuleAttempts[operationID] = .accept(
+            revision: current.revision,
+            request: request
+        )
+        return request
+    }
+
+    private func routingRuleRemovalRequest(
+        current: RoutingRule,
+        operationID: String
+    ) -> RoutingRuleDeleteRequest {
+        if case let .remove(revision, request) = routingRuleAttempts[operationID],
+           revision == current.revision {
+            return request
+        }
+        let request = RoutingRuleDeleteRequest(
+            expectedRevision: current.revision,
+            idempotencyKey: UUID().uuidString.lowercased()
+        )
+        routingRuleAttempts[operationID] = .remove(
+            revision: current.revision,
+            request: request
+        )
+        return request
     }
 
     func presentCorrection(
@@ -1710,6 +2102,11 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private static func isStaleRoutingRuleFailure(_ error: Error) -> Bool {
+        guard case let APIClientError.http(_, code, _, _) = error else { return false }
+        return code == .staleRevision
+    }
+
     private nonisolated static func shouldFocusReviewAfterUndo(for error: Error) -> Bool {
         guard case let APIClientError.http(status, code, _, _) = error else { return false }
         return shouldFocusReviewAfterUndo(status: status, code: code)
@@ -1783,6 +2180,41 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private enum RoutingRuleAction {
+        case load, save, toggle, accept, decline, delete
+    }
+
+    private static func routingRuleFailureMessage(
+        _ error: Error,
+        action: RoutingRuleAction
+    ) -> String {
+        if let apiError = error as? APIClientError {
+            switch apiError {
+            case .transportFailure,
+                 .http(status: _, code: .offline, requestId: _, retryAfterSeconds: _):
+                return action == .load
+                    ? "You’re offline. Reconnect to load routing rules securely."
+                    : "You’re offline. Nothing changed; reconnect and try again."
+            case .http(status: _, code: .staleRevision, requestId: _, retryAfterSeconds: _):
+                return "That rule changed on another device. Refresh before trying again."
+            case .http(status: 429, code: _, requestId: _, retryAfterSeconds: _):
+                return "Too many rule changes at once. Wait a moment and try again."
+            case .http(status: 503, code: _, requestId: _, retryAfterSeconds: _):
+                return "Protected rule storage is temporarily unavailable. Try again shortly."
+            default:
+                break
+            }
+        }
+        return switch action {
+        case .load: "Routing rules could not be loaded. Pull down to try again."
+        case .save: "That routing rule was not saved. Review it and try again."
+        case .toggle: "That rule’s status did not change. Refresh and try again."
+        case .accept: "That suggestion was not activated. Refresh and try again."
+        case .decline: "That suggestion was not declined. Refresh and try again."
+        case .delete: "That routing rule was not deleted. Refresh and try again."
+        }
+    }
+
     private func loadNoteSubset(
         archive: ArchiveFilter,
         deleted: DeletedFilter
@@ -1850,6 +2282,7 @@ final class AppModel: ObservableObject {
         receipts = []
         captureDetails = [:]
         reviewItems = []
+        routingRules = []
         searchResults = []
         archiveNotes = []
         deletedNotes = []
@@ -1863,10 +2296,13 @@ final class AppModel: ObservableObject {
         reviewCapturesByID = [:]
         captureDetailEpochs = [:]
         reviewItemsByID = [:]
+        routingRuleCollection = RoutingRuleCollection()
+        routingRulesEpoch &+= 1
         reviewQueueGeneration.invalidate()
         correctionAttempts = [:]
         reviewAttempts = [:]
         undoAttempts = [:]
+        routingRuleAttempts = [:]
         navigationPath = []
         captureSheet = nil
         editorSheet = nil
@@ -1877,6 +2313,10 @@ final class AppModel: ObservableObject {
         isSearching = false
         searchError = nil
         reviewError = nil
+        isLoadingRoutingRules = false
+        hasLoadedRoutingRules = false
+        routingRulesError = nil
+        routingRuleSubmittingIDs = []
         captureDetailLoadingIDs = []
         captureDetailErrors = [:]
         submittingInteractionIDs = []
@@ -2108,6 +2548,27 @@ final class AppModel: ObservableObject {
         for _ in 0 ..< 200 {
             let page = try await api.listReviewItems(.init(cursor: cursor, limit: 100))
             try identities.accept(page.items.map { $0.id.rawValue })
+            items.append(contentsOf: page.items)
+            guard let next = try validatedNextCursor(page.pageInfo, seen: &seen) else {
+                return items
+            }
+            cursor = next
+        }
+        throw PaginationError.pageLimitExceeded
+    }
+
+    private nonisolated static func fetchAllRoutingRules(api: APIClient) async throws
+        -> [RoutingRule] {
+        var items: [RoutingRule] = []
+        var cursor: String?
+        var seen = Set<String>()
+        var identities = PaginationIdentityValidator()
+        for _ in 0 ..< 20 {
+            let page = try await api.listRoutingRules(after: cursor)
+            try identities.accept(page.items.map { $0.id.rawValue })
+            guard items.count <= 1_000 - page.items.count else {
+                throw PaginationError.pageLimitExceeded
+            }
             items.append(contentsOf: page.items)
             guard let next = try validatedNextCursor(page.pageInfo, seen: &seen) else {
                 return items

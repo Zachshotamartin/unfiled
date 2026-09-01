@@ -2,6 +2,7 @@ import {
   ModelOperationSchema,
   NoteTypeSchema,
   OrganizationPlanSchema,
+  RoutingRuleMatchSnapshotSchema,
   entityIdSchema,
   type ModelOperation,
   type NoteType,
@@ -22,6 +23,9 @@ export const OrganizerCandidateManifestItemSchema = z.strictObject({
   candidateId: entityIdSchema("note"),
   isOpen: z.boolean(),
   noteId: entityIdSchema("note"),
+  // Present on organizer-owned manifests so a matched-space append remains
+  // bound to the frozen space capability. Legacy non-rule callers may omit it.
+  spaceId: entityIdSchema("spc").nullable().optional(),
   revision: z
     .number()
     .int()
@@ -32,7 +36,10 @@ export const OrganizerCandidateManifestItemSchema = z.strictObject({
 
 export const OrganizerCaptureControlsSchema = z.strictObject({
   expansionDisabled: z.boolean(),
-  explicitDestinationNoteId: entityIdSchema("note").nullable()
+  explicitDestinationNoteId: entityIdSchema("note").nullable(),
+  // Missing is normalized to the legacy-safe no-rule state; database-bound
+  // organizer controls require the member explicitly at their trust boundary.
+  ruleMatch: RoutingRuleMatchSnapshotSchema.nullable().default(null)
 });
 
 export const OrganizerCandidateManifestSchema = z
@@ -388,6 +395,40 @@ function assertAuthorizedPlan(plan: OrganizationPlan, manifest: OrganizerCandida
       OrganizationMaterializationErrorCode.UNAUTHORIZED_REFERENCE,
       "Plan does not honor the explicit destination"
     );
+  }
+  const ruleMatch = explicitDestinationNoteId === null ? manifest.controls.ruleMatch : null;
+  if (
+    ruleMatch !== null &&
+    (plan.decision === "append_to_note" || plan.decision === "create_note")
+  ) {
+    if (!plan.reasonCodes.includes("routing_rule_match") || plan.generatedExpansion !== null) {
+      fail(
+        OrganizationMaterializationErrorCode.INCOMPATIBLE_OPERATION,
+        "Plan does not preserve deterministic routing-rule provenance"
+      );
+    }
+    if (
+      ruleMatch.destinationKind === "note" &&
+      (plan.decision !== "append_to_note" ||
+        destinationCandidate?.noteId !== ruleMatch.destinationId)
+    ) {
+      fail(
+        OrganizationMaterializationErrorCode.UNAUTHORIZED_REFERENCE,
+        "Plan does not honor the routing-rule note destination"
+      );
+    }
+    if (
+      ruleMatch.destinationKind === "space" &&
+      (plan.decision === "create_note"
+        ? plan.destination.newNote?.spaceCandidateId !== ruleMatch.destinationId
+        : destinationCandidate?.spaceId !== ruleMatch.destinationId ||
+          !spaces.has(ruleMatch.destinationId))
+    ) {
+      fail(
+        OrganizationMaterializationErrorCode.UNAUTHORIZED_REFERENCE,
+        "Plan does not honor the routing-rule space destination"
+      );
+    }
   }
   if (manifest.controls.expansionDisabled && plan.generatedExpansion !== null) {
     fail(

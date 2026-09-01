@@ -2,10 +2,10 @@
 
 set -euo pipefail
 
-trap 'echo "Milestones B–E1 HTTP E2E failed near line $LINENO." >&2' ERR
+trap 'echo "Milestones B–E2 HTTP E2E failed near line $LINENO." >&2' ERR
 
 if ! command -v psql >/dev/null 2>&1; then
-  echo "The Milestones B–E1 HTTP E2E requires the PostgreSQL psql client." >&2
+  echo "The Milestones B–E2 HTTP E2E requires the PostgreSQL psql client." >&2
   exit 1
 fi
 e2e_psql_version="$(psql --version)"
@@ -16,7 +16,7 @@ case "$e2e_psql_version" in
     exit 1
     ;;
 esac
-printf 'Milestones B–E1 HTTP E2E PostgreSQL client: %s\n' "$e2e_psql_version"
+printf 'Milestones B–E2 HTTP E2E PostgreSQL client: %s\n' "$e2e_psql_version"
 
 e2e_tmp_dir="$(mktemp -d)"
 e2e_app_pid=""
@@ -39,7 +39,7 @@ cleanup() {
       || true
   fi
   if [[ "$exit_code" -ne 0 && -f "$e2e_tmp_dir/web.log" ]]; then
-    printf 'Milestones B–E1 HTTP E2E stopped at stage: %s\n' "$e2e_stage" >&2
+    printf 'Milestones B–E2 HTTP E2E stopped at stage: %s\n' "$e2e_stage" >&2
     # Keep failure diagnostics bounded without ever echoing a plaintext test
     # canary if the application has regressed and logged one.
     tail -n 120 "$e2e_tmp_dir/web.log" | \
@@ -60,6 +60,17 @@ cleanup() {
       E2E_LOG_SOURCE_LATER_D="${e2e_e1_source_later_title_d:-}" \
       E2E_LOG_AI_TARGET_TITLE_D="${e2e_e1_ai_target_title_d:-}" \
       E2E_LOG_AI_TARGET_BODY_D="${e2e_e1_ai_target_body_d:-}" \
+      E2E_LOG_E2_RULE="${e2e_e2_rule_condition:-}" \
+      E2E_LOG_E2_EXPLICIT_DESTINATION="${e2e_e2_destination_title:-}" \
+      E2E_LOG_E2_EXPLICIT_DESTINATION_BODY="${e2e_e2_destination_body:-}" \
+      E2E_LOG_E2_MATCHED="${e2e_e2_matched_capture_canary:-}" \
+      E2E_LOG_E2_PRIVATE="${e2e_e2_private_capture_canary:-}" \
+      E2E_LOG_E2_ACCEPT="${e2e_e2_accept_capture_canary:-}" \
+      E2E_LOG_E2_ACCEPT_CONDITION="${e2e_e2_accept_condition:-}" \
+      E2E_LOG_E2_DECLINE="${e2e_e2_decline_capture_canary:-}" \
+      E2E_LOG_E2_DECLINE_CONDITION="${e2e_e2_decline_condition:-}" \
+      E2E_LOG_E2_ACCEPT_DESTINATION="${e2e_e2_accept_destination_title:-}" \
+      E2E_LOG_E2_DECLINE_DESTINATION="${e2e_e2_decline_destination_title:-}" \
       E2E_LOG_CAPTURE_CANARY="${e2e_capture_canary:-}" \
       E2E_LOG_SEARCH_CANARY="${e2e_private_search_canary:-}" node -e '
         let input = "";
@@ -864,10 +875,13 @@ correct_e1_fixture_decision() {
   local decision_id="$2"
   local source_note_id="$3"
   local destination_note_id="$4"
+  local source_expected_revision="${5:-1}"
+  local destination_expected_revision="${6:-1}"
+  local expected_replayed="${7:-false}"
   local idempotency_key="milestone-e1-$label-correction-$e2e_run_id"
   local body
   local status
-  body="{\"idempotencyKey\":\"$idempotency_key\",\"source\":{\"noteId\":\"$source_note_id\",\"expectedRevision\":1},\"destination\":{\"type\":\"existing_note\",\"noteId\":\"$destination_note_id\",\"expectedRevision\":1}}"
+  body="{\"idempotencyKey\":\"$idempotency_key\",\"source\":{\"noteId\":\"$source_note_id\",\"expectedRevision\":$source_expected_revision},\"destination\":{\"type\":\"existing_note\",\"noteId\":\"$destination_note_id\",\"expectedRevision\":$destination_expected_revision}}"
   status="$({
     curl --silent --show-error \
       --request POST \
@@ -920,20 +934,66 @@ correct_e1_fixture_decision() {
   fi
   assert_private_response_headers "$e2e_tmp_dir/e1-$label-correction.headers"
   E2E_DECISION_ID="$decision_id" E2E_SOURCE_NOTE_ID="$source_note_id" \
-    E2E_DESTINATION_NOTE_ID="$destination_note_id" node -e '
+    E2E_DESTINATION_NOTE_ID="$destination_note_id" \
+    E2E_SOURCE_REVISION="$source_expected_revision" \
+    E2E_DESTINATION_REVISION="$destination_expected_revision" \
+    E2E_EXPECTED_REPLAYED="$expected_replayed" node -e '
       const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
       if (value.outcome !== "applied" || value.decisionId !== process.env.E2E_DECISION_ID) {
         process.exit(1);
       }
-      if (value.source?.noteId !== process.env.E2E_SOURCE_NOTE_ID || value.source?.currentRevision !== 2) {
+      if (value.source?.noteId !== process.env.E2E_SOURCE_NOTE_ID ||
+          value.source?.currentRevision !== Number(process.env.E2E_SOURCE_REVISION) + 1) {
         process.exit(1);
       }
-      if (value.destination?.noteId !== process.env.E2E_DESTINATION_NOTE_ID || value.destination?.currentRevision !== 2) {
+      if (value.destination?.noteId !== process.env.E2E_DESTINATION_NOTE_ID ||
+          value.destination?.currentRevision !== Number(process.env.E2E_DESTINATION_REVISION) + 1) {
         process.exit(1);
       }
-      if (value.replayed !== false) process.exit(1);
+      if (value.replayed !== (process.env.E2E_EXPECTED_REPLAYED === "true")) process.exit(1);
       process.stdout.write(value.source.mutationId + " " + value.destination.mutationId + "\n");
     ' "$e2e_tmp_dir/e1-$label-correction.json"
+}
+
+e2e_correction_observation_count() {
+  local label="$1"
+  local idempotency_key="milestone-e1-$label-correction-$e2e_run_id"
+  psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
+    --no-psqlrc --set=ON_ERROR_STOP=1 --tuples-only --no-align \
+    --set=owner_id="$e2e_encrypted_owner_id" \
+    --set=idempotency_key="$idempotency_key" <<'SQL'
+      select count(*)
+      from public.routing_rule_proposal_observations as observation
+      join public.encrypted_owner_interaction_claims as correction
+        on correction.user_id = observation.user_id
+        and correction.feedback_event_id = observation.feedback_event_id
+      where correction.user_id = :'owner_id'::uuid
+        and correction.idempotency_key = :'idempotency_key';
+SQL
+}
+
+ensure_e2_correction_observed() {
+  local label="$1"
+  local decision_id="$2"
+  local source_note_id="$3"
+  local destination_note_id="$4"
+  local source_expected_revision="${5:-1}"
+  local destination_expected_revision="${6:-1}"
+  local observation_count
+  local replay_attempt
+  for replay_attempt in 1 2 3; do
+    : "$replay_attempt"
+    observation_count="$(e2e_correction_observation_count "$label")"
+    if [[ "$observation_count" == "1" ]]; then
+      return 0
+    fi
+    [[ "$observation_count" == "0" ]]
+    correct_e1_fixture_decision \
+      "$label" "$decision_id" "$source_note_id" "$destination_note_id" \
+      "$source_expected_revision" "$destination_expected_revision" true >/dev/null
+  done
+  observation_count="$(e2e_correction_observation_count "$label")"
+  [[ "$observation_count" == "1" ]]
 }
 
 assert_e1_post_only() {
@@ -2461,6 +2521,799 @@ if grep --fixed-strings --quiet "$e2e_e1_sensitive_title_a" "$e2e_tmp_dir/web.lo
   exit 1
 fi
 
+# E2 exercises the owner-authorized encrypted routing-rule boundary through
+# the built server. Every response is private/no-store, while the database sees
+# only private-manual ciphertext plus content-free matching coordinates.
+e2e_routing_http() {
+  local label="$1"
+  local method="$2"
+  local path="$3"
+  local body="${4:-}"
+  local idempotency_key="${5:-}"
+  local arguments=(
+    --silent
+    --show-error
+    --request "$method"
+    --header "authorization: Bearer $e2e_encrypted_access_token"
+    --dump-header "$e2e_tmp_dir/e2-$label.headers"
+    --output "$e2e_tmp_dir/e2-$label.json"
+    --write-out '%{http_code}'
+  )
+  if [[ -n "$body" ]]; then
+    arguments+=(--header "content-type: application/json" --data "$body")
+  fi
+  if [[ -n "$idempotency_key" ]]; then
+    arguments+=(--header "idempotency-key: $idempotency_key")
+  fi
+  curl "${arguments[@]}" "$e2e_app_url/api/v1$path"
+}
+
+e2e_stage="e2-explicit-destination"
+e2e_e2_condition_suffix="$({
+  E2E_RUN_ID="$e2e_run_id" node -e '
+    const digest = require("node:crypto")
+      .createHash("sha256")
+      .update(process.env.E2E_RUN_ID, "utf8")
+      .digest("hex");
+    process.stdout.write(digest.slice(0, 12));
+  '
+})"
+e2e_e2_rule_condition="e2r-$e2e_e2_condition_suffix"
+e2e_e2_destination_title="E2 explicit route destination $e2e_run_id"
+e2e_e2_destination_body="E2 explicit destination body $e2e_run_id"
+e2e_e2_destination_key="milestone-e2-explicit-destination-$e2e_run_id"
+e2e_e2_destination_response="$({
+  e2e_encrypted_request_json POST /notes \
+    "{\"idempotencyKey\":\"$e2e_e2_destination_key\",\"title\":\"$e2e_e2_destination_title\",\"type\":\"generic\",\"bodyMarkdown\":\"$e2e_e2_destination_body\",\"privacy\":\"ai_assisted\"}" \
+    "$e2e_e2_destination_key"
+})"
+e2e_e2_destination_id="$({
+  printf '%s' "$e2e_e2_destination_response" | E2E_TITLE="$e2e_e2_destination_title" node -e '
+    let input = "";
+    process.stdin.on("data", (chunk) => (input += chunk));
+    process.stdin.on("end", () => {
+      const value = JSON.parse(input);
+      if (value.note?.title !== process.env.E2E_TITLE || value.note?.currentRevision !== 1) {
+        process.exit(1);
+      }
+      process.stdout.write(value.note.id);
+    });
+  '
+})"
+
+e2e_stage="e2-explicit-create"
+e2e_e2_rule_create_key="milestone-e2-rule-create-$e2e_run_id"
+e2e_e2_rule_create_body="{\"idempotencyKey\":\"$e2e_e2_rule_create_key\",\"enabled\":true,\"ruleType\":\"prefix\",\"condition\":\"$e2e_e2_rule_condition\",\"destination\":{\"type\":\"note\",\"noteId\":\"$e2e_e2_destination_id\"},\"priority\":900}"
+e2e_e2_rule_create_status="$({
+  e2e_routing_http explicit-create POST /routing-rules \
+    "$e2e_e2_rule_create_body" "$e2e_e2_rule_create_key"
+})"
+[[ "$e2e_e2_rule_create_status" == "201" ]]
+assert_private_response_headers "$e2e_tmp_dir/e2-explicit-create.headers"
+e2e_e2_rule_id="$({
+  E2E_CONDITION="$e2e_e2_rule_condition" E2E_DESTINATION="$e2e_e2_destination_id" node -e '
+    const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+    const rule = value.rule;
+    if (!/^rule_[0-9A-HJKMNP-TV-Z]{26}$/u.test(rule?.id)) process.exit(1);
+    if (rule.revision !== 1 || rule.enabled !== true || rule.ruleType !== "prefix") process.exit(1);
+    if (rule.condition !== process.env.E2E_CONDITION || rule.aliases?.length !== 0) process.exit(1);
+    if (rule.destination?.type !== "note" || rule.destination.noteId !== process.env.E2E_DESTINATION) {
+      process.exit(1);
+    }
+    if (rule.destinationStatus !== "active" || rule.priority !== 900) process.exit(1);
+    if (rule.source !== "explicit" || rule.proposalState !== null || rule.lastFiredAt !== null) {
+      process.exit(1);
+    }
+    if (value.replayed !== false) process.exit(1);
+    process.stdout.write(rule.id);
+  ' "$e2e_tmp_dir/e2-explicit-create.json"
+})"
+
+e2e_stage="e2-explicit-create-replay"
+e2e_e2_rule_create_replay_status="$({
+  e2e_routing_http explicit-create-replay POST /routing-rules \
+    "$e2e_e2_rule_create_body" "$e2e_e2_rule_create_key"
+})"
+[[ "$e2e_e2_rule_create_replay_status" == "201" ]]
+assert_private_response_headers "$e2e_tmp_dir/e2-explicit-create-replay.headers"
+E2E_RULE_ID="$e2e_e2_rule_id" node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  if (value.rule?.id !== process.env.E2E_RULE_ID || value.rule.revision !== 1 ||
+      value.replayed !== true) {
+    process.exit(1);
+  }
+' "$e2e_tmp_dir/e2-explicit-create-replay.json"
+
+e2e_stage="e2-explicit-list"
+e2e_e2_rule_list_status="$(e2e_routing_http explicit-list GET /routing-rules)"
+[[ "$e2e_e2_rule_list_status" == "200" ]]
+assert_private_response_headers "$e2e_tmp_dir/e2-explicit-list.headers"
+E2E_RULE_ID="$e2e_e2_rule_id" E2E_CONDITION="$e2e_e2_rule_condition" node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  const rule = value.items?.find((item) => item.id === process.env.E2E_RULE_ID);
+  if (rule?.condition !== process.env.E2E_CONDITION || rule.revision !== 1) process.exit(1);
+' "$e2e_tmp_dir/e2-explicit-list.json"
+
+e2e_stage="e2-explicit-update"
+e2e_e2_rule_update_key="milestone-e2-rule-update-$e2e_run_id"
+e2e_e2_rule_update_body="{\"expectedRevision\":1,\"idempotencyKey\":\"$e2e_e2_rule_update_key\",\"priority\":901}"
+e2e_e2_rule_update_status="$({
+  e2e_routing_http explicit-update PATCH "/routing-rules/$e2e_e2_rule_id" \
+    "$e2e_e2_rule_update_body" "$e2e_e2_rule_update_key"
+})"
+[[ "$e2e_e2_rule_update_status" == "200" ]]
+assert_private_response_headers "$e2e_tmp_dir/e2-explicit-update.headers"
+e2e_e2_rule_updated_at="$({
+  E2E_RULE_ID="$e2e_e2_rule_id" E2E_CONDITION="$e2e_e2_rule_condition" node -e '
+    const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+    if (value.rule?.id !== process.env.E2E_RULE_ID || value.rule.revision !== 2) process.exit(1);
+    if (value.rule.priority !== 901 || value.rule.condition !== process.env.E2E_CONDITION) process.exit(1);
+    if (!Number.isFinite(Date.parse(value.rule.updatedAt)) || value.replayed !== false) process.exit(1);
+    process.stdout.write(value.rule.updatedAt);
+  ' "$e2e_tmp_dir/e2-explicit-update.json"
+})"
+
+e2e_stage="e2-explicit-update-replay"
+e2e_e2_rule_update_replay_status="$({
+  e2e_routing_http explicit-update-replay PATCH "/routing-rules/$e2e_e2_rule_id" \
+    "$e2e_e2_rule_update_body" "$e2e_e2_rule_update_key"
+})"
+[[ "$e2e_e2_rule_update_replay_status" == "200" ]]
+assert_private_response_headers "$e2e_tmp_dir/e2-explicit-update-replay.headers"
+E2E_RULE_ID="$e2e_e2_rule_id" node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  if (value.rule?.id !== process.env.E2E_RULE_ID || value.rule.revision !== 2 ||
+      value.replayed !== true) {
+    process.exit(1);
+  }
+' "$e2e_tmp_dir/e2-explicit-update-replay.json"
+
+e2e_stage="e2-explicit-update-idempotency-misuse"
+e2e_e2_rule_update_misuse_status="$({
+  e2e_routing_http explicit-update-misuse PATCH "/routing-rules/$e2e_e2_rule_id" \
+    "{\"expectedRevision\":1,\"idempotencyKey\":\"$e2e_e2_rule_update_key\",\"priority\":902}" \
+    "$e2e_e2_rule_update_key"
+})"
+[[ "$e2e_e2_rule_update_misuse_status" == "409" ]]
+assert_private_response_headers "$e2e_tmp_dir/e2-explicit-update-misuse.headers"
+node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  if (value.code !== "invalid_idempotency_key") process.exit(1);
+' "$e2e_tmp_dir/e2-explicit-update-misuse.json"
+e2e_e2_after_misuse_status="$(e2e_routing_http explicit-after-misuse GET /routing-rules)"
+[[ "$e2e_e2_after_misuse_status" == "200" ]]
+assert_private_response_headers "$e2e_tmp_dir/e2-explicit-after-misuse.headers"
+E2E_RULE_ID="$e2e_e2_rule_id" node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  const rule = value.items?.find((item) => item.id === process.env.E2E_RULE_ID);
+  if (rule?.revision !== 2 || rule.priority !== 901) process.exit(1);
+' "$e2e_tmp_dir/e2-explicit-after-misuse.json"
+
+e2e_stage="e2-explicit-stale"
+e2e_e2_rule_stale_key="milestone-e2-rule-stale-$e2e_run_id"
+e2e_e2_rule_stale_status="$({
+  e2e_routing_http explicit-stale PATCH "/routing-rules/$e2e_e2_rule_id" \
+    "{\"expectedRevision\":1,\"idempotencyKey\":\"$e2e_e2_rule_stale_key\",\"priority\":902}" \
+    "$e2e_e2_rule_stale_key"
+})"
+[[ "$e2e_e2_rule_stale_status" == "409" ]]
+assert_private_response_headers "$e2e_tmp_dir/e2-explicit-stale.headers"
+node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  if (value.code !== "stale_revision") process.exit(1);
+' "$e2e_tmp_dir/e2-explicit-stale.json"
+
+e2e_stage="e2-matched-capture"
+e2e_e2_matched_capture_id="$(e2e_new_entity_id cap)"
+e2e_e2_matched_capture_canary="$e2e_e2_rule_condition: routed capture $e2e_run_id"
+e2e_e2_matched_capture_created_at="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+e2e_e2_matched_capture_body="$({
+  E2E_CAPTURE_ID="$e2e_e2_matched_capture_id" \
+    E2E_CAPTURE_TEXT="$e2e_e2_matched_capture_canary" \
+    E2E_CREATED_AT="$e2e_e2_matched_capture_created_at" node -e '
+      process.stdout.write(JSON.stringify({
+        clientCaptureId: process.env.E2E_CAPTURE_ID,
+        rawContent: process.env.E2E_CAPTURE_TEXT,
+        source: "web",
+        clientCreatedAt: process.env.E2E_CREATED_AT,
+        clientTimezone: "UTC",
+        privacy: "ai_assisted",
+        expansionDisabled: false
+      }));
+    '
+})"
+e2e_e2_matched_capture_response="$({
+  e2e_encrypted_request_json POST /captures "$e2e_e2_matched_capture_body" \
+    "$e2e_e2_matched_capture_id"
+})"
+read -r e2e_e2_matched_job_id e2e_e2_matched_received_at < <(
+  printf '%s' "$e2e_e2_matched_capture_response" | \
+    E2E_CAPTURE_ID="$e2e_e2_matched_capture_id" \
+    E2E_CAPTURE_TEXT="$e2e_e2_matched_capture_canary" node -e '
+      let input = "";
+      process.stdin.on("data", (chunk) => (input += chunk));
+      process.stdin.on("end", () => {
+        const value = JSON.parse(input);
+        if (value.capture?.id !== process.env.E2E_CAPTURE_ID ||
+            value.capture?.rawContent !== process.env.E2E_CAPTURE_TEXT) process.exit(1);
+        if (value.capture.status !== "queued" || value.replayed !== false) process.exit(1);
+        if (!/^job_[0-9A-HJKMNP-TV-Z]{26}$/u.test(value.jobId)) process.exit(1);
+        if (!Number.isFinite(Date.parse(value.capture.receivedAt))) process.exit(1);
+        process.stdout.write(value.jobId + " " + value.capture.receivedAt + "\n");
+      });
+    '
+)
+
+e2e_e2_after_match_status="$(e2e_routing_http after-match GET /routing-rules)"
+[[ "$e2e_e2_after_match_status" == "200" ]]
+assert_private_response_headers "$e2e_tmp_dir/e2-after-match.headers"
+E2E_RULE_ID="$e2e_e2_rule_id" E2E_FIRED_AT="$e2e_e2_matched_received_at" \
+  E2E_UPDATED_AT="$e2e_e2_rule_updated_at" node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  const rule = value.items?.find((item) => item.id === process.env.E2E_RULE_ID);
+  if (rule?.revision !== 2 || rule.priority !== 901) process.exit(1);
+  if (Date.parse(rule.lastFiredAt) !== Date.parse(process.env.E2E_FIRED_AT)) process.exit(1);
+  if (Date.parse(rule.updatedAt) !== Date.parse(process.env.E2E_UPDATED_AT)) process.exit(1);
+' "$e2e_tmp_dir/e2-after-match.json"
+
+e2e_e2_match_attestation="$({
+  psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
+    --no-psqlrc --set=ON_ERROR_STOP=1 --tuples-only --no-align \
+    --set=owner_id="$e2e_encrypted_owner_id" \
+    --set=job_id="$e2e_e2_matched_job_id" \
+    --set=rule_id="$e2e_e2_rule_id" <<'SQL'
+      select jsonb_build_object(
+        'snapshot', private.organization_job_routing_rule_control(
+          :'job_id', :'owner_id'::uuid
+        ),
+        'currentRevision', current_revision,
+        'lastFiredAt', last_fired_at,
+        'updatedAt', updated_at
+      )
+      from public.routing_rules
+      where user_id = :'owner_id'::uuid and id = :'rule_id';
+SQL
+})"
+E2E_RULE_ID="$e2e_e2_rule_id" E2E_DESTINATION_ID="$e2e_e2_destination_id" \
+  E2E_FIRED_AT="$e2e_e2_matched_received_at" E2E_UPDATED_AT="$e2e_e2_rule_updated_at" \
+  E2E_ATTESTATION="$e2e_e2_match_attestation" node -e '
+    const value = JSON.parse(process.env.E2E_ATTESTATION);
+    const expected = {
+      ruleId: process.env.E2E_RULE_ID,
+      ruleRevision: 2,
+      destinationKind: "note",
+      destinationId: process.env.E2E_DESTINATION_ID,
+      priority: 901,
+      matched: true
+    };
+    if (Object.keys(value.snapshot ?? {}).sort().join(",") !== Object.keys(expected).sort().join(",")) {
+      process.exit(1);
+    }
+    for (const [key, expectedValue] of Object.entries(expected)) {
+      if (value.snapshot[key] !== expectedValue) process.exit(1);
+    }
+    if (value.currentRevision !== 2) process.exit(1);
+    if (Date.parse(value.lastFiredAt) !== Date.parse(process.env.E2E_FIRED_AT)) process.exit(1);
+    if (Date.parse(value.updatedAt) !== Date.parse(process.env.E2E_UPDATED_AT)) process.exit(1);
+  '
+
+e2e_stage="e2-private-capture-bypass"
+e2e_e2_private_capture_id="$(e2e_new_entity_id cap)"
+e2e_e2_private_capture_canary="$e2e_e2_rule_condition: private bypass $e2e_run_id"
+e2e_e2_private_capture_created_at="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+e2e_e2_private_capture_body="$({
+  E2E_CAPTURE_ID="$e2e_e2_private_capture_id" \
+    E2E_CAPTURE_TEXT="$e2e_e2_private_capture_canary" \
+    E2E_CREATED_AT="$e2e_e2_private_capture_created_at" node -e '
+      process.stdout.write(JSON.stringify({
+        clientCaptureId: process.env.E2E_CAPTURE_ID,
+        rawContent: process.env.E2E_CAPTURE_TEXT,
+        source: "web",
+        clientCreatedAt: process.env.E2E_CREATED_AT,
+        clientTimezone: "UTC",
+        privacy: "private_manual",
+        expansionDisabled: false
+      }));
+    '
+})"
+e2e_e2_private_capture_response="$({
+  e2e_encrypted_request_json POST /captures "$e2e_e2_private_capture_body" \
+    "$e2e_e2_private_capture_id"
+})"
+e2e_e2_private_job_id="$({
+  printf '%s' "$e2e_e2_private_capture_response" | \
+    E2E_CAPTURE_ID="$e2e_e2_private_capture_id" node -e '
+      let input = "";
+      process.stdin.on("data", (chunk) => (input += chunk));
+      process.stdin.on("end", () => {
+        const value = JSON.parse(input);
+        if (value.capture?.id !== process.env.E2E_CAPTURE_ID ||
+            value.capture?.privacy !== "private_manual") process.exit(1);
+        if (!/^job_[0-9A-HJKMNP-TV-Z]{26}$/u.test(value.jobId) ||
+            value.replayed !== false) process.exit(1);
+        process.stdout.write(value.jobId);
+      });
+    '
+})"
+e2e_e2_private_attestation="$({
+  psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
+    --no-psqlrc --set=ON_ERROR_STOP=1 --tuples-only --no-align \
+    --set=owner_id="$e2e_encrypted_owner_id" \
+    --set=private_capture_id="$e2e_e2_private_capture_id" \
+    --set=private_job_id="$e2e_e2_private_job_id" \
+    --set=rule_id="$e2e_e2_rule_id" <<'SQL'
+      select jsonb_build_object(
+        'captureStatus', (
+          select status from public.captures
+          where user_id = :'owner_id'::uuid and id = :'private_capture_id'
+        ),
+        'jobState', (
+          select state from public.organization_jobs
+          where user_id = :'owner_id'::uuid and id = :'private_job_id'
+        ),
+        'privateSnapshotCount', (
+          select count(*) from public.organization_job_rule_matches
+          where user_id = :'owner_id'::uuid and job_id = :'private_job_id'
+        ),
+        'lastFiredAt', (
+          select last_fired_at from public.routing_rules
+          where user_id = :'owner_id'::uuid and id = :'rule_id'
+        ),
+        'updatedAt', (
+          select updated_at from public.routing_rules
+          where user_id = :'owner_id'::uuid and id = :'rule_id'
+        )
+      );
+SQL
+})"
+E2E_FIRED_AT="$e2e_e2_matched_received_at" E2E_UPDATED_AT="$e2e_e2_rule_updated_at" \
+  E2E_ATTESTATION="$e2e_e2_private_attestation" node -e '
+    const value = JSON.parse(process.env.E2E_ATTESTATION);
+    if (value.captureStatus !== "inbox" || value.jobState !== "succeeded") process.exit(1);
+    if (value.privateSnapshotCount !== 0) process.exit(1);
+    if (Date.parse(value.lastFiredAt) !== Date.parse(process.env.E2E_FIRED_AT)) process.exit(1);
+    if (Date.parse(value.updatedAt) !== Date.parse(process.env.E2E_UPDATED_AT)) process.exit(1);
+  '
+
+e2e_stage="e2-explicit-delete"
+e2e_e2_rule_delete_key="milestone-e2-rule-delete-$e2e_run_id"
+e2e_e2_rule_delete_body="{\"expectedRevision\":2,\"idempotencyKey\":\"$e2e_e2_rule_delete_key\"}"
+e2e_e2_rule_delete_status="$({
+  e2e_routing_http explicit-delete DELETE "/routing-rules/$e2e_e2_rule_id" \
+    "$e2e_e2_rule_delete_body" "$e2e_e2_rule_delete_key"
+})"
+[[ "$e2e_e2_rule_delete_status" == "200" ]]
+assert_private_response_headers "$e2e_tmp_dir/e2-explicit-delete.headers"
+E2E_RULE_ID="$e2e_e2_rule_id" node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  if (value.ruleId !== process.env.E2E_RULE_ID || value.deleted !== true ||
+      value.replayed !== false) process.exit(1);
+' "$e2e_tmp_dir/e2-explicit-delete.json"
+
+e2e_stage="e2-explicit-delete-replay"
+e2e_e2_rule_delete_replay_status="$({
+  e2e_routing_http explicit-delete-replay DELETE "/routing-rules/$e2e_e2_rule_id" \
+    "$e2e_e2_rule_delete_body" "$e2e_e2_rule_delete_key"
+})"
+[[ "$e2e_e2_rule_delete_replay_status" == "200" ]]
+assert_private_response_headers "$e2e_tmp_dir/e2-explicit-delete-replay.headers"
+E2E_RULE_ID="$e2e_e2_rule_id" node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  if (value.ruleId !== process.env.E2E_RULE_ID || value.deleted !== true ||
+      value.replayed !== true) process.exit(1);
+' "$e2e_tmp_dir/e2-explicit-delete-replay.json"
+
+e2e_e2_after_delete_status="$(e2e_routing_http after-delete GET /routing-rules)"
+[[ "$e2e_e2_after_delete_status" == "200" ]]
+assert_private_response_headers "$e2e_tmp_dir/e2-after-delete.headers"
+E2E_RULE_ID="$e2e_e2_rule_id" node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  if (value.items?.some((item) => item.id === process.env.E2E_RULE_ID)) process.exit(1);
+' "$e2e_tmp_dir/e2-after-delete.json"
+e2e_e2_snapshot_after_delete="$({
+  psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
+    --no-psqlrc --set=ON_ERROR_STOP=1 --tuples-only --no-align \
+    --set=owner_id="$e2e_encrypted_owner_id" \
+    --set=job_id="$e2e_e2_matched_job_id" \
+    --set=rule_id="$e2e_e2_rule_id" <<'SQL'
+      select jsonb_build_object(
+        'ruleCount', (select count(*) from public.routing_rules
+          where user_id = :'owner_id'::uuid and id = :'rule_id'),
+        'snapshot', private.organization_job_routing_rule_control(
+          :'job_id', :'owner_id'::uuid
+        )
+      );
+SQL
+})"
+E2E_RULE_ID="$e2e_e2_rule_id" E2E_ATTESTATION="$e2e_e2_snapshot_after_delete" node -e '
+  const value = JSON.parse(process.env.E2E_ATTESTATION);
+  if (value.ruleCount !== 0 || value.snapshot?.ruleId !== process.env.E2E_RULE_ID) process.exit(1);
+'
+
+# The matched-capture proof intentionally leaves its organizer job queued so
+# the immutable routing snapshot can be inspected before and after rule
+# deletion. Keep that test-only job intact, but move its availability beyond
+# this run so the exact-job E1 fixture below cannot claim the older queue item.
+e2e_stage="e2-defer-matched-job-fixture"
+e2e_e2_deferred_job_count="$({
+  psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
+    --no-psqlrc --set=ON_ERROR_STOP=1 --tuples-only --no-align \
+    --set=owner_id="$e2e_encrypted_owner_id" \
+    --set=job_id="$e2e_e2_matched_job_id" <<'SQL'
+      with deferred as (
+        update public.organization_jobs
+        set available_at = clock_timestamp() + interval '1 day'
+        where user_id = :'owner_id'::uuid
+          and id = :'job_id'
+          and state = 'created'
+          and attempt = 0
+        returning 1
+      )
+      select count(*) from deferred;
+SQL
+})"
+[[ "$e2e_e2_deferred_job_count" == "1" ]]
+
+# Two distinct correction events with the same encrypted condition/destination
+# create an owner-visible offer. The offer stays disabled until an exact PATCH
+# acceptance; a DELETE on a separate offer records a hidden decline instead of
+# allowing the pattern to be silently relearned.
+e2e_stage="e2-learned-accept-first-correction"
+e2e_e2_accept_condition="e2a-$e2e_e2_condition_suffix"
+e2e_e2_accept_capture_canary="$e2e_e2_accept_condition: learned accept capture"
+e2e_e2_accept_destination_title="E2 learned accept destination $e2e_e2_condition_suffix"
+read -r e2e_e2_accept_source_a e2e_e2_accept_seed_mutation_a \
+  e2e_e2_accept_destination e2e_e2_accept_capture_a e2e_e2_accept_job_a \
+  e2e_e2_accept_decision_a < <(
+    setup_e1_interaction_fixture \
+      e2-accept-1 "E2 learned accept source one $e2e_e2_condition_suffix" \
+      "$e2e_e2_accept_capture_canary" "$e2e_e2_accept_destination_title"
+  )
+[[ "$e2e_e2_accept_seed_mutation_a" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
+[[ "$e2e_e2_accept_capture_a" =~ ^cap_[0-9A-HJKMNP-TV-Z]{26}$ ]]
+[[ "$e2e_e2_accept_job_a" =~ ^job_[0-9A-HJKMNP-TV-Z]{26}$ ]]
+read -r e2e_e2_accept_source_mutation_a e2e_e2_accept_destination_mutation_a < <(
+  correct_e1_fixture_decision e2-accept-1 "$e2e_e2_accept_decision_a" \
+    "$e2e_e2_accept_source_a" "$e2e_e2_accept_destination"
+)
+[[ "$e2e_e2_accept_source_mutation_a" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
+[[ "$e2e_e2_accept_destination_mutation_a" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
+ensure_e2_correction_observed \
+  e2-accept-1 "$e2e_e2_accept_decision_a" \
+  "$e2e_e2_accept_source_a" "$e2e_e2_accept_destination"
+
+e2e_e2_accept_first_list_status="$(e2e_routing_http accept-first-list GET /routing-rules)"
+[[ "$e2e_e2_accept_first_list_status" == "200" ]]
+assert_private_response_headers "$e2e_tmp_dir/e2-accept-first-list.headers"
+E2E_CONDITION="$e2e_e2_accept_condition" node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  if (value.items?.some((item) => item.condition === process.env.E2E_CONDITION)) process.exit(1);
+' "$e2e_tmp_dir/e2-accept-first-list.json"
+
+e2e_stage="e2-learned-accept-second-correction"
+read -r e2e_e2_accept_source_b e2e_e2_accept_seed_mutation_b \
+  e2e_e2_accept_unused_destination e2e_e2_accept_capture_b e2e_e2_accept_job_b \
+  e2e_e2_accept_decision_b < <(
+    setup_e1_interaction_fixture \
+      e2-accept-2 "E2 learned accept source two $e2e_e2_condition_suffix" \
+      "$e2e_e2_accept_capture_canary" \
+      "E2 learned accept unused destination $e2e_e2_condition_suffix"
+  )
+[[ "$e2e_e2_accept_seed_mutation_b" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
+[[ "$e2e_e2_accept_unused_destination" =~ ^note_[0-9A-HJKMNP-TV-Z]{26}$ ]]
+[[ "$e2e_e2_accept_capture_b" =~ ^cap_[0-9A-HJKMNP-TV-Z]{26}$ ]]
+[[ "$e2e_e2_accept_job_b" =~ ^job_[0-9A-HJKMNP-TV-Z]{26}$ ]]
+read -r e2e_e2_accept_source_mutation_b e2e_e2_accept_destination_mutation_b < <(
+  correct_e1_fixture_decision e2-accept-2 "$e2e_e2_accept_decision_b" \
+    "$e2e_e2_accept_source_b" "$e2e_e2_accept_destination" 1 2
+)
+[[ "$e2e_e2_accept_source_mutation_b" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
+[[ "$e2e_e2_accept_destination_mutation_b" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
+ensure_e2_correction_observed \
+  e2-accept-2 "$e2e_e2_accept_decision_b" \
+  "$e2e_e2_accept_source_b" "$e2e_e2_accept_destination" 1 2
+
+e2e_e2_accept_offer_list_status="$(e2e_routing_http accept-offer-list GET /routing-rules)"
+[[ "$e2e_e2_accept_offer_list_status" == "200" ]]
+assert_private_response_headers "$e2e_tmp_dir/e2-accept-offer-list.headers"
+e2e_e2_accept_rule_id="$({
+  E2E_CONDITION="$e2e_e2_accept_condition" \
+    E2E_DESTINATION="$e2e_e2_accept_destination" node -e '
+      const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+      const matches = value.items?.filter((item) =>
+        item.condition === process.env.E2E_CONDITION &&
+        item.destination?.type === "note" &&
+        item.destination.noteId === process.env.E2E_DESTINATION
+      ) ?? [];
+      if (matches.length !== 1) process.exit(1);
+      const rule = matches[0];
+      if (rule.revision !== 2 || rule.enabled !== false || rule.ruleType !== "prefix") {
+        process.exit(1);
+      }
+      if (rule.priority !== 500 || rule.source !== "correction_suggested") process.exit(1);
+      if (rule.proposalState !== "offered" || rule.destinationStatus !== "active") process.exit(1);
+      if (rule.lastFiredAt !== null) process.exit(1);
+      process.stdout.write(rule.id);
+    ' "$e2e_tmp_dir/e2-accept-offer-list.json"
+})"
+
+e2e_stage="e2-learned-offer-accept"
+e2e_e2_accept_key="milestone-e2-offer-accept-$e2e_run_id"
+e2e_e2_accept_body="{\"expectedRevision\":2,\"idempotencyKey\":\"$e2e_e2_accept_key\",\"enabled\":true}"
+e2e_e2_accept_status="$({
+  e2e_routing_http offer-accept PATCH "/routing-rules/$e2e_e2_accept_rule_id" \
+    "$e2e_e2_accept_body" "$e2e_e2_accept_key"
+})"
+[[ "$e2e_e2_accept_status" == "200" ]]
+assert_private_response_headers "$e2e_tmp_dir/e2-offer-accept.headers"
+E2E_RULE_ID="$e2e_e2_accept_rule_id" E2E_CONDITION="$e2e_e2_accept_condition" node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  if (value.rule?.id !== process.env.E2E_RULE_ID || value.rule.revision !== 3) process.exit(1);
+  if (value.rule.enabled !== true || value.rule.proposalState !== "accepted") process.exit(1);
+  if (value.rule.source !== "correction_suggested" || value.rule.condition !== process.env.E2E_CONDITION) {
+    process.exit(1);
+  }
+  if (value.replayed !== false) process.exit(1);
+' "$e2e_tmp_dir/e2-offer-accept.json"
+
+e2e_e2_accept_replay_status="$({
+  e2e_routing_http offer-accept-replay PATCH "/routing-rules/$e2e_e2_accept_rule_id" \
+    "$e2e_e2_accept_body" "$e2e_e2_accept_key"
+})"
+[[ "$e2e_e2_accept_replay_status" == "200" ]]
+assert_private_response_headers "$e2e_tmp_dir/e2-offer-accept-replay.headers"
+E2E_RULE_ID="$e2e_e2_accept_rule_id" node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  if (value.rule?.id !== process.env.E2E_RULE_ID || value.rule.revision !== 3 ||
+      value.replayed !== true) {
+    process.exit(1);
+  }
+' "$e2e_tmp_dir/e2-offer-accept-replay.json"
+
+e2e_stage="e2-learned-decline-first-correction"
+e2e_e2_decline_condition="e2d-$e2e_e2_condition_suffix"
+e2e_e2_decline_capture_canary="$e2e_e2_decline_condition: learned decline capture"
+e2e_e2_decline_destination_title="E2 learned decline destination $e2e_e2_condition_suffix"
+read -r e2e_e2_decline_source_a e2e_e2_decline_seed_mutation_a \
+  e2e_e2_decline_destination e2e_e2_decline_capture_a e2e_e2_decline_job_a \
+  e2e_e2_decline_decision_a < <(
+    setup_e1_interaction_fixture \
+      e2-decline-1 "E2 learned decline source one $e2e_e2_condition_suffix" \
+      "$e2e_e2_decline_capture_canary" "$e2e_e2_decline_destination_title"
+  )
+[[ "$e2e_e2_decline_seed_mutation_a" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
+[[ "$e2e_e2_decline_capture_a" =~ ^cap_[0-9A-HJKMNP-TV-Z]{26}$ ]]
+[[ "$e2e_e2_decline_job_a" =~ ^job_[0-9A-HJKMNP-TV-Z]{26}$ ]]
+read -r e2e_e2_decline_source_mutation_a e2e_e2_decline_destination_mutation_a < <(
+  correct_e1_fixture_decision e2-decline-1 "$e2e_e2_decline_decision_a" \
+    "$e2e_e2_decline_source_a" "$e2e_e2_decline_destination"
+)
+[[ "$e2e_e2_decline_source_mutation_a" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
+[[ "$e2e_e2_decline_destination_mutation_a" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
+ensure_e2_correction_observed \
+  e2-decline-1 "$e2e_e2_decline_decision_a" \
+  "$e2e_e2_decline_source_a" "$e2e_e2_decline_destination"
+
+e2e_stage="e2-learned-decline-second-correction"
+read -r e2e_e2_decline_source_b e2e_e2_decline_seed_mutation_b \
+  e2e_e2_decline_unused_destination e2e_e2_decline_capture_b e2e_e2_decline_job_b \
+  e2e_e2_decline_decision_b < <(
+    setup_e1_interaction_fixture \
+      e2-decline-2 "E2 learned decline source two $e2e_e2_condition_suffix" \
+      "$e2e_e2_decline_capture_canary" \
+      "E2 learned decline unused destination $e2e_e2_condition_suffix"
+  )
+[[ "$e2e_e2_decline_seed_mutation_b" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
+[[ "$e2e_e2_decline_unused_destination" =~ ^note_[0-9A-HJKMNP-TV-Z]{26}$ ]]
+[[ "$e2e_e2_decline_capture_b" =~ ^cap_[0-9A-HJKMNP-TV-Z]{26}$ ]]
+[[ "$e2e_e2_decline_job_b" =~ ^job_[0-9A-HJKMNP-TV-Z]{26}$ ]]
+read -r e2e_e2_decline_source_mutation_b e2e_e2_decline_destination_mutation_b < <(
+  correct_e1_fixture_decision e2-decline-2 "$e2e_e2_decline_decision_b" \
+    "$e2e_e2_decline_source_b" "$e2e_e2_decline_destination" 1 2
+)
+[[ "$e2e_e2_decline_source_mutation_b" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
+[[ "$e2e_e2_decline_destination_mutation_b" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
+ensure_e2_correction_observed \
+  e2-decline-2 "$e2e_e2_decline_decision_b" \
+  "$e2e_e2_decline_source_b" "$e2e_e2_decline_destination" 1 2
+
+e2e_e2_decline_offer_list_status="$(e2e_routing_http decline-offer-list GET /routing-rules)"
+[[ "$e2e_e2_decline_offer_list_status" == "200" ]]
+assert_private_response_headers "$e2e_tmp_dir/e2-decline-offer-list.headers"
+e2e_e2_decline_rule_id="$({
+  E2E_CONDITION="$e2e_e2_decline_condition" \
+    E2E_DESTINATION="$e2e_e2_decline_destination" node -e '
+      const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+      const matches = value.items?.filter((item) =>
+        item.condition === process.env.E2E_CONDITION &&
+        item.destination?.type === "note" &&
+        item.destination.noteId === process.env.E2E_DESTINATION
+      ) ?? [];
+      if (matches.length !== 1) process.exit(1);
+      const rule = matches[0];
+      if (rule.revision !== 2 || rule.enabled !== false || rule.proposalState !== "offered") {
+        process.exit(1);
+      }
+      if (rule.source !== "correction_suggested" || rule.priority !== 500) process.exit(1);
+      process.stdout.write(rule.id);
+    ' "$e2e_tmp_dir/e2-decline-offer-list.json"
+})"
+
+e2e_stage="e2-learned-offer-decline"
+e2e_e2_decline_key="milestone-e2-offer-decline-$e2e_run_id"
+e2e_e2_decline_body="{\"expectedRevision\":2,\"idempotencyKey\":\"$e2e_e2_decline_key\"}"
+e2e_e2_decline_status="$({
+  e2e_routing_http offer-decline DELETE "/routing-rules/$e2e_e2_decline_rule_id" \
+    "$e2e_e2_decline_body" "$e2e_e2_decline_key"
+})"
+[[ "$e2e_e2_decline_status" == "200" ]]
+assert_private_response_headers "$e2e_tmp_dir/e2-offer-decline.headers"
+E2E_RULE_ID="$e2e_e2_decline_rule_id" node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  if (value.ruleId !== process.env.E2E_RULE_ID || value.deleted !== true ||
+      value.replayed !== false) process.exit(1);
+' "$e2e_tmp_dir/e2-offer-decline.json"
+
+e2e_e2_decline_replay_status="$({
+  e2e_routing_http offer-decline-replay DELETE "/routing-rules/$e2e_e2_decline_rule_id" \
+    "$e2e_e2_decline_body" "$e2e_e2_decline_key"
+})"
+[[ "$e2e_e2_decline_replay_status" == "200" ]]
+assert_private_response_headers "$e2e_tmp_dir/e2-offer-decline-replay.headers"
+E2E_RULE_ID="$e2e_e2_decline_rule_id" node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  if (value.ruleId !== process.env.E2E_RULE_ID || value.deleted !== true ||
+      value.replayed !== true) process.exit(1);
+' "$e2e_tmp_dir/e2-offer-decline-replay.json"
+
+e2e_e2_learned_list_status="$(e2e_routing_http learned-final-list GET /routing-rules)"
+[[ "$e2e_e2_learned_list_status" == "200" ]]
+assert_private_response_headers "$e2e_tmp_dir/e2-learned-final-list.headers"
+E2E_ACCEPT_RULE="$e2e_e2_accept_rule_id" E2E_DECLINE_RULE="$e2e_e2_decline_rule_id" node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  const accepted = value.items?.find((item) => item.id === process.env.E2E_ACCEPT_RULE);
+  if (accepted?.enabled !== true || accepted.proposalState !== "accepted" ||
+      accepted.revision !== 3) {
+    process.exit(1);
+  }
+  if (value.items.some((item) => item.id === process.env.E2E_DECLINE_RULE)) process.exit(1);
+' "$e2e_tmp_dir/e2-learned-final-list.json"
+
+e2e_stage="e2-learned-state-attestation"
+e2e_e2_learned_attestation="$({
+  psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
+    --no-psqlrc --set=ON_ERROR_STOP=1 --tuples-only --no-align \
+    --set=owner_id="$e2e_encrypted_owner_id" \
+    --set=accept_rule="$e2e_e2_accept_rule_id" \
+    --set=decline_rule="$e2e_e2_decline_rule_id" <<'SQL'
+      select jsonb_build_object(
+        'accepted', (select jsonb_build_object(
+          'enabled', enabled,
+          'revision', current_revision,
+          'proposalState', proposal_state,
+          'conditionEncrypted', condition_envelope is not null,
+          'keyClass', condition_key_class,
+          'keyPurpose', condition_key_purpose
+        ) from public.routing_rules
+          where user_id = :'owner_id'::uuid and id = :'accept_rule'),
+        'acceptedObservations', (select count(*)
+          from public.routing_rule_proposal_observations
+          where user_id = :'owner_id'::uuid and rule_id = :'accept_rule'),
+        'declined', (select jsonb_build_object(
+          'enabled', enabled,
+          'revision', current_revision,
+          'proposalState', proposal_state,
+          'conditionEncrypted', condition_envelope is not null,
+          'keyClass', condition_key_class,
+          'keyPurpose', condition_key_purpose
+        ) from public.routing_rules
+          where user_id = :'owner_id'::uuid and id = :'decline_rule'),
+        'declinedObservations', (select count(*)
+          from public.routing_rule_proposal_observations
+          where user_id = :'owner_id'::uuid and rule_id = :'decline_rule')
+      );
+SQL
+})"
+E2E_ATTESTATION="$e2e_e2_learned_attestation" node -e '
+  const value = JSON.parse(process.env.E2E_ATTESTATION);
+  const accepted = value.accepted;
+  const declined = value.declined;
+  if (accepted?.enabled !== true || accepted.revision !== 3 ||
+      accepted.proposalState !== "accepted") {
+    process.exit(1);
+  }
+  if (declined?.enabled !== false || declined.revision !== 3 ||
+      declined.proposalState !== "declined") {
+    process.exit(1);
+  }
+  for (const rule of [accepted, declined]) {
+    if (!rule.conditionEncrypted || rule.keyClass !== "private_manual" ||
+        rule.keyPurpose !== "object_wrap") process.exit(1);
+  }
+  if (value.acceptedObservations !== 2 || value.declinedObservations !== 2) process.exit(1);
+'
+
+e2e_stage="e2-plaintext-db-canary"
+psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
+  --no-psqlrc --set=ON_ERROR_STOP=1 --quiet \
+  --set=owner_id="$e2e_encrypted_owner_id" \
+  --set=rule_condition="$e2e_e2_rule_condition" \
+  --set=explicit_destination="$e2e_e2_destination_title" \
+  --set=explicit_destination_body="$e2e_e2_destination_body" \
+  --set=matched_capture="$e2e_e2_matched_capture_canary" \
+  --set=private_capture="$e2e_e2_private_capture_canary" \
+  --set=accept_condition="$e2e_e2_accept_condition" \
+  --set=accept_capture="$e2e_e2_accept_capture_canary" \
+  --set=accept_destination="$e2e_e2_accept_destination_title" \
+  --set=decline_condition="$e2e_e2_decline_condition" \
+  --set=decline_capture="$e2e_e2_decline_capture_canary" \
+  --set=decline_destination="$e2e_e2_decline_destination_title" <<'SQL' >/dev/null
+    create temporary table e2_http_plaintext_canaries(value text primary key);
+    insert into e2_http_plaintext_canaries(value) values
+      (:'rule_condition'),
+      (:'explicit_destination'),
+      (:'explicit_destination_body'),
+      (:'matched_capture'),
+      (:'private_capture'),
+      (:'accept_condition'),
+      (:'accept_capture'),
+      (:'accept_destination'),
+      (:'decline_condition'),
+      (:'decline_capture'),
+      (:'decline_destination');
+    select pg_catalog.set_config('unfiled.e2_http_owner', :'owner_id', false);
+    do $e2_http_plaintext$
+    declare
+      owner_value uuid := pg_catalog.current_setting('unfiled.e2_http_owner')::uuid;
+      table_value record;
+      hit_count bigint;
+    begin
+      for table_value in
+        select columns.table_name
+        from information_schema.columns as columns
+        join information_schema.tables as tables
+          on tables.table_schema = columns.table_schema
+          and tables.table_name = columns.table_name
+        where columns.table_schema = 'public'
+          and columns.column_name = 'user_id'
+          and tables.table_type = 'BASE TABLE'
+        order by columns.table_name
+      loop
+        execute pg_catalog.format(
+          'select count(*) from public.%I as row_value where row_value.user_id = $1 and exists (select 1 from pg_temp.e2_http_plaintext_canaries as canary where pg_catalog.strpos(to_jsonb(row_value)::text, canary.value) > 0)',
+          table_value.table_name
+        ) into hit_count using owner_value;
+        if hit_count <> 0 then
+          raise exception using errcode = 'P0001',
+            message = 'e2_http_plaintext_canary_found',
+            detail = table_value.table_name;
+        end if;
+      end loop;
+    end
+    $e2_http_plaintext$;
+SQL
+
+e2e_stage="e2-plaintext-log-canary"
+e2e_e2_log_canaries=(
+  "$e2e_e2_rule_condition"
+  "$e2e_e2_destination_title"
+  "$e2e_e2_destination_body"
+  "$e2e_e2_matched_capture_canary"
+  "$e2e_e2_private_capture_canary"
+  "$e2e_e2_accept_condition"
+  "$e2e_e2_accept_capture_canary"
+  "$e2e_e2_accept_destination_title"
+  "$e2e_e2_decline_condition"
+  "$e2e_e2_decline_capture_canary"
+  "$e2e_e2_decline_destination_title"
+)
+for e2e_e2_canary in "${e2e_e2_log_canaries[@]}"; do
+  if grep --fixed-strings --quiet -- "$e2e_e2_canary" "$e2e_tmp_dir/web.log"; then
+    echo "E2 routing-rule plaintext appeared in the web server log." >&2
+    exit 1
+  fi
+done
+
 e2e_second_key="milestone-b-http-create-second-$e2e_run_id"
 e2e_second="$(
   request_json POST /notes \
@@ -2901,4 +3754,4 @@ request_json POST /auth/sign-out | node -e '
   });
 '
 
-echo "Milestones B–E1 local HTTP E2E passed."
+echo "Milestones B–E2 local HTTP E2E passed."

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ConfigurationError } from "@/server/api/errors";
 
+import { mappedServiceRpcHttpError } from "./managed-encryption-error-mapping";
 import { createServiceRpcClient, ServiceRpcError, ServiceRpcErrorCode } from "./service-rpc-client";
 
 const environment = Object.freeze({
@@ -11,6 +12,19 @@ const environment = Object.freeze({
 });
 
 describe("allowlisted encrypted service RPC client", () => {
+  it("maps a raced routing destination to a stable non-retryable owner error", () => {
+    expect(
+      mappedServiceRpcHttpError(
+        new ServiceRpcError(ServiceRpcErrorCode.ROUTING_RULE_DESTINATION_INVALID),
+        "routing rule"
+      )
+    ).toMatchObject({
+      code: "validation_failed",
+      message: "Choose an active destination and try again.",
+      status: 400
+    });
+  });
+
   it("calls only an explicit function with server credentials and no cache", async () => {
     const request = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       void input;
@@ -81,6 +95,11 @@ describe("allowlisted encrypted service RPC client", () => {
   it.each([
     ["conflict_requires_review", ServiceRpcErrorCode.CONFLICT_REQUIRES_REVIEW],
     ["capture_id_conflict", ServiceRpcErrorCode.INVALID_IDEMPOTENCY_KEY],
+    ["routing_rule_match_stale", ServiceRpcErrorCode.ROUTING_RULE_MATCH_STALE],
+    ["routing_rule_observation_stale", ServiceRpcErrorCode.ROUTING_RULE_OBSERVATION_STALE],
+    ["routing_rule_limit", ServiceRpcErrorCode.RATE_LIMITED],
+    ["routing_rule_enabled_limit", ServiceRpcErrorCode.RATE_LIMITED],
+    ["routing_rule_destination_invalid", ServiceRpcErrorCode.ROUTING_RULE_DESTINATION_INVALID],
     ["stale_maintenance_cursor", ServiceRpcErrorCode.STALE_MAINTENANCE_CURSOR],
     ["stale_scrub_cursor", ServiceRpcErrorCode.STALE_MAINTENANCE_CURSOR],
     ["explicit_destination_not_owned", ServiceRpcErrorCode.FORBIDDEN],

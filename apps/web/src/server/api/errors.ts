@@ -5,6 +5,8 @@ import {
   type ApiErrorCodeValue
 } from "@unfiled/contracts";
 
+const MAX_JSON_REQUEST_BYTES = 250_000;
+
 export class HttpError extends Error {
   public readonly code: ApiErrorCodeValue;
   public readonly details: Readonly<Record<string, unknown>> | undefined;
@@ -85,17 +87,74 @@ export function errorResponse(reason: unknown, request: Request): Response {
   return jsonResponse(body, { status: 500, headers: { "x-request-id": id } });
 }
 
-export async function readJsonObject(request: Request): Promise<Record<string, unknown>> {
-  const contentLength = Number(request.headers.get("content-length") ?? "0");
-  if (contentLength > 250_000) {
-    throw new HttpError(413, ApiErrorCode.VALIDATION_FAILED, "That request is too large.");
+function invalidJsonRequest(): HttpError {
+  return new HttpError(400, ApiErrorCode.VALIDATION_FAILED, "Send a valid JSON request.");
+}
+
+function requestTooLarge(): HttpError {
+  return new HttpError(413, ApiErrorCode.VALIDATION_FAILED, "That request is too large.");
+}
+
+function validateDeclaredContentLength(request: Request): void {
+  const declaredLength = request.headers.get("content-length");
+  if (declaredLength === null) return;
+  if (!/^\d+$/u.test(declaredLength)) throw invalidJsonRequest();
+  if (BigInt(declaredLength) > BigInt(MAX_JSON_REQUEST_BYTES)) throw requestTooLarge();
+}
+
+async function readBoundedRequestBody(request: Request): Promise<Uint8Array> {
+  if (request.body === null) return new Uint8Array();
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      if (chunk.value.byteLength > MAX_JSON_REQUEST_BYTES - length) {
+        try {
+          await reader.cancel();
+        } catch {
+          // The sanitized size failure remains authoritative if cancellation races.
+        }
+        throw requestTooLarge();
+      }
+      length += chunk.value.byteLength;
+      chunks.push(chunk.value);
+    }
+  } catch (error) {
+    for (const chunk of chunks) chunk.fill(0);
+    if (error instanceof HttpError) throw error;
+    throw invalidJsonRequest();
+  } finally {
+    reader.releaseLock();
   }
 
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  try {
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+  } finally {
+    for (const chunk of chunks) chunk.fill(0);
+  }
+  return bytes;
+}
+
+export async function readJsonObject(request: Request): Promise<Record<string, unknown>> {
+  validateDeclaredContentLength(request);
+
+  const bytes = await readBoundedRequestBody(request);
   let value: unknown;
   try {
-    value = await request.json();
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch {
-    throw new HttpError(400, ApiErrorCode.VALIDATION_FAILED, "Send a valid JSON request.");
+    throw invalidJsonRequest();
+  } finally {
+    bytes.fill(0);
   }
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new HttpError(400, ApiErrorCode.VALIDATION_FAILED, "Send a JSON object.");

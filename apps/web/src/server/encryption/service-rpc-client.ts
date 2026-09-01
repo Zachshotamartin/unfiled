@@ -10,6 +10,9 @@ export const ServiceRpcErrorCode = Object.freeze({
   NOT_FOUND: "not_found",
   PROVIDER_UNAVAILABLE: "provider_unavailable",
   RATE_LIMITED: "rate_limited",
+  ROUTING_RULE_DESTINATION_INVALID: "routing_rule_destination_invalid",
+  ROUTING_RULE_MATCH_STALE: "routing_rule_match_stale",
+  ROUTING_RULE_OBSERVATION_STALE: "routing_rule_observation_stale",
   STALE_MAINTENANCE_CURSOR: "stale_maintenance_cursor",
   STALE_REVISION: "stale_revision",
   UNAUTHORIZED: "unauthorized",
@@ -143,6 +146,15 @@ function databaseError(status: number, body: unknown): ServiceRpcError {
   if (message.includes("stale_revision")) {
     return new ServiceRpcError(ServiceRpcErrorCode.STALE_REVISION);
   }
+  if (message.includes("routing_rule_match_stale")) {
+    return new ServiceRpcError(ServiceRpcErrorCode.ROUTING_RULE_MATCH_STALE);
+  }
+  if (message.includes("routing_rule_observation_stale")) {
+    return new ServiceRpcError(ServiceRpcErrorCode.ROUTING_RULE_OBSERVATION_STALE);
+  }
+  if (message.includes("routing_rule_destination_invalid")) {
+    return new ServiceRpcError(ServiceRpcErrorCode.ROUTING_RULE_DESTINATION_INVALID);
+  }
   if (message.includes("conflict_requires_review")) {
     return new ServiceRpcError(ServiceRpcErrorCode.CONFLICT_REQUIRES_REVIEW);
   }
@@ -178,7 +190,12 @@ function databaseError(status: number, body: unknown): ServiceRpcError {
   if (message.includes("not_found") || status === 404) {
     return new ServiceRpcError(ServiceRpcErrorCode.NOT_FOUND);
   }
-  if (message.includes("rate_limited") || status === 429) {
+  if (
+    message.includes("rate_limited") ||
+    message.includes("routing_rule_limit") ||
+    message.includes("routing_rule_enabled_limit") ||
+    status === 429
+  ) {
     return new ServiceRpcError(ServiceRpcErrorCode.RATE_LIMITED);
   }
   if (message.includes("validation_failed") || status === 400) {

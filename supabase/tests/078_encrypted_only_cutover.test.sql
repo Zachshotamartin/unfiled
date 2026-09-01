@@ -227,7 +227,7 @@ select is(
     where (namespace.nspname, procedure.proname) in (
       ('public', 'prepare_encrypted_note_write'),
       ('public', 'verify_encrypted_content_object'),
-      ('public', 'create_encrypted_capture_with_job'),
+      ('private', 'create_encrypted_capture_with_job_e1'),
       ('private', 'create_encrypted_capture_with_job_legacy'),
       ('private', 'claim_encrypted_organizer_jobs_impl')
     ) and procedure.prosrc like

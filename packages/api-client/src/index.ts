@@ -32,6 +32,8 @@ import {
   MutationBatchUndoResponseSchema,
   MutationResultSchema,
   MutationUndoRequestSchema,
+  MAX_RETAINED_ROUTING_RULES,
+  MAX_ROUTING_RULE_PAGE_BYTES,
   NoteArchiveRequestSchema,
   NoteCreateRequestSchema,
   NoteDetailResponseSchema,
@@ -61,6 +63,7 @@ import {
   RoutingRuleCreateRequestSchema,
   RoutingRuleDeleteRequestSchema,
   RoutingRuleDeleteResponseSchema,
+  RoutingRuleListQuerySchema,
   RoutingRuleListResponseSchema,
   RoutingRuleMutationResponseSchema,
   RoutingRuleUpdateRequestSchema,
@@ -125,6 +128,8 @@ import {
   type ReviewResolveRequest,
   type RoutingRuleCreateRequest,
   type RoutingRuleDeleteRequest,
+  type RoutingRuleDto,
+  type RoutingRuleListQuery,
   type RoutingRuleUpdateRequest,
   type SearchNotesRequest,
   type SpaceArchiveRequest,
@@ -172,16 +177,97 @@ export class ApiClientError extends Error {
   }
 }
 
+/** A content-free failure for invalid JSON, error envelopes, or success payloads. */
+export class ApiClientMalformedResponseError extends Error {
+  public constructor(public readonly status: number) {
+    super("The service returned malformed data.");
+    this.name = "ApiClientMalformedResponseError";
+  }
+}
+
 export type ApiClientOptions = Readonly<{
   baseUrl: string;
   getAccessToken: () => Promise<string | null>;
   fetch?: typeof globalThis.fetch;
 }>;
 
-async function decode<T>(response: Response, schema: ZodType<T>): Promise<T> {
-  const body: unknown = await response.json();
-  if (!response.ok) throw new ApiClientError(response.status, ApiErrorSchema.parse(body));
-  return schema.parse(body);
+async function decode<T>(
+  response: Response,
+  schema: ZodType<T>,
+  maximumResponseBytes?: number
+): Promise<T> {
+  let serialized: string;
+  try {
+    if (maximumResponseBytes === undefined) {
+      serialized = await response.text();
+    } else {
+      const declared = response.headers.get("content-length");
+      if (declared !== null) {
+        const declaredBytes = Number(declared);
+        if (
+          !/^\d+$/u.test(declared) ||
+          !Number.isSafeInteger(declaredBytes) ||
+          declaredBytes > maximumResponseBytes
+        ) {
+          throw new ApiClientMalformedResponseError(response.status);
+        }
+      }
+      if (response.body === null) {
+        serialized = await response.text();
+      } else {
+        const reader = response.body.getReader();
+        const chunks: Uint8Array[] = [];
+        let length = 0;
+        try {
+          for (;;) {
+            const chunk = await reader.read();
+            if (chunk.done) break;
+            length += chunk.value.byteLength;
+            if (length > maximumResponseBytes) {
+              try {
+                await reader.cancel();
+              } catch {
+                // The sanitized size failure remains authoritative even if cancellation races.
+              }
+              throw new ApiClientMalformedResponseError(response.status);
+            }
+            chunks.push(chunk.value);
+          }
+        } finally {
+          reader.releaseLock();
+        }
+        const bytes = new Uint8Array(length);
+        let offset = 0;
+        for (const chunk of chunks) {
+          bytes.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        serialized = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      }
+    }
+  } catch {
+    throw new ApiClientMalformedResponseError(response.status);
+  }
+  if (
+    maximumResponseBytes !== undefined &&
+    new TextEncoder().encode(serialized).byteLength > maximumResponseBytes
+  ) {
+    throw new ApiClientMalformedResponseError(response.status);
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(serialized) as unknown;
+  } catch {
+    throw new ApiClientMalformedResponseError(response.status);
+  }
+  if (!response.ok) {
+    const parsedError = ApiErrorSchema.safeParse(body);
+    if (!parsedError.success) throw new ApiClientMalformedResponseError(response.status);
+    throw new ApiClientError(response.status, parsedError.data);
+  }
+  const parsed = schema.safeParse(body);
+  if (!parsed.success) throw new ApiClientMalformedResponseError(response.status);
+  return parsed.data;
 }
 
 function queryString(
@@ -207,6 +293,7 @@ export function createApiClient(options: ApiClientOptions) {
       cache?: RequestCache;
       idempotencyKey?: string;
       authenticated?: boolean;
+      maximumResponseBytes?: number;
     }>,
     responseSchema: ZodType<T>
   ): Promise<T> {
@@ -222,7 +309,7 @@ export function createApiClient(options: ApiClientOptions) {
       },
       ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) })
     });
-    return decode(response, responseSchema);
+    return decode(response, responseSchema, init.maximumResponseBytes);
   }
 
   async function authenticatedRawRequest(path: string): Promise<Response> {
@@ -237,8 +324,15 @@ export function createApiClient(options: ApiClientOptions) {
       }
     });
     if (!response.ok) {
-      const body: unknown = await response.json().catch(() => null);
-      throw new ApiClientError(response.status, ApiErrorSchema.parse(body));
+      let body: unknown;
+      try {
+        body = JSON.parse(await response.text()) as unknown;
+      } catch {
+        throw new ApiClientMalformedResponseError(response.status);
+      }
+      const parsed = ApiErrorSchema.safeParse(body);
+      if (!parsed.success) throw new ApiClientMalformedResponseError(response.status);
+      throw new ApiClientError(response.status, parsed.data);
     }
     const mediaType = response.headers.get("content-type")?.split(";", 1)[0]?.trim();
     if (
@@ -249,6 +343,40 @@ export function createApiClient(options: ApiClientOptions) {
       throw new TypeError("Invalid account export response");
     }
     return response;
+  }
+
+  async function listRoutingRules(input: Partial<RoutingRuleListQuery> = {}) {
+    const query = RoutingRuleListQuerySchema.parse(input);
+    const suffix = queryString([["cursor", query.cursor]]);
+    return request(
+      `/routing-rules${suffix}`,
+      { cache: "no-store", maximumResponseBytes: MAX_ROUTING_RULE_PAGE_BYTES },
+      RoutingRuleListResponseSchema
+    );
+  }
+
+  async function listAllRoutingRules(): Promise<Readonly<{ items: readonly RoutingRuleDto[] }>> {
+    const items: RoutingRuleDto[] = [];
+    const seenIds = new Set<string>();
+    const seenCursors = new Set<string>();
+    let cursor: RoutingRuleListQuery["cursor"];
+    for (;;) {
+      const page = await listRoutingRules(cursor === undefined ? {} : { cursor });
+      for (const rule of page.items) {
+        if (seenIds.has(rule.id) || items.length >= MAX_RETAINED_ROUTING_RULES) {
+          throw new ApiClientMalformedResponseError(200);
+        }
+        seenIds.add(rule.id);
+        items.push(rule);
+      }
+      if (!page.pageInfo.hasMore) return Object.freeze({ items: Object.freeze(items) });
+      const nextCursor = page.pageInfo.nextCursor;
+      if (nextCursor === null || seenCursors.has(nextCursor)) {
+        throw new ApiClientMalformedResponseError(200);
+      }
+      seenCursors.add(nextCursor);
+      cursor = RoutingRuleListQuerySchema.parse({ cursor: nextCursor }).cursor;
+    }
   }
 
   return Object.freeze({
@@ -680,15 +808,21 @@ export function createApiClient(options: ApiClientOptions) {
       );
     },
 
-    listRoutingRules() {
-      return request("/routing-rules", { cache: "no-store" }, RoutingRuleListResponseSchema);
-    },
+    listRoutingRules,
+
+    listAllRoutingRules,
 
     createRoutingRule(input: RoutingRuleCreateRequest) {
       const body = RoutingRuleCreateRequestSchema.parse(input);
       return request(
         "/routing-rules",
-        { body, cache: "no-store", idempotencyKey: body.idempotencyKey, method: "POST" },
+        {
+          body,
+          cache: "no-store",
+          idempotencyKey: body.idempotencyKey,
+          maximumResponseBytes: MAX_ROUTING_RULE_PAGE_BYTES,
+          method: "POST"
+        },
         RoutingRuleMutationResponseSchema
       );
     },
@@ -698,7 +832,13 @@ export function createApiClient(options: ApiClientOptions) {
       const body = RoutingRuleUpdateRequestSchema.parse(input);
       return request(
         `/routing-rules/${id}`,
-        { body, cache: "no-store", idempotencyKey: body.idempotencyKey, method: "PATCH" },
+        {
+          body,
+          cache: "no-store",
+          idempotencyKey: body.idempotencyKey,
+          maximumResponseBytes: MAX_ROUTING_RULE_PAGE_BYTES,
+          method: "PATCH"
+        },
         RoutingRuleMutationResponseSchema
       );
     },
@@ -708,7 +848,13 @@ export function createApiClient(options: ApiClientOptions) {
       const body = RoutingRuleDeleteRequestSchema.parse(input);
       return request(
         `/routing-rules/${id}`,
-        { body, cache: "no-store", idempotencyKey: body.idempotencyKey, method: "DELETE" },
+        {
+          body,
+          cache: "no-store",
+          idempotencyKey: body.idempotencyKey,
+          maximumResponseBytes: MAX_ROUTING_RULE_PAGE_BYTES,
+          method: "DELETE"
+        },
         RoutingRuleDeleteResponseSchema
       );
     },
