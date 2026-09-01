@@ -281,7 +281,7 @@ describe("encrypted aggregate hardening", () => {
         ...record.envelope,
         payload: {
           ...record.envelope.payload,
-          ciphertext: `${ciphertext.slice(0, -1)}${ciphertext.endsWith("A") ? "B" : "A"}`
+          ciphertext: `${ciphertext.startsWith("A") ? "B" : "A"}${ciphertext.slice(1)}`
         }
       }
     };
