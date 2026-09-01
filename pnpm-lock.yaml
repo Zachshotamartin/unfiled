@@ -53,9 +53,21 @@ importers:
       '@unfiled/content-crypto':
         specifier: workspace:*
         version: link:../../packages/content-crypto
+      '@unfiled/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@unfiled/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@unfiled/encrypted-aggregate':
+        specifier: workspace:*
+        version: link:../../packages/encrypted-aggregate
       '@unfiled/key-management':
         specifier: workspace:*
         version: link:../../packages/key-management
+      '@unfiled/search':
+        specifier: workspace:*
+        version: link:../../packages/search
       '@vercel/oidc':
         specifier: 3.8.5
         version: 3.8.5
@@ -213,6 +225,9 @@ importers:
       '@unfiled/domain':
         specifier: workspace:*
         version: link:../domain
+      '@unfiled/search':
+        specifier: workspace:*
+        version: link:../search
       zod:
         specifier: 4.5.4
         version: 4.5.4

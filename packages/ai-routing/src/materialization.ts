@@ -9,6 +9,8 @@ import {
 } from "@unfiled/contracts";
 import { z } from "zod";
 
+import { assertPlanSourcePreserved } from "./preservation.js";
+
 const MAX_CANDIDATES = 8;
 const MAX_AUTHORIZED_SPACES = 16;
 const MAX_AUTHORIZED_TAGS = 100;
@@ -145,6 +147,7 @@ export const OrganizationMaterializationErrorCode = Object.freeze({
   INVALID_MANIFEST: "invalid_manifest",
   INVALID_STABLE_IDS: "invalid_stable_ids",
   INVALID_DECISION: "invalid_decision",
+  SOURCE_PRESERVATION_FAILED: "source_preservation_failed",
   UNAUTHORIZED_REFERENCE: "unauthorized_reference",
   INCOMPATIBLE_OPERATION: "incompatible_operation",
   INVALID_STABLE_ID_BINDING: "invalid_stable_id_binding"
@@ -500,11 +503,22 @@ export function parseAuthorizedOrganizationPlan(
   input: Readonly<{
     unknownPlan: unknown;
     manifest: unknown;
+    captureText?: string;
   }>
 ): Readonly<{ plan: OrganizationPlan; manifest: OrganizerCandidateManifest }> {
   const plan = parsePlan(input.unknownPlan);
   const manifest = parseManifest(input.manifest);
   assertAuthorizedPlan(plan, manifest);
+  if (input.captureText !== undefined) {
+    try {
+      assertPlanSourcePreserved(input.captureText, plan);
+    } catch {
+      fail(
+        OrganizationMaterializationErrorCode.SOURCE_PRESERVATION_FAILED,
+        "Plan does not preserve the capture source"
+      );
+    }
+  }
   return deepFreeze({ plan, manifest });
 }
 
@@ -513,12 +527,23 @@ export function materializeAuthorizedOrganizationPlan(
     plan: unknown;
     manifest: unknown;
     stableIds: unknown;
+    captureText?: string;
   }>
 ): MaterializedOrganizationCommand {
   const plan = parsePlan(input.plan);
   const manifest = parseManifest(input.manifest);
   const stableIds = parseStableIds(input.stableIds);
   assertAuthorizedPlan(plan, manifest);
+  if (input.captureText !== undefined) {
+    try {
+      assertPlanSourcePreserved(input.captureText, plan);
+    } catch {
+      fail(
+        OrganizationMaterializationErrorCode.SOURCE_PRESERVATION_FAILED,
+        "Plan does not preserve the capture source"
+      );
+    }
+  }
 
   const base = {
     decisionId: stableIds.decisionId,
@@ -621,8 +646,13 @@ export function validateAndMaterializeOrganizationPlan(
     unknownPlan: unknown;
     manifest: unknown;
     stableIds: unknown;
+    captureText?: string;
   }>
 ): MaterializedOrganizationCommand {
   const authorized = parseAuthorizedOrganizationPlan(input);
-  return materializeAuthorizedOrganizationPlan({ ...authorized, stableIds: input.stableIds });
+  return materializeAuthorizedOrganizationPlan({
+    ...authorized,
+    stableIds: input.stableIds,
+    ...(input.captureText === undefined ? {} : { captureText: input.captureText })
+  });
 }

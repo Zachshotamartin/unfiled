@@ -9,45 +9,93 @@ import {
   type EncryptedCandidate,
   type OrganizerCipher,
   type OrganizerPreparation,
-  type OrganizerRepository
+  type OrganizerRepository,
+  type OrganizerRoutingPolicyContext
 } from "../src/drain.js";
-import { OrganizerUnavailableError } from "../src/errors.js";
+import {
+  OrganizerPlannerReviewError,
+  OrganizerProviderError,
+  OrganizerUnavailableError
+} from "../src/errors.js";
 import type { OrganizerKeyAuthority } from "../src/key-management.js";
 import type { OrganizerPlanner } from "../src/planner.js";
 
 const signal = new AbortController().signal;
 const authority = {} as OrganizerKeyAuthority;
 const controls = Object.freeze({ expansionDisabled: false, explicitDestinationNoteId: null });
+const automaticPolicyContext: OrganizerRoutingPolicyContext = Object.freeze({
+  accountCaptureOrdinal: 6,
+  deterministicRuleMatch: true,
+  features: Object.freeze({
+    destinationRecency: 1,
+    duplicateTitleSuspicion: 0,
+    explicitDestinationMention: 1,
+    margin: 1,
+    openSameDayTypeMatch: 1,
+    priorAccepted: 1,
+    reasonCodeConsistency: 1,
+    ruleOrAliasNearMatch: 1,
+    semanticSimilarity: 1,
+    typeCompatibility: 1
+  }),
+  mode: "balanced",
+  retrievalAutoEligible: true
+});
+const zeroPolicyFeatures: OrganizerRoutingPolicyContext["features"] = Object.freeze({
+  destinationRecency: 0,
+  duplicateTitleSuspicion: 0,
+  explicitDestinationMention: 0,
+  margin: 0,
+  openSameDayTypeMatch: 0,
+  priorAccepted: 0,
+  reasonCodeConsistency: 0,
+  ruleOrAliasNearMatch: 0,
+  semanticSimilarity: 0,
+  typeCompatibility: 0
+});
 const job: ClaimedOrganizerJob = Object.freeze({
+  accountCaptureOrdinal: 6,
   attempt: 1,
   captureId: "cap_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+  clientTimezone: "America/Los_Angeles",
   controls,
   jobId: "job_01ARZ3NDEKTSV4RRFFQ69G5FAV",
   leaseExpiresAt: "2026-08-31T20:00:00.000Z",
   leaseToken: "11111111-1111-4111-8111-111111111111",
+  occurredAt: "2026-08-31T19:58:00.000Z",
   ownerId: "22222222-2222-4222-8222-222222222222",
-  promptVersion: "organization-v1",
+  promptVersion: "routing-v1",
   replanCount: 0,
+  routingMode: "balanced",
   schemaVersion: 1,
   source: {
     resourceId: "cap_01ARZ3NDEKTSV4RRFFQ69G5FAV",
     recordVersion: 1,
     cipher: {},
     key: {}
-  }
+  },
+  commandProjection: "encrypted_only"
 });
 const candidate = Object.freeze({
+  archivedAt: null,
   candidateId: "note_01ARZ3NDEKTSV4RRFFQ69G5FAB" as const,
+  dailyDate: "2026-08-31",
+  deletedAt: null,
   isOpen: true,
+  links: Object.freeze([]),
   noteId: "note_01ARZ3NDEKTSV4RRFFQ69G5FAA" as const,
   noteType: "list" as const,
+  pinnedAt: null,
   revision: 2,
+  spaceId: null,
   source: {
     resourceId: "note_01ARZ3NDEKTSV4RRFFQ69G5FAA",
     recordVersion: 2,
     cipher: {},
     key: {}
-  }
+  },
+  tagIds: Object.freeze([]),
+  updatedAt: "2026-08-31T19:00:00.000Z"
 });
 
 function candidateAt(revision: number, values: Partial<EncryptedCandidate> = {}) {
@@ -103,6 +151,8 @@ function repository(overrides: Partial<OrganizerRepository> = {}): OrganizerRepo
       replanCount: 0
     }),
     candidates: vi.fn().mockResolvedValue({ candidates: [candidate], controls }),
+    ragPage: vi.fn().mockResolvedValue({ status: "no_active_generation" }),
+    selectCandidates: vi.fn().mockRejectedValue(new Error("not used by this test")),
     prepareCreate: vi.fn().mockResolvedValue(prepared("create", null)),
     prepareAppend: vi
       .fn()
@@ -134,6 +184,7 @@ function cipher(): OrganizerCipher {
             noteId: encrypted.noteId,
             noteType: encrypted.noteType,
             revision: encrypted.revision,
+            structuredData: { items: [], schemaVersion: 1 },
             title: "Shopping"
           })
       ),
@@ -200,7 +251,12 @@ function authorized(candidateCount = 1, replanCount: 0 | 1 = 0) {
   };
 }
 
-function drain(repo: OrganizerRepository, planner = appendPlanner, crypto = cipher()) {
+function drain(
+  repo: OrganizerRepository,
+  planner = appendPlanner,
+  crypto = cipher(),
+  routingPolicyContext: OrganizerRoutingPolicyContext | null = automaticPolicyContext
+) {
   return createOrganizerDrain({
     cipher: crypto,
     claimLimit: 2,
@@ -209,6 +265,7 @@ function drain(repo: OrganizerRepository, planner = appendPlanner, crypto = ciph
     planner,
     recoveryLimit: 50,
     repository: repo,
+    ...(routingPolicyContext === null ? {} : { routingPolicyContext }),
     workerId: "organizer-test"
   });
 }
@@ -360,9 +417,14 @@ describe("organizer drain", () => {
       })
     });
     const createPlanner: OrganizerPlanner = { plan: vi.fn().mockResolvedValue(createPlan) };
+    const createCrypto = cipher();
+    vi.mocked(createCrypto.openCapture).mockResolvedValueOnce({
+      controls,
+      rawContent: "A thought"
+    });
     expect(
       (
-        await drain(createRepo, createPlanner).drain({
+        await drain(createRepo, createPlanner, createCrypto).drain({
           authority,
           requestId: "r",
           signal,
@@ -684,7 +746,223 @@ describe("organizer drain", () => {
     const heartbeatInput = vi.mocked(repo.heartbeat).mock.calls[0]?.[0];
     expect(plannerInput?.controls).toEqual(currentControls);
     expect(plannerInput?.capture.controls).toEqual(currentControls);
+    expect(plannerInput).toMatchObject({ promptVersion: "routing-v1", schemaVersion: 1 });
     expect(heartbeatInput?.candidateManifest.controls).toEqual(currentControls);
+  });
+
+  it.each([
+    [new OrganizerProviderError("provider_key_invalid", false, 401), "provider_key_invalid", false],
+    [new OrganizerProviderError("rate_limited", true, 429), "rate_limited", true],
+    [new OrganizerProviderError("validation_failed", false, 422), "validation_failed", false],
+    [new OrganizerProviderError("provider_unavailable", true, 503), "provider_unavailable", true]
+  ] as const)("preserves typed planner failure mapping %#", async (failure, code, retryable) => {
+    const repo = repository({
+      fail: vi.fn().mockResolvedValue({ state: retryable ? "awaiting_retry" : "failed" })
+    });
+    const planner: OrganizerPlanner = { plan: vi.fn().mockRejectedValue(failure) };
+    await drain(repo, planner).drain({
+      authority,
+      requestId: "r",
+      signal,
+      trigger: "schedule"
+    });
+    expect(repo.fail).toHaveBeenCalledWith(expect.objectContaining({ errorCode: code, retryable }));
+    expect(repo.commit).not.toHaveBeenCalled();
+  });
+
+  it("turns a provider refusal into Review instead of a failed job", async () => {
+    const repo = repository({
+      commit: vi.fn().mockResolvedValue({
+        jobId: job.jobId,
+        noteId: null,
+        outcome: "review",
+        replayed: false,
+        revision: null,
+        replanCount: 0
+      })
+    });
+    const planner: OrganizerPlanner = {
+      plan: vi.fn().mockRejectedValue(new OrganizerPlannerReviewError("refusal"))
+    };
+    const result = await drain(repo, planner).drain({
+      authority,
+      requestId: "r",
+      signal,
+      trigger: "schedule"
+    });
+    expect(result.completed).toBe(1);
+    expect(repo.fail).not.toHaveBeenCalled();
+    expect(repo.commit).toHaveBeenCalledOnce();
+    expect(vi.mocked(repo.commit).mock.calls[0]?.[0].command.outcome).toBe("review");
+  });
+
+  it("applies deterministic list extraction before preparation and records the override", async () => {
+    const crypto = cipher();
+    vi.mocked(crypto.openCapture).mockResolvedValueOnce({
+      controls,
+      rawContent: "- milk\n- bread"
+    });
+    const planner: OrganizerPlanner = {
+      plan: vi.fn().mockResolvedValue({
+        ...appendPlan,
+        operations: [{ type: "append_list_items", section: "Open items", items: ["eggs"] }]
+      })
+    };
+    const repo = repository();
+    const result = await drain(repo, planner, crypto).drain({
+      authority,
+      requestId: "r",
+      signal,
+      trigger: "schedule"
+    });
+    expect(result.completed).toBe(1);
+    expect(repo.prepareAppend).toHaveBeenCalledOnce();
+    const sealedPlan = vi.mocked(crypto.sealCommand).mock.calls[0]?.[0].plan;
+    expect(sealedPlan?.validatedPlan.operations).toEqual([
+      { type: "append_list_items", section: "Open items", items: ["milk", "bread"] }
+    ]);
+    expect(sealedPlan?.validatedPlan.reasonCodes).toContain("parser_override");
+  });
+
+  it("routes a source-changing freeform plan to Review before append preparation", async () => {
+    const crypto = cipher();
+    vi.mocked(crypto.openCapture).mockResolvedValueOnce({
+      controls,
+      rawContent: "Keep this exact private sentence"
+    });
+    const planner: OrganizerPlanner = {
+      plan: vi.fn().mockResolvedValue({
+        ...appendPlan,
+        captureKind: "freeform",
+        operations: [{ type: "append_raw", content: "A rewritten sentence" }]
+      })
+    };
+    const repo = repository({
+      commit: vi.fn().mockResolvedValue({
+        jobId: job.jobId,
+        noteId: null,
+        outcome: "review",
+        replayed: false,
+        revision: null,
+        replanCount: 0
+      })
+    });
+    const result = await drain(repo, planner, crypto).drain({
+      authority,
+      requestId: "r",
+      signal,
+      trigger: "schedule"
+    });
+    expect(result.completed).toBe(1);
+    expect(repo.prepareAppend).not.toHaveBeenCalled();
+    expect(repo.prepareCreate).toHaveBeenCalledOnce();
+    expect(vi.mocked(repo.commit).mock.calls[0]?.[0].command.outcome).toBe("review");
+  });
+
+  it.each([
+    [
+      "retrieval degradation",
+      { ...automaticPolicyContext, deterministicRuleMatch: false, retrievalAutoEligible: false }
+    ],
+    [
+      "score below threshold",
+      {
+        ...automaticPolicyContext,
+        features: zeroPolicyFeatures
+      }
+    ]
+  ] as const)("routes %s to Review before preparation", async (_label, policyContext) => {
+    const crypto = cipher();
+    const repo = repository({
+      commit: vi.fn().mockResolvedValue({
+        jobId: job.jobId,
+        noteId: null,
+        outcome: "review",
+        replayed: false,
+        revision: null,
+        replanCount: 0
+      })
+    });
+    const result = await drain(repo, appendPlanner, crypto, policyContext).drain({
+      authority,
+      requestId: "r",
+      signal,
+      trigger: "schedule"
+    });
+    expect(result.completed).toBe(1);
+    expect(repo.prepareAppend).not.toHaveBeenCalled();
+    expect(vi.mocked(repo.commit).mock.calls[0]?.[0].command.outcome).toBe("review");
+    const reviewed = vi.mocked(crypto.sealCommand).mock.calls.at(-1)?.[0].plan;
+    const routingDecision = vi.mocked(crypto.sealCommand).mock.calls.at(-1)?.[0].routingDecision;
+    if (reviewed?.kind !== "review") throw new Error("Expected a materialized review");
+    expect(reviewed.alternatives).toHaveLength(1);
+    expect(reviewed.alternatives[0]?.candidateId).toBe(candidate.candidateId);
+    expect(reviewed.alternatives[0]?.noteId).toBe(candidate.noteId);
+    expect(reviewed.validatedPlan.alternatives).toEqual([candidate.candidateId]);
+    expect(reviewed.validatedPlan.captureKind).toBe("list_items");
+    expect(routingDecision?.autoApply).toBe(false);
+    expect(routingDecision?.band).toBe(_label === "score below threshold" ? "inbox" : "review");
+  });
+
+  it("auto-applies a high-confidence aphorism after principle syntax inference", async () => {
+    const principleCandidate = candidateAt(2, { noteType: "principle" });
+    const crypto = cipher();
+    vi.mocked(crypto.openCapture).mockResolvedValueOnce({
+      controls,
+      rawContent: "Simplicity compounds"
+    });
+    const planner: OrganizerPlanner = {
+      plan: vi.fn().mockResolvedValue({
+        ...appendPlan,
+        captureKind: "principle",
+        operations: [{ type: "append_raw", content: "Simplicity compounds" }]
+      })
+    };
+    const repo = repository({
+      candidates: vi.fn().mockResolvedValue({ candidates: [principleCandidate], controls }),
+      commit: vi.fn().mockResolvedValue({
+        jobId: job.jobId,
+        noteId: principleCandidate.noteId,
+        outcome: "appended",
+        replayed: false,
+        revision: 3,
+        replanCount: 0
+      })
+    });
+    const result = await drain(repo, planner, crypto).drain({
+      authority,
+      requestId: "r",
+      signal,
+      trigger: "schedule"
+    });
+    expect(result.completed).toBe(1);
+    expect(repo.prepareAppend).toHaveBeenCalledOnce();
+    expect(vi.mocked(repo.commit).mock.calls[0]?.[0].command.outcome).toBe("appended");
+  });
+
+  it("never publishes after cancellation wins while the planner is returning", async () => {
+    const controller = new AbortController();
+    const repo = repository({
+      fail: vi.fn().mockResolvedValue({ state: "awaiting_retry" })
+    });
+    const planner: OrganizerPlanner = {
+      plan: vi.fn().mockImplementation(() => {
+        controller.abort();
+        return Promise.resolve(appendPlan);
+      })
+    };
+    const result = await drain(repo, planner).drain({
+      authority,
+      requestId: "r",
+      signal: controller.signal,
+      trigger: "schedule"
+    });
+    expect(result.retryScheduled).toBe(1);
+    expect(repo.fail).toHaveBeenCalledWith(
+      expect.objectContaining({ errorCode: "provider_unavailable", retryable: true })
+    );
+    expect(repo.prepareAppend).not.toHaveBeenCalled();
+    expect(repo.commit).not.toHaveBeenCalled();
   });
 
   it("never decrypts or discloses a closed explicit target and commits Review", async () => {

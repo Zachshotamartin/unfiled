@@ -164,7 +164,7 @@ select ok(
 );
 select ok(
   (
-    select count(*) = 8
+    select count(*) = 10
     from pg_proc as procedure
     join pg_namespace as namespace on namespace.oid = procedure.pronamespace
     where namespace.nspname = 'public'
@@ -172,7 +172,7 @@ select ok(
         'unfiled_organizer_worker', procedure.oid, 'EXECUTE'
       )
   ),
-  'the organizer has exactly eight public RPC capabilities'
+  'the organizer has exactly ten lease-bound public RPC capabilities'
 );
 select ok(
   has_function_privilege(
@@ -194,6 +194,11 @@ select ok(
     )
     and not has_function_privilege(
       'unfiled_organizer_worker',
+      'public.list_active_note_rag_index(uuid,jsonb,integer,integer)',
+      'EXECUTE'
+    )
+    and not has_function_privilege(
+      'unfiled_organizer_worker',
       'public.register_user_content_key(uuid,text,public.content_key_class,public.content_key_purpose,integer,text,bytea)',
       'EXECUTE'
     )
@@ -206,7 +211,7 @@ select ok(
     and not has_table_privilege(
       'unfiled_organizer_worker', 'public.notes', 'UPDATE'
     ),
-  'the exact-eight role has no index, key lifecycle, private schema, or relation access'
+  'the exact-ten role has no unbound index, key lifecycle, private schema, or relation access'
 );
 select ok(
   not has_function_privilege(
@@ -265,6 +270,8 @@ select ok(
       'private.claim_encrypted_organizer_jobs_impl(text,integer,integer)'::regprocedure,
       'private.heartbeat_encrypted_organizer_job_impl(text,text,integer,jsonb)'::regprocedure,
       'private.list_encrypted_organizer_candidates_impl(text,text,integer)'::regprocedure,
+      'private.list_encrypted_organizer_rag_page_impl(text,text,jsonb,integer,integer)'::regprocedure,
+      'private.select_encrypted_organizer_candidates_impl(text,text,jsonb)'::regprocedure,
       'private.prepare_encrypted_organizer_write_impl(text,text,text,text,bigint,text)'::regprocedure,
       'private.prepare_encrypted_organizer_create_impl(text,text,text,text)'::regprocedure,
       'private.prepare_encrypted_organizer_append_impl(text,text,text,bigint,text)'::regprocedure,
@@ -307,6 +314,8 @@ select ok(
       'private.claim_encrypted_organizer_jobs_impl(text,integer,integer)'::regprocedure,
       'private.heartbeat_encrypted_organizer_job_impl(text,text,integer,jsonb)'::regprocedure,
       'private.list_encrypted_organizer_candidates_impl(text,text,integer)'::regprocedure,
+      'private.list_encrypted_organizer_rag_page_impl(text,text,jsonb,integer,integer)'::regprocedure,
+      'private.select_encrypted_organizer_candidates_impl(text,text,jsonb)'::regprocedure,
       'private.prepare_encrypted_organizer_write_impl(text,text,text,text,bigint,text)'::regprocedure,
       'private.prepare_encrypted_organizer_create_impl(text,text,text,text)'::regprocedure,
       'private.prepare_encrypted_organizer_append_impl(text,text,text,bigint,text)'::regprocedure,
@@ -459,6 +468,8 @@ select ok(
     from unnest(array[
       'private.heartbeat_encrypted_organizer_job_impl(text,text,integer,jsonb)'::regprocedure,
       'private.list_encrypted_organizer_candidates_impl(text,text,integer)'::regprocedure,
+      'private.list_encrypted_organizer_rag_page_impl(text,text,jsonb,integer,integer)'::regprocedure,
+      'private.select_encrypted_organizer_candidates_impl(text,text,jsonb)'::regprocedure,
       'private.prepare_encrypted_organizer_write_impl(text,text,text,text,bigint,text)'::regprocedure,
       'private.prepare_encrypted_organizer_append_impl(text,text,text,bigint,text)'::regprocedure
     ]) as guarded(function_oid)

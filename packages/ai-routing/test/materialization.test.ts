@@ -231,6 +231,35 @@ describe("authorized organization plan materialization", () => {
     expect(String(thrown)).not.toContain(sourceCanary);
   });
 
+  it("enforces source preservation when capture text is supplied", () => {
+    expect(
+      parseAuthorizedOrganizationPlan({
+        unknownPlan: appendPlan,
+        manifest,
+        captureText: "shopping: milk and eggs"
+      }).plan.operations[0]
+    ).toMatchObject({ type: "append_list_items" });
+
+    const sourceCanary = "private-capture-canary";
+    let thrown: unknown;
+    try {
+      parseAuthorizedOrganizationPlan({
+        unknownPlan: {
+          ...appendPlan,
+          operations: [{ type: "append_raw", content: "rewritten model output" }]
+        },
+        manifest,
+        captureText: sourceCanary
+      });
+    } catch (error: unknown) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({
+      code: OrganizationMaterializationErrorCode.SOURCE_PRESERVATION_FAILED
+    });
+    expect(String(thrown)).not.toContain(sourceCanary);
+  });
+
   it("rejects non-JSON values, accessors, cycles, and forged prototypes before schema parsing", () => {
     let getterCalls = 0;
     const accessorPlan = Object.create(null) as Record<string, unknown>;

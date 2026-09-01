@@ -11,6 +11,7 @@ const macArn = "arn:aws:kms:us-west-2:123456789012:key/66666666-7777-4888-8999-0
 const retiredObjectArn =
   "arn:aws:kms:us-west-2:123456789012:key/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 const pem = "-----BEGIN CERTIFICATE-----\n" + "A".repeat(80) + "\n-----END CERTIFICATE-----\n";
+const providerKey = "a".repeat(32);
 
 function local(overrides: OrganizerEnvironment = {}): OrganizerEnvironment {
   return {
@@ -42,6 +43,7 @@ function production(overrides: OrganizerEnvironment = {}): OrganizerEnvironment 
     UNFILED_ORGANIZER_DATABASE_EXPECTED_HOST: "aws-0-us-west-2.pooler.supabase.com",
     UNFILED_ORGANIZER_DATABASE_PROJECT_REF: "abcdefghijklmnopqrst",
     UNFILED_ORGANIZER_DATABASE_CA_PEM_BASE64: Buffer.from(pem).toString("base64"),
+    UNFILED_ORGANIZER_OPENAI_API_KEY: providerKey,
     ...overrides
   };
 }
@@ -55,13 +57,14 @@ describe("organizer configuration", () => {
         requestTimeoutMs: 49_000,
         maxRequestBytes: 1_024,
         pipeline: { kind: "disabled" },
+        planner: { kind: "disabled" },
         keyBoundary: { kind: "local-synthetic", keyClass: "ai_assisted" }
       })
     );
     expect(ORGANIZER_CAPABILITIES).toEqual(
       expect.objectContaining({
         acceptsUserSessions: false,
-        productionPlannerConfigured: false,
+        productionPlannerConfigured: true,
         decryptKeyClasses: ["ai_assisted"]
       })
     );
@@ -89,6 +92,7 @@ describe("organizer configuration", () => {
       concurrency: 2,
       leaseSeconds: 120
     });
+    expect(config.planner).toMatchObject({ kind: "openai-responses" });
   });
   it.each([
     ["missing runtime", {}, ["UNFILED_ORGANIZER_ENV"]],
@@ -112,6 +116,16 @@ describe("organizer configuration", () => {
     ],
     ["user session", local({ AUTH_SECRET: "present" }), ["AUTH_SECRET"]],
     ["provider key", local({ OPENAI_API_KEY: "present" }), ["OPENAI_API_KEY"]],
+    [
+      "dedicated provider key outside production",
+      local({ UNFILED_ORGANIZER_OPENAI_API_KEY: providerKey }),
+      ["UNFILED_ORGANIZER_OPENAI_API_KEY"]
+    ],
+    [
+      "provider model override",
+      local({ UNFILED_ORGANIZER_OPENAI_MODEL: "gpt-latest" }),
+      ["UNFILED_ORGANIZER_OPENAI_MODEL"]
+    ],
     ["ambient database", local({ DATABASE_URL: "present" }), ["DATABASE_URL"]],
     [
       "Supabase secret",
@@ -131,6 +145,9 @@ describe("organizer configuration", () => {
     expect(() => loadOrganizerConfig(production({ VERCEL_ENV: "preview" }))).toThrow("VERCEL_ENV");
   });
   it.each([
+    [{ UNFILED_ORGANIZER_OPENAI_API_KEY: undefined }, "UNFILED_ORGANIZER_OPENAI_API_KEY"],
+    [{ UNFILED_ORGANIZER_OPENAI_API_KEY: "short" }, "UNFILED_ORGANIZER_OPENAI_API_KEY"],
+    [{ UNFILED_ORGANIZER_OPENAI_API_KEY: ` ${providerKey}` }, "UNFILED_ORGANIZER_OPENAI_API_KEY"],
     [{ UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN: objectArn }, "UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN"],
     [{ UNFILED_AWS_REGION: "invalid" }, "UNFILED_AWS_REGION"],
     [{ UNFILED_AWS_ROLE_ARN: "arn:invalid" }, "UNFILED_AWS_ROLE_ARN"],

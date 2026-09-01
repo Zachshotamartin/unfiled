@@ -1,30 +1,14 @@
-import { DeterministicOrganizationModel } from "../fake-model.js";
-import { smokeEvaluationExitCode, type SmokeEvaluationResult } from "./smoke.js";
+import { loadRoutingEvaluationCorpus } from "./corpus.js";
+import { evaluateRoutingCorpus, routingEvaluationExitCode } from "./harness.js";
 
-const model = new DeterministicOrganizationModel();
-const result = await model.plan({
-  captureId: "cap_01J6M9Q7G4BMKB33GSG3NJ6D1X",
-  text: "shopping: milk and batteries",
-  inferredKind: "list_items",
-  candidates: [
-    {
-      candidateId: "note_01J6M9Q7G4BMKB33GSG3NJ6D1Y",
-      title: "Shopping",
-      type: "list",
-      spacePath: "Shopping",
-      isOpen: true,
-      ageBucket: "today",
-      headings: ["Open items"],
-      latestSnippet: "eggs"
-    }
-  ]
-});
-
-const evaluation: SmokeEvaluationResult = {
-  corpusVersion: "milestone-a-smoke",
-  cases: 1,
-  passed: result.decision === "append_to_note"
-};
-
-process.stdout.write(`${JSON.stringify(evaluation, null, 2)}\n`);
-process.exitCode = smokeEvaluationExitCode(evaluation);
+try {
+  const corpus = await loadRoutingEvaluationCorpus();
+  const report = evaluateRoutingCorpus(corpus);
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  process.exitCode = routingEvaluationExitCode(report);
+} catch (error: unknown) {
+  process.stderr.write(
+    `${JSON.stringify({ passed: false, error: error instanceof Error ? error.message : "Routing evaluation failed" })}\n`
+  );
+  process.exitCode = 1;
+}

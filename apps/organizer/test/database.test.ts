@@ -12,19 +12,37 @@ import {
 import { OrganizerUnavailableError } from "../src/errors.js";
 
 const ULID = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+const SECOND_ULID = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
 const JOB_ID = `job_${ULID}`;
 const CAPTURE_ID = `cap_${ULID}`;
 const NOTE_ID = `note_${ULID}` as const;
+const SECOND_NOTE_ID = `note_${SECOND_ULID}` as const;
+const INDEX_ID = `irw_${ULID}`;
+const SECOND_INDEX_ID = `irw_${SECOND_ULID}`;
+const GENERATION_ID = `igen_${ULID}`;
 const OWNER_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const LEASE = "11111111-1111-4111-8111-111111111111";
 const NOW = "2026-08-31T20:00:00.000Z";
 const controls = Object.freeze({ expansionDisabled: false, explicitDestinationNoteId: null });
+const RAG_PAGE_BYTES = 262_160;
+const ragSnapshot = Object.freeze({
+  dimensions: 3,
+  expectedNoteCount: 2,
+  generationId: GENERATION_ID,
+  indexedNoteCount: 2,
+  modelId: "text-embedding-3-small",
+  revisionToken: "7"
+});
 
 function b64(bytes: number, fill: number): string {
   return Buffer.alloc(bytes, fill).toString("base64url");
 }
 
-function envelope(kind: "capture" | "note_content", resourceId: string, recordVersion: number) {
+function envelope(
+  kind: "capture" | "note_content" | "note_rag_index",
+  resourceId: string,
+  recordVersion: number
+) {
   return {
     version: 1,
     suite: "A256GCM",
@@ -61,9 +79,13 @@ function key(purpose: "content_mac" | "object_wrap" = "object_wrap") {
   };
 }
 
-function projection(kind: "capture" | "note_content", resourceId: string, recordVersion: number) {
+function projection(
+  kind: "capture" | "note_content" | "note_rag_index",
+  resourceId: string,
+  recordVersion: number
+) {
   const value = envelope(kind, resourceId, recordVersion);
-  return {
+  const base = {
     resourceId,
     recordVersion,
     envelope: value,
@@ -71,6 +93,19 @@ function projection(kind: "capture" | "note_content", resourceId: string, record
     encryptedByteLength: 16,
     serializedBytes: Buffer.byteLength(JSON.stringify(value))
   };
+  return kind === "capture"
+    ? {
+        ...base,
+        contentMac: {
+          mac: "a".repeat(64),
+          keyId: "ai_assisted.content_mac.v1",
+          keyClass: "ai_assisted",
+          keyPurpose: "content_mac",
+          keyVersion: 1
+        },
+        contentMacKeyRecord: key("content_mac")
+      }
+    : base;
 }
 
 function claim(overrides: Record<string, unknown> = {}) {
@@ -79,17 +114,22 @@ function claim(overrides: Record<string, unknown> = {}) {
   return {
     jobs: [
       {
+        accountCaptureOrdinal: 6,
         attempt: 1,
         captureId: CAPTURE_ID,
+        clientTimezone: "UTC",
         controls,
         jobId: JOB_ID,
         leaseExpiresAt: NOW,
         leaseToken: LEASE,
+        occurredAt: NOW,
         ownerId: OWNER_ID,
         promptVersion: "organization-v1",
         replanCount: 0,
+        routingMode: "balanced",
         schemaVersion: 1,
         source: sourceProjection,
+        commandProjection: "encrypted_only",
         ...overrides
       }
     ],
@@ -98,26 +138,146 @@ function claim(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function candidatePage(overrides: Record<string, unknown> = {}) {
-  const aggregate = projection("note_content", NOTE_ID, 2);
+function candidateEntry(noteId: typeof NOTE_ID | typeof SECOND_NOTE_ID, revision: number) {
+  const aggregate = projection("note_content", noteId, revision);
   const { serializedBytes, ...aggregateProjection } = aggregate;
+  return {
+    candidate: {
+      candidateId: noteId,
+      noteId,
+      revision,
+      type: "list",
+      metadata: {
+        archivedAt: null,
+        dailyDate: null,
+        deletedAt: null,
+        isOpen: true,
+        links: [],
+        pinnedAt: null,
+        spaceId: null,
+        tagIds: [],
+        updatedAt: NOW
+      },
+      aggregate: aggregateProjection
+    },
+    serializedBytes
+  };
+}
+
+function candidatePage(overrides: Record<string, unknown> = {}) {
+  const { candidate, serializedBytes } = candidateEntry(NOTE_ID, 2);
   return {
     jobId: JOB_ID,
     controls,
-    candidates: [
-      {
-        candidateId: NOTE_ID,
-        noteId: NOTE_ID,
-        revision: 2,
-        type: "list",
-        metadata: { isOpen: true, spaceId: null, updatedAt: NOW },
-        aggregate: aggregateProjection
-      }
-    ],
+    candidates: [candidate],
     returnedCount: 1,
     encryptedBytes: serializedBytes,
     encryptedByteBudget: 8_388_608,
     ...overrides
+  };
+}
+
+function ragItem(
+  indexId: typeof INDEX_ID | typeof SECOND_INDEX_ID,
+  noteId: typeof NOTE_ID | typeof SECOND_NOTE_ID,
+  indexedRevision: number
+) {
+  const record = projection("note_rag_index", indexId, indexedRevision);
+  return {
+    cipher: {
+      envelope: record.envelope,
+      keyClass: "ai_assisted",
+      keyId: record.keyRecord.keyId,
+      keyPurpose: "object_wrap",
+      keyVersion: record.keyRecord.keyVersion
+    },
+    encryptedByteLength: record.encryptedByteLength,
+    indexId,
+    indexedRevision,
+    noteId
+  };
+}
+
+function ragPageResult(
+  items: readonly ReturnType<typeof ragItem>[],
+  options: Readonly<{
+    hasMore?: boolean;
+    limit?: number;
+    maxBytes?: number;
+    overrides?: Record<string, unknown>;
+  }> = {}
+) {
+  const hasMore = options.hasMore ?? false;
+  const last = items.at(-1);
+  return {
+    jobId: JOB_ID,
+    result: {
+      coverage: {
+        complete: true,
+        coveredNoteCount: 2,
+        eligibleNoteCount: 2,
+        expectedNoteCount: 2,
+        indexedNoteCount: 2,
+        pendingJobCount: 0,
+        repairCandidates: [],
+        repairCount: 0,
+        repairLimitExceeded: false,
+        verified: true
+      },
+      generation: {
+        embeddingDimensions: ragSnapshot.dimensions,
+        embeddingModelId: ragSnapshot.modelId,
+        envelopeSchemaVersion: 1,
+        generationId: ragSnapshot.generationId,
+        revisionToken: Number(ragSnapshot.revisionToken)
+      },
+      items,
+      keys: items.length === 0 ? [] : [key()],
+      ownerId: OWNER_ID,
+      page: {
+        ciphertextByteBudget: options.maxBytes ?? RAG_PAGE_BYTES,
+        ciphertextBytes: items.reduce((sum, item) => sum + item.encryptedByteLength, 0),
+        hasMore,
+        limit: options.limit ?? 1,
+        nextCursor:
+          hasMore && last !== undefined
+            ? {
+                afterIndexId: last.indexId,
+                generationId: ragSnapshot.generationId,
+                revisionToken: Number(ragSnapshot.revisionToken)
+              }
+            : null,
+        returnedCount: items.length
+      },
+      ...options.overrides
+    }
+  };
+}
+
+function selectedCandidatePage(
+  entries: readonly ReturnType<typeof candidateEntry>[],
+  overrides: Record<string, unknown> = {}
+) {
+  return {
+    candidates: entries.map(({ candidate }) => candidate),
+    controls,
+    encryptedByteBudget: 8_388_608,
+    encryptedBytes: entries.reduce((sum, entry) => sum + entry.serializedBytes, 0),
+    generationId: ragSnapshot.generationId,
+    jobId: JOB_ID,
+    returnedCount: entries.length,
+    revisionToken: Number(ragSnapshot.revisionToken),
+    ...overrides
+  };
+}
+
+function ragSelection() {
+  return {
+    candidates: [
+      { indexedRevision: 2, noteId: NOTE_ID },
+      { indexedRevision: 3, noteId: SECOND_NOTE_ID }
+    ],
+    snapshot: ragSnapshot
   };
 }
 
@@ -188,7 +348,7 @@ const command = Object.freeze({
 });
 
 describe("organizer database adapter", () => {
-  it("uses only the exact role and eight text-token RPC contracts end to end", async () => {
+  it("uses only the exact role and text-token RPC contracts end to end", async () => {
     const db = executor([
       {
         rows: [{ sessionUser: "unfiled_organizer_worker", currentUser: "unfiled_organizer_worker" }]
@@ -270,6 +430,250 @@ describe("organizer database adapter", () => {
     ]);
     expect(ORGANIZER_RPC_SQL.heartbeat).toContain("$2::text");
     expect(ORGANIZER_RPC_SQL.heartbeat).toContain("$4::jsonb");
+  });
+
+  it("parses encrypted RAG pages and sends the exact lease-bound paging parameters", async () => {
+    const firstItem = ragItem(INDEX_ID, NOTE_ID, 2);
+    const secondItem = ragItem(SECOND_INDEX_ID, SECOND_NOTE_ID, 3);
+    const db = executor([
+      rpc(claim()),
+      rpc(ragPageResult([firstItem], { hasMore: true })),
+      rpc(ragPageResult([secondItem]))
+    ]);
+    const repository = createOrganizerRepository(db);
+    await repository.claim({ leaseSeconds: 120, limit: 1, signal, workerId: "worker-1" });
+
+    const first = await repository.ragPage({
+      cursor: null,
+      jobId: JOB_ID,
+      leaseToken: LEASE,
+      limit: 1,
+      maxBytes: RAG_PAGE_BYTES,
+      signal
+    });
+    expect(first.status).toBe("page");
+    if (first.status !== "page") throw new Error("expected an encrypted RAG page");
+    expect(first.page).toMatchObject({
+      coverage: { missingOrStaleCount: 0, repairOverflow: false, status: "complete" },
+      items: [
+        {
+          ciphertextBytes: 16,
+          indexId: INDEX_ID,
+          indexedRevision: 2,
+          noteId: NOTE_ID,
+          record: { recordVersion: 2, resourceId: INDEX_ID }
+        }
+      ],
+      snapshot: ragSnapshot
+    });
+    expect(first.page.nextCursor).toBe(
+      JSON.stringify({
+        afterIndexId: INDEX_ID,
+        generationId: GENERATION_ID,
+        revisionToken: 7
+      })
+    );
+
+    const second = await repository.ragPage({
+      cursor: first.page.nextCursor,
+      jobId: JOB_ID,
+      leaseToken: LEASE,
+      limit: 1,
+      maxBytes: RAG_PAGE_BYTES,
+      signal
+    });
+    expect(second).toMatchObject({
+      status: "page",
+      page: { items: [{ indexId: SECOND_INDEX_ID, noteId: SECOND_NOTE_ID }], nextCursor: null }
+    });
+    expect(db.queries.slice(1).map(({ text, values }) => ({ text, values }))).toEqual([
+      {
+        text: ORGANIZER_RPC_SQL.ragPage,
+        values: [JOB_ID, LEASE, null, 1, RAG_PAGE_BYTES]
+      },
+      {
+        text: ORGANIZER_RPC_SQL.ragPage,
+        values: [
+          JOB_ID,
+          LEASE,
+          { afterIndexId: INDEX_ID, generationId: GENERATION_ID, revisionToken: 7 },
+          1,
+          RAG_PAGE_BYTES
+        ]
+      }
+    ]);
+  });
+
+  it("parses the explicit no-active-generation RAG result", async () => {
+    const db = executor([
+      rpc(claim()),
+      rpc({
+        jobId: JOB_ID,
+        result: {
+          coverage: {
+            complete: false,
+            coveredNoteCount: 0,
+            eligibleNoteCount: 0,
+            expectedNoteCount: 0,
+            indexedNoteCount: 0,
+            pendingJobCount: 0,
+            repairCandidates: [],
+            repairCount: 0,
+            repairLimitExceeded: false,
+            verified: false
+          },
+          generation: null,
+          items: [],
+          keys: [],
+          ownerId: OWNER_ID,
+          page: {
+            ciphertextByteBudget: RAG_PAGE_BYTES,
+            ciphertextBytes: 0,
+            hasMore: false,
+            limit: 1,
+            nextCursor: null,
+            returnedCount: 0
+          }
+        }
+      })
+    ]);
+    const repository = createOrganizerRepository(db);
+    await repository.claim({ leaseSeconds: 120, limit: 1, signal, workerId: "worker-1" });
+    await expect(
+      repository.ragPage({
+        cursor: null,
+        jobId: JOB_ID,
+        leaseToken: LEASE,
+        limit: 1,
+        maxBytes: RAG_PAGE_BYTES,
+        signal
+      })
+    ).resolves.toEqual({ status: "no_active_generation" });
+  });
+
+  it("parses selected encrypted candidates in caller order with exact snapshot bindings", async () => {
+    const first = candidateEntry(NOTE_ID, 2);
+    const second = candidateEntry(SECOND_NOTE_ID, 3);
+    const db = executor([rpc(claim()), rpc(selectedCandidatePage([first, second]))]);
+    const repository = createOrganizerRepository(db);
+    await repository.claim({ leaseSeconds: 120, limit: 1, signal, workerId: "worker-1" });
+
+    const page = await repository.selectCandidates({
+      jobId: JOB_ID,
+      leaseToken: LEASE,
+      selection: ragSelection(),
+      signal
+    });
+    expect(page.snapshot).toEqual(ragSnapshot);
+    expect(page.candidates.map(({ noteId, revision }) => ({ noteId, revision }))).toEqual([
+      { noteId: NOTE_ID, revision: 2 },
+      { noteId: SECOND_NOTE_ID, revision: 3 }
+    ]);
+    expect(db.queries[1]).toMatchObject({
+      text: ORGANIZER_RPC_SQL.selectCandidates,
+      values: [
+        JOB_ID,
+        LEASE,
+        {
+          candidates: ragSelection().candidates,
+          generationId: GENERATION_ID,
+          revisionToken: 7
+        }
+      ]
+    });
+  });
+
+  it("rejects malformed RAG records and reordered or revision-drifted selections", async () => {
+    const malformedRag = createOrganizerRepository(
+      executor([
+        rpc(claim()),
+        rpc(ragPageResult([ragItem(INDEX_ID, NOTE_ID, 2)], { overrides: { keys: [] } }))
+      ])
+    );
+    await malformedRag.claim({ leaseSeconds: 120, limit: 1, signal, workerId: "worker-1" });
+    await expect(
+      malformedRag.ragPage({
+        cursor: null,
+        jobId: JOB_ID,
+        leaseToken: LEASE,
+        limit: 1,
+        maxBytes: RAG_PAGE_BYTES,
+        signal
+      })
+    ).rejects.toBeInstanceOf(OrganizerDatabaseContractError);
+
+    for (const returned of [
+      [candidateEntry(SECOND_NOTE_ID, 3), candidateEntry(NOTE_ID, 2)],
+      [candidateEntry(NOTE_ID, 2), candidateEntry(SECOND_NOTE_ID, 4)]
+    ]) {
+      const repository = createOrganizerRepository(
+        executor([rpc(claim()), rpc(selectedCandidatePage(returned))])
+      );
+      await repository.claim({ leaseSeconds: 120, limit: 1, signal, workerId: "worker-1" });
+      await expect(
+        repository.selectCandidates({
+          jobId: JOB_ID,
+          leaseToken: LEASE,
+          selection: ragSelection(),
+          signal
+        })
+      ).rejects.toBeInstanceOf(OrganizerDatabaseContractError);
+    }
+  });
+
+  it("rejects malformed RAG requests before disclosure and normalizes retrieval transport errors", async () => {
+    const invalidDb = executor([rpc(claim())]);
+    const invalid = createOrganizerRepository(invalidDb);
+    await invalid.claim({ leaseSeconds: 120, limit: 1, signal, workerId: "worker-1" });
+    await expect(
+      invalid.ragPage({
+        cursor: '{"generationId":"forged"}',
+        jobId: JOB_ID,
+        leaseToken: LEASE,
+        limit: 1,
+        maxBytes: RAG_PAGE_BYTES,
+        signal
+      })
+    ).rejects.toBeInstanceOf(OrganizerDatabaseContractError);
+    await expect(
+      invalid.selectCandidates({
+        jobId: JOB_ID,
+        leaseToken: LEASE,
+        selection: {
+          candidates: [
+            { indexedRevision: 2, noteId: NOTE_ID },
+            { indexedRevision: 2, noteId: NOTE_ID }
+          ],
+          snapshot: ragSnapshot
+        },
+        signal
+      })
+    ).rejects.toBeInstanceOf(OrganizerDatabaseContractError);
+    expect(invalidDb.queries).toHaveLength(1);
+
+    for (const operation of ["ragPage", "selectCandidates"] as const) {
+      const repository = createOrganizerRepository(
+        executor([rpc(claim()), { throw: { code: "08006" } }])
+      );
+      await repository.claim({ leaseSeconds: 120, limit: 1, signal, workerId: "worker-1" });
+      const pending =
+        operation === "ragPage"
+          ? repository.ragPage({
+              cursor: null,
+              jobId: JOB_ID,
+              leaseToken: LEASE,
+              limit: 1,
+              maxBytes: RAG_PAGE_BYTES,
+              signal
+            })
+          : repository.selectCandidates({
+              jobId: JOB_ID,
+              leaseToken: LEASE,
+              selection: ragSelection(),
+              signal
+            });
+      await expect(pending).rejects.toBeInstanceOf(OrganizerUnavailableError);
+    }
   });
 
   it("parses replan, review-required, fail, and exact recovery results", async () => {
@@ -522,6 +926,22 @@ describe("organizer database adapter", () => {
     const malformedRepository = createOrganizerRepository(executor([rpc(malformed)]));
     await expect(
       malformedRepository.claim({ leaseSeconds: 120, limit: 1, signal, workerId: "worker-1" })
+    ).rejects.toBeInstanceOf(OrganizerDatabaseContractError);
+
+    const { candidate: mismatchedCandidate } = candidateEntry(NOTE_ID, 2);
+    const mismatchedIds = createOrganizerRepository(
+      executor([
+        rpc(claim()),
+        rpc(
+          candidatePage({
+            candidates: [{ ...mismatchedCandidate, candidateId: SECOND_NOTE_ID }]
+          })
+        )
+      ])
+    );
+    await mismatchedIds.claim({ leaseSeconds: 120, limit: 1, signal, workerId: "worker-1" });
+    await expect(
+      mismatchedIds.candidates({ jobId: JOB_ID, leaseToken: LEASE, limit: 8, signal })
     ).rejects.toBeInstanceOf(OrganizerDatabaseContractError);
 
     const db = executor([rpc(claim()), rpc(candidatePage())]);

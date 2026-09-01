@@ -170,7 +170,7 @@ In order; first failure sends the capture to Inbox with `invalid_plan` (and the 
 2. `candidateId` (destination, relations, spaces) ∈ manifest; ownership re-verified server-side.
 3. Operations compatible with destination type (no `append_log_entry` to a `principle` note).
 4. Item counts, lengths, operation count within limits.
-5. **Preservation check:** the concatenated operation content must contain the capture's informational content — verified by token-overlap heuristic (≥ 0.9 of capture's content tokens appear in operations) or the presence of `append_raw`. Rewrites fail.
+5. **Preservation check:** prose operations must preserve the capture byte-for-byte (`append_raw`, or paragraphs joined with their exact separators). Only server-owned deterministic list/log extraction may remove routing scaffolding, and then every informational token must remain once, in order, with no novel token. Reordering, normalization, punctuation/case changes, and partial overlap fail.
 6. `generatedExpansion` present only if user's expansion preference allows.
 7. Note revision precondition captured for stage 6.
 
@@ -282,7 +282,9 @@ At 1,000 eligible notes, exact encrypted retrieval additionally gates at p95 < 2
 
 ### 12.4 Procedure
 
-Deterministic stages run in CI on every PR (mock model). Full stochastic eval (n=3 samples per case, report worst) runs on prompt/schema/model/weight changes and nightly on main; results committed as a dated report. A regression on any gating metric blocks the change. Baselines pin: prompt version, schema version, candidate algorithm hash, model ID, weights.
+`pnpm eval:routing` runs the 175-case deterministic mock safety corpus. `pnpm eval:routing:pipeline` runs a separate deterministic production-component seam through real retrieval/ranking, strict plan parsing/authorization, source preservation, policy, materialization, and application. Its report explicitly sets `liveProviderEvidence=false`, lists those exercised components, and excludes database lease/heartbeat, encrypted seal/persist, and repository select/commit generation revalidation. Both credential-free stages run in CI on every PR.
+
+The optional credentialed stage is `pnpm eval:routing:live`. It requires the dedicated `UNFILED_ROUTING_EVAL_OPENAI_API_KEY` with no generic/runtime-key fallback, runs the strict pinned OpenAI planner exactly three times for every live-eligible frozen synthetic pipeline case, and reports worst-of-three results. Telemetry is content-free: case IDs, decisions/bands/error codes, request completion/status, latency, token counts, estimated cost, version pins, and hashes—never prompts, responses, capture text, or candidate text. Run it on prompt/schema/model/weight changes and for release evidence, then commit a reviewed dated report. No credentialed live evaluation or report has been completed yet. A regression on any gating metric blocks the change; baselines pin prompt version, schema version, candidate algorithm, candidate fixtures, model ID, and weights.
 
 ## 13. Provider and effort settings (BYOK)
 
