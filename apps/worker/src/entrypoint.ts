@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 
-import { loadWorkerConfig } from "./config";
-import { createWorkerComposition } from "./composition";
-import type { WorkerApp } from "./http";
+import { loadWorkerConfig } from "./config.js";
+import { createWorkerComposition } from "./composition.js";
+import type { WorkerApp } from "./http.js";
 
 let application: WorkerApp | undefined;
 

@@ -8,6 +8,7 @@ export const ServiceRpcErrorCode = Object.freeze({
   KEY_UNAVAILABLE: "key_unavailable",
   NOT_FOUND: "not_found",
   PROVIDER_UNAVAILABLE: "provider_unavailable",
+  STALE_MAINTENANCE_CURSOR: "stale_maintenance_cursor",
   STALE_REVISION: "stale_revision",
   UNAUTHORIZED: "unauthorized",
   VALIDATION_FAILED: "validation_failed"
@@ -132,6 +133,9 @@ function databaseError(status: number, body: unknown): ServiceRpcError {
   }
   if (message.includes("stale_revision")) {
     return new ServiceRpcError(ServiceRpcErrorCode.STALE_REVISION);
+  }
+  if (message.includes("stale_maintenance_cursor")) {
+    return new ServiceRpcError(ServiceRpcErrorCode.STALE_MAINTENANCE_CURSOR);
   }
   if (
     message.includes("key_unavailable") ||

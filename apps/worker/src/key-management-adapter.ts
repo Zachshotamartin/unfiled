@@ -1,5 +1,5 @@
 import {
-  assertAiAssistedKmsReadiness,
+  assertIndexWorkerKmsReadiness,
   createAwsKmsEnvelopeCustodian,
   createVercelOidcKmsTransport,
   type CreateIntermediateKeyRequest,
@@ -7,12 +7,12 @@ import {
   type ManagedKeyRecordV1
 } from "@unfiled/key-management";
 
-import type { AwsWorkerKeyBoundary, WorkerConfig, WorkerRuntime } from "./config";
-import { WorkerUnavailableError } from "./errors";
+import type { AwsWorkerKeyBoundary, WorkerConfig, WorkerRuntime } from "./config.js";
+import { WorkerUnavailableError } from "./errors.js";
 import {
   isVerifiedWorkerInvocation,
   type VerifiedWorkerInvocation
-} from "./invocation-auth-adapter";
+} from "./invocation-auth-adapter.js";
 
 const MAX_OIDC_TOKEN_LENGTH = 16_384;
 const JWT_PATTERN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
@@ -183,7 +183,7 @@ export function isAwsWorkerBoundary(
 
 /**
  * A successful readiness session proves STS exchange plus GenerateDataKey and
- * Decrypt on both active AI-assisted roots before authority can be minted.
+ * Decrypt on the active AI-assisted object-wrap root before authority is minted.
  */
 async function openAwsReadinessSession(
   boundary: AwsWorkerKeyBoundary,
@@ -199,20 +199,19 @@ async function openAwsReadinessSession(
     transport = await createVercelOidcKmsTransport({
       region: boundary.region,
       roleArn: boundary.roleArn,
-      workload: "organization_worker"
+      workload: "index_worker"
     });
     const activeRoots = {
       ai_assisted: {
-        content_mac: boundary.aiContentMacKmsKeyArn,
         object_wrap: boundary.aiObjectWrapKmsKeyArn
       }
     } as const;
-    await assertAiAssistedKmsReadiness({ activeRoots, signal, transport });
+    await assertIndexWorkerKmsReadiness({ activeRoots, signal, transport });
     const custodian = createAwsKmsEnvelopeCustodian({
       activeRoots,
       retiredRoots: boundary.retiredRoots,
       transport,
-      workload: "organization_worker"
+      workload: "index_worker"
     });
     return Object.freeze({
       close: () => transport?.destroy(),

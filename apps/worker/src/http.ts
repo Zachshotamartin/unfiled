@@ -1,21 +1,21 @@
 import { randomUUID } from "node:crypto";
 
-import type { WorkerConfig } from "./config";
-import type { DrainResult, DrainTrigger, WorkerDrainPort } from "./drain";
-import { isDrainResult, unconfiguredDrainPort } from "./drain";
-import { classifyWorkerError, WorkerError } from "./errors";
+import type { WorkerConfig } from "./config.js";
+import type { DrainResult, DrainTrigger, WorkerDrainPort } from "./drain.js";
+import { isDrainResult, unconfiguredDrainPort } from "./drain.js";
+import { classifyWorkerError, WorkerError } from "./errors.js";
 import {
   oidcTokenFromRequest,
   isAiAssistedKeyAuthority,
   type WorkerKeyManagementAdapter,
   unconfiguredKeyManagementAdapter
-} from "./key-management-adapter";
+} from "./key-management-adapter.js";
 import {
   authorizeLocalWorkerInvocation,
   type ProductionInvocationAuthAdapter,
   unconfiguredProductionInvocationAuth
-} from "./invocation-auth-adapter";
-import { createStructuredLogger, type WorkerLogger, type WorkerRoute } from "./logging";
+} from "./invocation-auth-adapter.js";
+import { createStructuredLogger, type WorkerLogger, type WorkerRoute } from "./logging.js";
 
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,80}$/;
 const SAFE_METHOD_PATTERN = /^[A-Z]{1,12}$/;

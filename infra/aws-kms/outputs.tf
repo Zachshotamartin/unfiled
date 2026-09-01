@@ -1,5 +1,5 @@
 output "vercel_oidc_provider_arn" {
-  description = "AWS IAM OIDC provider trusted by the two exact production subjects."
+  description = "AWS IAM OIDC provider trusted by the three exact production subjects."
   value       = aws_iam_openid_connect_provider.vercel.arn
 }
 
@@ -9,8 +9,13 @@ output "web_oidc_subject" {
 }
 
 output "worker_oidc_subject" {
-  description = "Exact Vercel production subject trusted by the AI-only worker role."
+  description = "Exact Vercel production subject trusted by the AI object-wrap-only worker role."
   value       = local.worker_subject
+}
+
+output "verifier_oidc_subject" {
+  description = "Exact Vercel production subject trusted by the decrypt-only RAG verifier role."
+  value       = local.verifier_subject
 }
 
 output "web_role_arn" {
@@ -23,13 +28,18 @@ output "worker_role_arn" {
   value       = aws_iam_role.worker.arn
 }
 
+output "verifier_role_arn" {
+  description = "Set as UNFILED_AWS_ROLE_ARN only in the isolated verifier Vercel project."
+  value       = aws_iam_role.verifier.arn
+}
+
 output "ai_assisted_object_wrap_kms_key_arn" {
-  description = "Active AI-assisted object-wrapping root ARN available to web and worker roles."
+  description = "Active AI-assisted object-wrapping root ARN available to web and worker roles and decrypt-only to the verifier role."
   value       = aws_kms_key.root[local.active_generation_id_by_pair["ai_assisted_object_wrap"]].arn
 }
 
 output "ai_assisted_content_mac_kms_key_arn" {
-  description = "Active AI-assisted content-MAC root ARN available to web and worker roles."
+  description = "Active AI-assisted content-MAC root ARN available only to the interactive web role."
   value       = aws_kms_key.root[local.active_generation_id_by_pair["ai_assisted_content_mac"]].arn
 }
 
@@ -81,7 +91,7 @@ output "web_root_key_registry" {
 }
 
 output "worker_root_key_registry" {
-  description = "AI-assisted-only active, staged, and retired key registry available to the isolated worker; no private identifiers are included."
+  description = "AI-assisted object-wrap active, staged, and retired key registry available to the isolated index worker; no content-MAC or private identifiers are included."
   value = {
     for registry_id, generation in local.root_key_generations : registry_id => {
       key_class   = generation.key_class
@@ -89,20 +99,36 @@ output "worker_root_key_registry" {
       generation  = generation.generation
       status      = generation.status
       kms_key_arn = aws_kms_key.root[registry_id].arn
-    } if generation.key_class == "ai_assisted"
+    } if generation.key_class == "ai_assisted" && generation.purpose == "object_wrap"
   }
 }
 
-output "worker_retired_ai_root_registry_json" {
-  description = "Exact JSON value for UNFILED_RETIRED_AI_ROOT_REGISTRY_JSON; contains retired AI-assisted roots only and no private or staged identifiers."
+output "verifier_root_key_registry" {
+  description = "AI-assisted object-wrap active, staged, and retired key registry available to the verifier; its IAM role is decrypt-only."
+  value = {
+    for registry_id, generation in local.root_key_generations : registry_id => {
+      key_class   = generation.key_class
+      purpose     = generation.purpose
+      generation  = generation.generation
+      status      = generation.status
+      kms_key_arn = aws_kms_key.root[registry_id].arn
+    } if generation.key_class == "ai_assisted" && generation.purpose == "object_wrap"
+  }
+}
+
+output "verifier_retired_ai_object_wrap_roots_json" {
+  description = "Exact JSON value for UNFILED_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON; contains retired AI-assisted object-wrap root ARNs only."
   value = jsonencode([
-    for registry_id in sort(keys(local.root_key_generations)) : {
-      arn      = aws_kms_key.root[registry_id].arn
-      keyClass = local.root_key_generations[registry_id].key_class
-      purpose  = local.root_key_generations[registry_id].purpose
-      status   = local.root_key_generations[registry_id].status
-    }
-    if local.root_key_generations[registry_id].key_class == "ai_assisted" && local.root_key_generations[registry_id].status == "retired"
+    for registry_id in sort(keys(local.root_key_generations)) : aws_kms_key.root[registry_id].arn
+    if local.root_key_generations[registry_id].key_class == "ai_assisted" && local.root_key_generations[registry_id].purpose == "object_wrap" && local.root_key_generations[registry_id].status == "retired"
+  ])
+}
+
+output "worker_retired_ai_object_wrap_roots_json" {
+  description = "Exact JSON value for the worker's UNFILED_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON; contains retired AI-assisted object-wrap root ARNs only."
+  value = jsonencode([
+    for registry_id in sort(keys(local.root_key_generations)) : aws_kms_key.root[registry_id].arn
+    if local.root_key_generations[registry_id].key_class == "ai_assisted" && local.root_key_generations[registry_id].purpose == "object_wrap" && local.root_key_generations[registry_id].status == "retired"
   ])
 }
 

@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 
-import { createWorkerComposition } from "./composition";
-import { loadWorkerConfig } from "./config";
+import { createWorkerComposition } from "./composition.js";
+import { loadWorkerConfig } from "./config.js";
 
 const HARD_BODY_LIMIT_BYTES = 16_384;
 

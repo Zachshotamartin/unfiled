@@ -48,6 +48,15 @@ override_resource {
 }
 
 override_resource {
+  target          = aws_iam_role.verifier
+  override_during = plan
+  values = {
+    arn = "arn:aws:iam::123456789012:role/unfiled-production-verifier"
+    id  = "unfiled-production-verifier"
+  }
+}
+
+override_resource {
   target          = aws_kms_key.root["ai_assisted_object_wrap_v1"]
   override_during = plan
   values = {
@@ -88,9 +97,10 @@ variables {
   key_administrator_arns = [
     "arn:aws:iam::123456789012:role/unfiled-kms-admin",
   ]
-  vercel_team_slug    = "unfiled-team"
-  web_project_name    = "unfiled-web"
-  worker_project_name = "unfiled-worker"
+  vercel_team_slug      = "unfiled-team"
+  web_project_name      = "unfiled-web"
+  worker_project_name   = "unfiled-worker"
+  verifier_project_name = "unfiled-verifier"
 }
 
 run "four_active_roots_and_exact_workload_boundary" {
@@ -115,6 +125,7 @@ run "four_active_roots_and_exact_workload_boundary" {
     condition = (
       output.web_oidc_subject == "owner:unfiled-team:project:unfiled-web:environment:production"
       && output.worker_oidc_subject == "owner:unfiled-team:project:unfiled-worker:environment:production"
+      && output.verifier_oidc_subject == "owner:unfiled-team:project:unfiled-verifier:environment:production"
     )
     error_message = "OIDC trust must stay pinned to the exact, distinct production project names."
   }
@@ -124,6 +135,8 @@ run "four_active_roots_and_exact_workload_boundary" {
       jsondecode(aws_iam_role.worker.assume_role_policy).Statement[0].Condition.StringEquals["oidc.vercel.com/unfiled-team:aud"] == "sts.amazonaws.com"
       && jsondecode(aws_iam_role.worker.assume_role_policy).Statement[0].Condition.StringEquals["oidc.vercel.com/unfiled-team:sub"] == output.worker_oidc_subject
       && jsondecode(aws_iam_role.web.assume_role_policy).Statement[0].Condition.StringEquals["oidc.vercel.com/unfiled-team:sub"] == output.web_oidc_subject
+      && jsondecode(aws_iam_role.verifier.assume_role_policy).Statement[0].Condition.StringEquals["oidc.vercel.com/unfiled-team:aud"] == "sts.amazonaws.com"
+      && jsondecode(aws_iam_role.verifier.assume_role_policy).Statement[0].Condition.StringEquals["oidc.vercel.com/unfiled-team:sub"] == output.verifier_oidc_subject
     )
     error_message = "AWS role trust must keep the fixed STS audience and exact Vercel subjects."
   }
@@ -147,32 +160,90 @@ run "four_active_roots_and_exact_workload_boundary" {
   assert {
     condition = alltrue([
       for registry_id, generation in local.root_key_generations :
-      jsondecode(aws_kms_key.root[registry_id].policy).Statement[2].Condition.StringEquals["kms:EncryptionContext:UnfiledKeyClass"] == generation.key_class
-      && jsondecode(aws_kms_key.root[registry_id].policy).Statement[2].Condition.StringEquals["kms:EncryptionContext:UnfiledKeyPurpose"] == generation.purpose
-      && toset(jsondecode(aws_kms_key.root[registry_id].policy).Statement[2].Condition["ForAllValues:StringEquals"]["kms:EncryptionContextKeys"]) == toset(local.encryption_context_keys)
-      && toset(jsondecode(aws_kms_key.root[registry_id].policy).Statement[2].Action) == toset(["kms:Decrypt", "kms:GenerateDataKey"])
-      && toset(jsondecode(aws_kms_key.root[registry_id].policy).Statement[3].Action) == toset(["kms:ReEncryptTo"])
+      one([
+        for statement in jsondecode(aws_kms_key.root[registry_id].policy).Statement : statement
+        if statement.Sid == "BoundActiveIntermediateKey"
+      ]).Condition.StringEquals["kms:EncryptionContext:UnfiledKeyClass"] == generation.key_class
+      && one([
+        for statement in jsondecode(aws_kms_key.root[registry_id].policy).Statement : statement
+        if statement.Sid == "BoundActiveIntermediateKey"
+      ]).Condition.StringEquals["kms:EncryptionContext:UnfiledKeyPurpose"] == generation.purpose
+      && toset(one([
+        for statement in jsondecode(aws_kms_key.root[registry_id].policy).Statement : statement
+        if statement.Sid == "BoundActiveIntermediateKey"
+      ]).Condition["ForAllValues:StringEquals"]["kms:EncryptionContextKeys"]) == toset(local.encryption_context_keys)
+      && toset(one([
+        for statement in jsondecode(aws_kms_key.root[registry_id].policy).Statement : statement
+        if statement.Sid == "BoundActiveIntermediateKey"
+      ]).Action) == toset(["kms:Decrypt", "kms:GenerateDataKey"])
+      && toset(one([
+        for statement in jsondecode(aws_kms_key.root[registry_id].policy).Statement : statement
+        if statement.Sid == "InteractiveApiReEncryptToActive"
+      ]).Action) == toset(["kms:ReEncryptTo"])
     ])
     error_message = "Every active root must pin one pair and exact context, allow data-key generation/decrypt, and permit only web-target rewrap."
   }
 
   assert {
     condition = (
-      toset(one([
-        for statement in jsondecode(aws_iam_role_policy.worker_kms.policy).Statement : statement
-        if statement.Sid == "DescribeAiAssistedKeyGenerations"
+      length([for statement in jsondecode(aws_iam_role_policy.verifier_kms.policy).Statement : statement if startswith(statement.Sid, "Decrypt")]) == 1
+      && length(regexall("GenerateDataKey|ReEncrypt", aws_iam_role_policy.verifier_kms.policy)) == 0
+      && toset(one([
+        for statement in jsondecode(aws_iam_role_policy.verifier_kms.policy).Statement : statement
+        if statement.Sid == "DescribeAiObjectWrapKeyGenerations"
         ]).Resource) == toset([
         aws_kms_key.root["ai_assisted_object_wrap_v1"].arn,
+      ])
+      && length(regexall(aws_iam_role.verifier.arn, aws_kms_key.root["ai_assisted_object_wrap_v1"].policy)) > 0
+      && length(regexall(aws_iam_role.verifier.arn, aws_kms_key.root["ai_assisted_content_mac_v1"].policy)) == 0
+      && toset(one([
+        for statement in jsondecode(aws_iam_role_policy.verifier_kms.policy).Statement : statement
+        if statement.Sid == "DenyEveryAiContentMacGenerationEvenIfAnotherPolicyChanges"
+        ]).Resource) == toset([
         aws_kms_key.root["ai_assisted_content_mac_v1"].arn,
       ])
-      && length(regexall("ReEncrypt", aws_iam_role_policy.worker_kms.policy)) == 0
+      && toset(one([
+        for statement in jsondecode(aws_iam_role_policy.verifier_kms.policy).Statement : statement
+        if statement.Sid == "DenyEveryPrivateManualGenerationEvenIfAnotherPolicyChanges"
+        ]).Resource) == toset([
+        aws_kms_key.root["private_manual_object_wrap_v1"].arn,
+        aws_kms_key.root["private_manual_content_mac_v1"].arn,
+      ])
+      && length(output.verifier_root_key_registry) == 1
+      && alltrue([for generation in values(output.verifier_root_key_registry) : generation.key_class == "ai_assisted" && generation.purpose == "object_wrap"])
+      && jsondecode(output.verifier_retired_ai_object_wrap_roots_json) == []
     )
-    error_message = "The worker may use only AI-assisted generations and must never receive root-rewrap actions."
+    error_message = "The verifier must be AI object-wrap-only and decrypt-only, explicitly deny content-MAC/private roots, and receive no generate or rewrap authority."
   }
 
   assert {
     condition = (
       toset(one([
+        for statement in jsondecode(aws_iam_role_policy.worker_kms.policy).Statement : statement
+        if statement.Sid == "DescribeAiObjectWrapKeyGenerations"
+        ]).Resource) == toset([
+        aws_kms_key.root["ai_assisted_object_wrap_v1"].arn,
+      ])
+      && length([
+        for statement in jsondecode(aws_iam_role_policy.worker_kms.policy).Statement : statement
+        if startswith(statement.Sid, "Use")
+        && statement.Condition.StringEquals["kms:EncryptionContext:UnfiledKeyPurpose"] == "object_wrap"
+      ]) == 1
+      && length(regexall(aws_iam_role.worker.arn, aws_kms_key.root["ai_assisted_content_mac_v1"].policy)) == 0
+      && length(regexall("ReEncrypt", aws_iam_role_policy.worker_kms.policy)) == 0
+    )
+    error_message = "The index worker may use only AI-assisted object-wrap generations and must never receive content-MAC or root-rewrap authority."
+  }
+
+  assert {
+    condition = (
+      toset(one([
+        for statement in jsondecode(aws_iam_role_policy.worker_kms.policy).Statement : statement
+        if statement.Sid == "DenyEveryAiContentMacGenerationEvenIfAnotherPolicyChanges"
+        ]).Resource) == toset([
+        aws_kms_key.root["ai_assisted_content_mac_v1"].arn,
+      ])
+      && toset(one([
         for statement in jsondecode(aws_iam_role_policy.worker_kms.policy).Statement : statement
         if statement.Sid == "DenyEveryPrivateManualGenerationEvenIfAnotherPolicyChanges"
         ]).Resource) == toset([
@@ -180,7 +251,7 @@ run "four_active_roots_and_exact_workload_boundary" {
         aws_kms_key.root["private_manual_content_mac_v1"].arn,
       ])
     )
-    error_message = "The worker must retain an explicit deny for every private-manual generation."
+    error_message = "The worker must explicitly deny every AI content-MAC and private-manual generation."
   }
 
   assert {

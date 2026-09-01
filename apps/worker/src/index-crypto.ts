@@ -12,8 +12,8 @@ import {
   type ManagedKeyStore
 } from "@unfiled/key-management";
 
-import type { AiAssistedKeyAuthority } from "./key-management-adapter";
-import { custodianForAiAssistedAuthority } from "./key-management-adapter";
+import type { AiAssistedKeyAuthority } from "./key-management-adapter.js";
+import { custodianForAiAssistedAuthority } from "./key-management-adapter.js";
 
 export type IndexCryptoJob = Readonly<{
   indexResourceId: string;
@@ -134,7 +134,7 @@ export function createManagedIndexCryptoFactory(
       const resolver = createManagedKeyResolver({
         custodian,
         store: keyStore(job),
-        workload: "organization_worker"
+        workload: "index_worker"
       });
       const aggregate = createEncryptedAggregateService({
         keyResolver: resolver,

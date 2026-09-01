@@ -191,15 +191,18 @@ describe("local-only environment key resolver", () => {
     }
   });
 
-  it("refuses to load private-manual material into the organization worker", async () => {
-    await expect(
-      createLocalEnvironmentKeyResolver({
-        environment: environment([
-          entry(9, { keyClass: "private_manual", keyId: "private.local.v1" })
-        ]),
-        workload: "organization_worker"
-      })
-    ).rejects.toSatisfy(expectCode(KeyManagementErrorCode.CONFIGURATION_INVALID));
+  it("refuses to load content-MAC or private material into the index worker", async () => {
+    for (const forbidden of [
+      entry(9, { purpose: "content_mac", keyId: "ai.mac.local.v1" }),
+      entry(9, { keyClass: "private_manual", keyId: "private.local.v1" })
+    ]) {
+      await expect(
+        createLocalEnvironmentKeyResolver({
+          environment: environment([forbidden]),
+          workload: "index_worker"
+        })
+      ).rejects.toSatisfy(expectCode(KeyManagementErrorCode.CONFIGURATION_INVALID));
+    }
   });
 
   it("exports only configuration variable names, never values", () => {

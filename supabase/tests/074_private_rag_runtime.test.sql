@@ -63,6 +63,23 @@ begin
 end;
 $$;
 
+create function pg_temp.verify_rag_index_generation(
+  p_owner_id uuid,
+  p_generation_id text,
+  p_expected_revision_token bigint,
+  p_attestation jsonb
+)
+returns jsonb
+language sql
+volatile
+security definer
+set search_path = ''
+as $$
+  select private.verify_rag_index_generation_impl(
+    p_owner_id, p_generation_id, p_expected_revision_token, p_attestation
+  );
+$$;
+
 create function pg_temp.caught_sqlstate(statement text)
 returns text
 language plpgsql
@@ -93,6 +110,9 @@ create temporary table c5c_values (
 ) on commit drop;
 grant all on table c5c_values to service_role, unfiled_rag_verifier;
 grant execute on function pg_temp.caught_error(text) to unfiled_rag_verifier;
+grant execute on function pg_temp.verify_rag_index_generation(
+  uuid, text, bigint, jsonb
+) to unfiled_rag_verifier;
 
 select has_table(
   'public', 'rag_index_generation_verifications',
@@ -145,6 +165,11 @@ select ok(
       'public.verify_rag_index_generation(uuid,text,bigint,jsonb)',
       'EXECUTE'
     )
+    and has_function_privilege(
+      'unfiled_rag_verifier',
+      'public.list_building_note_rag_index(uuid,text,bigint,jsonb,integer,integer)',
+      'EXECUTE'
+    )
     and not has_table_privilege(
       'unfiled_index_worker',
       'public.rag_index_generation_verifications',
@@ -187,7 +212,7 @@ select ok(
 );
 select ok(
   (
-    select count(*) = 1
+    select count(*) = 2
     from pg_proc as procedure
     join pg_namespace as procedure_schema
       on procedure_schema.oid = procedure.pronamespace
@@ -203,7 +228,7 @@ select ok(
       'unfiled_rag_verifier',
       'public.rag_index_generation_verifications', 'SELECT'
     ),
-  'the verifier has exactly one public RPC and no private or relation access'
+  'the verifier has exactly two public RPCs and no private or relation access'
 );
 
 set local role service_role;
@@ -256,7 +281,7 @@ set local role unfiled_rag_verifier;
 insert into c5c_values (key, value) values (
   'bogus-mac-attestation',
   pg_temp.caught_error($bogus_mac_attestation$
-    select public.verify_rag_index_generation(
+    select pg_temp.verify_rag_index_generation(
       '22222222-2222-4222-8222-222222222222',
       'igen_74000000000000000000000001', 0,
       pg_temp.generation_attestation(
@@ -271,7 +296,7 @@ insert into c5c_values (key, value) values (
 insert into c5c_values (key, value) values (
   'arbitrary-verifier-attestation',
   pg_temp.caught_error($arbitrary_attestation$
-    select public.verify_rag_index_generation(
+    select pg_temp.verify_rag_index_generation(
       '22222222-2222-4222-8222-222222222222',
       'igen_74000000000000000000000001', 0,
       jsonb_build_object(
@@ -281,7 +306,7 @@ insert into c5c_values (key, value) values (
     )
   $arbitrary_attestation$)
 );
-select public.verify_rag_index_generation(
+select pg_temp.verify_rag_index_generation(
   '22222222-2222-4222-8222-222222222222',
   'igen_74000000000000000000000001', 0,
   pg_temp.generation_attestation(
@@ -323,7 +348,7 @@ select throws_ok(
 );
 reset role;
 set local role unfiled_rag_verifier;
-select public.verify_rag_index_generation(
+select pg_temp.verify_rag_index_generation(
   '22222222-2222-4222-8222-222222222222',
   'igen_74000000000000000000000001', 0,
   pg_temp.generation_attestation(
@@ -613,7 +638,7 @@ set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 reset role;
 set local role unfiled_rag_verifier;
-select public.verify_rag_index_generation(
+select pg_temp.verify_rag_index_generation(
   '22222222-2222-4222-8222-222222222222',
   'igen_74000000000000000000000001',
   (select (value ->> 'token')::bigint from c5c_values where key = 'verify-token-v2'),
@@ -693,7 +718,7 @@ set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 reset role;
 set local role unfiled_rag_verifier;
-select public.verify_rag_index_generation(
+select pg_temp.verify_rag_index_generation(
   '22222222-2222-4222-8222-222222222222',
   'igen_74000000000000000000000001',
   (select (value ->> 'token')::bigint from c5c_values where key = 'page-token'),

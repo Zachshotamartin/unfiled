@@ -1,6 +1,6 @@
 import { isIP } from "node:net";
 
-import { WorkerConfigurationError } from "./errors";
+import { WorkerConfigurationError } from "./errors.js";
 
 const DATABASE_VARIABLE = "UNFILED_WORKER_DATABASE_URL";
 const EXPECTED_HOST_VARIABLE = "UNFILED_WORKER_DATABASE_EXPECTED_HOST";

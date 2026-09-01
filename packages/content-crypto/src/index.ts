@@ -184,6 +184,15 @@ function decodeBase64Url(value: string, maximumBytes: number): Uint8Array {
   }
 
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  const remainder = value.length % 4;
+  const finalSextet = alphabet.indexOf(value.at(-1) ?? "");
+  if (
+    finalSextet < 0 ||
+    (remainder === 2 && (finalSextet & 0x0f) !== 0) ||
+    (remainder === 3 && (finalSextet & 0x03) !== 0)
+  ) {
+    fail(ContentCryptoErrorCode.INVALID_ENVELOPE, "Envelope encoding is not canonical");
+  }
   const outputLength = Math.floor((value.length * 6) / 8);
   const output = new Uint8Array(outputLength);
   let accumulator = 0;
@@ -202,7 +211,7 @@ function decodeBase64Url(value: string, maximumBytes: number): Uint8Array {
     }
   }
 
-  if (outputIndex !== output.length || encodeBase64Url(output) !== value) {
+  if (outputIndex !== output.length) {
     fail(ContentCryptoErrorCode.INVALID_ENVELOPE, "Envelope encoding is not canonical");
   }
   return output;

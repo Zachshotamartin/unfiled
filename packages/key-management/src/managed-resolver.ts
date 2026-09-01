@@ -18,7 +18,7 @@ import {
   type ManagedKeyStore,
   type ManagedObjectWrappingKey,
   type OwnerBoundKeyResolver
-} from "./types";
+} from "./types.js";
 import {
   assertWorkload,
   assertWorkloadCanAccess,
@@ -28,7 +28,7 @@ import {
   parseManagedKeyRecord,
   sameBinding,
   sameSelector
-} from "./validation";
+} from "./validation.js";
 
 const INTERMEDIATE_KEY_BYTES = 32;
 
@@ -116,7 +116,7 @@ export function createManagedKeyResolver(
   const cryptoImplementation = runtimeCrypto(options.crypto);
 
   async function resolveObject(selector: KeySelector): Promise<ManagedObjectWrappingKey | null> {
-    assertWorkloadCanAccess(options.workload, selector.keyClass);
+    assertWorkloadCanAccess(options.workload, selector.keyClass, selector.purpose);
     const stored = await options.store.findById(selector);
     if (stored === null) return null;
     const record = parseStoreRecordForSelector(stored, selector);
@@ -127,7 +127,7 @@ export function createManagedKeyResolver(
   }
 
   async function resolveMac(selector: KeySelector): Promise<ManagedContentMacKey | null> {
-    assertWorkloadCanAccess(options.workload, selector.keyClass);
+    assertWorkloadCanAccess(options.workload, selector.keyClass, selector.purpose);
     const stored = await options.store.findById(selector);
     if (stored === null) return null;
     const record = parseStoreRecordForSelector(stored, selector);
@@ -138,7 +138,7 @@ export function createManagedKeyResolver(
   }
 
   async function activeRecord(binding: KeyBinding): Promise<ManagedKeyRecordV1> {
-    assertWorkloadCanAccess(options.workload, binding.keyClass);
+    assertWorkloadCanAccess(options.workload, binding.keyClass, binding.purpose);
     const stored = await options.store.findActive(binding);
     if (stored === null) {
       keyManagementFailure(KeyManagementErrorCode.KEY_NOT_FOUND, "Active key is unavailable");
@@ -174,7 +174,7 @@ export function createManagedKeyResolver(
 
     contentKeyResolver(bindingValue): ContentKeyResolver {
       const binding = withPurpose(bindingValue, "object_wrap");
-      assertWorkloadCanAccess(options.workload, binding.keyClass);
+      assertWorkloadCanAccess(options.workload, binding.keyClass, binding.purpose);
       return async (keyId: string): Promise<KeyEncryptionKey | null> => {
         const resolved = await resolveObject(parseKeySelector({ ...binding, keyId }));
         return resolved?.key ?? null;

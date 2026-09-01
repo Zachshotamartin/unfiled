@@ -6,6 +6,8 @@ The canonical phone client is the native Apple app in [`apps/ios`](./apps/ios). 
 
 The repository still requires account-bound Vercel, AWS, database-login, CloudTrail, Apple signing, archive, and physical-iPhone evidence before production release. Unsigned simulator builds verify compilation and tests, but do not establish provisioning, App Group behavior, Keychain/SQLCipher behavior on hardware, extension packaging, or App Store readiness. The product must not be described as end-to-end encrypted.
 
+The encrypted-index code is split across three trust domains: `apps/web` owns authenticated lifecycle orchestration, `apps/worker` decrypts AI-assisted note aggregates to build encrypted index documents, and `apps/verifier` independently decrypts and validates one shadow generation before activation. The atomic encrypted organizer and plaintext-contract cutover are still pending, so fresh AI-assisted aggregate writes remain fail-closed and the current repository is not a production release.
+
 ## Native iOS quick start
 
 Install full Xcode and the repository-pinned XcodeGen 2.46.0 release, then run these commands from the repository root. The exact generator version is required because later XcodeGen releases may produce a different checked-in project order:

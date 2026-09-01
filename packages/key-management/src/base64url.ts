@@ -1,4 +1,4 @@
-import { KeyManagementErrorCode, keyManagementFailure } from "./types";
+import { KeyManagementErrorCode, keyManagementFailure } from "./types.js";
 
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const PATTERN = /^[A-Za-z0-9_-]+$/u;

@@ -16,8 +16,6 @@ const localBoundary: WorkerConfig["keyBoundary"] = {
 };
 
 const awsBoundary: WorkerConfig["keyBoundary"] = {
-  aiContentMacKmsKeyArn:
-    "arn:aws:kms:us-west-2:123456789012:key/66666666-7777-4888-9999-aaaaaaaaaaaa",
   aiObjectWrapKmsKeyArn:
     "arn:aws:kms:us-west-2:123456789012:key/11111111-2222-4333-8444-555555555555",
   expectedOidcSubject: "owner:team-example:project:unfiled-worker:environment:production",
@@ -25,7 +23,7 @@ const awsBoundary: WorkerConfig["keyBoundary"] = {
   keyClass: "ai_assisted",
   oidcAudience: "sts.amazonaws.com",
   region: "us-west-2",
-  retiredRoots: { ai_assisted: { content_mac: [], object_wrap: [] } },
+  retiredRoots: { ai_assisted: { object_wrap: [] } },
   roleArn: "arn:aws:iam::123456789012:role/unfiled-worker-production",
   vercelProjectId: "prj_example"
 };

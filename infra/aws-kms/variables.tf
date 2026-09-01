@@ -29,7 +29,7 @@ variable "web_project_name" {
 }
 
 variable "worker_project_name" {
-  description = "Exact Vercel project name for the isolated organization/index worker."
+  description = "Exact Vercel project name for the isolated index worker."
   type        = string
 
   validation {
@@ -38,6 +38,20 @@ variable "worker_project_name" {
       var.worker_project_name != var.web_project_name
     )
     error_message = "worker_project_name must be an exact Vercel project name distinct from web_project_name."
+  }
+}
+
+variable "verifier_project_name" {
+  description = "Exact Vercel project name for the isolated RAG generation verifier."
+  type        = string
+
+  validation {
+    condition = (
+      can(regex("^[a-z0-9](?:[a-z0-9_-]{0,98}[a-z0-9])?$", var.verifier_project_name)) &&
+      var.verifier_project_name != var.web_project_name &&
+      var.verifier_project_name != var.worker_project_name
+    )
+    error_message = "verifier_project_name must be an exact Vercel project name distinct from web_project_name and worker_project_name."
   }
 }
 

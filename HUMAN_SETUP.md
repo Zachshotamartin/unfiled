@@ -35,7 +35,7 @@ Complete these human validation items before treating Milestone 0 as approved:
 
 1. Create separate preview and production projects at Supabase.
 2. Enable Vault and confirm the project plan supports the required backup and point-in-time recovery targets.
-3. Store each project URL, anonymous key, service-role key, and database password only in the matching interactive web/API Vercel environment. The isolated `apps/worker` project must never receive a global Supabase service-role/secret key; its later C.5c database credential is scoped separately below.
+3. Store each project URL, anonymous key, service-role key, and database password only in the matching interactive web/API Vercel environment. The isolated `apps/worker` and `apps/verifier` projects must never receive a global Supabase service-role/secret key; their narrowly scoped C.5c database credentials are provisioned separately below.
 4. Link preview from a trusted shell: `pnpm supabase link --project-ref <preview-project-ref>`.
 5. Review migrations, then apply: `pnpm supabase db push --linked`.
 6. Never link a developer preview deployment to production data.
@@ -103,29 +103,32 @@ Complete these human validation items before treating Milestone 0 as approved:
 6. The checked-in Vercel Hobby schedule calls `/api/internal/captures/drain` daily at 03:07 UTC. `after()` and active clients provide normal prompt processing; the daily call is dormant-work recovery. On Vercel Pro or Enterprise, change only that capture schedule in `apps/web/vercel.json` to `* * * * *`, deploy, and confirm authenticated one-minute invocations. Hobby deployments reject schedules more frequent than daily.
 7. After deploying Preview, create one synthetic canary capture, wait for its Inbox receipt, and inspect the `captures` row with an authorized administrative session. `raw_text` must equal `[encrypted]`, the canary must not appear anywhere in the row or logs, `content_envelope.version` must equal `1`, and `content_fingerprint` must be a 64-character keyed digest. Public API responses must contain the authenticated plaintext only after owner authorization and must never contain the envelope, fingerprint, or key identifier.
 
-### Production managed KMS and isolated worker — C.5a account evidence pending
+### Production managed KMS, isolated worker, and isolated verifier — C.5 account evidence pending
 
-The checked-in C.5a module at `infra/aws-kms` now defines the exact production identities and four independently controlled KMS roots. These steps create billable, account-bound cloud resources. They may be completed after the C.5a pull request is merged, but they do **not** authorize real note traffic yet: C.5b–d must still replace every plaintext aggregate/read path and pass the final cutover gate.
+The checked-in module at `infra/aws-kms` defines the exact production identities and four independently controlled KMS roots. These steps create billable, account-bound cloud resources. They do **not** authorize real note traffic yet: C.5d must still replace every plaintext aggregate/read path, the separate organizer must land, and the final cutover gate must pass.
 
-1. Record eight exact values: AWS region; a dedicated non-runtime KMS administrator role/user ARN;
+1. Record ten exact values: AWS region; a dedicated non-runtime KMS administrator role/user ARN;
    Vercel team slug and `team_...` owner ID; and the distinct project **name** plus `prj_...` ID
-   for both web and worker. Project names—not IDs—appear in OIDC subjects.
-2. Create or select two Vercel projects from this repository. Set the web Root Directory to
-   `apps/web` and the worker Root Directory to `apps/worker`. In both projects, enable **Team
-   Issuer** under Settings → Security → Secure Backend Access (OIDC). Under the worker project's
-   Deployment Protection, configure **Trusted Sources** to authorize only web Production → worker
-   Production. Do not authorize Preview, another project, or a team/project wildcard.
+   for web, worker, and verifier. Project names—not IDs—appear in OIDC subjects.
+2. Create or select three Vercel projects from this repository. Set their Root Directories to
+   `apps/web`, `apps/worker`, and `apps/verifier`. In all three projects, enable **Team Issuer** under
+   Settings → Security → Secure Backend Access (OIDC). Configure **Trusted Sources** separately on
+   the worker and verifier projects: authorize only web Production → that project's Production
+   deployment. Do not authorize Preview, worker → verifier, another project, or a team/project
+   wildcard.
 3. From `infra/aws-kms`, copy `terraform.tfvars.example` to the ignored `terraform.tfvars`, replace every placeholder, and authenticate Terraform with an administrator identity. If the team's Vercel issuer already exists in that AWS account, use the import command in `infra/aws-kms/README.md` instead of creating a duplicate.
-4. Run `terraform init`, `terraform fmt -check -recursive`, `terraform validate`, `terraform test`, `terraform plan -out unfiled-kms.tfplan`, and finally `terraform apply unfiled-kms.tfplan`. Confirm the plan creates two exact-subject runtime roles and these four aliases:
+4. Run `terraform init`, `terraform fmt -check -recursive`, `terraform validate`, `terraform test`, `terraform plan -out unfiled-kms.tfplan`, and finally `terraform apply unfiled-kms.tfplan`. Confirm the plan creates three exact-subject runtime roles and these four aliases:
    - `alias/unfiled/ai-assisted/object-wrap`
    - `alias/unfiled/ai-assisted/content-mac`
    - `alias/unfiled/private-manual/object-wrap`
    - `alias/unfiled/private-manual/content-mac`
-5. Copy only Terraform's non-secret outputs into Vercel Production settings. Both projects receive
-   `UNFILED_AWS_REGION`; each receives its matching `UNFILED_AWS_ROLE_ARN`. Both receive the active
-   `UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN` and `UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN`. Only web receives
-   the two active `UNFILED_PRIVATE_*_KMS_KEY_ARN` values and, when C.5b wires it, the complete web
-   registry. In the worker set all of:
+5. Copy only Terraform's non-secret outputs into Vercel Production settings. All three projects
+   receive `UNFILED_AWS_REGION`; each receives its matching `UNFILED_AWS_ROLE_ARN`. Web receives
+   both active AI root ARNs. The worker and verifier receive only
+   `UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN`: never give either isolated workload the AI content-MAC
+   ARN or a broad AI registry. Only web receives the
+   two active `UNFILED_PRIVATE_*_KMS_KEY_ARN` values and the complete web registry. In the worker set
+   all of:
 
    ```dotenv
    UNFILED_WORKER_ENV=production
@@ -138,28 +141,46 @@ The checked-in C.5a module at `infra/aws-kms` now defines the exact production i
    UNFILED_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT=<terraform-web_oidc_subject>
    ```
 
-   Set `UNFILED_RETIRED_AI_ROOT_REGISTRY_JSON` only to the literal result of
-   `terraform output -raw worker_retired_ai_root_registry_json` (initially `[]`); never hand-convert
-   the broader registry. Vercel injects `VERCEL_ENV` and `VERCEL_PROJECT_ID`; do not override them.
-   Never configure AWS access keys, a root KEK, a private KMS identifier, a user/browser session
-   secret, `CRON_SECRET`, the local drain bearer, `SUPABASE_SERVICE_ROLE_KEY`,
-   `SUPABASE_SECRET_KEY`, or another global Supabase service/secret variant in the worker project.
+   Set `UNFILED_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON` only to the literal result of
+   `terraform output -raw worker_retired_ai_object_wrap_roots_json` (initially `[]`); never hand-convert
+   the broader registry. In the verifier set all of:
 
-6. Deploy the worker first, but do not make any OIDC-bearing call to it yet. The runtime cannot
-   cryptographically derive a Vercel project ID from a `*.vercel.app` alias, so the exact origin is a
-   sensitive bearer-token egress trust boundary. In Vercel's authenticated dashboard or REST API,
-   select the worker by the recorded `prj_...` ID and prove that the intended exact Production alias
-   is attached to that project and its current Production deployment. Cross-check the alias through
-   the authenticated alias/deployment view, and record only the team ID, worker project ID, exact
-   alias, Production deployment ID, and commit—not an access token or OIDC token. Public DNS, TLS,
-   or an unauthenticated HTTP response does not prove the Vercel project mapping. Alias drift,
-   project transfer, or alias reassignment invalidates this evidence and requires the caller to be
-   disabled until the proof is repeated.
+   ```dotenv
+   UNFILED_VERIFIER_ENV=production
+   UNFILED_VERIFIER_PROJECT_ID=<verifier-prj-id>
+   UNFILED_VERIFIER_EXPECTED_OIDC_SUBJECT=<terraform-verifier_oidc_subject>
+   UNFILED_TRUSTED_SOURCE_TEAM_SLUG=<exact-team-slug>
+   UNFILED_TRUSTED_SOURCE_OWNER_ID=<team-id>
+   UNFILED_TRUSTED_SOURCE_WEB_PROJECT_ID=<web-prj-id>
+   UNFILED_TRUSTED_SOURCE_WEB_PROJECT_NAME=<exact-web-project-name>
+   UNFILED_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT=<terraform-web_oidc_subject>
+   UNFILED_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON=<terraform-verifier-retired-output>
+   ```
 
-   Only after that proof, set this one target value in the web Production project and deploy web:
+   Set the last value only to the literal result of
+   `terraform output -raw verifier_retired_ai_object_wrap_roots_json` (initially `[]`). Vercel
+   injects `VERCEL_ENV` and `VERCEL_PROJECT_ID`; do not override them. Never configure AWS access
+   keys, a root KEK, an AI content-MAC or private KMS identifier, a user/browser session secret, `CRON_SECRET`, the
+   local drain bearer, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_SECRET_KEY`, or another global
+   Supabase service/secret variant in the worker or verifier project. The verifier must also reject
+   any AI content-MAC identifier, provider API key, or worker database credential.
+
+6. Deploy the worker and verifier first, but do not make an OIDC-bearing call to either one yet. The
+   runtime cannot cryptographically derive a Vercel project ID from a `*.vercel.app` alias, so each
+   exact origin is a sensitive bearer-token egress trust boundary. In Vercel's authenticated
+   dashboard or REST API, select each project by its recorded `prj_...` ID and prove that the
+   intended exact Production alias is attached to that project and its current Production
+   deployment. Cross-check each alias through the authenticated alias/deployment view, and record
+   only the team ID, project ID, exact alias, Production deployment ID, and commit—not an access
+   token or OIDC token. Public DNS, TLS, or an unauthenticated HTTP response does not prove the
+   Vercel project mapping. Alias drift, project transfer, or alias reassignment invalidates this
+   evidence and requires the corresponding caller to be disabled until the proof is repeated.
+
+   Only after both proofs, set these target values in the web Production project and deploy web:
 
    ```dotenv
    UNFILED_INDEX_WORKER_ORIGIN=https://<proved-worker-production-alias>.vercel.app
+   UNFILED_RAG_VERIFIER_ORIGIN=https://<proved-verifier-production-alias>.vercel.app
    ```
 
    Do not configure `UNFILED_INDEX_WORKER_PROJECT_ID`: an unverified project-ID string beside an
@@ -167,12 +188,11 @@ The checked-in C.5a module at `infra/aws-kms` now defines the exact production i
    do not add a shared caller secret, worker bearer, bypass secret, user token, or worker workload
    token to the web project.
 
-   Call the protected worker only from web Production. Before cutover, prove that Vercel preserves
-   `x-vercel-trusted-oidc-idp-token` for the handler and exposes the
-   workload token through the request context used by `@vercel/oidc-aws-credentials-provider`.
-   The probe must exchange the real short-lived identity through STS and complete GenerateDataKey
-   plus Decrypt on both active AI roots. Never print or return either raw token. Header presence,
-   local JWT parsing, or constructing a KMS client without successful calls is not evidence.
+   Do not invoke either protected workload yet. Production composition intentionally fails closed
+   until the worker has its dedicated database/provider configuration and the verifier has its
+   dedicated database configuration. Alias proof establishes only the OIDC-token egress target; it
+   is not runtime, database, provider, or KMS readiness evidence. Complete the two dedicated-login
+   sections below before making a real protected call.
 
 7. Configure a CloudTrail trail that retains read and write **management events** and does not
    exclude KMS events. KMS cryptographic operations are management events, not CloudTrail data
@@ -180,12 +200,8 @@ The checked-in C.5a module at `infra/aws-kms` now defines the exact production i
    owner/class/purpose/key-record identifiers and must never contain note text or email addresses.
    Add alerting for access denials, unusual KMS volume, key disable/deletion scheduling, and worker
    attempts against private-manual roots.
-8. Execute `runKeyCustodyProbe` with the deployed worker identity and both private root ARNs supplied
-   only to the controlled probe runner—not to worker environment configuration. The recorded report
-   must have `privateDenialEvidence === "direct_kms"`, AI generation/decryption success, denial on
-   GenerateDataKey and Decrypt for both private purposes, wrong-context rejection, content-free
-   events, and matching CloudTrail evidence.
-9. Follow `infra/aws-kms/README.md` for the staged → active/retired two-apply rotation. A 21st
+8. After the complete worker and verifier readiness/custody proofs below, follow
+   `infra/aws-kms/README.md` for the staged → active/retired two-apply rotation. A 21st
    runtime-decryptable retired generation is intentionally blocked until a separately reviewed
    archived-root lifecycle exists. Complete and record KMS outage, intermediate/root rewrap,
    restored-backup, and pre-cutover-backup-expiry drills before advancing any owner to
@@ -255,11 +271,12 @@ index jobs:
 4. Create a server-only OpenAI project key restricted to the embedding workload and add it only to
    the worker Production project as `UNFILED_OPENAI_EMBEDDING_API_KEY`. Set the reviewed generation's
    exact model and dimensions as `UNFILED_EMBEDDING_MODEL_ID` and
-   `UNFILED_EMBEDDING_DIMENSIONS`; the initial planned pair is `text-embedding-3-small` and `1536`.
-   The worker rejects a job whose generation differs. Do not place this key in web, iOS, Preview,
-   logs, source control, or a user preference. Confirm provider data controls and retention for the
-   production project before allowing AI-assisted notes; private-manual notes remain categorically
-   ineligible and must produce zero provider calls.
+   `UNFILED_EMBEDDING_DIMENSIONS` in both worker and web Production; the initial planned pair is
+   `text-embedding-3-small` and `1536`. The worker rejects a job whose generation differs, and the
+   web lifecycle controller uses the same pair to create shadow generations. Do not place the
+   provider key in web, verifier, iOS, Preview, logs, source control, or a user preference. Confirm
+   provider data controls and retention for the production project before allowing AI-assisted
+   notes; private-manual notes remain categorically ineligible and must produce zero provider calls.
 5. From the deployed C.5c adapter's database session, record a content-free readiness result proving
    `session_user = 'unfiled_index_worker'`. `SET ROLE unfiled_index_worker` is not acceptable:
    security-definer RPCs check the original connection identity. Confirm again that the role is not
@@ -273,30 +290,50 @@ index jobs:
    note/key/RAG-table reads, key registration/activation/rewrap, generation creation/activation, and
    every other function must return permission denied. Record identifiers, SQLSTATE/outcome, and
    timestamps only—never rows, ciphertext, credentials, tokens, or note content.
-7. Exercise lease loss, worker timeout, database/provider/KMS outage, pooler reconnect, response-loss
+7. From web Production, invoke the proved worker Production alias with one synthetic AI-assisted
+   encrypted index job. Prove that Vercel preserves `x-vercel-trusted-oidc-idp-token` for the
+   handler and exposes the workload token through the request context used by
+   `@vercel/oidc-aws-credentials-provider`. The real short-lived worker identity must exchange
+   through STS and complete GenerateDataKey plus Decrypt only on the active AI object-wrap root;
+   the job must also complete through the exact database role and restricted embedding provider.
+   Never print or return either raw token. Header presence, local JWT parsing, constructing a KMS
+   client, or an HTTP health response without successful cryptographic calls is not evidence.
+8. Execute `runKeyCustodyProbe` with the deployed worker identity and the AI content-MAC plus both
+   private root ARNs supplied only to the controlled probe runner—not to worker environment
+   configuration. The recorded report must have both denial-evidence fields equal to
+   `"direct_kms"`, object-wrap generation/decryption success, denial on GenerateDataKey and Decrypt
+   for AI content-MAC and both private purposes, wrong-context rejection, content-free events, and
+   matching CloudTrail evidence.
+9. Exercise lease loss, worker timeout, database/provider/KMS outage, pooler reconnect, response-loss
    replay, and credential revocation.
    Jobs must remain queued or recover through the bounded RPCs; no code may fall back to a global
    Supabase credential, direct table access, plaintext job payload, or private-manual key. Enable the
    drain only after these checks and the Vercel/AWS evidence above are green.
-8. Confirm the web post-commit wake-up and `/api/internal/indexing/drain` recovery cron reach only the
-   protected worker Production deployment. The Hobby schedule runs daily at 03:27 UTC; on Pro or
-   Enterprise it may be increased after cost/load review. A wake-up may be lost or rejected without
-   losing work because the encrypted database queue is authoritative. Record only aggregate job
-   counts and deployment/request IDs, never note IDs or content.
-9. Rotate this credential independently of Supabase service keys. Drain/pause the worker, use the
-   same trusted `psql` `\password unfiled_index_worker` prompt, update the Vercel Production secret,
-   redeploy/recycle pooled connections, prove the old credential is rejected and the new session has
-   the same exact allowlist, then resume. A database rebuild or replay of the role-creating migration
-   returns it to `NOLOGIN`; repeat the explicit provisioning/probe instead of weakening the migration.
+10. Inspect configuration only: confirm the web post-commit wake-up and
+    `/api/internal/indexing/drain` recovery target the protected worker Production origin, and confirm
+    `/api/internal/indexing/maintenance` is scheduled at 02:22 UTC with recovery at 03:27 UTC and
+    contains only the proved worker/verifier origins. Do not claim or invoke the complete maintenance
+    path until verifier step 6 below is green. [Vercel Hobby
+    schedules](https://vercel.com/docs/cron-jobs/usage-and-pricing) are daily but may run at any point
+    within the selected hour, so the separate hours preserve maintenance-before-recovery ordering;
+    the minute values become exact only on Pro or Enterprise. A wake-up may be lost or rejected
+    without losing work because the encrypted database queue is authoritative.
+11. Rotate this credential independently of Supabase service keys. Drain/pause the worker, use the
+    same trusted `psql` `\password unfiled_index_worker` prompt, update the Vercel Production secret,
+    redeploy/recycle pooled connections, prove the old credential is rejected and the new session has
+    the same exact allowlist, then resume. A database rebuild or replay of the role-creating migration
+    returns it to `NOLOGIN`; repeat the explicit provisioning/probe instead of weakening the migration.
 
 ### Dedicated generation-verifier database login — provision separately
 
-`supabase/roles.sql` and migration `20260830000017_private_rag_runtime.sql` also create
-`unfiled_rag_verifier` as `NOLOGIN`, `NOINHERIT`, and `NOBYPASSRLS`. It has no table, sequence, or
-private-schema access and can execute only `verify_rag_index_generation`. The separately
-authenticated verifier role is the attestation authority; the database recomputes the canonical
-manifest digest, while activation independently revalidates that evidence. This is not a stored
-signature or MAC.
+`supabase/roles.sql`, migration `20260830000017_private_rag_runtime.sql`, and migration
+`20260830000019_rag_generation_control_plane.sql` create and narrow `unfiled_rag_verifier` as
+`NOLOGIN`, `NOINHERIT`, and `NOBYPASSRLS`. It has no table, sequence, or private-schema access and
+can execute exactly two public RPCs: one bounded read of an exact building generation and one
+canonical attestation write. The separately deployed `apps/verifier` process must strictly decrypt
+every projected index document before it submits the database-recomputed manifest digest.
+Activation independently revalidates that evidence. The stored attestation is a database capability
+decision, not a signature or MAC over plaintext.
 
 1. Apply the same membership-shape gate as the index worker: zero rows after a real superuser
    cleanup is preferred; otherwise the only permitted row is the automatic `supabase_admin`-granted
@@ -309,18 +346,54 @@ signature or MAC.
    \password unfiled_rag_verifier
    ```
 
-3. Store its separately generated pooler credential only in the verifier controller's Production
-   secret scope. It must not be shared with the index worker, organizer, web project, Preview, CI,
-   `service_role`, or any Supabase API key. Require an exact
-   `session_user = 'unfiled_rag_verifier'` readiness proof over `sslmode=verify-full`.
+3. Store its separately generated pooler credential only in the `apps/verifier` Production secret
+   scope. For the shared Supavisor transaction pooler, use the required transport username
+   `unfiled_rag_verifier.<project-ref>`; a direct/dedicated endpoint uses the unsuffixed role. Set:
+
+   ```dotenv
+   UNFILED_VERIFIER_DATABASE_URL=<postgresql-uri-with-sslmode-verify-full>
+   UNFILED_VERIFIER_DATABASE_EXPECTED_HOST=<exact-canonical-host>
+   UNFILED_VERIFIER_DATABASE_PROJECT_REF=<exact-20-character-project-ref>
+   UNFILED_VERIFIER_DATABASE_CA_PEM_BASE64=<downloaded-canonical-PEM-as-base64>
+   ```
+
+   The credential must not be shared with the index worker, organizer, web project, Preview, CI,
+   `service_role`, or any Supabase API key. Require both `session_user` and `current_user` to equal
+   `unfiled_rag_verifier` over hostname- and certificate-verified TLS. `SET ROLE` is not evidence.
+
 4. Prove the login can execute only
-   `verify_rag_index_generation(uuid,text,bigint,jsonb)`, cannot read any relation or use the
-   `private` schema, and cannot activate a generation. Prove a service-role session cannot verify,
-   a bogus extra `verificationMac` field is rejected, an arbitrary digest is rejected, and
-   activation rejects mutated or stale canonical evidence. Record only identifiers, SQLSTATEs,
-   role/grant metadata, and timestamps—never ciphertext, note content, or credentials.
-5. Rotate and revoke this credential independently. A rebuild returns the role to `NOLOGIN`; repeat
-   this provisioning and privilege proof before the verifier controller resumes.
+   `list_building_note_rag_index(uuid,text,bigint,jsonb,integer,integer)` and
+   `verify_rag_index_generation(uuid,text,bigint,jsonb)`. It must not read or mutate any relation,
+   use the `private` schema, seed/fail/activate a generation, claim worker work, or call another
+   public function. Prove service-role and `SET ROLE` sessions cannot use either verifier RPC; a
+   bogus extra attestation field and arbitrary digest are rejected; and activation rejects mutated
+   or stale canonical evidence. Record only identifiers, SQLSTATEs, role/grant metadata, and
+   timestamps—never ciphertext, note content, or credentials.
+5. Only after steps 1–4 and the worker readiness proof above are complete, invoke the proved verifier
+   Production alias from web Production with one synthetic complete
+   shadow generation. Verify Trusted Sources rejects Preview, direct public callers, cookies,
+   `Authorization`, protection-bypass headers, and a mismatched web project. Confirm the verifier
+   response contains only generation ID, canonical decimal revision token, verified count, and
+   `verified: true`; logs must contain only request/deployment metadata and aggregate counts. Tamper
+   independently with ciphertext, envelope context, key reference, model/dimensions, count, cursor,
+   and revision token; every case must fail closed and must not create activation evidence.
+6. Prove that Vercel preserves `x-vercel-trusted-oidc-idp-token` for the verifier handler and exposes
+   the workload token through the request context used by
+   `@vercel/oidc-aws-credentials-provider`. The real short-lived verifier identity must exchange
+   through STS and complete Decrypt only on the active AI object-wrap root. Then run the verifier
+   denial probe: it may Describe and Decrypt only active/retired AI object-wrap roots;
+   GenerateDataKey, ReEncrypt, staged-root Decrypt, every AI content-MAC operation, every
+   private-root operation, and wrong-context Decrypt must be denied. Match allowed and denied calls
+   to CloudTrail without recording tokens, ciphertext, encryption-context owner IDs, or plaintext.
+   A successful HTTP health check, JWT parse, or client construction is not custody evidence. Record
+   worker and verifier identities as separate evidence sets.
+7. Now run one complete authenticated indexing-maintenance invocation followed by recovery. Confirm
+   it calls only the proved worker and verifier Production origins and reports content-free aggregate
+   lifecycle counters. Record only aggregate job counts and deployment/request IDs, never owner/note
+   IDs, ciphertext, or content.
+8. Rotate and revoke this database credential independently. A rebuild returns the role to
+   `NOLOGIN`; repeat the provisioning, exact-session proof, privilege probe, and end-to-end canary
+   before the verifier controller resumes.
 
 Until those steps and C.5 pass, Unfiled may be shown as a portfolio work in progress but must not claim that the complete note library is encrypted or that private-manual mode is end-to-end encrypted.
 

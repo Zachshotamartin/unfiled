@@ -48,6 +48,15 @@ override_resource {
 }
 
 override_resource {
+  target          = aws_iam_role.verifier
+  override_during = plan
+  values = {
+    arn = "arn:aws:iam::123456789012:role/unfiled-production-verifier"
+    id  = "unfiled-production-verifier"
+  }
+}
+
+override_resource {
   target          = aws_kms_key.root["ai_assisted_object_wrap_v1"]
   override_during = plan
   values = {
@@ -124,9 +133,10 @@ variables {
   key_administrator_arns = [
     "arn:aws:iam::123456789012:role/unfiled-kms-admin",
   ]
-  vercel_team_slug    = "unfiled-team"
-  web_project_name    = "unfiled-web"
-  worker_project_name = "unfiled-worker"
+  vercel_team_slug      = "unfiled-team"
+  web_project_name      = "unfiled-web"
+  worker_project_name   = "unfiled-worker"
+  verifier_project_name = "unfiled-verifier"
 }
 
 run "v1_baseline" {
@@ -232,8 +242,8 @@ run "stage_v2_while_v1_remains_active" {
       length([
         for statement in jsondecode(aws_iam_role_policy.worker_kms.policy).Statement : statement
         if startswith(statement.Sid, "Use")
-      ]) == 2
-      && length(regexall("UseAiAssistedObjectWrapV2|UseAiAssistedContentMacV2|ReEncrypt", aws_iam_role_policy.worker_kms.policy)) == 0
+      ]) == 1
+      && length(regexall("UseAiAssistedObjectWrapV2|UseAiAssistedContentMac|ReEncrypt", aws_iam_role_policy.worker_kms.policy)) == 0
     )
     error_message = "The worker may describe staged AI roots for readiness but cannot use them or rewrap with them."
   }
@@ -242,7 +252,10 @@ run "stage_v2_while_v1_remains_active" {
     condition = alltrue([
       for registry_id, generation in local.root_key_generations :
       !(generation.status == "staged" && generation.key_class == "private_manual")
-      || length(regexall(aws_iam_role.worker.arn, aws_kms_key.root[registry_id].policy)) == 0
+      || (
+        length(regexall(aws_iam_role.worker.arn, aws_kms_key.root[registry_id].policy)) == 0
+        && length(regexall(aws_iam_role.verifier.arn, aws_kms_key.root[registry_id].policy)) == 0
+      )
     ])
     error_message = "Private staged key policies must not identify the worker as a principal."
   }
@@ -250,11 +263,13 @@ run "stage_v2_while_v1_remains_active" {
   assert {
     condition = (
       length(output.web_root_key_registry) == 8
-      && length(output.worker_root_key_registry) == 4
-      && alltrue([for generation in values(output.worker_root_key_registry) : generation.key_class == "ai_assisted"])
+      && length(output.worker_root_key_registry) == 2
+      && length(output.verifier_root_key_registry) == 2
+      && alltrue([for generation in values(output.worker_root_key_registry) : generation.key_class == "ai_assisted" && generation.purpose == "object_wrap"])
+      && alltrue([for generation in values(output.verifier_root_key_registry) : generation.key_class == "ai_assisted" && generation.purpose == "object_wrap"])
       && alltrue([for staged_arns in values(output.staged_root_key_arns) : length(staged_arns) == 1])
     )
-    error_message = "Readiness configuration must expose staged roots to web, expose only AI roots to worker, and keep private identifiers out of worker output."
+    error_message = "Readiness configuration must expose staged roots to web, expose only AI object-wrap roots to worker, and keep content-MAC/private identifiers out of worker output."
   }
 }
 
@@ -336,8 +351,14 @@ run "promote_v2_and_retire_v1" {
     condition = alltrue([
       for registry_id, generation in local.root_key_generations :
       generation.status != "active" || (
-        toset(jsondecode(aws_kms_key.root[registry_id].policy).Statement[2].Action) == toset(["kms:Decrypt", "kms:GenerateDataKey"])
-        && toset(jsondecode(aws_kms_key.root[registry_id].policy).Statement[3].Action) == toset(["kms:ReEncryptTo"])
+        toset(one([
+          for statement in jsondecode(aws_kms_key.root[registry_id].policy).Statement : statement
+          if statement.Sid == "BoundActiveIntermediateKey"
+        ]).Action) == toset(["kms:Decrypt", "kms:GenerateDataKey"])
+        && toset(one([
+          for statement in jsondecode(aws_kms_key.root[registry_id].policy).Statement : statement
+          if statement.Sid == "InteractiveApiReEncryptToActive"
+        ]).Action) == toset(["kms:ReEncryptTo"])
       )
     ])
     error_message = "Only active v2 roots may generate data keys and accept root rewraps."
@@ -347,8 +368,14 @@ run "promote_v2_and_retire_v1" {
     condition = alltrue([
       for registry_id, generation in local.root_key_generations :
       generation.status != "retired" || (
-        toset(jsondecode(aws_kms_key.root[registry_id].policy).Statement[2].Action) == toset(["kms:Decrypt"])
-        && toset(jsondecode(aws_kms_key.root[registry_id].policy).Statement[3].Action) == toset(["kms:ReEncryptFrom"])
+        toset(one([
+          for statement in jsondecode(aws_kms_key.root[registry_id].policy).Statement : statement
+          if statement.Sid == "BoundRetiredIntermediateKeyDecryptOnly"
+        ]).Action) == toset(["kms:Decrypt"])
+        && toset(one([
+          for statement in jsondecode(aws_kms_key.root[registry_id].policy).Statement : statement
+          if statement.Sid == "InteractiveApiReEncryptFromRetired"
+        ]).Action) == toset(["kms:ReEncryptFrom"])
       )
     ])
     error_message = "Retired v1 roots must remain decrypt-only and may only be rewrap sources for the web role."
@@ -359,28 +386,59 @@ run "promote_v2_and_retire_v1" {
       length(regexall("ReEncrypt", aws_iam_role_policy.worker_kms.policy)) == 0
       && toset(one([
         for statement in jsondecode(aws_iam_role_policy.worker_kms.policy).Statement : statement
-        if statement.Sid == "DescribeAiAssistedKeyGenerations"
+        if statement.Sid == "DescribeAiObjectWrapKeyGenerations"
         ]).Resource) == toset([
         aws_kms_key.root["ai_assisted_object_wrap_v1"].arn,
         aws_kms_key.root["ai_assisted_object_wrap_v2"].arn,
-        aws_kms_key.root["ai_assisted_content_mac_v1"].arn,
-        aws_kms_key.root["ai_assisted_content_mac_v2"].arn,
       ])
     )
-    error_message = "The worker must decrypt active+retired AI roots but must never receive rewrap authority."
+    error_message = "The worker must decrypt active+retired AI object-wrap roots but must never receive content-MAC or rewrap authority."
   }
 
   assert {
-    condition = toset(one([
-      for statement in jsondecode(aws_iam_role_policy.worker_kms.policy).Statement : statement
-      if statement.Sid == "DenyEveryPrivateManualGenerationEvenIfAnotherPolicyChanges"
-      ]).Resource) == toset([
-      aws_kms_key.root["private_manual_object_wrap_v1"].arn,
-      aws_kms_key.root["private_manual_object_wrap_v2"].arn,
-      aws_kms_key.root["private_manual_content_mac_v1"].arn,
-      aws_kms_key.root["private_manual_content_mac_v2"].arn,
-    ])
-    error_message = "The worker explicit deny must expand to every private-manual generation."
+    condition = (
+      toset(one([
+        for statement in jsondecode(aws_iam_role_policy.worker_kms.policy).Statement : statement
+        if statement.Sid == "DenyEveryAiContentMacGenerationEvenIfAnotherPolicyChanges"
+        ]).Resource) == toset([
+        aws_kms_key.root["ai_assisted_content_mac_v1"].arn,
+        aws_kms_key.root["ai_assisted_content_mac_v2"].arn,
+      ])
+      && toset(one([
+        for statement in jsondecode(aws_iam_role_policy.worker_kms.policy).Statement : statement
+        if statement.Sid == "DenyEveryPrivateManualGenerationEvenIfAnotherPolicyChanges"
+        ]).Resource) == toset([
+        aws_kms_key.root["private_manual_object_wrap_v1"].arn,
+        aws_kms_key.root["private_manual_object_wrap_v2"].arn,
+        aws_kms_key.root["private_manual_content_mac_v1"].arn,
+        aws_kms_key.root["private_manual_content_mac_v2"].arn,
+      ])
+    )
+    error_message = "The worker explicit deny must expand to every AI content-MAC and private-manual generation."
+  }
+
+  assert {
+    condition = (
+      length(regexall("GenerateDataKey|ReEncrypt", aws_iam_role_policy.verifier_kms.policy)) == 0
+      && length([for statement in jsondecode(aws_iam_role_policy.verifier_kms.policy).Statement : statement if startswith(statement.Sid, "Decrypt")]) == 2
+      && toset(one([
+        for statement in jsondecode(aws_iam_role_policy.verifier_kms.policy).Statement : statement
+        if statement.Sid == "DenyEveryAiContentMacGenerationEvenIfAnotherPolicyChanges"
+        ]).Resource) == toset([
+        aws_kms_key.root["ai_assisted_content_mac_v1"].arn,
+        aws_kms_key.root["ai_assisted_content_mac_v2"].arn,
+      ])
+      && toset(one([
+        for statement in jsondecode(aws_iam_role_policy.verifier_kms.policy).Statement : statement
+        if statement.Sid == "DenyEveryPrivateManualGenerationEvenIfAnotherPolicyChanges"
+        ]).Resource) == toset([
+        aws_kms_key.root["private_manual_object_wrap_v1"].arn,
+        aws_kms_key.root["private_manual_object_wrap_v2"].arn,
+        aws_kms_key.root["private_manual_content_mac_v1"].arn,
+        aws_kms_key.root["private_manual_content_mac_v2"].arn,
+      ])
+    )
+    error_message = "The verifier must decrypt active and retired AI object-wrap roots only and explicitly deny every AI content-MAC/private generation."
   }
 
   assert {
@@ -395,17 +453,13 @@ run "promote_v2_and_retire_v1" {
   assert {
     condition = (
       length(output.web_root_key_registry) == 8
-      && length(output.worker_root_key_registry) == 4
-      && alltrue([for generation in values(output.worker_root_key_registry) : generation.key_class == "ai_assisted"])
-      && length(jsondecode(output.worker_retired_ai_root_registry_json)) == 2
-      && alltrue([
-        for generation in jsondecode(output.worker_retired_ai_root_registry_json) :
-        generation.keyClass == "ai_assisted"
-        && generation.status == "retired"
-        && contains(["object_wrap", "content_mac"], generation.purpose)
-        && startswith(generation.arn, "arn:aws:kms:us-west-2:123456789012:key/")
-      ])
+      && length(output.worker_root_key_registry) == 2
+      && length(output.verifier_root_key_registry) == 2
+      && alltrue([for generation in values(output.worker_root_key_registry) : generation.key_class == "ai_assisted" && generation.purpose == "object_wrap"])
+      && alltrue([for generation in values(output.verifier_root_key_registry) : generation.key_class == "ai_assisted" && generation.purpose == "object_wrap"])
+      && jsondecode(output.verifier_retired_ai_object_wrap_roots_json) == [aws_kms_key.root["ai_assisted_object_wrap_v1"].arn]
+      && jsondecode(output.worker_retired_ai_object_wrap_roots_json) == [aws_kms_key.root["ai_assisted_object_wrap_v1"].arn]
     )
-    error_message = "Application registries must expose all web roots and exact AI-only worker configuration without leaking private or staged identifiers."
+    error_message = "Application registries must expose all web roots and exact AI object-wrap-only worker configuration without leaking content-MAC, private, or staged identifiers."
   }
 }

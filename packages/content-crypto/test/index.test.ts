@@ -230,6 +230,30 @@ describe("content envelope encryption", () => {
       );
     }
 
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    for (const plaintext of [new Uint8Array(), new Uint8Array([0x42])]) {
+      const tailEnvelope = await sealBytes(plaintext, context, encryptionKey);
+      const ciphertext = tailEnvelope.payload.ciphertext;
+      const remainder = ciphertext.length % 4;
+      expect(remainder === 2 || remainder === 3).toBe(true);
+      const last = alphabet.indexOf(ciphertext.at(-1) ?? "");
+      const noncanonicalLast = alphabet[(last & (remainder === 2 ? 0x30 : 0x3c)) | 1];
+      if (noncanonicalLast === undefined) throw new Error("expected a base64url tail digit");
+      await expect(
+        openBytes(
+          {
+            ...tailEnvelope,
+            payload: {
+              ...tailEnvelope.payload,
+              ciphertext: `${ciphertext.slice(0, -1)}${noncanonicalLast}`
+            }
+          },
+          context,
+          encryptionKey
+        )
+      ).rejects.toSatisfy(expectCode(ContentCryptoErrorCode.INVALID_ENVELOPE));
+    }
+
     expect(() =>
       parseContentEnvelope("x".repeat(contentCryptoLimits.maximumSerializedEnvelopeBytes + 1))
     ).toThrow(ContentCryptoError);

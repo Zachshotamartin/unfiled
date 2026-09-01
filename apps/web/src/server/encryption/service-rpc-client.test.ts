@@ -80,6 +80,7 @@ describe("allowlisted encrypted service RPC client", () => {
 
   it.each([
     ["capture_id_conflict", ServiceRpcErrorCode.INVALID_IDEMPOTENCY_KEY],
+    ["stale_maintenance_cursor", ServiceRpcErrorCode.STALE_MAINTENANCE_CURSOR],
     ["explicit_destination_not_owned", ServiceRpcErrorCode.FORBIDDEN],
     ["invalid_rollout_state", ServiceRpcErrorCode.PROVIDER_UNAVAILABLE],
     ["encrypted_organizer_write_unavailable", ServiceRpcErrorCode.PROVIDER_UNAVAILABLE],

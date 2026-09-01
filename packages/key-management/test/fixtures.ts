@@ -1,5 +1,6 @@
 import type {
   AiAssistedRootKeySet,
+  IndexWorkerRootKeySet,
   KeyClass,
   KeyPurpose,
   ManagedKeyRecordV1,
@@ -24,6 +25,10 @@ export const ROOTS: RootKeySet = Object.freeze({
 
 export const AI_ROOTS: AiAssistedRootKeySet = Object.freeze({
   ai_assisted: ROOTS.ai_assisted
+});
+
+export const INDEX_ROOTS: IndexWorkerRootKeySet = Object.freeze({
+  ai_assisted: Object.freeze({ object_wrap: ROOTS.ai_assisted.object_wrap })
 });
 
 export const RETIRED_AI_OBJECT_ROOT =
