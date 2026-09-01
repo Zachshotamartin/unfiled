@@ -86,6 +86,42 @@ function utf8Length(value: string): number {
   return textEncoder.encode(value).byteLength;
 }
 
+function canonicalNormalizedTextByteLength(value: string): number | null {
+  let previousSpace = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code > 0x7f) {
+      return normalizePrivateRagText(value) === value ? utf8Length(value) : null;
+    }
+    if (code >= 0x41 && code <= 0x5a) return null;
+    if (code >= 0x09 && code <= 0x0d) return null;
+    if (code === 0x20) {
+      if (index === 0 || index === value.length - 1 || previousSpace) return null;
+      previousSpace = true;
+    } else {
+      previousSpace = false;
+    }
+  }
+  return value.length;
+}
+
+function asciiJsonStringContentByteLength(value: string): number | null {
+  let length = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code > 0x7f) return null;
+    if (code === 0x22 || code === 0x5c) {
+      length += 2;
+    } else if (code <= 0x1f) {
+      length +=
+        code === 0x08 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d ? 2 : 6;
+    } else {
+      length += 1;
+    }
+  }
+  return length;
+}
+
 function assertNoteId(value: string): void {
   if (!NOTE_ID_PATTERN.test(value)) privateRagValidationFailure("invalid_note_id");
 }
@@ -215,10 +251,11 @@ function validateWireDocument(
   if (typeof value.normalizedLexicalText !== "string") {
     privateRagValidationFailure("invalid_text");
   }
+  const normalizedTextBytes = canonicalNormalizedTextByteLength(value.normalizedLexicalText);
   if (
     value.normalizedLexicalText.length === 0 ||
-    normalizePrivateRagText(value.normalizedLexicalText) !== value.normalizedLexicalText ||
-    utf8Length(value.normalizedLexicalText) > MAX_PRIVATE_RAG_NORMALIZED_TEXT_BYTES
+    normalizedTextBytes === null ||
+    normalizedTextBytes > MAX_PRIVATE_RAG_NORMALIZED_TEXT_BYTES
   ) {
     privateRagValidationFailure("invalid_text");
   }
@@ -245,10 +282,7 @@ function validateWireDocument(
     normalizedLexicalText: value.normalizedLexicalText,
     embedding: Object.freeze({ ...(value.embedding as Float32LeEmbeddingV1) })
   });
-  if (
-    textEncoder.encode(JSON.stringify(canonicalWireValue(document))).byteLength >
-    MAX_PRIVATE_RAG_PAYLOAD_BYTES
-  ) {
+  if (canonicalWireByteLength(document) > MAX_PRIVATE_RAG_PAYLOAD_BYTES) {
     privateRagValidationFailure("payload_too_large");
   }
   return document;
@@ -278,6 +312,16 @@ function canonicalWireValue(document: PrivateRagIndexDocumentV1): Record<string,
     title: document.title,
     updatedAt: document.updatedAt
   };
+}
+
+function canonicalWireByteLength(document: PrivateRagIndexDocumentV1): number {
+  const asciiTextBytes = asciiJsonStringContentByteLength(document.normalizedLexicalText);
+  if (asciiTextBytes === null) {
+    return textEncoder.encode(JSON.stringify(canonicalWireValue(document))).byteLength;
+  }
+  const withoutNormalizedText = canonicalWireValue(document);
+  withoutNormalizedText.normalizedLexicalText = "";
+  return textEncoder.encode(JSON.stringify(withoutNormalizedText)).byteLength + asciiTextBytes;
 }
 
 export function normalizePrivateRagText(value: string): string {

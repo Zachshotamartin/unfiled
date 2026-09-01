@@ -230,6 +230,18 @@ describe("content envelope encryption", () => {
       );
     }
 
+    const invalidMiddleCiphertext = `${envelope.payload.ciphertext.slice(0, 4)}*${envelope.payload.ciphertext.slice(5)}`;
+    const invalidMiddleEnvelope = {
+      ...envelope,
+      payload: { ...envelope.payload, ciphertext: invalidMiddleCiphertext }
+    };
+    await expect(openBytes(invalidMiddleEnvelope, context, encryptionKey)).rejects.toSatisfy(
+      expectCode(ContentCryptoErrorCode.INVALID_ENVELOPE)
+    );
+    expect(() => parseContentEnvelope(JSON.stringify(invalidMiddleEnvelope))).toThrow(
+      expect.objectContaining({ code: ContentCryptoErrorCode.INVALID_ENVELOPE })
+    );
+
     const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     for (const plaintext of [new Uint8Array(), new Uint8Array([0x42])]) {
       const tailEnvelope = await sealBytes(plaintext, context, encryptionKey);

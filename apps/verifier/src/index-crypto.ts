@@ -1,5 +1,5 @@
 import { openBytes } from "@unfiled/content-crypto";
-import { decodePrivateRagIndexEmbedding, parsePrivateRagIndexDocumentBytes } from "@unfiled/search";
+import { parsePrivateRagIndexDocumentBytes } from "@unfiled/search";
 
 import type { BuildingGeneration, BuildingIndexItem } from "./database.js";
 import { GenerationVerificationError, VerifierUnavailableError } from "./errors.js";
@@ -40,14 +40,12 @@ export function createStrictIndexDocumentOpener(): StrictIndexDocumentOpener {
           },
           key
         );
-        const document = parsePrivateRagIndexDocumentBytes(plaintext, {
+        parsePrivateRagIndexDocumentBytes(plaintext, {
           noteId: item.noteId,
           indexedRevision: item.indexedRevision,
           modelId: generation.embeddingModelId,
           dimensions: generation.embeddingDimensions
         });
-        const embedding = decodePrivateRagIndexEmbedding(document);
-        embedding.fill(0);
       } catch (error: unknown) {
         if (
           error instanceof VerifierUnavailableError ||
