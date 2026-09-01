@@ -2,5 +2,6 @@
 @import "@unfiled/design-tokens/css";
 @import "./product-details.css";
 @import "./capture.css";
+@import "./routing-rules.css";
 @import "./globals-core.css";
 @import "./globals-responsive.css";

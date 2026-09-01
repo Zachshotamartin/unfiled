@@ -210,6 +210,7 @@ describe("managed encrypted capture repository", () => {
     expect(managedEncryptedCaptureRpcFunctions).toEqual([
       ...encryptedAggregateRuntimeRpcFunctions,
       ...encryptedCaptureRpcFunctions,
+      "list_encrypted_library_objects",
       ...encryptedNoteReadRpcFunctions
     ]);
     expect(new Set(managedEncryptedCaptureRpcFunctions).size).toBe(
@@ -252,6 +253,7 @@ describe("managed encrypted capture repository", () => {
         "aggregate",
         "noteReads",
         "ownerId",
+        "routingRules",
         "signal"
       ]);
       expect(dependencies).toMatchObject({

@@ -13,6 +13,56 @@ export type PagedResponse<T> = Readonly<{
   }>;
 }>;
 
+export type PagedContinuation<T> = Readonly<{
+  error: string | null;
+  firstPage: PagedResponse<T> | null;
+  items: readonly T[];
+  loading: boolean;
+  pageInfo: PagedResponse<T>["pageInfo"] | null;
+  url: string;
+}>;
+
+type PagedContinuationLoad<T> = Readonly<{
+  firstPage: PagedResponse<T> | null;
+  items: readonly T[];
+  url: string;
+}>;
+
+export function emptyPagedContinuation<T>(
+  url: string,
+  firstPage: PagedResponse<T> | null
+): PagedContinuation<T> {
+  return { error: null, firstPage, items: [], loading: false, pageInfo: null, url };
+}
+
+export function continuationForFirstPage<T>(
+  continuation: PagedContinuation<T>,
+  url: string,
+  firstPage: PagedResponse<T> | null
+): PagedContinuation<T> {
+  return continuation.url === url && continuation.firstPage === firstPage
+    ? continuation
+    : emptyPagedContinuation(url, firstPage);
+}
+
+export function applyContinuationPage<T>(
+  continuation: PagedContinuation<T>,
+  load: PagedContinuationLoad<T>,
+  page: PagedResponse<T>
+): PagedContinuation<T> {
+  if (continuation.url !== load.url || continuation.firstPage !== load.firstPage) {
+    return continuation;
+  }
+  return {
+    error: null,
+    firstPage: load.firstPage,
+    items: [...load.items, ...page.items],
+    loading: false,
+    pageInfo: page.pageInfo,
+    url: load.url
+  };
+}
+
 export function mergePageItems<T>(
   first: readonly T[],
   continuation: readonly T[],
@@ -30,19 +80,10 @@ export function mergePageItems<T>(
 
 export function usePagedResource<T>(url: string, keyOf: (item: T) => string) {
   const first = useLiveResource<PagedResponse<T>>(url);
-  const [continuation, setContinuation] = useState<
-    Readonly<{
-      error: string | null;
-      items: readonly T[];
-      loading: boolean;
-      pageInfo: PagedResponse<T>["pageInfo"] | null;
-      url: string;
-    }>
-  >({ error: null, items: [], loading: false, pageInfo: null, url });
-  const current =
-    continuation.url === url
-      ? continuation
-      : { error: null, items: [], loading: false, pageInfo: null, url };
+  const [continuation, setContinuation] = useState<PagedContinuation<T>>(() =>
+    emptyPagedContinuation(url, null)
+  );
+  const current = continuationForFirstPage(continuation, url, first.data);
   const pageInfo = current.pageInfo ?? first.data?.pageInfo ?? null;
 
   const items = useMemo(() => {
@@ -52,6 +93,7 @@ export function usePagedResource<T>(url: string, keyOf: (item: T) => string) {
   const loadMore = useCallback(async (): Promise<void> => {
     const cursor = pageInfo?.nextCursor;
     if (cursor === null || cursor === undefined || current.loading) return;
+    const load = { firstPage: current.firstPage, items: current.items, url };
     setContinuation({ ...current, error: null, loading: true, url });
     try {
       const separator = url.includes("?") ? "&" : "?";
@@ -59,20 +101,18 @@ export function usePagedResource<T>(url: string, keyOf: (item: T) => string) {
         `${url}${separator}cursor=${encodeURIComponent(cursor)}`,
         { cache: "no-store" }
       );
-      setContinuation({
-        error: null,
-        items: [...current.items, ...page.items],
-        loading: false,
-        pageInfo: page.pageInfo,
-        url
-      });
+      setContinuation((latest) => applyContinuationPage(latest, load, page));
     } catch (reason) {
-      setContinuation({
-        ...current,
-        error: reason instanceof Error ? reason.message : "The next page could not be loaded.",
-        loading: false,
-        url
-      });
+      setContinuation((latest) =>
+        latest.url === load.url && latest.firstPage === load.firstPage
+          ? {
+              ...latest,
+              error:
+                reason instanceof Error ? reason.message : "The next page could not be loaded.",
+              loading: false
+            }
+          : latest
+      );
     }
   }, [current, pageInfo?.nextCursor, url]);
 

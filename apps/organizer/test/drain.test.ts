@@ -22,7 +22,11 @@ import type { OrganizerPlanner } from "../src/planner.js";
 
 const signal = new AbortController().signal;
 const authority = {} as OrganizerKeyAuthority;
-const controls = Object.freeze({ expansionDisabled: false, explicitDestinationNoteId: null });
+const controls = Object.freeze({
+  expansionDisabled: false,
+  explicitDestinationNoteId: null,
+  ruleMatch: null
+});
 const automaticPolicyContext: OrganizerRoutingPolicyContext = Object.freeze({
   accountCaptureOrdinal: 6,
   deterministicRuleMatch: true,
@@ -271,6 +275,305 @@ function drain(
 }
 
 describe("organizer drain", () => {
+  it("executes matched-note and zero-candidate matched-space routes without the planner", async () => {
+    const ruleId = "rule_01ARZ3NDEKTSV4RRFFQ69G5FAE" as const;
+    const noteRuleControls = Object.freeze({
+      expansionDisabled: false,
+      explicitDestinationNoteId: null,
+      ruleMatch: Object.freeze({
+        destinationId: candidate.noteId,
+        destinationKind: "note" as const,
+        matched: true as const,
+        priority: 900,
+        ruleId,
+        ruleRevision: 5
+      })
+    });
+    const noteRuleJob = Object.freeze({
+      ...job,
+      controls: noteRuleControls,
+      routingMode: "cautious" as const
+    });
+    const noteRepo = repository({
+      claim: vi.fn().mockResolvedValue([noteRuleJob]),
+      candidates: vi.fn().mockResolvedValue({ candidates: [candidate], controls: noteRuleControls })
+    });
+    const noteCipher = cipher();
+    vi.mocked(noteCipher.openCapture).mockResolvedValue({
+      controls: noteRuleControls,
+      rawContent: "Shopping: milk"
+    });
+    const planner: OrganizerPlanner = {
+      plan: vi.fn().mockRejectedValue(new Error("rule path must not call the planner"))
+    };
+
+    await expect(
+      drain(noteRepo, planner, noteCipher).drain({
+        authority,
+        requestId: "note-rule",
+        signal,
+        trigger: "manual"
+      })
+    ).resolves.toEqual({ claimed: 1, completed: 1, failed: 0, retryScheduled: 0 });
+    expect(planner.plan).not.toHaveBeenCalled();
+    expect(noteRepo.prepareAppend).toHaveBeenCalledOnce();
+    expect(vi.mocked(noteCipher.sealCommand).mock.calls[0]?.[0]).toMatchObject({
+      plan: {
+        kind: "append",
+        validatedPlan: { reasonCodes: ["routing_rule_match"] }
+      },
+      routingDecision: { autoApply: true, band: "auto" }
+    });
+
+    const spaceId = "spc_01ARZ3NDEKTSV4RRFFQ69G5FAF" as const;
+    const spaceRuleControls = Object.freeze({
+      ...noteRuleControls,
+      ruleMatch: Object.freeze({
+        ...noteRuleControls.ruleMatch,
+        destinationId: spaceId,
+        destinationKind: "space" as const
+      })
+    });
+    const spaceRuleJob = Object.freeze({ ...job, controls: spaceRuleControls });
+    const spaceRepo = repository({
+      claim: vi.fn().mockResolvedValue([spaceRuleJob]),
+      candidates: vi.fn().mockResolvedValue({ candidates: [], controls: spaceRuleControls }),
+      heartbeat: vi.fn().mockResolvedValue(authorized(0)),
+      commit: vi.fn().mockResolvedValue({
+        jobId: job.jobId,
+        noteId: "note_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        outcome: "created",
+        replayed: false,
+        revision: 1,
+        replanCount: 0
+      })
+    });
+    const spaceCipher = cipher();
+    vi.mocked(spaceCipher.openCapture).mockResolvedValue({
+      controls: spaceRuleControls,
+      rawContent: "add milk and eggs"
+    });
+
+    await expect(
+      drain(spaceRepo, planner, spaceCipher).drain({
+        authority,
+        requestId: "space-rule",
+        signal,
+        trigger: "manual"
+      })
+    ).resolves.toEqual({ claimed: 1, completed: 1, failed: 0, retryScheduled: 0 });
+    expect(spaceRepo.prepareCreate).toHaveBeenCalledOnce();
+    expect(spaceCipher.openCandidate).not.toHaveBeenCalled();
+    expect(vi.mocked(spaceCipher.sealCommand).mock.calls[0]?.[0]).toMatchObject({
+      plan: {
+        kind: "create",
+        spaceId,
+        title: "Daily list / 2026-08-31",
+        validatedPlan: { reasonCodes: ["routing_rule_match"] }
+      }
+    });
+  });
+
+  it("applies the long-capture hard override to a matched existing-note rule", async () => {
+    const ruleControls = Object.freeze({
+      expansionDisabled: false,
+      explicitDestinationNoteId: null,
+      ruleMatch: Object.freeze({
+        destinationId: candidate.noteId,
+        destinationKind: "note" as const,
+        matched: true as const,
+        priority: 900,
+        ruleId: "rule_01ARZ3NDEKTSV4RRFFQ69G5FAE" as const,
+        ruleRevision: 5
+      })
+    });
+    const genericCandidate = candidateAt(2, { noteType: "generic" });
+    const repo = repository({
+      claim: vi.fn().mockResolvedValue([{ ...job, controls: ruleControls }]),
+      candidates: vi
+        .fn()
+        .mockResolvedValue({ candidates: [genericCandidate], controls: ruleControls }),
+      commit: vi.fn().mockResolvedValue({
+        jobId: job.jobId,
+        noteId: null,
+        outcome: "review",
+        replayed: false,
+        revision: null,
+        replanCount: 0
+      })
+    });
+    const crypto = cipher();
+    vi.mocked(crypto.openCapture).mockResolvedValue({
+      controls: ruleControls,
+      rawContent: "x".repeat(2_001)
+    });
+
+    await expect(
+      drain(repo, { plan: vi.fn() }, crypto).drain({
+        authority,
+        requestId: "long-rule-capture",
+        signal,
+        trigger: "manual"
+      })
+    ).resolves.toEqual({ claimed: 1, completed: 1, failed: 0, retryScheduled: 0 });
+    expect(repo.prepareAppend).not.toHaveBeenCalled();
+    expect(repo.prepareCreate).toHaveBeenCalledOnce();
+    const sealed = vi.mocked(crypto.sealCommand).mock.calls.at(-1)?.[0];
+    expect(sealed).toMatchObject({
+      plan: { kind: "review" },
+      reviewReason: "planner_ambiguity",
+      routingDecision: {
+        autoApply: false,
+        band: "review"
+      }
+    });
+    expect(sealed?.routingDecision?.reasons).toContain("long_capture");
+  });
+
+  it("sends a multiple-candidate matched-space route to Review without disclosure", async () => {
+    const spaceId = "spc_01ARZ3NDEKTSV4RRFFQ69G5FAF" as const;
+    const ruleControls = Object.freeze({
+      expansionDisabled: false,
+      explicitDestinationNoteId: null,
+      ruleMatch: Object.freeze({
+        destinationId: spaceId,
+        destinationKind: "space" as const,
+        matched: true as const,
+        priority: 900,
+        ruleId: "rule_01ARZ3NDEKTSV4RRFFQ69G5FAE" as const,
+        ruleRevision: 5
+      })
+    });
+    const first = Object.freeze({ ...candidate, spaceId });
+    const second = candidateAt(2, {
+      candidateId: "note_01ARZ3NDEKTSV4RRFFQ69G5FAD",
+      noteId: "note_01ARZ3NDEKTSV4RRFFQ69G5FAC",
+      spaceId
+    });
+    const repo = repository({
+      claim: vi.fn().mockResolvedValue([{ ...job, controls: ruleControls }]),
+      candidates: vi
+        .fn()
+        .mockResolvedValue({ candidates: [first, second], controls: ruleControls }),
+      heartbeat: vi.fn().mockResolvedValue(authorized(2)),
+      commit: vi.fn().mockResolvedValue({
+        jobId: job.jobId,
+        noteId: null,
+        outcome: "review",
+        replayed: false,
+        revision: null,
+        replanCount: 0
+      })
+    });
+    const crypto = cipher();
+    vi.mocked(crypto.openCapture).mockResolvedValue({
+      controls: ruleControls,
+      rawContent: "add milk and eggs"
+    });
+    const planner: OrganizerPlanner = { plan: vi.fn() };
+
+    await expect(
+      drain(repo, planner, crypto).drain({
+        authority,
+        requestId: "ambiguous-space-rule",
+        signal,
+        trigger: "manual"
+      })
+    ).resolves.toEqual({ claimed: 1, completed: 1, failed: 0, retryScheduled: 0 });
+    expect(planner.plan).not.toHaveBeenCalled();
+    expect(crypto.openCandidate).not.toHaveBeenCalled();
+    expect(repo.prepareAppend).not.toHaveBeenCalled();
+    expect(vi.mocked(crypto.sealCommand).mock.calls[0]?.[0]).toMatchObject({
+      plan: {
+        kind: "review",
+        validatedPlan: {
+          reasonCodes: ["ambiguous_intent", "routing_rule_match"]
+        }
+      },
+      reviewReason: "planner_ambiguity"
+    });
+  });
+
+  it("reseals Review at the database replan generation when a rule target invalidates at commit", async () => {
+    const ruleControls = Object.freeze({
+      expansionDisabled: false,
+      explicitDestinationNoteId: null,
+      ruleMatch: Object.freeze({
+        destinationId: candidate.noteId,
+        destinationKind: "note" as const,
+        matched: true as const,
+        priority: 900,
+        ruleId: "rule_01ARZ3NDEKTSV4RRFFQ69G5FAE" as const,
+        ruleRevision: 5
+      })
+    });
+    const reviewPreparation = Object.freeze({
+      ...prepared("create", null),
+      replanCount: 1 as const
+    });
+    const repo = repository({
+      claim: vi.fn().mockResolvedValue([{ ...job, controls: ruleControls }]),
+      candidates: vi.fn().mockResolvedValue({ candidates: [candidate], controls: ruleControls }),
+      heartbeat: vi
+        .fn()
+        .mockResolvedValueOnce(authorized(1, 0))
+        .mockResolvedValueOnce(authorized(1, 0))
+        .mockResolvedValueOnce(authorized(1, 1))
+        .mockResolvedValueOnce(authorized(1, 1)),
+      prepareCreate: vi.fn().mockResolvedValue(reviewPreparation),
+      commit: vi
+        .fn()
+        .mockResolvedValueOnce({
+          conflictReason: "candidate_eligibility",
+          jobId: job.jobId,
+          noteId: null,
+          outcome: "review_required",
+          replayed: false,
+          revision: null,
+          replanCount: 1
+        })
+        .mockResolvedValueOnce({
+          jobId: job.jobId,
+          noteId: null,
+          outcome: "review",
+          replayed: false,
+          revision: null,
+          replanCount: 1
+        })
+    });
+    const crypto = cipher();
+    vi.mocked(crypto.openCapture).mockResolvedValue({
+      controls: ruleControls,
+      rawContent: "Shopping: milk"
+    });
+    const planner: OrganizerPlanner = { plan: vi.fn() };
+
+    await expect(
+      drain(repo, planner, crypto).drain({
+        authority,
+        requestId: "rule-target-invalidated",
+        signal,
+        trigger: "manual"
+      })
+    ).resolves.toEqual({ claimed: 1, completed: 1, failed: 0, retryScheduled: 0 });
+    expect(planner.plan).not.toHaveBeenCalled();
+    expect(repo.prepareAppend).toHaveBeenCalledOnce();
+    expect(repo.prepareCreate).toHaveBeenCalledOnce();
+    expect(repo.commit).toHaveBeenCalledTimes(2);
+    expect(repo.heartbeat).toHaveBeenCalledTimes(4);
+    expect(vi.mocked(crypto.sealCommand).mock.calls[1]?.[0]).toMatchObject({
+      activeReplanCount: 1,
+      plan: {
+        kind: "review",
+        validatedPlan: {
+          reasonCodes: ["ambiguous_intent", "routing_rule_match"]
+        }
+      },
+      preparation: { replanCount: 1 },
+      reviewReason: "planner_ambiguity"
+    });
+  });
+
   it("authorizes, prepares, seals, revalidates, and atomically commits append", async () => {
     const repo = repository();
     await expect(
@@ -723,7 +1026,8 @@ describe("organizer drain", () => {
   it("adopts authoritative controls changed after claim and prevents expansion", async () => {
     const currentControls = Object.freeze({
       expansionDisabled: true,
-      explicitDestinationNoteId: null
+      explicitDestinationNoteId: null,
+      ruleMatch: null
     });
     const repo = repository({
       candidates: vi.fn().mockResolvedValue({ candidates: [candidate], controls: currentControls }),
@@ -968,7 +1272,8 @@ describe("organizer drain", () => {
   it("never decrypts or discloses a closed explicit target and commits Review", async () => {
     const explicitControls = Object.freeze({
       expansionDisabled: false,
-      explicitDestinationNoteId: candidate.noteId
+      explicitDestinationNoteId: candidate.noteId,
+      ruleMatch: null
     });
     const closed = Object.freeze({ ...candidate, isOpen: false });
     const crypto = cipher();
@@ -1017,7 +1322,11 @@ describe("organizer drain", () => {
   ])("routes %s planner output to encrypted Review", async (_label, planned, expectedReason) => {
     const selectedControls =
       _label === "disabled expansion"
-        ? Object.freeze({ expansionDisabled: true, explicitDestinationNoteId: null })
+        ? Object.freeze({
+            expansionDisabled: true,
+            explicitDestinationNoteId: null,
+            ruleMatch: null
+          })
         : controls;
     const crypto = cipher();
     const repo = repository({

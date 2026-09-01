@@ -1830,6 +1830,7 @@ select 'private-capture-command', jsonb_build_object(
   'privacy', 'private_manual',
   'explicitDestinationNoteId', null,
   'expansionDisabled', true,
+  'routingRuleMatch', null,
   'privateReceiptCipher', pg_temp.cipher(
     'cap_73000000000000000000000002',
     '22222222-2222-4222-8222-222222222222', 1, 'capture_receipt',

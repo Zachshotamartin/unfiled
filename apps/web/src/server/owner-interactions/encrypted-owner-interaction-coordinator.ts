@@ -101,6 +101,7 @@ import {
 const OWNER_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const ENCRYPTED_ORGANIZER_REASON_SENTINEL = "encrypted_organizer";
+const ROUTING_RULE_OBSERVATION_MAX_WAIT_MS = 5_000;
 
 function interactionDiagnostic(stage: string): void {
   if (process.env.UNFILED_E1_HTTP_DIAGNOSTICS === "1") {
@@ -174,6 +175,17 @@ export type EncryptedOwnerInteractionCoordinatorDependencies = Readonly<{
     reservations: readonly ObjectWrapReservation[]
   ): PreparedOwnerEncryptedAggregateService;
   adapter: EncryptedOwnerInteractionRpcAdapter;
+  observeRoutingRuleCorrection(
+    input: Readonly<{
+      feedbackEventId: EntityId<"fbk">;
+      captureId: EntityId<"cap">;
+      captureText: string | null;
+      destination:
+        | Readonly<{ type: "note"; noteId: EntityId<"note"> }>
+        | Readonly<{ type: "space"; spaceId: EntityId<"spc"> }>;
+    }>
+  ): Promise<void>;
+  routingRuleObservationDeadlineAt?: number;
   signal?: AbortSignal;
 }>;
 
@@ -698,6 +710,7 @@ function assertCorrectionResponseBinding(
     if (
       response.reviewItemId !== preparation.branches.needsReview.reviewItemId ||
       result.reviewItemId !== response.reviewItemId ||
+      result.feedbackEventId !== null ||
       result.members.length !== 0
     ) {
       return unavailable();
@@ -748,7 +761,9 @@ function assertCorrectionResponseBinding(
     response.destination.type !== request.destination.type ||
     response.destination.noteId !== destination.noteId ||
     response.destination.currentRevision !== destination.currentRevision ||
-    response.destination.mutationId !== destination.mutationId
+    response.destination.mutationId !== destination.mutationId ||
+    result.feedbackEventId === null ||
+    result.feedbackEventId !== preparation.branches.applied.feedbackEventId
   ) {
     return unavailable();
   }
@@ -848,6 +863,91 @@ export class EncryptedOwnerInteractionCoordinator {
     if (this.dependencies.signal !== undefined) {
       throwIfServiceOperationAborted(this.dependencies.signal);
     }
+  }
+
+  private async settleRoutingRuleObservation(observe: () => Promise<void>): Promise<boolean> {
+    const deadlineAt = this.dependencies.routingRuleObservationDeadlineAt;
+    const remainingMs =
+      deadlineAt === undefined
+        ? ROUTING_RULE_OBSERVATION_MAX_WAIT_MS
+        : Math.floor(deadlineAt - Date.now());
+    const waitMs = Math.min(ROUTING_RULE_OBSERVATION_MAX_WAIT_MS, remainingMs);
+    if (!Number.isFinite(waitMs) || waitMs <= 0) return false;
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<false>((resolve) => {
+      timeout = setTimeout(() => resolve(false), waitMs);
+    });
+    // Both branches are observed even when the timeout wins, so a late abort or
+    // provider rejection cannot escape as an unhandled promise rejection.
+    const observation = Promise.resolve()
+      .then(observe)
+      .then(
+        () => true as const,
+        () => false as const
+      );
+    try {
+      return await Promise.race([observation, timedOut]);
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+    }
+  }
+
+  private async observeRoutingRuleCorrection(
+    preparation: PrepareDecisionCorrectionResult,
+    request: DecisionCorrectionRequest,
+    response: DecisionCorrectionResponse,
+    result: OwnerInteractionCommitResult,
+    captureText: string | null
+  ): Promise<void> {
+    const observe = this.dependencies.observeRoutingRuleCorrection;
+    if (response.outcome !== "applied") return;
+    // Keep the runtime guard even though production composition requires this
+    // dependency. It makes an incomplete or dynamically substituted
+    // composition fail closed after the correction's durable commit.
+    if (typeof observe !== "function") return unavailable();
+    const feedbackEventId = result.feedbackEventId;
+    if (
+      feedbackEventId === null ||
+      feedbackEventId !== preparation.branches.applied.feedbackEventId
+    ) {
+      return unavailable();
+    }
+    const destination =
+      request.destination.type === "new_note" && request.destination.spaceId !== null
+        ? Object.freeze({
+            type: "space" as const,
+            spaceId: request.destination.spaceId
+          })
+        : Object.freeze({
+            type: "note" as const,
+            noteId: response.destination.noteId
+          });
+    // The correction and its feedback event are already durable at this
+    // point. Do not acknowledge the API request until its idempotent,
+    // feedback-bound observation is durable too. If this bounded follow-up
+    // fails, returning provider_unavailable forces the client to retry the
+    // exact correction idempotency key; that replay cannot duplicate the note
+    // writes and resumes the same observation. Diagnostics deliberately
+    // contain no owner content or provider error text.
+    let completed: boolean;
+    try {
+      completed = await this.settleRoutingRuleObservation(() =>
+        observe({
+          feedbackEventId,
+          captureId: preparation.ids.captureId,
+          captureText,
+          destination
+        })
+      );
+    } catch {
+      interactionDiagnostic("correction.rule-observation-deferred");
+      return unavailable();
+    }
+    interactionDiagnostic(
+      completed ? "correction.rule-observation-complete" : "correction.rule-observation-deferred"
+    );
+    if (!completed) return unavailable();
   }
 
   private async openCurrentNote(member: OwnerInteractionPreparedMember): Promise<Note> {
@@ -1119,7 +1219,8 @@ export class EncryptedOwnerInteractionCoordinator {
       candidates: [...candidates.values()].map((candidate) => ({ ...candidate })),
       controls: {
         expansionDisabled: true,
-        explicitDestinationNoteId: destination.expectedRevision === 0 ? null : destination.noteId
+        explicitDestinationNoteId: destination.expectedRevision === 0 ? null : destination.noteId,
+        ruleMatch: null
       },
       authorizedSpaceIds: spaceId === null ? [] : [spaceId],
       authorizedTagIds: [...new Set(tagIds)]
@@ -1786,6 +1887,13 @@ export class EncryptedOwnerInteractionCoordinator {
         replayed.result
       );
       interactionDiagnostic("correction.replay-bound");
+      await this.observeRoutingRuleCorrection(
+        preparation,
+        request,
+        parsedResponse,
+        replayed.result,
+        null
+      );
       return parsedResponse;
     }
 
@@ -1796,6 +1904,7 @@ export class EncryptedOwnerInteractionCoordinator {
     let destinationEffect: Awaited<
       ReturnType<EncryptedOwnerInteractionCoordinator["applyDestination"]>
     > = null;
+    let correctionCaptureText: string | null = null;
     if (
       preparation.branches.applied.available &&
       sourceMember !== null &&
@@ -1805,6 +1914,7 @@ export class EncryptedOwnerInteractionCoordinator {
       preparation.source.decision.captureId === preparation.ids.captureId
     ) {
       const captureText = await this.openCapture(preparation.source);
+      correctionCaptureText = captureText;
       interactionDiagnostic(
         captureText === null ? "correction.capture-unavailable" : "correction.capture-opened"
       );
@@ -1981,6 +2091,13 @@ export class EncryptedOwnerInteractionCoordinator {
     interactionDiagnostic("correction.response-opened");
     const parsedResponse = DecisionCorrectionResponseSchema.parse(opened);
     assertCorrectionResponseBinding(parsedResponse, outcome, preparation, request, result);
+    await this.observeRoutingRuleCorrection(
+      preparation,
+      request,
+      parsedResponse,
+      result,
+      correctionCaptureText
+    );
     return parsedResponse;
   }
 

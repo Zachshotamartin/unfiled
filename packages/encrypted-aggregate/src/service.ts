@@ -208,6 +208,7 @@ type AggregateVerificationCoordinates = Readonly<{
     | "note_mutation"
     | "organization_decision"
     | "review_item"
+    | "routing_rule"
     | "space_display"
     | "tag_display"
     | "idempotency_response";
@@ -820,6 +821,17 @@ export function createEncryptedAggregateService(
         recordVersion: input.recordVersion,
         keyClass: parsePrivacy(input.sourcePrivacy),
         payload: parsePayload(ReviewPayloadSchema, input.payload)
+      });
+    }
+    if (input.surface === "routing_rule") {
+      assertEntityId(input.ruleId, "rule");
+      assertRecordVersion(input.recordVersion);
+      return Object.freeze({
+        surface: input.surface,
+        resourceId: input.ruleId,
+        recordVersion: input.recordVersion,
+        keyClass: "private_manual",
+        payload: parsePayload(RoutingRulePayloadSchema, input.payload)
       });
     }
     if (input.surface === "space_display") {

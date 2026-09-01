@@ -20,6 +20,7 @@ enum AppRoute: Hashable {
     case archive
     case deleted
     case settings
+    case routingRules
 }
 
 struct CaptureSheet: Equatable, Identifiable {

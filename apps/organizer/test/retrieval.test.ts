@@ -21,7 +21,8 @@ const signal = new AbortController().signal;
 const authority = {} as OrganizerKeyAuthority;
 const controls = Object.freeze({
   expansionDisabled: false,
-  explicitDestinationNoteId: null
+  explicitDestinationNoteId: null,
+  ruleMatch: null
 });
 const capture = Object.freeze({ controls, rawContent: "add milk to Shopping" });
 const job: ClaimedOrganizerJob = Object.freeze({
@@ -203,6 +204,45 @@ describe("organizer encrypted RAG retrieval", () => {
     expect(repo.selectCandidates).not.toHaveBeenCalled();
     expect(result.routingPolicyContext.retrievalAutoEligible).toBe(false);
     expect(result.routingPolicyContext.deterministicRuleMatch).toBe(false);
+  });
+
+  it("bypasses RAG, embeddings, and payload decryption for a frozen rule snapshot", async () => {
+    const ruleControls = Object.freeze({
+      expansionDisabled: false,
+      explicitDestinationNoteId: null,
+      ruleMatch: Object.freeze({
+        destinationId: NOTE_ID,
+        destinationKind: "note" as const,
+        matched: true as const,
+        priority: 800,
+        ruleId: "rule_01ARZ3NDEKTSV4RRFFQ69G5FAE" as const,
+        ruleRevision: 2
+      })
+    });
+    const ruleCapture = Object.freeze({ ...capture, controls: ruleControls });
+    const ruleJob = Object.freeze({ ...job, controls: ruleControls });
+    const repo = repository({
+      candidates: vi.fn().mockResolvedValue({ candidates: [candidate], controls: ruleControls })
+    });
+    const embed = vi.fn();
+    const opener = payloads();
+
+    const result = await createOrganizerCandidateRetrieval({
+      embeddingProvider: { embed },
+      payloadsForAuthority: () => opener,
+      repository: repo
+    }).retrieve({ authority, capture: ruleCapture, job: ruleJob, signal });
+
+    expect(result.candidates).toEqual([candidate]);
+    expect(result.routingPolicyContext).toMatchObject({
+      deterministicRuleMatch: true,
+      retrievalAutoEligible: false
+    });
+    expect(repo.candidates).toHaveBeenCalledTimes(1);
+    expect(repo.ragPage).not.toHaveBeenCalled();
+    expect(repo.selectCandidates).not.toHaveBeenCalled();
+    expect(embed).not.toHaveBeenCalled();
+    expect(opener.openPayload).not.toHaveBeenCalled();
   });
 
   it("keeps a verified complete empty library eligible for safe creation", async () => {

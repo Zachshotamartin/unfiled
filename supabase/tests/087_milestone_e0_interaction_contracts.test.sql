@@ -821,6 +821,7 @@ select public.create_encrypted_capture_with_job(
     'privacy', 'ai_assisted',
     'explicitDestinationNoteId', null,
     'expansionDisabled', false,
+    'routingRuleMatch', null,
     'privateReceiptCipher', null,
     'privateReceiptVerificationMac', null
   )
@@ -920,7 +921,7 @@ select is(
       'note_00000000000000000000000001', 9, true
     )
   $sql$) ->> 'message',
-  'organization_rule_match_invalid',
+  'routing_rule_match_stale',
   'a rule snapshot cannot forge the matched rule priority'
 );
 select is(
@@ -935,7 +936,7 @@ select is(
       'note_00000000000000000000000001', 10, false
     )
   $sql$) ->> 'message',
-  'organization_rule_match_invalid',
+  'routing_rule_match_stale',
   'the matched-rule table rejects an explicit non-match outcome'
 );
 select is(
@@ -950,7 +951,7 @@ select is(
       'spc_00000000000000000000000001', 10, true
     )
   $sql$) ->> 'message',
-  'organization_rule_match_invalid',
+  'routing_rule_match_stale',
   'a rule snapshot cannot forge a different destination kind or ID'
 );
 select is(
@@ -990,7 +991,7 @@ select is(
       'note_00000000000000000000000001', 10, true
     )
   $sql$) ->> 'message',
-  'organization_rule_match_invalid',
+  'routing_rule_match_stale',
   'a stale rule revision cannot be attached to a job'
 );
 select is(
@@ -1005,7 +1006,7 @@ select is(
       'note_00000000000000000000000001', 11, true
     )
   $sql$) ->> 'message',
-  'organization_rule_match_invalid',
+  'routing_rule_match_stale',
   'job ownership cannot be forged on a rule match'
 );
 

@@ -26,6 +26,7 @@ import type {
 import type { OrganizerEmbeddingProvider } from "./embedding-provider.js";
 import { OrganizerUnavailableError } from "./errors.js";
 import type { OrganizerKeyAuthority } from "./key-management.js";
+import { organizerLocalDate } from "./local-date.js";
 import {
   inferOrganizerCaptureKind,
   resolveDeterministicDestination,
@@ -96,26 +97,6 @@ function sameSnapshot(
   );
 }
 
-function localDate(occurredAt: string, timezone: string): string | null {
-  try {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      day: "2-digit",
-      month: "2-digit",
-      timeZone: timezone,
-      year: "numeric"
-    }).formatToParts(new Date(occurredAt));
-    const values = new Map(parts.map(({ type, value }) => [type, value]));
-    const year = values.get("year");
-    const month = values.get("month");
-    const day = values.get("day");
-    return year === undefined || month === undefined || day === undefined
-      ? null
-      : `${year}-${month}-${day}`;
-  } catch {
-    return null;
-  }
-}
-
 function compatibleType(
   capture: DecryptedCapture,
   noteType: EncryptedCandidate["noteType"]
@@ -155,7 +136,7 @@ function featureFor(
 ): RoutingSignalFeatures {
   const isDeterministicDestination = candidate.candidateId === deterministicDestinationCandidateId;
   const typeCompatibility = compatibleType(capture, candidate.noteType);
-  const occurredDate = localDate(job.occurredAt, job.clientTimezone);
+  const occurredDate = organizerLocalDate(job.occurredAt, job.clientTimezone);
   const sameDay = occurredDate !== null && candidate.dailyDate === occurredDate;
   const sameTitleCount = allMatches.filter(
     ({ title }) => normalizePrivateRagText(title) === normalizePrivateRagText(match.title)
@@ -195,7 +176,7 @@ function explicitFallbackFeatures(
 ): RoutingSignalFeatures {
   if (capture.controls.explicitDestinationNoteId !== candidate.noteId) return ZERO_FEATURES;
   const typeCompatibility = compatibleType(capture, candidate.noteType);
-  const occurredDate = localDate(job.occurredAt, job.clientTimezone);
+  const occurredDate = organizerLocalDate(job.occurredAt, job.clientTimezone);
   return Object.freeze({
     destinationRecency: 1,
     duplicateTitleSuspicion: 0,
@@ -259,7 +240,10 @@ function context(
   return Object.freeze({
     accountCaptureOrdinal: job.accountCaptureOrdinal,
     candidateFeatures,
-    deterministicRuleMatch: deterministicDestination !== null,
+    deterministicRuleMatch:
+      (capture.controls.explicitDestinationNoteId === null &&
+        capture.controls.ruleMatch !== null) ||
+      deterministicDestination !== null,
     features: selectedFeatures ?? candidateFeatures[0]?.features ?? ZERO_FEATURES,
     mode: job.routingMode,
     retrievalAutoEligible: matches !== null
@@ -495,7 +479,7 @@ export function createOrganizerCandidateRetrieval(
       controls: page.controls,
       rawContent: input.capture.rawContent
     });
-    if (page.controls.explicitDestinationNoteId !== null) {
+    if (page.controls.explicitDestinationNoteId !== null || page.controls.ruleMatch !== null) {
       return Object.freeze({
         ...page,
         ragGenerationId: null,
@@ -528,7 +512,10 @@ export function createOrganizerCandidateRetrieval(
     async retrieve(input) {
       if (closed) throw new OrganizerUnavailableError();
       expireCacheIfNeeded();
-      if (input.capture.controls.explicitDestinationNoteId !== null) {
+      if (
+        input.capture.controls.explicitDestinationNoteId !== null ||
+        input.capture.controls.ruleMatch !== null
+      ) {
         return fallback(input);
       }
       let probe: PrivateRagPageReadResult<OrganizerRagRecord>;
@@ -621,7 +608,11 @@ export function createOrganizerCandidateRetrieval(
           throw new OrganizerUnavailableError();
         }
         assertSelectedBindings(selected.candidates, usableMatches);
-        if (selected.controls.explicitDestinationNoteId !== null) return await fallback(input);
+        if (
+          selected.controls.explicitDestinationNoteId !== null ||
+          selected.controls.ruleMatch !== null
+        )
+          return await fallback(input);
         const currentCapture = Object.freeze({
           controls: selected.controls,
           rawContent: input.capture.rawContent

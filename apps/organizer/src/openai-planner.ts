@@ -8,6 +8,7 @@ import {
 import {
   inferOrganizerCaptureKind,
   resolveDeterministicDestination,
+  sameOrganizerCaptureControls,
   type DeterministicDestinationMatch,
   type OrganizerPlanner,
   type PlannerInput
@@ -134,8 +135,8 @@ function buildProviderInput(
     characterLength(input.capture.rawContent) < 1 ||
     characterLength(input.capture.rawContent) > MAX_CAPTURE_CHARACTERS ||
     input.candidates.length > MAX_CANDIDATES ||
-    input.capture.controls.expansionDisabled !== input.controls.expansionDisabled ||
-    input.capture.controls.explicitDestinationNoteId !== input.controls.explicitDestinationNoteId
+    !sameOrganizerCaptureControls(input.capture.controls, input.controls) ||
+    (input.controls.explicitDestinationNoteId === null && input.controls.ruleMatch !== null)
   ) {
     inputBoundsFailure();
   }
@@ -526,6 +527,9 @@ export function createOpenAIOrganizerPlanner(
   const fetchImplementation = options.fetchImplementation ?? fetch;
   return Object.freeze({
     async plan(input): Promise<unknown> {
+      if (input.controls.explicitDestinationNoteId === null && input.controls.ruleMatch !== null) {
+        throw new OrganizerPlannerReviewError("input_bounds");
+      }
       const deterministicDestination = resolveDeterministicDestination({
         candidates: input.candidates,
         capture: input.capture

@@ -194,8 +194,33 @@ struct AppShellView: View {
             SettingsView(
                 email: model.currentUser?.email ?? "",
                 apiHost: model.apiHostLabel,
+                onOpenRoutingRules: { model.navigationPath.append(.routingRules) },
                 onSignOut: model.signOut
             )
+        case .routingRules:
+            RoutingRulesView(
+                rules: model.routingRules,
+                notes: model.notes,
+                spaces: model.spaces,
+                isLoading: model.isLoadingRoutingRules,
+                hasLoaded: model.hasLoadedRoutingRules,
+                errorMessage: model.routingRulesError,
+                submittingRuleIDs: model.routingRuleSubmittingIDs,
+                onRefresh: model.loadRoutingRules,
+                onSave: model.saveRoutingRule,
+                onSetEnabled: { ruleID, enabled in
+                    await model.setRoutingRuleEnabled(ruleID: ruleID, enabled: enabled)
+                },
+                onAccept: { ruleID in
+                    await model.acceptRoutingRuleProposal(ruleID: ruleID)
+                },
+                onRemove: { ruleID in
+                    await model.removeRoutingRule(ruleID: ruleID)
+                }
+            )
+            .task {
+                if !model.hasLoadedRoutingRules { await model.loadRoutingRules() }
+            }
         }
     }
 }

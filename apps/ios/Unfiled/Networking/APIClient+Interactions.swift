@@ -23,8 +23,13 @@ extension APIClient {
         )
     }
 
-    public func listRoutingRules() async throws -> RoutingRuleListResponse {
-        try await get("/routing-rules")
+    public func listRoutingRules(after cursor: String? = nil) async throws -> RoutingRuleListResponse {
+        if let cursor, RuleID(rawValue: cursor) == nil { throw APIClientError.invalidRequest }
+        return try await get(
+            "/routing-rules",
+            query: cursor.map { [URLQueryItem(name: "cursor", value: $0)] } ?? [],
+            maximumResponseBytes: 8_388_608
+        )
     }
 
     public func createRoutingRule(

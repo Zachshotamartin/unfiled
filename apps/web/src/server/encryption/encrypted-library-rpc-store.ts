@@ -130,12 +130,15 @@ export type EncryptedLibraryOperationalBySurface = Readonly<{
     resolvedAt: Timestamp | null;
   }>;
   routing_rule: Readonly<{
+    currentRevision: number;
     enabled: boolean;
     ruleType: "prefix" | "phrase" | "alias" | "destination_mention";
     destinationNoteId: string | null;
     destinationSpaceId: string | null;
     priority: number;
     source: "explicit" | "correction_suggested";
+    proposalState: "observing" | "offered" | "accepted" | "declined" | null;
+    destinationStatus: "active" | "archived" | "deleted" | "missing";
     lastFiredAt: Timestamp | null;
     createdAt: Timestamp;
     updatedAt: Timestamp;
@@ -1028,12 +1031,15 @@ function parseOperational(
       const row = exactRecord(
         value,
         [
+          "currentRevision",
           "enabled",
           "ruleType",
           "destinationNoteId",
           "destinationSpaceId",
           "priority",
           "source",
+          "proposalState",
+          "destinationStatus",
           "lastFiredAt",
           "createdAt",
           "updatedAt"
@@ -1044,6 +1050,7 @@ function parseOperational(
       const destinationSpaceId = nullableEntityId(row.destinationSpaceId, "spc", fail);
       if ((destinationNoteId === null) === (destinationSpaceId === null)) return fail();
       return Object.freeze({
+        currentRevision: positiveVersion(row.currentRevision, fail),
         enabled: booleanValue(row.enabled, fail),
         ruleType: enumValue(
           row.ruleType,
@@ -1054,6 +1061,19 @@ function parseOperational(
         destinationSpaceId,
         priority: nonNegativeInteger(row.priority, fail, 10_000),
         source: enumValue(row.source, ["explicit", "correction_suggested"] as const, fail),
+        proposalState:
+          row.proposalState === null
+            ? null
+            : enumValue(
+                row.proposalState,
+                ["observing", "offered", "accepted", "declined"] as const,
+                fail
+              ),
+        destinationStatus: enumValue(
+          row.destinationStatus,
+          ["active", "archived", "deleted", "missing"] as const,
+          fail
+        ),
         lastFiredAt: nullableTimestamp(row.lastFiredAt, fail),
         createdAt: timestamp(row.createdAt, fail),
         updatedAt: timestamp(row.updatedAt, fail)
@@ -1524,12 +1544,15 @@ function parseBackfillOperational(
       const row = exactRecord(
         value,
         [
+          "currentRevision",
           "enabled",
           "ruleType",
           "destinationNoteId",
           "destinationSpaceId",
           "priority",
           "source",
+          "proposalState",
+          "destinationStatus",
           "lastFiredAt",
           "updatedAt"
         ],
@@ -1539,6 +1562,7 @@ function parseBackfillOperational(
       const destinationSpaceId = nullableEntityId(row.destinationSpaceId, "spc", fail);
       if ((destinationNoteId === null) === (destinationSpaceId === null)) return fail();
       return Object.freeze({
+        currentRevision: positiveVersion(row.currentRevision, fail),
         enabled: booleanValue(row.enabled, fail),
         ruleType: enumValue(
           row.ruleType,
@@ -1549,6 +1573,19 @@ function parseBackfillOperational(
         destinationSpaceId,
         priority: nonNegativeInteger(row.priority, fail, 10_000),
         source: enumValue(row.source, ["explicit", "correction_suggested"] as const, fail),
+        proposalState:
+          row.proposalState === null
+            ? null
+            : enumValue(
+                row.proposalState,
+                ["observing", "offered", "accepted", "declined"] as const,
+                fail
+              ),
+        destinationStatus: enumValue(
+          row.destinationStatus,
+          ["active", "archived", "deleted", "missing"] as const,
+          fail
+        ),
         lastFiredAt: nullableTimestamp(row.lastFiredAt, fail),
         updatedAt: timestamp(row.updatedAt, fail)
       });

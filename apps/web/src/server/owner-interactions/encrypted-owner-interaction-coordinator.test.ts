@@ -573,7 +573,13 @@ function cryptoHarness(): CryptoHarness {
 
 function coordinator(
   adapter: EncryptedOwnerInteractionRpcAdapter,
-  crypto: CryptoHarness
+  crypto: CryptoHarness,
+  observeRoutingRuleCorrection: NonNullable<
+    ConstructorParameters<
+      typeof EncryptedOwnerInteractionCoordinator
+    >[0]["observeRoutingRuleCorrection"]
+  > = () => Promise.resolve(),
+  routingRuleObservationDeadlineAt?: number
 ): EncryptedOwnerInteractionCoordinator {
   return new EncryptedOwnerInteractionCoordinator({
     ownerId: OWNER,
@@ -583,7 +589,9 @@ function coordinator(
     }),
     aggregate: crypto.service,
     createPreparedService: (reservations) => crypto.createPreparedService(reservations),
-    adapter
+    adapter,
+    observeRoutingRuleCorrection,
+    ...(routingRuleObservationDeadlineAt === undefined ? {} : { routingRuleObservationDeadlineAt })
   });
 }
 
@@ -780,8 +788,12 @@ describe("encrypted owner-interaction coordinator", () => {
     );
     expect(commit).not.toHaveBeenCalled();
 
+    const observeRoutingRuleCorrection = vi.fn(() => Promise.resolve());
     await expect(
-      coordinator(adapter, crypto).correctDecision(DECISION, correctionRequest())
+      coordinator(adapter, crypto, observeRoutingRuleCorrection).correctDecision(
+        DECISION,
+        correctionRequest()
+      )
     ).resolves.toMatchObject({
       outcome: "applied",
       source: { noteId: NOTE_A, currentRevision: 3, mutationId: MUTATION_UNDO },
@@ -793,6 +805,28 @@ describe("encrypted owner-interaction coordinator", () => {
       }
     });
     expect(commit).toHaveBeenCalledOnce();
+    expect(observeRoutingRuleCorrection).toHaveBeenCalledWith({
+      feedbackEventId: FEEDBACK,
+      captureId: CAPTURE,
+      captureText: rawContent,
+      destination: { type: "note", noteId: NOTE_B }
+    });
+
+    const stalledObservation = vi.fn(
+      () =>
+        new Promise<void>(() => {
+          // Deliberately never settles; the bounded failure deadline must win.
+        })
+    );
+    await expectServiceError(
+      coordinator(adapter, crypto, stalledObservation, Date.now() + 25).correctDecision(
+        DECISION,
+        correctionRequest()
+      ),
+      ServiceRpcErrorCode.PROVIDER_UNAVAILABLE
+    );
+    expect(commit).toHaveBeenCalledTimes(2);
+    expect(stalledObservation).toHaveBeenCalledOnce();
   });
 
   it("persists the zero-note Review branch when an applied correction lacks its source capture", async () => {
@@ -859,11 +893,13 @@ describe("encrypted owner-interaction coordinator", () => {
       prepareDecisionCorrection: vi.fn(() => Promise.resolve(preparation)),
       commitDecisionCorrection: commit
     });
+    const observeRoutingRuleCorrection = vi.fn(() => Promise.resolve());
 
-    const response = await coordinator(adapter, crypto).correctDecision(
-      DECISION,
-      correctionRequest()
-    );
+    const response = await coordinator(
+      adapter,
+      crypto,
+      observeRoutingRuleCorrection
+    ).correctDecision(DECISION, correctionRequest());
 
     expect(response).toEqual({
       outcome: "needs_review",
@@ -896,6 +932,7 @@ describe("encrypted owner-interaction coordinator", () => {
       preparation.commonReservations[1]?.reservationId
     ]);
     expect(crypto.assertConsumed).toHaveBeenCalledOnce();
+    expect(observeRoutingRuleCorrection).not.toHaveBeenCalled();
   });
 
   it("replays the committed correction branch without resealing and rejects a substituted response", async () => {
@@ -995,6 +1032,136 @@ describe("encrypted owner-interaction coordinator", () => {
       coordinator(tamperedAdapter, crypto).correctDecision(DECISION, correctionRequest()),
       ServiceRpcErrorCode.PROVIDER_UNAVAILABLE
     );
+  });
+
+  it("requires learned-rule observation before success and resumes it on exact replay", async () => {
+    const crypto = cryptoHarness();
+    const encryptedResponse = stored("idempotency_response", `idempotency:${IDEMPOTENCY}`, 1);
+    const preparation: PrepareDecisionCorrectionResult = Object.freeze({
+      ...correctionPreparation(false),
+      completed: true,
+      replayed: true,
+      selectedOutcome: "applied",
+      source: null,
+      members: Object.freeze([]),
+      commonReservations: Object.freeze([]),
+      branches: Object.freeze({
+        applied: Object.freeze({
+          available: true,
+          feedbackEventId: FEEDBACK,
+          batchId: BATCH_ID,
+          reservations: Object.freeze([])
+        }),
+        needsReview: Object.freeze({
+          available: false,
+          reviewItemId: null,
+          reservations: Object.freeze([])
+        })
+      }),
+      encryptedResponse,
+      encryptedResponseVerificationMac: mac()
+    });
+    crypto.setResponse({
+      outcome: "applied",
+      decisionId: DECISION,
+      source: {
+        noteId: NOTE_A,
+        currentRevision: 3,
+        mutationId: MUTATION_UNDO
+      },
+      destination: {
+        type: "new_note",
+        noteId: NOTE_B,
+        currentRevision: 1,
+        mutationId: DESTINATION_MUTATION
+      },
+      replayed: false
+    });
+    const commit = vi.fn(() =>
+      Promise.resolve(
+        commitResult("encrypted_decision_correction", "applied", encryptedResponse, {
+          decisionId: DECISION,
+          feedbackEventId: FEEDBACK,
+          batchId: BATCH_ID,
+          members: Object.freeze([
+            Object.freeze({
+              role: "source_removal" as const,
+              noteId: NOTE_A,
+              currentRevision: 3,
+              revisionId: REV_UNDO,
+              mutationId: MUTATION_UNDO
+            }),
+            Object.freeze({
+              role: "destination_write" as const,
+              noteId: NOTE_B,
+              currentRevision: 1,
+              revisionId: DESTINATION_REVISION,
+              mutationId: DESTINATION_MUTATION
+            })
+          ]),
+          replayed: true
+        })
+      )
+    );
+    const adapter = adapterStub({
+      prepareDecisionCorrection: vi.fn(() => Promise.resolve(preparation)),
+      commitDecisionCorrection: commit
+    });
+    const privateCanary = "shopping: private correction oat milk 7fcb9e";
+    const observeRoutingRuleCorrection = vi
+      .fn<
+        NonNullable<
+          ConstructorParameters<
+            typeof EncryptedOwnerInteractionCoordinator
+          >[0]["observeRoutingRuleCorrection"]
+        >
+      >()
+      .mockRejectedValueOnce(new Error(privateCanary))
+      .mockResolvedValueOnce(undefined);
+    const previousDiagnostics = process.env.UNFILED_E1_HTTP_DIAGNOSTICS;
+    process.env.UNFILED_E1_HTTP_DIAGNOSTICS = "1";
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    let diagnostics: string;
+    try {
+      await expectServiceError(
+        coordinator(adapter, crypto, observeRoutingRuleCorrection).correctDecision(
+          DECISION,
+          correctionRequest()
+        ),
+        ServiceRpcErrorCode.PROVIDER_UNAVAILABLE
+      );
+
+      await expect(
+        coordinator(adapter, crypto, observeRoutingRuleCorrection).correctDecision(
+          DECISION,
+          correctionRequest()
+        )
+      ).resolves.toMatchObject({ outcome: "applied", replayed: true });
+      diagnostics = stderr.mock.calls.map(([value]) => String(value)).join("");
+    } finally {
+      stderr.mockRestore();
+      if (previousDiagnostics === undefined) delete process.env.UNFILED_E1_HTTP_DIAGNOSTICS;
+      else process.env.UNFILED_E1_HTTP_DIAGNOSTICS = previousDiagnostics;
+    }
+
+    expect(crypto.createPreparedService).not.toHaveBeenCalled();
+    expect(commit).toHaveBeenCalledTimes(2);
+    expect(observeRoutingRuleCorrection).toHaveBeenCalledTimes(2);
+    expect(observeRoutingRuleCorrection).toHaveBeenNthCalledWith(1, {
+      feedbackEventId: FEEDBACK,
+      captureId: CAPTURE,
+      captureText: null,
+      destination: { type: "note", noteId: NOTE_B }
+    });
+    expect(observeRoutingRuleCorrection).toHaveBeenNthCalledWith(2, {
+      feedbackEventId: FEEDBACK,
+      captureId: CAPTURE,
+      captureText: null,
+      destination: { type: "note", noteId: NOTE_B }
+    });
+    expect(diagnostics).toContain("correction.rule-observation-deferred");
+    expect(diagnostics).toContain("correction.rule-observation-complete");
+    expect(diagnostics).not.toContain(privateCanary);
   });
 
   it("applies every authenticated batch inverse and consumes only the exact selected reservations", async () => {

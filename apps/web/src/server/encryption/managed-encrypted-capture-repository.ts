@@ -1,4 +1,5 @@
 import { ApiErrorCode, type EntityId } from "@unfiled/contracts";
+import { RoutingRuleCapacityError } from "@unfiled/ai-routing/routing-rules";
 import { EncryptedAggregateError } from "@unfiled/encrypted-aggregate";
 
 import { HttpError } from "@/server/api/errors";
@@ -8,6 +9,7 @@ import type {
   NormalizedCaptureCreateInput,
   NormalizedCaptureDeleteInput
 } from "@/server/captures/repository";
+import { EncryptedRoutingRuleReader } from "@/server/routing-rules/encrypted-routing-rule-reader";
 
 import {
   encryptedAggregateRuntimeRpcFunctions,
@@ -21,6 +23,7 @@ import {
   createEncryptedCaptureRpcAdapter,
   encryptedCaptureRpcFunctions
 } from "./encrypted-capture-rpc-adapter";
+import { createEncryptedLibraryRpcStore } from "./encrypted-library-rpc-store";
 import {
   createEncryptedNoteReadRpcAdapter,
   encryptedNoteReadRpcFunctions
@@ -50,6 +53,7 @@ const MAX_OPERATION_SCOPE_MS = 60_000;
 export const managedEncryptedCaptureRpcFunctions = Object.freeze([
   ...encryptedAggregateRuntimeRpcFunctions,
   ...encryptedCaptureRpcFunctions,
+  "list_encrypted_library_objects",
   ...encryptedNoteReadRpcFunctions
 ] as const);
 
@@ -168,6 +172,13 @@ export class ManagedEncryptedCaptureRepository implements CaptureRepository {
               aggregate: service,
               adapter: createEncryptedCaptureRpcAdapter(client),
               noteReads: createEncryptedNoteReadRpcAdapter(client),
+              routingRules: new EncryptedRoutingRuleReader({
+                ownerId,
+                access,
+                aggregate: service,
+                store: createEncryptedLibraryRpcStore(client),
+                signal: scope.signal
+              }),
               signal: scope.signal
             });
             return use(repository);
@@ -182,6 +193,13 @@ export class ManagedEncryptedCaptureRepository implements CaptureRepository {
       }
       if (error instanceof EncryptedCaptureOperationUnavailableError) {
         throw new ManagedEncryptedCaptureCapabilityUnavailableError();
+      }
+      if (error instanceof RoutingRuleCapacityError) {
+        throw new HttpError(
+          429,
+          ApiErrorCode.RATE_LIMITED,
+          "Too many active routing rules are enabled for this capture."
+        );
       }
       throw error;
     } finally {

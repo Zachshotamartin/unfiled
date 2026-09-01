@@ -126,6 +126,12 @@ export type ProductionPipelineModelAdapter = Readonly<{
   plan(input: ProductionPipelineModelInput): Promise<unknown>;
 }>;
 
+type ProductionPipelineOrganizerControls = Readonly<
+  ProductionPipelineModelInput["controls"] & {
+    ruleMatch: null;
+  }
+>;
+
 export type ProductionPipelineOrganizerPlannerInput = Readonly<{
   candidates: readonly Readonly<{
     bodyMarkdown: string;
@@ -138,11 +144,11 @@ export type ProductionPipelineOrganizerPlannerInput = Readonly<{
     title: string;
   }>[];
   capture: Readonly<{
-    controls: ProductionPipelineModelInput["controls"];
+    controls: ProductionPipelineOrganizerControls;
     rawContent: string;
   }>;
   captureId: EntityId<"cap">;
-  controls: ProductionPipelineModelInput["controls"];
+  controls: ProductionPipelineOrganizerControls;
   promptVersion: string;
   schemaVersion: number;
   signal: AbortSignal;
@@ -157,7 +163,7 @@ export function projectProductionPipelineOrganizerPlannerInput(
     signal: AbortSignal;
   }>
 ): ProductionPipelineOrganizerPlannerInput {
-  const controls = Object.freeze({ ...input.controls });
+  const controls = Object.freeze({ ...input.controls, ruleMatch: null });
   return Object.freeze({
     candidates: Object.freeze(
       input.candidates.map((candidate) =>

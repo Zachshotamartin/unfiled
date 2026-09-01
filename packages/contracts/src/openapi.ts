@@ -73,6 +73,7 @@ import {
   NoteUpdateRequestSchema
 } from "./notes.js";
 import { InteractiveOperationsRequestSchema } from "./operations.js";
+import { RoutingRuleMatchSnapshotSchema } from "./organization.js";
 import {
   NoteLinkCreateRequestSchema,
   NoteLinkDeleteRequestSchema,
@@ -101,6 +102,7 @@ import {
   RoutingRuleDeleteRequestSchema,
   RoutingRuleDeleteResponseSchema,
   RoutingRuleDtoSchema,
+  RoutingRuleListQuerySchema,
   RoutingRuleListResponseSchema,
   RoutingRuleMutationResponseSchema,
   RoutingRuleUpdateRequestSchema
@@ -143,6 +145,74 @@ function openApiSchema(schema: ZodType): Record<string, unknown> {
   });
   void dialect;
   return document;
+}
+
+const canonicalRoutingRuleConditionDescription =
+  "After NFKC normalization, Unicode lowercase, Unicode White_Space collapsing, trimming, and trailing Unicode punctuation removal, the condition must contain 1 to 500 UTF-16 code units.";
+
+function describedProperty(
+  schema: Record<string, unknown>,
+  propertyName: string,
+  description: string
+): Record<string, unknown> {
+  const properties = schema.properties as Record<string, Record<string, unknown>> | undefined;
+  const property = properties?.[propertyName];
+  if (properties === undefined || property === undefined) return schema;
+  return {
+    ...schema,
+    properties: {
+      ...properties,
+      [propertyName]: { ...property, description }
+    }
+  };
+}
+
+function routingRuleDtoOpenApiSchema(): Record<string, unknown> {
+  return {
+    ...describedProperty(
+      openApiSchema(RoutingRuleDtoSchema),
+      "condition",
+      canonicalRoutingRuleConditionDescription
+    ),
+    allOf: [
+      {
+        if: { properties: { source: { const: "explicit" } }, required: ["source"] },
+        then: { properties: { proposalState: { type: "null" } } }
+      },
+      {
+        if: {
+          properties: { source: { const: "correction_suggested" } },
+          required: ["source"]
+        },
+        then: {
+          properties: {
+            proposalState: { type: "string", enum: ["offered", "accepted"] }
+          }
+        }
+      },
+      {
+        if: { properties: { proposalState: { const: "offered" } }, required: ["proposalState"] },
+        then: { properties: { enabled: { const: false } } }
+      }
+    ]
+  };
+}
+
+function routingRuleUpdateOpenApiSchema(): Record<string, unknown> {
+  return {
+    ...describedProperty(
+      openApiSchema(RoutingRuleUpdateRequestSchema),
+      "condition",
+      canonicalRoutingRuleConditionDescription
+    ),
+    anyOf: [
+      { required: ["enabled"] },
+      { required: ["ruleType"] },
+      { required: ["condition"] },
+      { required: ["destination"] },
+      { required: ["priority"] }
+    ]
+  };
 }
 
 function schemaRef(name: string) {
@@ -261,6 +331,13 @@ const cursorQuery = {
   required: false,
   schema: { type: "string", minLength: 1, maxLength: 512 }
 } as const;
+const routingRuleCursorQuery = {
+  name: "cursor",
+  in: "query",
+  required: false,
+  description: "The last routing-rule ID returned by the previous fixed 50-item page.",
+  schema: { type: "string", pattern: "^rule_[0-9A-HJKMNP-TV-Z]{26}$" }
+} as const;
 const limitQuery = {
   name: "limit",
   in: "query",
@@ -349,6 +426,23 @@ const privateCommonErrors = {
   "401": privateErrorResponse,
   "404": privateErrorResponse,
   "409": privateErrorResponse
+} as const;
+
+const privateRoutingRuleErrors = {
+  ...privateCommonErrors,
+  "403": privateErrorResponse,
+  "413": privateErrorResponse,
+  "429": privateErrorResponse,
+  "500": privateErrorResponse,
+  "503": privateErrorResponse
+} as const;
+
+const privateRoutingRuleListErrors = {
+  "400": privateErrorResponse,
+  "401": privateErrorResponse,
+  "429": privateErrorResponse,
+  "500": privateErrorResponse,
+  "503": privateErrorResponse
 } as const;
 
 export const openApiDocument = {
@@ -902,11 +996,14 @@ export const openApiDocument = {
     "/routing-rules": {
       get: {
         operationId: "listRoutingRules",
-        summary: "List visible personal routing rules",
+        summary: "List visible explicit, offered, and accepted personal routing rules",
+        description:
+          "Returns a fixed page of at most 50 rules and at most 8 MiB. Follow pageInfo.nextCursor until hasMore is false.",
         security: authenticated,
+        parameters: [routingRuleCursorQuery],
         responses: {
           "200": privateJsonResponse("Personal routing rules", "RoutingRuleListResponse"),
-          ...privateCommonErrors
+          ...privateRoutingRuleListErrors
         }
       },
       post: {
@@ -917,31 +1014,31 @@ export const openApiDocument = {
         requestBody: jsonBody("RoutingRuleCreateRequest"),
         responses: {
           "201": privateJsonResponse("Created routing rule", "RoutingRuleMutationResponse"),
-          ...privateCommonErrors
+          ...privateRoutingRuleErrors
         }
       }
     },
     "/routing-rules/{routingRuleId}": {
       patch: {
         operationId: "updateRoutingRule",
-        summary: "Update a personal routing rule",
+        summary: "Update a personal routing rule or confirm an offered learned rule",
         security: authenticated,
         parameters: [routingRuleId, idempotencyHeader],
         requestBody: jsonBody("RoutingRuleUpdateRequest"),
         responses: {
           "200": privateJsonResponse("Updated routing rule", "RoutingRuleMutationResponse"),
-          ...privateCommonErrors
+          ...privateRoutingRuleErrors
         }
       },
       delete: {
         operationId: "deleteRoutingRule",
-        summary: "Delete a personal routing rule",
+        summary: "Delete a personal routing rule or decline an offered learned rule",
         security: authenticated,
         parameters: [routingRuleId, idempotencyHeader],
         requestBody: jsonBody("RoutingRuleDeleteRequest"),
         responses: {
           "200": privateJsonResponse("Deleted routing rule", "RoutingRuleDeleteResponse"),
-          ...privateCommonErrors
+          ...privateRoutingRuleErrors
         }
       }
     },
@@ -1157,13 +1254,19 @@ export const openApiDocument = {
       ListReviewItemsResponse: openApiSchema(ListReviewItemsResponseSchema),
       ReviewResolveRequest: openApiSchema(ReviewResolveRequestSchema),
       ReviewResolveResponse: openApiSchema(ReviewResolveResponseSchema),
-      RoutingRuleDto: openApiSchema(RoutingRuleDtoSchema),
+      RoutingRuleDto: routingRuleDtoOpenApiSchema(),
+      RoutingRuleListQuery: openApiSchema(RoutingRuleListQuerySchema),
       RoutingRuleListResponse: openApiSchema(RoutingRuleListResponseSchema),
-      RoutingRuleCreateRequest: openApiSchema(RoutingRuleCreateRequestSchema),
-      RoutingRuleUpdateRequest: openApiSchema(RoutingRuleUpdateRequestSchema),
+      RoutingRuleCreateRequest: describedProperty(
+        openApiSchema(RoutingRuleCreateRequestSchema),
+        "condition",
+        canonicalRoutingRuleConditionDescription
+      ),
+      RoutingRuleUpdateRequest: routingRuleUpdateOpenApiSchema(),
       RoutingRuleDeleteRequest: openApiSchema(RoutingRuleDeleteRequestSchema),
       RoutingRuleMutationResponse: openApiSchema(RoutingRuleMutationResponseSchema),
       RoutingRuleDeleteResponse: openApiSchema(RoutingRuleDeleteResponseSchema),
+      RoutingRuleMatchSnapshot: openApiSchema(RoutingRuleMatchSnapshotSchema),
       GeneratedBlockDto: openApiSchema(GeneratedBlockDtoSchema),
       GeneratedBlockListResponse: openApiSchema(GeneratedBlockListResponseSchema),
       GeneratedBlockResolveRequest: openApiSchema(GeneratedBlockResolveRequestSchema),

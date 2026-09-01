@@ -21,8 +21,10 @@ import {
   type DecryptedCapture,
   type OrganizerCaptureControls,
   type OrganizerPlanner,
+  buildDeterministicRoutingRulePlan,
   inferOrganizerCaptureKind,
-  proposedNoteIdForJob
+  proposedNoteIdForJob,
+  sameOrganizerCaptureControls
 } from "./planner.js";
 import {
   OrganizerPlannerReviewError,
@@ -454,35 +456,48 @@ function routingPolicyForPlan(
   manifest: OrganizerCandidateManifest,
   captureText: string,
   inferredKind: ReturnType<typeof inferOrganizerCaptureKind>,
-  context: OrganizerRoutingPolicyContext
+  context: OrganizerRoutingPolicyContext,
+  deterministicRuleMatch = false
 ): RoutingPolicyResult {
   const candidate =
     plan.destination.candidateId === null
       ? undefined
       : manifest.candidates.find(({ candidateId }) => candidateId === plan.destination.candidateId);
   const destinationNoteType = candidate?.noteType ?? plan.destination.newNote?.noteType ?? null;
-  const features =
+  const contextualFeatures =
     (plan.destination.candidateId === null
       ? undefined
       : context.candidateFeatures?.find(
           ({ candidateId }) => candidateId === plan.destination.candidateId
         )?.features) ?? context.features;
+  const features = deterministicRuleMatch
+    ? Object.freeze({
+        ...contextualFeatures,
+        explicitDestinationMention: 1,
+        margin: 1,
+        reasonCodeConsistency: 1,
+        ruleOrAliasNearMatch: 1,
+        typeCompatibility: 1
+      })
+    : contextualFeatures;
   const decision = bandRoutingDecision({
     accountCaptureOrdinal: context.accountCaptureOrdinal,
     captureKind: inferredKind,
     captureLength: Array.from(captureText).length,
     createSignals:
       plan.decision === "create_note"
-        ? {
-            noCandidateFitStrength:
-              manifest.candidates.length === 0 && plan.reasonCodes.includes("no_candidate_fit")
-                ? 1
-                : 0,
-            titleValidity: plan.destination.newNote === null ? 0 : 1
-          }
+        ? deterministicRuleMatch
+          ? { noCandidateFitStrength: 1, titleValidity: 1 }
+          : {
+              noCandidateFitStrength:
+                manifest.candidates.length === 0 && plan.reasonCodes.includes("no_candidate_fit")
+                  ? 1
+                  : 0,
+              titleValidity: plan.destination.newNote === null ? 0 : 1
+            }
         : null,
     destinationNoteType,
-    deterministicRuleMatch: context.deterministicRuleMatch,
+    deterministicRuleMatch: deterministicRuleMatch || context.deterministicRuleMatch,
     duplicateNoteSuspected: plan.reasonCodes.includes("duplicate_suspected"),
     failure: null,
     features,
@@ -541,7 +556,14 @@ function forcedReview(
     .filter((candidateId) => authorizedCandidates.has(candidateId))
     .slice(0, 2);
   const reasonCodes = Array.from(
-    new Set(["ambiguous_intent" as const, ...(sourcePlan?.reasonCodes ?? [])])
+    new Set([
+      "ambiguous_intent" as const,
+      ...(manifest.controls.explicitDestinationNoteId === null &&
+      manifest.controls.ruleMatch !== null
+        ? (["routing_rule_match"] as const)
+        : []),
+      ...(sourcePlan?.reasonCodes ?? [])
+    ])
   ).slice(0, 5);
   const authorized = parseAuthorizedOrganizationPlan({
     manifest,
@@ -616,10 +638,7 @@ export function createOrganizerDrain(
   ): Promise<"completed" | "failed" | "retry"> {
     try {
       const capture = await options.cipher.openCapture({ authority, job, signal });
-      if (
-        capture.controls.expansionDisabled !== job.controls.expansionDisabled ||
-        capture.controls.explicitDestinationNoteId !== job.controls.explicitDestinationNoteId
-      )
+      if (!sameOrganizerCaptureControls(capture.controls, job.controls))
         throw new OrganizerUnavailableError();
       let replanCount: 0 | 1 = job.replanCount;
       let writeGeneration = 0;
@@ -725,7 +744,27 @@ export function createOrganizerDrain(
         const encryptedCandidates = page.candidates;
         const controls = page.controls;
         const currentCapture = Object.freeze({ controls, rawContent: capture.rawContent });
-        const routableEncryptedCandidates = encryptedCandidates.filter(({ isOpen }) => isOpen);
+        const isRoutingRulePath =
+          controls.explicitDestinationNoteId === null && controls.ruleMatch !== null;
+        const deterministicRoutingRulePlan = isRoutingRulePath
+          ? buildDeterministicRoutingRulePlan({
+              candidates: encryptedCandidates,
+              captureText: capture.rawContent,
+              clientTimezone: job.clientTimezone,
+              controls,
+              occurredAt: job.occurredAt
+            })
+          : null;
+        const ruleDestinationCandidateId =
+          deterministicRoutingRulePlan?.decision === "append_to_note"
+            ? deterministicRoutingRulePlan.destination.candidateId
+            : null;
+        const routableEncryptedCandidates = encryptedCandidates.filter(
+          ({ candidateId, isOpen }) =>
+            isOpen &&
+            (!isRoutingRulePath ||
+              (ruleDestinationCandidateId !== null && candidateId === ruleDestinationCandidateId))
+        );
         const candidates = await Promise.all(
           routableEncryptedCandidates.map((candidate) =>
             options.cipher.openCandidate({ authority, candidate, ownerId: job.ownerId, signal })
@@ -757,16 +796,23 @@ export function createOrganizerDrain(
         const manifest: OrganizerCandidateManifest = {
           schemaVersion: 1,
           candidates: disclosedCandidates.map(
-            ({ decrypted: { candidateId, isOpen, noteId, noteType, revision } }) => ({
+            ({
+              decrypted: { candidateId, isOpen, noteId, noteType, revision },
+              encrypted: { spaceId }
+            }) => ({
               candidateId,
               isOpen,
               noteId,
               noteType,
-              revision
+              revision,
+              spaceId
             })
           ),
           controls,
-          authorizedSpaceIds: [],
+          authorizedSpaceIds:
+            isRoutingRulePath && controls.ruleMatch.destinationKind === "space"
+              ? [controls.ruleMatch.destinationId]
+              : [],
           authorizedTagIds: []
         };
         if (disclosure.outcome !== "authorized") {
@@ -786,6 +832,8 @@ export function createOrganizerDrain(
           !manifest.candidates.some(({ noteId }) => noteId === explicitDestination)
         )
           pendingReviewReason = "explicit_destination_unavailable";
+        if (isRoutingRulePath && deterministicRoutingRulePlan === null)
+          pendingReviewReason = "planner_ambiguity";
         if (pendingReviewReason !== null) {
           const result = await commitReview(
             manifest,
@@ -798,31 +846,39 @@ export function createOrganizerDrain(
           if (result === "retry") continue;
           return result;
         }
-        if (plannerCalls >= (job.replanCount === 0 ? 2 : 1)) {
-          pendingReviewReason = "revision_conflict";
-          continue;
-        }
-        plannerCalls += 1;
-        signalActive(signal);
         let unknownPlan: unknown;
-        try {
-          unknownPlan = await options.planner.plan({
-            capture: currentCapture,
-            candidates,
-            captureId: job.captureId,
-            controls,
-            promptVersion: job.promptVersion,
-            schemaVersion: job.schemaVersion,
-            signal
-          });
-          signalActive(signal);
-        } catch (error: unknown) {
-          if (error instanceof OrganizerPlannerReviewError) {
+        if (isRoutingRulePath) {
+          if (deterministicRoutingRulePlan === null) {
             pendingReviewReason = "planner_ambiguity";
             continue;
           }
-          if (error instanceof OrganizerProviderError) throw error;
-          throw new OrganizerUnavailableError();
+          unknownPlan = deterministicRoutingRulePlan;
+        } else {
+          if (plannerCalls >= (job.replanCount === 0 ? 2 : 1)) {
+            pendingReviewReason = "revision_conflict";
+            continue;
+          }
+          plannerCalls += 1;
+          signalActive(signal);
+          try {
+            unknownPlan = await options.planner.plan({
+              capture: currentCapture,
+              candidates,
+              captureId: job.captureId,
+              controls,
+              promptVersion: job.promptVersion,
+              schemaVersion: job.schemaVersion,
+              signal
+            });
+            signalActive(signal);
+          } catch (error: unknown) {
+            if (error instanceof OrganizerPlannerReviewError) {
+              pendingReviewReason = "planner_ambiguity";
+              continue;
+            }
+            if (error instanceof OrganizerProviderError) throw error;
+            throw new OrganizerUnavailableError();
+          }
         }
         let authorized: ReturnType<typeof parseAuthorizedOrganizationPlan>;
         try {
@@ -832,11 +888,13 @@ export function createOrganizerDrain(
             pendingReviewReason = "planner_ambiguity";
             continue;
           }
-          const overridden = applyDeterministicExtractionOverride({
-            captureText: currentCapture.rawContent,
-            inferredKind,
-            plan: initiallyAuthorized.plan
-          });
+          const overridden = isRoutingRulePath
+            ? Object.freeze({ plan: initiallyAuthorized.plan })
+            : applyDeterministicExtractionOverride({
+                captureText: currentCapture.rawContent,
+                inferredKind,
+                plan: initiallyAuthorized.plan
+              });
           authorized = parseAuthorizedOrganizationPlan({
             captureText: currentCapture.rawContent,
             manifest,
@@ -852,7 +910,8 @@ export function createOrganizerDrain(
           manifest,
           currentCapture.rawContent,
           inferOrganizerCaptureKind(currentCapture.rawContent),
-          routingPolicyContext
+          routingPolicyContext,
+          isRoutingRulePath
         );
         if (authorized.plan.generatedExpansion !== null) {
           pendingReviewPlan = authorized.plan;
@@ -1013,6 +1072,7 @@ export function createOrganizerDrain(
         if (committed.jobId !== job.jobId) throw new OrganizerUnavailableError();
         if (committed.outcome === expectedOutcome) return "completed";
         if (committed.outcome === "review_required") {
+          replanCount = committed.replanCount;
           pendingReviewReason = reviewReasonForConflict(committed.conflictReason, controls);
           pendingReviewPlan = plan.validatedPlan;
           pendingRoutingDecision = routingDecision;

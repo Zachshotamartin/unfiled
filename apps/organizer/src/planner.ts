@@ -6,15 +6,18 @@ import {
 import {
   OrganizationPlanSchema,
   type ModelOperation,
-  type OrganizationPlan
+  type OrganizationPlan,
+  type RoutingRuleMatchSnapshot
 } from "@unfiled/contracts";
 
 import { OrganizerUnavailableError } from "./errors.js";
+import { organizerLocalDate } from "./local-date.js";
 import { ORGANIZER_PROMPT_VERSION, ORGANIZER_SCHEMA_VERSION } from "./prompt.js";
 
 const JOB_ID_PATTERN = /^job_([0-9A-HJKMNP-TV-Z]{26})$/u;
 const CAPTURE_ID_PATTERN = /^cap_[0-9A-HJKMNP-TV-Z]{26}$/u;
 const NOTE_ID_PATTERN = /^note_[0-9A-HJKMNP-TV-Z]{26}$/u;
+const SPACE_ID_PATTERN = /^spc_[0-9A-HJKMNP-TV-Z]{26}$/u;
 const NOTE_TYPES = new Set(["generic", "list", "log", "principle", "project"]);
 const PRINCIPLE_LABEL =
   /(?:^|\b)(?:principle|method|maxim|mindset|rule of thumb|belief|lesson)\s*:/iu;
@@ -22,13 +25,15 @@ const PRINCIPLE_CONCEPT =
   /\b(?:attention|availability|boundary|choice|commitment|commitments|consistency|curiosity|discipline|friction|honest|integrity|kindness|motivation|progress|rest|simplicity|systems|tradeoff|uncertainty)\b/iu;
 const PERSONAL_EVENT =
   /\b(?:i|i'm|i've|me|my|we|we're|our|today|tonight|yesterday|tomorrow|meeting|appointment)\b/iu;
-const LOG_ROUTING_PREFIX = /^\s*(?:(?:please\s+)?(?:log|record)\s+)/iu;
+const LOG_ROUTING_PREFIX =
+  /^\s*(?:(?:please\s+)?(?:add|append|put|save|record|log)\s+|(?:shopping|grocery|groceries|workout)(?:\s+list)?\s*:\s*)/iu;
 const ROUTING_DESTINATION_TAIL =
   /\s+(?:to|in|into)\s+(?:my\s+|the\s+)?[\p{L}\p{N}][\p{L}\p{N} '\u2019-]{0,59}[.!?]?\s*$/iu;
 
 export type OrganizerCaptureControls = Readonly<{
   expansionDisabled: boolean;
   explicitDestinationNoteId: `note_${string}` | null;
+  ruleMatch: RoutingRuleMatchSnapshot | null;
 }>;
 export type DecryptedCapture = Readonly<{
   controls: OrganizerCaptureControls;
@@ -68,6 +73,42 @@ export type DeterministicDestinationMatch = Readonly<{
 
 export type OrganizerCaptureKind =
   "freeform" | "list_items" | "log_entry" | "principle" | "project_update";
+
+export type RoutingRuleDestinationCandidate = Readonly<{
+  archivedAt: string | null;
+  candidateId: `note_${string}`;
+  dailyDate: string | null;
+  deletedAt: string | null;
+  isOpen: boolean;
+  noteId: `note_${string}`;
+  noteType: DecryptedCandidate["noteType"];
+  spaceId: `spc_${string}` | null;
+}>;
+
+export function sameRoutingRuleMatch(
+  left: RoutingRuleMatchSnapshot | null,
+  right: RoutingRuleMatchSnapshot | null
+): boolean {
+  if (left === null || right === null) return left === right;
+  return (
+    left.ruleId === right.ruleId &&
+    left.ruleRevision === right.ruleRevision &&
+    left.destinationKind === right.destinationKind &&
+    left.destinationId === right.destinationId &&
+    left.priority === right.priority
+  );
+}
+
+export function sameOrganizerCaptureControls(
+  left: OrganizerCaptureControls,
+  right: OrganizerCaptureControls
+): boolean {
+  return (
+    left.expansionDisabled === right.expansionDisabled &&
+    left.explicitDestinationNoteId === right.explicitDestinationNoteId &&
+    sameRoutingRuleMatch(left.ruleMatch, right.ruleMatch)
+  );
+}
 
 export function inferOrganizerCaptureKind(text: string): OrganizerCaptureKind {
   const normalized = text.normalize("NFKC").replace(/\s+/gu, " ").trim();
@@ -132,7 +173,9 @@ export function resolveDeterministicDestination(
     : null;
 }
 
-function expectedNoteType(kind: OrganizerCaptureKind): DecryptedCandidate["noteType"] {
+export function expectedOrganizerNoteType(
+  kind: OrganizerCaptureKind
+): DecryptedCandidate["noteType"] {
   if (kind === "list_items") return "list";
   if (kind === "log_entry") return "log";
   if (kind === "principle") return "principle";
@@ -140,7 +183,7 @@ function expectedNoteType(kind: OrganizerCaptureKind): DecryptedCandidate["noteT
   return "generic";
 }
 
-function deterministicOperation(
+export function deterministicOrganizerOperation(
   captureText: string,
   kind: OrganizerCaptureKind
 ): ModelOperation | null {
@@ -165,6 +208,30 @@ function deterministicOperation(
     : null;
 }
 
+function routingRuleOperationCompatible(
+  operation: ModelOperation,
+  noteType: DecryptedCandidate["noteType"]
+): boolean {
+  if (operation.type === "append_list_items") return noteType === "list";
+  if (operation.type === "append_log_entry") return noteType === "log";
+  return (
+    operation.type === "append_raw" &&
+    (noteType === "generic" || noteType === "principle" || noteType === "project")
+  );
+}
+
+function routingRuleSpaceTitle(captureText: string): string {
+  const normalized = captureText.normalize("NFKC").replace(/\s+/gu, " ").trim();
+  const titleCodePoints: string[] = [];
+  let codeUnitLength = 0;
+  for (const codePoint of normalized) {
+    if (codeUnitLength + codePoint.length > 60) break;
+    titleCodePoints.push(codePoint);
+    codeUnitLength += codePoint.length;
+  }
+  return titleCodePoints.join("").trim();
+}
+
 /** Builds an append plan only when destination, type, and source are deterministic. */
 export function buildDeterministicDestinationPlan(input: PlannerInput): OrganizationPlan | null {
   const candidateIds = new Set<string>();
@@ -178,8 +245,8 @@ export function buildDeterministicDestinationPlan(input: PlannerInput): Organiza
     Array.from(input.capture.rawContent).length < 1 ||
     Array.from(input.capture.rawContent).length > 10_000 ||
     input.candidates.length > 8 ||
-    input.capture.controls.expansionDisabled !== input.controls.expansionDisabled ||
-    input.capture.controls.explicitDestinationNoteId !== input.controls.explicitDestinationNoteId ||
+    !sameOrganizerCaptureControls(input.capture.controls, input.controls) ||
+    (input.controls.explicitDestinationNoteId === null && input.controls.ruleMatch !== null) ||
     (input.controls.explicitDestinationNoteId !== null &&
       !NOTE_ID_PATTERN.test(input.controls.explicitDestinationNoteId)) ||
     input.candidates.some((candidate) => {
@@ -215,8 +282,8 @@ export function buildDeterministicDestinationPlan(input: PlannerInput): Organiza
   const candidate = matchingCandidates[0];
   if (matchingCandidates.length !== 1 || candidate?.isOpen !== true) return null;
   const captureKind = inferOrganizerCaptureKind(input.capture.rawContent);
-  if (candidate.noteType !== expectedNoteType(captureKind)) return null;
-  const operation = deterministicOperation(input.capture.rawContent, captureKind);
+  if (candidate.noteType !== expectedOrganizerNoteType(captureKind)) return null;
+  const operation = deterministicOrganizerOperation(input.capture.rawContent, captureKind);
   if (operation === null) return null;
   const parsed = OrganizationPlanSchema.safeParse({
     alternatives: [],
@@ -233,6 +300,143 @@ export function buildDeterministicDestinationPlan(input: PlannerInput): Organiza
     !inspectPlanSourcePreservation(input.capture.rawContent, parsed.data).preserved
   )
     return null;
+  return parsed.data;
+}
+
+/**
+ * Builds the complete rule-match plan without consulting a model or decrypted
+ * destination title. The candidate page is an authorization-bound DB result:
+ * a note rule must yield its one target, while a space rule yields either the
+ * one compatible daily note or no note at all.
+ */
+export function buildDeterministicRoutingRulePlan(
+  input: Readonly<{
+    candidates: readonly RoutingRuleDestinationCandidate[];
+    captureText: string;
+    clientTimezone: string;
+    controls: OrganizerCaptureControls;
+    occurredAt: string;
+  }>
+): OrganizationPlan | null {
+  const ruleMatch = input.controls.ruleMatch;
+  if (
+    input.controls.explicitDestinationNoteId !== null ||
+    ruleMatch === null ||
+    typeof input.captureText !== "string" ||
+    Array.from(input.captureText).length < 1 ||
+    Array.from(input.captureText).length > 10_000 ||
+    input.candidates.length > 8
+  ) {
+    return null;
+  }
+
+  const candidateIds = new Set<string>();
+  const noteIds = new Set<string>();
+  if (
+    input.candidates.some((candidate) => {
+      const duplicate = candidateIds.has(candidate.candidateId) || noteIds.has(candidate.noteId);
+      candidateIds.add(candidate.candidateId);
+      noteIds.add(candidate.noteId);
+      return (
+        duplicate ||
+        !NOTE_ID_PATTERN.test(candidate.candidateId) ||
+        !NOTE_ID_PATTERN.test(candidate.noteId) ||
+        (candidate.spaceId !== null && !SPACE_ID_PATTERN.test(candidate.spaceId)) ||
+        !NOTE_TYPES.has(candidate.noteType)
+      );
+    })
+  ) {
+    return null;
+  }
+
+  const captureKind = inferOrganizerCaptureKind(input.captureText);
+  const noteType = expectedOrganizerNoteType(captureKind);
+  const operation = deterministicOrganizerOperation(input.captureText, captureKind);
+  if (operation === null) return null;
+
+  let decision: "append_to_note" | "create_note";
+  let destination: OrganizationPlan["destination"];
+  if (ruleMatch.destinationKind === "note") {
+    const candidate = input.candidates[0];
+    if (
+      input.candidates.length !== 1 ||
+      candidate?.noteId !== ruleMatch.destinationId ||
+      !routingRuleOperationCompatible(operation, candidate.noteType) ||
+      !candidate.isOpen ||
+      candidate.archivedAt !== null ||
+      candidate.deletedAt !== null
+    ) {
+      return null;
+    }
+    decision = "append_to_note";
+    destination = Object.freeze({ candidateId: candidate.candidateId, newNote: null });
+  } else {
+    const localDate = organizerLocalDate(input.occurredAt, input.clientTimezone);
+    if (localDate === null) return null;
+    const structuredDailyRoute = captureKind === "list_items" || captureKind === "log_entry";
+    if (!structuredDailyRoute) {
+      const title = routingRuleSpaceTitle(input.captureText);
+      if (title.length === 0) return null;
+      decision = "create_note";
+      destination = Object.freeze({
+        candidateId: null,
+        newNote: Object.freeze({
+          noteType,
+          spaceCandidateId: ruleMatch.destinationId,
+          title
+        })
+      });
+    } else {
+      if (
+        input.candidates.some(
+          (candidate) =>
+            candidate.spaceId !== ruleMatch.destinationId ||
+            candidate.dailyDate !== localDate ||
+            (candidate.noteType !== "list" && candidate.noteType !== "log") ||
+            !candidate.isOpen ||
+            candidate.archivedAt !== null ||
+            candidate.deletedAt !== null
+        )
+      ) {
+        return null;
+      }
+      const compatibleCandidates = input.candidates.filter(
+        (candidate) => candidate.noteType === noteType
+      );
+      if (compatibleCandidates.length === 0) {
+        decision = "create_note";
+        destination = Object.freeze({
+          candidateId: null,
+          newNote: Object.freeze({
+            noteType,
+            spaceCandidateId: ruleMatch.destinationId,
+            title: `${noteType === "list" ? "Daily list" : "Daily log"} / ${localDate}`
+          })
+        });
+      } else {
+        const candidate = compatibleCandidates[0];
+        if (compatibleCandidates.length !== 1 || candidate === undefined) {
+          return null;
+        }
+        decision = "append_to_note";
+        destination = Object.freeze({ candidateId: candidate.candidateId, newNote: null });
+      }
+    }
+  }
+
+  const parsed = OrganizationPlanSchema.safeParse({
+    alternatives: [],
+    captureKind,
+    decision,
+    destination,
+    generatedExpansion: null,
+    operations: [operation],
+    reasonCodes: ["routing_rule_match"],
+    schemaVersion: 1
+  });
+  if (!parsed.success || !inspectPlanSourcePreservation(input.captureText, parsed.data).preserved) {
+    return null;
+  }
   return parsed.data;
 }
 

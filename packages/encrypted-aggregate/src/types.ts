@@ -302,6 +302,7 @@ export type AggregateVerificationSurface =
   | "note_mutation"
   | "organization_decision"
   | "review_item"
+  | "routing_rule"
   | "space_display"
   | "tag_display"
   | "idempotency_response";
@@ -340,6 +341,11 @@ export type ReviewVerificationMacInput = Readonly<{
   payload: ReviewPayload;
 }>;
 
+export type RoutingRuleVerificationMacInput = Readonly<{
+  surface: "routing_rule";
+}> &
+  SealRoutingRuleInput;
+
 export type SpaceDisplayVerificationMacInput = Readonly<{
   surface: "space_display";
 }> &
@@ -364,6 +370,7 @@ export type AggregateVerificationMacInput<Payload = never> =
   | NoteMutationVerificationMacInput
   | OrganizationDecisionVerificationMacInput
   | ReviewVerificationMacInput
+  | RoutingRuleVerificationMacInput
   | SpaceDisplayVerificationMacInput
   | TagDisplayVerificationMacInput
   | IdempotencyResponseVerificationMacInput<Payload>;

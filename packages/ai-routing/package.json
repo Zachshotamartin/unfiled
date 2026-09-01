@@ -15,6 +15,10 @@
     "./materialization": {
       "types": "./src/materialization.ts",
       "import": "./src/materialization.ts"
+    },
+    "./routing-rules": {
+      "types": "./src/routing-rules.ts",
+      "import": "./src/routing-rules.ts"
     }
   },
   "scripts": {

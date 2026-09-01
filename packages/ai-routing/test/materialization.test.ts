@@ -17,6 +17,7 @@ const IDS = Object.freeze({
   createdNote: "note_01J6M9Q7G4BMKB33GSG3NJ6D22",
   decision: "dec_01J6M9Q7G4BMKB33GSG3NJ6D1X",
   mutation: "mut_01J6M9Q7G4BMKB33GSG3NJ6D1X",
+  rule: "rule_01J6M9Q7G4BMKB33GSG3NJ6D1X",
   review: "rvw_01J6M9Q7G4BMKB33GSG3NJ6D1X",
   revision: "rev_01J6M9Q7G4BMKB33GSG3NJ6D1X",
   space: "spc_01J6M9Q7G4BMKB33GSG3NJ6D1X",
@@ -43,7 +44,8 @@ const manifest = Object.freeze({
   ],
   controls: {
     expansionDisabled: false,
-    explicitDestinationNoteId: null
+    explicitDestinationNoteId: null,
+    ruleMatch: null
   },
   authorizedSpaceIds: [IDS.space],
   authorizedTagIds: [IDS.tag]
@@ -498,5 +500,167 @@ describe("authorized organization plan materialization", () => {
         OrganizationMaterializationErrorCode.INVALID_DECISION
       );
     }
+  });
+
+  it("binds frozen routing-rule note and space destinations before materialization", () => {
+    const noteRuleManifest = {
+      ...manifest,
+      controls: {
+        expansionDisabled: false,
+        explicitDestinationNoteId: null,
+        ruleMatch: {
+          destinationId: IDS.candidateNote,
+          destinationKind: "note" as const,
+          matched: true as const,
+          priority: 700,
+          ruleId: IDS.rule,
+          ruleRevision: 4
+        }
+      }
+    };
+    const noteRulePlan = {
+      ...appendPlan,
+      generatedExpansion: null,
+      reasonCodes: ["routing_rule_match" as const]
+    };
+    expect(
+      parseAuthorizedOrganizationPlan({ manifest: noteRuleManifest, unknownPlan: noteRulePlan })
+        .plan.decision
+    ).toBe("append_to_note");
+
+    expectCode(
+      () =>
+        parseAuthorizedOrganizationPlan({
+          manifest: noteRuleManifest,
+          unknownPlan: {
+            ...noteRulePlan,
+            destination: { candidateId: IDS.relationCandidate, newNote: null },
+            operations: [{ content: "exact", type: "append_raw" }]
+          }
+        }),
+      OrganizationMaterializationErrorCode.UNAUTHORIZED_REFERENCE
+    );
+
+    const spaceRuleManifest = {
+      ...manifest,
+      controls: {
+        expansionDisabled: false,
+        explicitDestinationNoteId: null,
+        ruleMatch: {
+          destinationId: IDS.space,
+          destinationKind: "space" as const,
+          matched: true as const,
+          priority: 700,
+          ruleId: IDS.rule,
+          ruleRevision: 4
+        }
+      }
+    };
+    const spaceRuleCreate = {
+      alternatives: [],
+      captureKind: "list_items" as const,
+      decision: "create_note" as const,
+      destination: {
+        candidateId: null,
+        newNote: {
+          noteType: "list" as const,
+          spaceCandidateId: IDS.space,
+          title: "Daily list / 2026-09-01"
+        }
+      },
+      generatedExpansion: null,
+      operations: [{ items: ["milk"], section: null, type: "append_list_items" as const }],
+      reasonCodes: ["routing_rule_match" as const],
+      schemaVersion: 1 as const
+    };
+    expect(
+      parseAuthorizedOrganizationPlan({
+        manifest: spaceRuleManifest,
+        unknownPlan: spaceRuleCreate
+      }).plan.destination.newNote
+    ).toMatchObject({ spaceCandidateId: IDS.space });
+
+    const spaceRuleAppend = {
+      ...appendPlan,
+      generatedExpansion: null,
+      reasonCodes: ["routing_rule_match" as const]
+    };
+    expect(
+      parseAuthorizedOrganizationPlan({
+        manifest: {
+          ...spaceRuleManifest,
+          candidates: spaceRuleManifest.candidates.map((candidate) =>
+            candidate.candidateId === IDS.candidate
+              ? { ...candidate, spaceId: IDS.space }
+              : candidate
+          )
+        },
+        unknownPlan: spaceRuleAppend
+      }).plan.destination.candidateId
+    ).toBe(IDS.candidate);
+    expectCode(
+      () =>
+        parseAuthorizedOrganizationPlan({
+          manifest: spaceRuleManifest,
+          unknownPlan: spaceRuleAppend
+        }),
+      OrganizationMaterializationErrorCode.UNAUTHORIZED_REFERENCE
+    );
+
+    expectCode(
+      () =>
+        parseAuthorizedOrganizationPlan({
+          manifest: spaceRuleManifest,
+          unknownPlan: {
+            ...spaceRuleCreate,
+            destination: {
+              candidateId: null,
+              newNote: { ...spaceRuleCreate.destination.newNote, spaceCandidateId: null }
+            }
+          }
+        }),
+      OrganizationMaterializationErrorCode.UNAUTHORIZED_REFERENCE
+    );
+    expectCode(
+      () =>
+        parseAuthorizedOrganizationPlan({
+          manifest: spaceRuleManifest,
+          unknownPlan: { ...spaceRuleCreate, reasonCodes: ["no_candidate_fit"] }
+        }),
+      OrganizationMaterializationErrorCode.INCOMPATIBLE_OPERATION
+    );
+  });
+
+  it("keeps explicit destination authority above a co-present rule snapshot", () => {
+    const explicitPlan = {
+      alternatives: [],
+      captureKind: "freeform" as const,
+      decision: "append_to_note" as const,
+      destination: { candidateId: IDS.relationCandidate, newNote: null },
+      generatedExpansion: null,
+      operations: [{ content: "exact", type: "append_raw" as const }],
+      reasonCodes: ["explicit_destination" as const],
+      schemaVersion: 1 as const
+    };
+    expect(
+      parseAuthorizedOrganizationPlan({
+        manifest: {
+          ...manifest,
+          controls: {
+            expansionDisabled: false,
+            explicitDestinationNoteId: IDS.relationNote,
+            ruleMatch: {
+              destinationId: IDS.candidateNote,
+              destinationKind: "note" as const,
+              matched: true as const,
+              priority: 700,
+              ruleId: IDS.rule,
+              ruleRevision: 4
+            }
+          }
+        },
+        unknownPlan: explicitPlan
+      }).plan.destination.candidateId
+    ).toBe(IDS.relationCandidate);
   });
 });

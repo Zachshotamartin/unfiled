@@ -26,7 +26,8 @@ import {
   type CaptureRetryResponse,
   type CaptureSummary,
   type EntityId,
-  type NoteSnapshot
+  type NoteSnapshot,
+  type RoutingRuleMatchSnapshot
 } from "@unfiled/contracts";
 import {
   applyNoteOperations,
@@ -157,6 +158,9 @@ export type EncryptedCaptureAggregateRepositoryDependencies = Readonly<{
   aggregate: EncryptedAggregateService;
   adapter: EncryptedCaptureRpcAdapter;
   noteReads: EncryptedNoteReadRpcAdapter;
+  routingRules?: Readonly<{
+    match(captureText: string): Promise<RoutingRuleMatchSnapshot | null>;
+  }>;
   signal?: AbortSignal;
   createJobId?: () => EntityId<"job">;
   now?: () => Date;
@@ -525,6 +529,22 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
     if (this.dependencies.signal !== undefined) {
       throwIfServiceOperationAborted(this.dependencies.signal);
     }
+  }
+
+  private async routingRuleMatch(
+    input: NormalizedCaptureCreateInput
+  ): Promise<RoutingRuleMatchSnapshot | null> {
+    if (
+      input.privacy !== "ai_assisted" ||
+      input.explicitDestinationNoteId !== undefined ||
+      this.dependencies.routingRules === undefined
+    ) {
+      return null;
+    }
+    this.assertNotAborted();
+    const match = await this.dependencies.routingRules.match(input.rawContent);
+    this.assertNotAborted();
+    return match;
   }
 
   private async openReceiptPayload(
@@ -1026,6 +1046,8 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
     );
     if (openedCapture.rawContent !== input.rawContent) return unavailable();
 
+    let routingRuleMatch = await this.routingRuleMatch(input);
+
     let privateReceiptCipher: EncryptedFieldRpcValue<"capture_receipt"> | null = null;
     let privateReceiptVerificationMac: KeyedMacRpcValue | null = null;
     if (input.privacy === "private_manual") {
@@ -1094,26 +1116,43 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
     }
 
     try {
-      const result = await this.dependencies.adapter.createCapture({
-        ownerId: this.ownerId,
-        capture: {
-          clientCaptureId: input.clientCaptureId,
-          jobId,
-          occurredAt,
-          contentCipher: encryptedFieldForRpc(sealedCapture.encrypted),
-          contentMac: keyedMacForRpc(sealedCapture.contentMac),
-          contentLength: input.rawContent.length,
-          source: input.source,
-          deviceId: input.deviceId ?? "",
-          clientCreatedAt: input.clientCreatedAt,
-          clientTimezone: input.clientTimezone,
-          privacy: input.privacy,
-          explicitDestinationNoteId: input.explicitDestinationNoteId ?? null,
-          expansionDisabled: input.expansionDisabled,
-          privateReceiptCipher,
-          privateReceiptVerificationMac
+      let result: Awaited<ReturnType<EncryptedCaptureRpcAdapter["createCapture"]>>;
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          result = await this.dependencies.adapter.createCapture({
+            ownerId: this.ownerId,
+            capture: {
+              clientCaptureId: input.clientCaptureId,
+              jobId,
+              occurredAt,
+              contentCipher: encryptedFieldForRpc(sealedCapture.encrypted),
+              contentMac: keyedMacForRpc(sealedCapture.contentMac),
+              contentLength: input.rawContent.length,
+              source: input.source,
+              deviceId: input.deviceId ?? "",
+              clientCreatedAt: input.clientCreatedAt,
+              clientTimezone: input.clientTimezone,
+              privacy: input.privacy,
+              explicitDestinationNoteId: input.explicitDestinationNoteId ?? null,
+              routingRuleMatch,
+              expansionDisabled: input.expansionDisabled,
+              privateReceiptCipher,
+              privateReceiptVerificationMac
+            }
+          });
+          break;
+        } catch (error: unknown) {
+          if (
+            attempt !== 0 ||
+            routingRuleMatch === null ||
+            !(error instanceof ServiceRpcError) ||
+            error.code !== ServiceRpcErrorCode.ROUTING_RULE_MATCH_STALE
+          ) {
+            throw error;
+          }
+          routingRuleMatch = await this.routingRuleMatch(input);
         }
-      });
+      }
       if (result.replayed) {
         const replay = await this.findExisting(input.clientCaptureId);
         return replay === null ? unavailable() : this.replayResponse(replay, input);

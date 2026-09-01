@@ -24,6 +24,7 @@ const ENTITY_SUFFIX = "[0-9A-HJKMNP-TV-Z]{26}";
 const JOB = new RegExp(`^job_${ENTITY_SUFFIX}$`, "u");
 const CAPTURE = new RegExp(`^cap_${ENTITY_SUFFIX}$`, "u");
 const NOTE = new RegExp(`^note_${ENTITY_SUFFIX}$`, "u");
+const RULE = new RegExp(`^rule_${ENTITY_SUFFIX}$`, "u");
 const INDEX = new RegExp(`^irw_${ENTITY_SUFFIX}$`, "u");
 const GENERATION = new RegExp(`^igen_${ENTITY_SUFFIX}$`, "u");
 const SPACE = new RegExp(`^spc_${ENTITY_SUFFIX}$`, "u");
@@ -232,8 +233,42 @@ function decodedBytes(value: unknown): number {
   return length;
 }
 
+function routingRuleMatch(value: unknown): ClaimedOrganizerJob["controls"]["ruleMatch"] {
+  if (value === null) return null;
+  const match = exact(value, [
+    "destinationId",
+    "destinationKind",
+    "matched",
+    "priority",
+    "ruleId",
+    "ruleRevision"
+  ]);
+  if (match.matched !== true) reject();
+  const common = {
+    matched: true as const,
+    priority: integer(match.priority, 0, 10_000),
+    ruleId: string(match.ruleId, RULE) as `rule_${string}`,
+    ruleRevision: integer(match.ruleRevision, 1)
+  };
+  if (match.destinationKind === "note") {
+    return Object.freeze({
+      ...common,
+      destinationId: string(match.destinationId, NOTE) as `note_${string}`,
+      destinationKind: "note" as const
+    });
+  }
+  if (match.destinationKind === "space") {
+    return Object.freeze({
+      ...common,
+      destinationId: string(match.destinationId, SPACE) as `spc_${string}`,
+      destinationKind: "space" as const
+    });
+  }
+  return reject();
+}
+
 function captureControls(value: unknown): ClaimedOrganizerJob["controls"] {
-  const controls = exact(value, ["expansionDisabled", "explicitDestinationNoteId"]);
+  const controls = exact(value, ["expansionDisabled", "explicitDestinationNoteId", "ruleMatch"]);
   const explicitDestinationNoteId =
     controls.explicitDestinationNoteId === null
       ? null
@@ -241,8 +276,28 @@ function captureControls(value: unknown): ClaimedOrganizerJob["controls"] {
   if (typeof controls.expansionDisabled !== "boolean") reject();
   return Object.freeze({
     expansionDisabled: controls.expansionDisabled,
-    explicitDestinationNoteId
+    explicitDestinationNoteId,
+    ruleMatch: routingRuleMatch(controls.ruleMatch)
   });
+}
+
+function sameCaptureControls(
+  left: ClaimedOrganizerJob["controls"],
+  right: ClaimedOrganizerJob["controls"]
+): boolean {
+  const leftRule = left.ruleMatch;
+  const rightRule = right.ruleMatch;
+  return (
+    left.expansionDisabled === right.expansionDisabled &&
+    left.explicitDestinationNoteId === right.explicitDestinationNoteId &&
+    (leftRule === null || rightRule === null
+      ? leftRule === rightRule
+      : leftRule.ruleId === rightRule.ruleId &&
+        leftRule.ruleRevision === rightRule.ruleRevision &&
+        leftRule.destinationKind === rightRule.destinationKind &&
+        leftRule.destinationId === rightRule.destinationId &&
+        leftRule.priority === rightRule.priority)
+  );
 }
 
 type ParsedProjection = EncryptedProjection &
@@ -959,10 +1014,9 @@ function revalidationManifest(
   expectedCandidates: readonly EncryptedCandidate[]
 ): CandidateRevalidationManifest {
   const root = exact(value, ["candidates", "controls"]);
-  const controls = exact(root.controls, ["expansionDisabled", "explicitDestinationNoteId"]);
+  const controls = captureControls(root.controls);
   if (
-    controls.expansionDisabled !== expectedControls.expansionDisabled ||
-    controls.explicitDestinationNoteId !== expectedControls.explicitDestinationNoteId ||
+    !sameCaptureControls(controls, expectedControls) ||
     !Array.isArray(root.candidates) ||
     root.candidates.length > 8 ||
     root.candidates.length !== expectedCandidates.length

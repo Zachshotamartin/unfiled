@@ -26,7 +26,11 @@ const LEASE = "11111111-1111-4111-8111-111111111111";
 const NOW = "2026-08-31T20:00:00.000Z";
 const POSTGRES_OFFSET_TIMESTAMP = "2026-09-01T01:30:00.123456+05:30";
 const CANONICAL_OFFSET_TIMESTAMP = "2026-08-31T20:00:00.123456Z";
-const controls = Object.freeze({ expansionDisabled: false, explicitDestinationNoteId: null });
+const controls = Object.freeze({
+  expansionDisabled: false,
+  explicitDestinationNoteId: null,
+  ruleMatch: null
+});
 const RAG_PAGE_BYTES = 262_160;
 const ragSnapshot = Object.freeze({
   dimensions: 3,
@@ -355,6 +359,45 @@ const command = Object.freeze({
 });
 
 describe("organizer database adapter", () => {
+  it("strictly decodes content-free note and space rule snapshots", async () => {
+    const noteRuleMatch = {
+      destinationId: NOTE_ID,
+      destinationKind: "note",
+      matched: true,
+      priority: 900,
+      ruleId: "rule_01ARZ3NDEKTSV4RRFFQ69G5FAE",
+      ruleRevision: 4
+    } as const;
+    const spaceRuleMatch = {
+      ...noteRuleMatch,
+      destinationId: "spc_01ARZ3NDEKTSV4RRFFQ69G5FAF",
+      destinationKind: "space"
+    } as const;
+
+    for (const ruleMatch of [noteRuleMatch, spaceRuleMatch]) {
+      const repository = createOrganizerRepository(
+        executor([rpc(claim({ controls: { ...controls, ruleMatch } }))])
+      );
+      await expect(
+        repository.claim({ leaseSeconds: 120, limit: 1, signal, workerId: "worker-1" })
+      ).resolves.toMatchObject([{ controls: { ruleMatch } }]);
+    }
+
+    for (const ruleMatch of [
+      { ...noteRuleMatch, condition: "private plaintext must not cross this boundary" },
+      { ...noteRuleMatch, destinationId: "spc_01ARZ3NDEKTSV4RRFFQ69G5FAF" },
+      { ...noteRuleMatch, matched: false },
+      { ...noteRuleMatch, ruleRevision: 0 }
+    ]) {
+      const repository = createOrganizerRepository(
+        executor([rpc(claim({ controls: { ...controls, ruleMatch } }))])
+      );
+      await expect(
+        repository.claim({ leaseSeconds: 120, limit: 1, signal, workerId: "worker-1" })
+      ).rejects.toBeInstanceOf(OrganizerDatabaseContractError);
+    }
+  });
+
   it("uses only the exact role and text-token RPC contracts end to end", async () => {
     const db = executor([
       {
@@ -1048,6 +1091,33 @@ describe("organizer database adapter", () => {
             revision
           })),
           controls
+        },
+        jobId: JOB_ID,
+        leaseSeconds: 120,
+        leaseToken: LEASE,
+        signal
+      })
+    ).rejects.toBeInstanceOf(OrganizerDatabaseContractError);
+    await expect(
+      repository.heartbeat({
+        candidateManifest: {
+          candidates: page.candidates.map(({ candidateId, isOpen, noteId, revision }) => ({
+            candidateId,
+            isOpen,
+            noteId,
+            revision
+          })),
+          controls: {
+            ...controls,
+            ruleMatch: {
+              destinationId: NOTE_ID,
+              destinationKind: "note",
+              matched: true,
+              priority: 900,
+              ruleId: "rule_01ARZ3NDEKTSV4RRFFQ69G5FAE",
+              ruleRevision: 4
+            }
+          }
         },
         jobId: JOB_ID,
         leaseSeconds: 120,

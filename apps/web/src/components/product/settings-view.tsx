@@ -7,6 +7,7 @@ import type { SessionUser } from "@/lib/product/types";
 import { useLiveResource } from "@/lib/product/use-live-resource";
 
 import { ResourceError, ResourceSkeleton } from "./resource-states";
+import { RoutingRulesSettings } from "./routing-rules-settings";
 
 export function SettingsView() {
   const router = useRouter();
@@ -36,6 +37,7 @@ export function SettingsView() {
           <SignOutIcon size={17} /> Sign out
         </button>
       </section>
+      <RoutingRulesSettings />
       <section className="settings-row">
         <div>
           <h2 className="text-lg font-medium">Private manual notes</h2>

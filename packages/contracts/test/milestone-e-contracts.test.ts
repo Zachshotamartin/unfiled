@@ -342,6 +342,8 @@ describe("Milestone E public contracts", () => {
         normalizedCondition: "groceries",
         aliases: [],
         source: "explicit",
+        proposalState: null,
+        destinationStatus: "active",
         lastFiredAt: null,
         createdAt: NOW,
         updatedAt: NOW

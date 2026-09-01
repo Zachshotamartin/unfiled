@@ -12,15 +12,15 @@ This file contains only steps that require a human account, physical device, pai
 
 ## Remaining release gates at a glance
 
-The Milestone D organizer, cipher, encrypted RAG path, and OpenAI adapters and the Milestone E1 encrypted correction/Review/batch-Undo slice are implemented in code. E2–E4 and Milestones F–G remain pending. The following steps still require a human-controlled account, credential, environment, or device and remain release-blocking:
+The Milestone D organizer, cipher, encrypted RAG path, and OpenAI adapters and the Milestone E1/E2 encrypted correction/Review/batch-Undo and routing-rule slices are implemented in code. E2's final aggregate/HTTP/PR-CI evidence remains pending; E3–E4 and Milestones F–G remain pending. The following steps still require a human-controlled account, credential, environment, or device and remain release-blocking:
 
 1. Create the dedicated OpenAI Production project/service account, restrict its model/key authority, set rate/spend controls, decide and document its data-retention posture, and place the key only in the organizer Production secret store.
 2. Keep `pnpm eval:routing` as the deterministic mock safety gate and run `pnpm eval:routing:pipeline` for the deterministic production-component seam. Its report names the real components exercised and the database/runtime guarantees it excludes. The optional credentialed runner is checked in as `pnpm eval:routing:live`; it requires only `UNFILED_ROUTING_EVAL_OPENAI_API_KEY`, runs exactly three samples per eligible synthetic case, and emits safe content-free telemetry. No credentialed live run or stochastic provider report exists yet.
-3. Provision and prove the exact Vercel Trusted Sources, AWS OIDC/KMS roles, CloudTrail trail, and TLS-only PostgreSQL logins. The organizer login must expose exactly ten RPCs through Milestone D/E3; only E4 may add the eleventh lease-bound Vault credential RPC.
+3. Provision and prove the exact Vercel Trusted Sources, AWS OIDC/KMS roles, CloudTrail trail, and TLS-only PostgreSQL logins. None of the four required Vercel projects is provisioned or deployed yet. The organizer login must expose exactly ten RPCs through Milestone D/E3; only E4 may add the eleventh lease-bound Vault credential RPC.
 4. Run the staged synthetic organizer canaries and outage/race/replay cases, verify ciphertext-only durable state, and record the disable/rollback decision points before admitting a small cohort.
 5. Complete the restore drill, apply the one-way C.5d production contract from a real database-owner session, verify the post-contract canary, and track every pre-contract backup until expiry.
 6. Complete Apple signing, signed archive inspection, SQLCipher/Keychain/App Group checks, and the Lock Screen widget matrix on a physical iPhone.
-7. Before enabling E1 in Production, run the deployed owner-interaction account/canary gates below. After E2–E4 code lands, extend that evidence through private rules, generated blocks/duplicates, and Vault-only BYOK. No user BYOK or Anthropic control may be enabled from the current E1 code state.
+7. Before enabling E1/E2 in Production, run the deployed owner-interaction and private-rule account/canary gates below. Extend that evidence after E3–E4 through generated blocks/duplicates and Vault-only BYOK. No user BYOK or Anthropic control may be enabled from the current E2 code state.
 
 The production storage promise is application encryption at rest with scoped server-side decryption. It is not end-to-end encryption or zero-knowledge storage.
 
@@ -55,6 +55,8 @@ Complete these human validation items before treating Milestone 0 as approved:
 6. Never link a developer preview deployment to production data.
 
 ## Vercel
+
+No Vercel project has been created for this repository. The four-project procedure below is a required future account step, not deployment evidence.
 
 1. Import `Zachshotamartin/unfiled` into Vercel and set the root directory to `apps/web`.
 2. In the `apps/web` project, set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and only the provider application keys owned by web in the appropriate environment scopes. Do not copy the service-role key into the separate worker, verifier, or organizer project, and do not place `UNFILED_ORGANIZER_OPENAI_API_KEY` in web.
@@ -700,8 +702,11 @@ migration `20260901000001_milestone_e0_interaction_contracts.sql` now installs r
 Vault-only metadata constraints, immutable content-free job snapshots, and the common interaction
 lifecycle without adding E1–E4 public RPCs. E1 migration
 `20260901000002_encrypted_decision_corrections.sql` now implements its six exact capabilities and
-the owner-authorized web/native interactions. E2 through E4 retain assigned migrations
-`20260901000003`–`00005`. The credential-free E1 gate is green: the full built-local HTTP B–E1
+the owner-authorized web/native interactions. E2 migration
+`20260901000003_encrypted_routing_rules_and_personalization.sql` implements its exact five
+service-only capabilities, encrypted explicit/learned rule lifecycle, and content-free organizer
+snapshot. E3 and E4 retain assigned migrations `20260901000004`–`00005`. The final E2 aggregate,
+built-local HTTP, and PR-CI evidence is not yet recorded. The credential-free E1 gate is green: the full built-local HTTP B–E1
 suite passed; web passed 78 files / 651 tests; organizer, worker, and verifier passed 18 / 281,
 18 / 159, and 11 / 168 respectively; a clean database reset plus strict private/public schema lint
 passed with zero warnings, followed by 36 pgTAP files / 1,671 assertions and the database
@@ -714,9 +719,9 @@ known vulnerabilities; boundaries and OpenAPI were green. None of this replaces 
 human-controlled deployment/account checks below. Milestone D still discards returned
 generated-expansion text, and user BYOK remains disabled.
 
-1. From the current E1 release candidate, verify the database applied the shared E0 migration
-   followed immediately by the E1 migration. When E2–E4 land, the complete release candidate must
-   apply exactly these feature migrations in order:
+1. From the current E2 release candidate, verify the database applied the shared E0, E1, and E2
+   migrations in order. When E3–E4 land, the complete release candidate must apply exactly these
+   feature migrations in order:
    `20260901000001_milestone_e0_interaction_contracts.sql`,
    `20260901000002_encrypted_decision_corrections.sql`,
    `20260901000003_encrypted_routing_rules_and_personalization.sql`,
@@ -739,8 +744,14 @@ generated-expansion text, and user BYOK remains disabled.
    results only through web, then prove the condition/alias is private-manual ciphertext everywhere
    durable and absent from organizer/provider requests, jobs, Realtime, logs, and telemetry. The
    organizer may receive only rule ID, exact revision, destination kind/ID, priority, and match
-   result. Prove the proposal stays disabled until the synthetic owner explicitly confirms it; this
-   applies to aliases too.
+   result. Prove observing rules stay hidden, offers stay disabled, decline suppresses them, and only
+   explicit acceptance enables a learned rule; this applies to aliases too. Exercise the exact five
+   service-only RPC denials, two-correction observation race, same-key acknowledgement recovery,
+   1,000-retained/256-active/8-MiB limits, 50-item/8-MiB pages, malformed/repeated cursors, and
+   authoritative replay/stale refresh. Confirm TypeScript and Swift agree on NFKC, locale-independent
+   lowercase, Unicode `White_Space`, U+0085, U+FEFF, punctuation-only rejection, and both 500-UTF-16
+   bounds. Route list/log daily notes and generic/principle/project prose; closed, private, archived,
+   deleted, stale, incompatible, ambiguous, and over-2,000-character targets must enter Review.
 4. Return a unique synthetic generated expansion from the provider fixture. Before E3 the marker
    must be discarded and absent from product UI/durable stores. After E3, prove it is a separately
    encrypted `proposed` generated block, remains stable across response-loss replay, and accept/reject

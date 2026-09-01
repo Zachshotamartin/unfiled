@@ -229,6 +229,7 @@ select label, jsonb_build_object(
   'privacy', 'ai_assisted',
   'explicitDestinationNoteId', null,
   'expansionDisabled', false,
+  'routingRuleMatch', null,
   'privateReceiptCipher', null,
   'privateReceiptVerificationMac', null
 )

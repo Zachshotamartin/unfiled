@@ -21,6 +21,7 @@ const OTHER_CAPTURE = "cap_01J6M9Q7G4BMKB33GSG3NJ6D1Y" as const;
 const JOB = "job_01J6M9Q7G4BMKB33GSG3NJ6D1X" as const;
 const OTHER_JOB = "job_01J6M9Q7G4BMKB33GSG3NJ6D1Y" as const;
 const NOTE = "note_01J6M9Q7G4BMKB33GSG3NJ6D1X" as const;
+const RULE = "rule_01J6M9Q7G4BMKB33GSG3NJ6D1X" as const;
 const MUTATION = "mut_01J6M9Q7G4BMKB33GSG3NJ6D1X" as const;
 const UNDO_MUTATION = "mut_01J6M9Q7G4BMKB33GSG3NJ6D1Y" as const;
 const UNDO_REVISION = "rev_01J6M9Q7G4BMKB33GSG3NJ6D1Y" as const;
@@ -188,6 +189,7 @@ function privateCommand(): CreateEncryptedCaptureCommand {
       clientTimezone: "America/Los_Angeles",
       privacy: "private_manual",
       explicitDestinationNoteId: null,
+      routingRuleMatch: null,
       expansionDisabled: false,
       privateReceiptCipher: sealedCipher(
         "capture_receipt",
@@ -283,6 +285,55 @@ describe("encrypted capture RPC adapter", () => {
         }
       })
     ).resolves.toMatchObject({ replayed: false });
+  });
+
+  it("accepts only a strict content-free rule snapshot on AI capture admission", async () => {
+    const rpc = vi.fn<ServiceRpcClient["rpc"]>().mockResolvedValue({
+      captureId: CAPTURE,
+      jobId: JOB,
+      replayed: false
+    });
+    const base = privateCommand();
+    const ai = {
+      ...base,
+      capture: {
+        ...base.capture,
+        privacy: "ai_assisted" as const,
+        contentCipher: sealedCipher(
+          "capture",
+          CAPTURE,
+          "ai_assisted",
+          "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        ),
+        contentMac: mac("ai_assisted"),
+        routingRuleMatch: {
+          ruleId: RULE,
+          ruleRevision: 7,
+          destinationKind: "note" as const,
+          destinationId: NOTE,
+          priority: 900,
+          matched: true as const
+        },
+        privateReceiptCipher: null,
+        privateReceiptVerificationMac: null
+      }
+    };
+    await expect(createEncryptedCaptureRpcAdapter(client(rpc)).createCapture(ai)).resolves.toEqual({
+      captureId: CAPTURE,
+      jobId: JOB,
+      replayed: false
+    });
+    expect((rpc.mock.calls[0]?.[1].p_capture as Record<string, unknown>).routingRuleMatch).toEqual(
+      ai.capture.routingRuleMatch
+    );
+
+    await expectFailure(
+      createEncryptedCaptureRpcAdapter(client(vi.fn())).createCapture({
+        ...ai,
+        capture: { ...ai.capture, explicitDestinationNoteId: NOTE }
+      }),
+      ServiceRpcErrorCode.VALIDATION_FAILED
+    );
   });
 
   it("rejects owner/resource/envelope substitution and same-reservation commands before RPC", async () => {

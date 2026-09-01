@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     let email: String
     let apiHost: String
+    let onOpenRoutingRules: @MainActor () -> Void
     let onSignOut: @MainActor () async -> Void
 
     @State private var confirmsSignOut = false
@@ -30,6 +31,36 @@ struct SettingsView: View {
                         .font(.system(size: 14))
                         .foregroundStyle(UnfiledTheme.fog)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+
+                settingsSection("Automatic filing") {
+                    Button(action: onOpenRoutingRules) {
+                        HStack(spacing: 14) {
+                            Image(systemName: "arrow.triangle.branch")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(UnfiledTheme.persimmon)
+                                .frame(width: 28)
+                                .accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Routing rules")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundStyle(UnfiledTheme.paper)
+                                Text("Choose where familiar captures should go")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(UnfiledTheme.fog)
+                            }
+                            Spacer(minLength: 10)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(UnfiledTheme.fog)
+                                .accessibilityHidden(true)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Opens automatic filing rules")
+                    .accessibilityIdentifier(RoutingRuleAccessibilityIdentifier.settingsLink)
                 }
 
                 settingsSection("Lock Screen capture") {

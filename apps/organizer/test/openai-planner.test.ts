@@ -10,7 +10,11 @@ const candidateId = "note_01ARZ3NDEKTSV4RRFFQ69G5FAB" as const;
 const noteId = "note_01ARZ3NDEKTSV4RRFFQ69G5FAA" as const;
 const secondCandidateId = "note_01ARZ3NDEKTSV4RRFFQ69G5FAD" as const;
 const secondNoteId = "note_01ARZ3NDEKTSV4RRFFQ69G5FAC" as const;
-const controls = Object.freeze({ expansionDisabled: false, explicitDestinationNoteId: noteId });
+const controls = Object.freeze({
+  expansionDisabled: false,
+  explicitDestinationNoteId: noteId,
+  ruleMatch: null
+});
 const plan = Object.freeze({
   alternatives: [],
   captureKind: "freeform",
@@ -180,6 +184,35 @@ describe("OpenAI Responses organizer planner", () => {
     assertStrictObjects(OPENAI_ORGANIZATION_PLAN_SCHEMA);
   });
 
+  it("refuses a frozen rule snapshot before building or sending a provider request", async () => {
+    const fetchImplementation = successfulFetchImplementation();
+    const ruleControls = Object.freeze({
+      expansionDisabled: false,
+      explicitDestinationNoteId: null,
+      ruleMatch: Object.freeze({
+        destinationId: noteId,
+        destinationKind: "note" as const,
+        matched: true as const,
+        priority: 800,
+        ruleId: "rule_01ARZ3NDEKTSV4RRFFQ69G5FAE" as const,
+        ruleRevision: 2
+      })
+    });
+
+    await expect(
+      createOpenAIOrganizerPlanner({ apiKey: API_KEY, fetchImplementation }).plan(
+        plannerInput({
+          capture: { controls: ruleControls, rawContent: "Remember milk" },
+          controls: ruleControls
+        })
+      )
+    ).rejects.toMatchObject({
+      name: "OrganizerPlannerReviewError",
+      reason: "input_bounds"
+    });
+    expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
   it("infers bounded syntax without letting content choose the prompt profile", async () => {
     const fetchImplementation = successfulFetchImplementation();
     const service = createOpenAIOrganizerPlanner({ apiKey: API_KEY, fetchImplementation });
@@ -252,7 +285,8 @@ describe("OpenAI Responses organizer planner", () => {
   it("translates every provider candidate reference back to its internal candidate ID", async () => {
     const noExplicitControls = Object.freeze({
       expansionDisabled: false,
-      explicitDestinationNoteId: null
+      explicitDestinationNoteId: null,
+      ruleMatch: null
     });
     const firstCandidate = plannerInput().candidates[0];
     if (firstCandidate === undefined) throw new Error("Expected the candidate fixture.");
@@ -341,7 +375,8 @@ describe("OpenAI Responses organizer planner", () => {
     async (invalidReference) => {
       const noExplicitControls = Object.freeze({
         expansionDisabled: false,
-        explicitDestinationNoteId: null
+        explicitDestinationNoteId: null,
+        ruleMatch: null
       });
       const inventedAlias = `candidate_${"0".repeat(32)}`;
       const fetchImplementation = successfulFetchImplementation((candidateIds) => {

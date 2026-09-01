@@ -55,9 +55,14 @@ struct NotePresentation: Equatable, Identifiable, Sendable {
     let spaceID: String?
     let currentRevision: Int
     let isOpen: Bool
+    let privacy: PrivacyMode
     let archived: Bool
     let deleted: Bool
     let pinned: Bool
+
+    var isRoutableRoutingRuleDestination: Bool {
+        privacy == .aiAssisted && isOpen && !archived && !deleted
+    }
 }
 
 struct NoteDetailPresentation: Equatable, Identifiable, Sendable {

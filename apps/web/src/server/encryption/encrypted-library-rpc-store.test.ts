@@ -218,12 +218,15 @@ const LIST_OPERATIONAL: Readonly<Record<EncryptedLibrarySurface, UnknownRecord>>
     resolvedAt: null
   },
   routing_rule: {
+    currentRevision: 2,
     enabled: true,
     ruleType: "prefix",
     destinationNoteId: IDS.note,
     destinationSpaceId: null,
     priority: 100,
     source: "explicit",
+    proposalState: null,
+    destinationStatus: "active",
     lastFiredAt: null,
     createdAt: TIME,
     updatedAt: TIME
@@ -318,12 +321,15 @@ const BACKFILL_OPERATIONAL: Readonly<Record<EncryptedLibrarySurface, UnknownReco
       resolvedAt: null
     },
     routing_rule: {
+      currentRevision: 2,
       enabled: true,
       ruleType: "prefix",
       destinationNoteId: IDS.note,
       destinationSpaceId: null,
       priority: 100,
       source: "explicit",
+      proposalState: null,
+      destinationStatus: "active",
       lastFiredAt: null,
       updatedAt: TIME
     },

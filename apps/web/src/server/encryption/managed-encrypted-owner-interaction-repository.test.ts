@@ -13,18 +13,24 @@ import type { OwnerInteractionRepositoryContext } from "@/server/owner-interacti
 
 const mocks = vi.hoisted(() => ({
   adapters: [] as unknown[],
+  captureAdapters: [] as unknown[],
   clients: [] as unknown[],
   coordinatorDependencies: [] as unknown[],
+  routingCoordinatorDependencies: [] as unknown[],
   core: {
     correctDecision: vi.fn(),
     resolveReviewItem: vi.fn(),
     undoMutationBatch: vi.fn()
   },
   createAdapter: vi.fn(),
+  createCaptureAdapter: vi.fn(),
   createKeyRuntime: vi.fn(),
   createPreparedService: vi.fn(),
   createServiceClient: vi.fn(),
+  getCaptureDetail: vi.fn(),
   leaseActive: false,
+  observeCorrection: vi.fn(),
+  openCapture: vi.fn(),
   runtimes: [] as unknown[],
   signals: [] as AbortSignal[],
   withOwnerRuntime: vi.fn()
@@ -50,8 +56,16 @@ type InteractionAdapterModule = Readonly<{
   encryptedOwnerInteractionRpcFunctions: typeof encryptedOwnerInteractionRpcFunctions;
 }>;
 
+type CaptureAdapterModule = Readonly<{
+  createEncryptedCaptureRpcAdapter: typeof createEncryptedCaptureRpcAdapter;
+}>;
+
 type CoordinatorModule = Readonly<{
   EncryptedOwnerInteractionCoordinator: typeof EncryptedOwnerInteractionCoordinator;
+}>;
+
+type RoutingCoordinatorModule = Readonly<{
+  EncryptedRoutingRuleCoordinator: typeof EncryptedRoutingRuleCoordinator;
 }>;
 
 vi.mock("./service-rpc-client", async (importOriginal) => {
@@ -74,6 +88,11 @@ vi.mock("./encrypted-owner-interaction-rpc-adapter", async (importOriginal) => {
   return { ...actual, createEncryptedOwnerInteractionRpcAdapter: mocks.createAdapter };
 });
 
+vi.mock("./encrypted-capture-rpc-adapter", async (importOriginal) => {
+  const actual = await importOriginal<CaptureAdapterModule>();
+  return { ...actual, createEncryptedCaptureRpcAdapter: mocks.createCaptureAdapter };
+});
+
 vi.mock(
   "@/server/owner-interactions/encrypted-owner-interaction-coordinator",
   async (importOriginal) => {
@@ -88,15 +107,28 @@ vi.mock(
   }
 );
 
+vi.mock("@/server/routing-rules/encrypted-routing-rule-coordinator", async (importOriginal) => {
+  const actual = await importOriginal<RoutingCoordinatorModule>();
+  return {
+    ...actual,
+    EncryptedRoutingRuleCoordinator: function MockRoutingRuleCoordinator(dependencies: unknown) {
+      mocks.routingCoordinatorDependencies.push(dependencies);
+      return Object.freeze({ observeCorrection: mocks.observeCorrection });
+    }
+  };
+});
+
 import {
   encryptedAggregateRuntimeRpcFunctions,
   type OwnerEncryptedAggregateRuntime,
   type withOwnerEncryptedAggregateRuntime
 } from "./encrypted-aggregate-runtime";
+import type { createEncryptedCaptureRpcAdapter } from "./encrypted-capture-rpc-adapter";
 import {
   type createEncryptedOwnerInteractionRpcAdapter,
   encryptedOwnerInteractionRpcFunctions
 } from "./encrypted-owner-interaction-rpc-adapter";
+import { encryptedRoutingRuleRpcFunctions } from "./encrypted-routing-rule-rpc-adapter";
 import {
   ManagedEncryptedOwnerInteractionRepository,
   managedEncryptedOwnerInteractionRpcFunctions
@@ -109,6 +141,8 @@ import {
 } from "./service-rpc-client";
 import type { createInteractiveWebKeyRuntime, InteractiveWebKeyRuntime } from "./web-key-runtime";
 import type { EncryptedOwnerInteractionCoordinator } from "@/server/owner-interactions/encrypted-owner-interaction-coordinator";
+import type { EncryptedOwnerInteractionCoordinatorDependencies } from "@/server/owner-interactions/encrypted-owner-interaction-coordinator";
+import type { EncryptedRoutingRuleCoordinator } from "@/server/routing-rules/encrypted-routing-rule-coordinator";
 
 const OWNER_ID = "11111111-1111-4111-8111-111111111111";
 const CONTEXT: OwnerInteractionRepositoryContext = Object.freeze({
@@ -118,6 +152,8 @@ const CONTEXT: OwnerInteractionRepositoryContext = Object.freeze({
 const DECISION_ID = "dec_01J6M9Q7G4BMKB33GSG3NJ6D1X" as EntityId<"dec">;
 const REVIEW_ID = "rvw_01J6M9Q7G4BMKB33GSG3NJ6D1X" as EntityId<"rvw">;
 const MUTATION_ID = "mut_01J6M9Q7G4BMKB33GSG3NJ6D1X" as EntityId<"mut">;
+const CAPTURE_ID = "cap_01J6M9Q7G4BMKB33GSG3NJ6D1X" as EntityId<"cap">;
+const FEEDBACK_ID = "fbk_01J6M9Q7G4BMKB33GSG3NJ6D1X" as EntityId<"fbk">;
 const NOTE_A = "note_01J6M9Q7G4BMKB33GSG3NJ6D1X" as EntityId<"note">;
 const NOTE_B = "note_01J6M9Q7G4BMKB33GSG3NJ6D1Y" as EntityId<"note">;
 const PRIVATE_CANARY = "private owner interaction title 7fcb9e";
@@ -155,15 +191,21 @@ function resetCore(): void {
 
 beforeEach(() => {
   mocks.adapters.length = 0;
+  mocks.captureAdapters.length = 0;
   mocks.clients.length = 0;
   mocks.coordinatorDependencies.length = 0;
+  mocks.routingCoordinatorDependencies.length = 0;
   mocks.runtimes.length = 0;
   mocks.signals.length = 0;
   mocks.leaseActive = false;
   mocks.createAdapter.mockReset();
+  mocks.createCaptureAdapter.mockReset();
   mocks.createKeyRuntime.mockReset();
   mocks.createPreparedService.mockReset();
   mocks.createServiceClient.mockReset();
+  mocks.getCaptureDetail.mockReset();
+  mocks.observeCorrection.mockReset().mockResolvedValue(undefined);
+  mocks.openCapture.mockReset();
   mocks.withOwnerRuntime.mockReset();
   resetCore();
 
@@ -180,6 +222,11 @@ beforeEach(() => {
   mocks.createAdapter.mockImplementation((client: unknown) => {
     const adapter = Object.freeze({ kind: "strict-owner-interaction", client });
     mocks.adapters.push(adapter);
+    return adapter;
+  });
+  mocks.createCaptureAdapter.mockImplementation((client: unknown) => {
+    const adapter = Object.freeze({ client, getCaptureDetail: mocks.getCaptureDetail });
+    mocks.captureAdapters.push(adapter);
     return adapter;
   });
   mocks.withOwnerRuntime.mockImplementation(async (...parameters: unknown[]) => {
@@ -199,7 +246,7 @@ beforeEach(() => {
         Object.freeze({
           access: Object.freeze({ ownerId }),
           createPreparedService: mocks.createPreparedService,
-          service: Object.freeze({ kind: "aggregate-service" })
+          service: Object.freeze({ kind: "aggregate-service", openCapture: mocks.openCapture })
         }) as unknown as OwnerEncryptedAggregateRuntime
       );
     } finally {
@@ -212,7 +259,10 @@ describe("managed encrypted owner-interaction repository", () => {
   it("uses the exact duplicate-free aggregate and interaction RPC capabilities", () => {
     expect(managedEncryptedOwnerInteractionRpcFunctions).toEqual([
       ...encryptedAggregateRuntimeRpcFunctions,
-      ...encryptedOwnerInteractionRpcFunctions
+      ...encryptedOwnerInteractionRpcFunctions,
+      "get_encrypted_capture_detail",
+      "list_encrypted_library_objects",
+      ...encryptedRoutingRuleRpcFunctions
     ]);
     expect(new Set(managedEncryptedOwnerInteractionRpcFunctions).size).toBe(
       managedEncryptedOwnerInteractionRpcFunctions.length
@@ -253,18 +303,23 @@ describe("managed encrypted owner-interaction repository", () => {
     expect(mocks.leaseActive).toBe(false);
 
     for (const [index, dependencies] of mocks.coordinatorDependencies.entries()) {
+      const coordinatorDependencies =
+        dependencies as EncryptedOwnerInteractionCoordinatorDependencies;
       expect(Object.keys(dependencies as object).sort()).toEqual([
         "access",
         "adapter",
         "aggregate",
         "createPreparedService",
+        "observeRoutingRuleCorrection",
         "ownerId",
+        "routingRuleObservationDeadlineAt",
         "signal"
       ]);
-      expect(dependencies).toMatchObject({
+      expect(coordinatorDependencies).toMatchObject({
         ownerId: OWNER_ID,
         adapter: { kind: "strict-owner-interaction", client: mocks.clients[index] }
       });
+      expect(typeof coordinatorDependencies.routingRuleObservationDeadlineAt).toBe("number");
     }
     expect(mocks.core.correctDecision).toHaveBeenCalledWith(DECISION_ID, CORRECTION);
     expect(mocks.core.resolveReviewItem).toHaveBeenCalledWith(REVIEW_ID, REVIEW_RESOLUTION);
@@ -279,6 +334,59 @@ describe("managed encrypted owner-interaction repository", () => {
       expect(JSON.stringify(options)).not.toContain(CONTEXT.accessToken);
       expect(JSON.stringify(options)).not.toContain(PRIVATE_CANARY);
     }
+  });
+
+  it("reopens the authenticated source capture when a correction replay resumes rule learning", async () => {
+    const captureText = "shopping: oat milk and batteries";
+    const contentCipher = Object.freeze({ kind: "capture-cipher" });
+    const contentMac = Object.freeze({ kind: "capture-mac" });
+    mocks.getCaptureDetail.mockResolvedValue(
+      Object.freeze({
+        captureId: CAPTURE_ID,
+        recordVersion: 1,
+        privacy: "ai_assisted",
+        contentLength: captureText.length,
+        contentCipher,
+        contentMac
+      })
+    );
+    mocks.openCapture.mockResolvedValue({ schemaVersion: 1, rawContent: captureText });
+    mocks.core.correctDecision.mockImplementationOnce(async () => {
+      const dependencies = mocks.coordinatorDependencies.at(
+        -1
+      ) as EncryptedOwnerInteractionCoordinatorDependencies;
+      await dependencies.observeRoutingRuleCorrection({
+        feedbackEventId: FEEDBACK_ID,
+        captureId: CAPTURE_ID,
+        captureText: null,
+        destination: { type: "note", noteId: NOTE_B }
+      });
+      return RESULTS.correction;
+    });
+
+    await expect(
+      new ManagedEncryptedOwnerInteractionRepository().correctDecision(
+        CONTEXT,
+        DECISION_ID,
+        CORRECTION
+      )
+    ).resolves.toBe(RESULTS.correction);
+
+    expect(mocks.getCaptureDetail).toHaveBeenCalledWith({
+      ownerId: OWNER_ID,
+      captureId: CAPTURE_ID
+    });
+    expect(mocks.openCapture).toHaveBeenCalledWith(
+      { ownerId: OWNER_ID },
+      { encrypted: contentCipher, contentMac },
+      { captureId: CAPTURE_ID, recordVersion: 1, privacy: "ai_assisted" }
+    );
+    expect(mocks.observeCorrection).toHaveBeenCalledWith({
+      feedbackEventId: FEEDBACK_ID,
+      captureText,
+      destination: { type: "note", noteId: NOTE_B }
+    });
+    expect(mocks.signals[0]?.aborted).toBe(true);
   });
 
   it.each([

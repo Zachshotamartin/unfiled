@@ -199,7 +199,7 @@ insert into public.encrypted_organizer_preparations (
   '89000000-0000-4000-8000-000000000013',
   '89000000-0000-4000-8000-000000000014',
   'repair.ai.object.v1', 1,
-  '{"explicitDestinationNoteId":null,"expansionDisabled":false}'::jsonb,
+  '{"explicitDestinationNoteId":null,"expansionDisabled":false,"ruleMatch":null}'::jsonb,
   repeat('a', 64),
   '{"jobId":"job_89000000000000000000000001","outcome":"review"}'::jsonb,
   '2026-08-31 21:15:19+00'
