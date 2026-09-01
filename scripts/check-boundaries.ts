@@ -82,6 +82,20 @@ const rules: Readonly<Record<string, BoundaryRule>> = Object.freeze({
       "@unfiled/worker"
     ],
     sourceRoots: ["src", "api"]
+  },
+  "apps/organizer": {
+    forbidden: [
+      "next",
+      "react",
+      ...retiredClientDependencies,
+      "@supabase",
+      "openai",
+      "@anthropic-ai",
+      "@unfiled/web",
+      "@unfiled/worker",
+      "@unfiled/verifier"
+    ],
+    sourceRoots: ["src", "api"]
   }
 });
 
@@ -205,6 +219,19 @@ function assertScannerSelfTest(): void {
   );
   if (verifierFixture.length !== 1) {
     throw new Error("Boundary scanner self-test failed: verifier violations were not detected");
+  }
+
+  const organizerRule = rules["apps/organizer"];
+  if (organizerRule === undefined || !organizerRule.sourceRoots.includes("api")) {
+    throw new Error("Boundary scanner self-test failed: organizer API root is not covered");
+  }
+  const organizerFixture = sourceViolations(
+    "apps/organizer/src/fixture.ts",
+    'import OpenAI from "openai";\nvoid OpenAI;',
+    organizerRule.forbidden
+  );
+  if (organizerFixture.length !== 1) {
+    throw new Error("Boundary scanner self-test failed: organizer violations were not detected");
   }
 }
 

@@ -10,12 +10,14 @@ locals {
     "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role/${var.resource_name_prefix}-web",
     "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role/${var.resource_name_prefix}-worker",
     "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role/${var.resource_name_prefix}-verifier",
+    "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role/${var.resource_name_prefix}-organizer",
   ]
-  issuer_hostpath  = "oidc.vercel.com/${var.vercel_team_slug}"
-  issuer_url       = "https://${local.issuer_hostpath}"
-  web_subject      = "owner:${var.vercel_team_slug}:project:${var.web_project_name}:environment:production"
-  worker_subject   = "owner:${var.vercel_team_slug}:project:${var.worker_project_name}:environment:production"
-  verifier_subject = "owner:${var.vercel_team_slug}:project:${var.verifier_project_name}:environment:production"
+  issuer_hostpath   = "oidc.vercel.com/${var.vercel_team_slug}"
+  issuer_url        = "https://${local.issuer_hostpath}"
+  web_subject       = "owner:${var.vercel_team_slug}:project:${var.web_project_name}:environment:production"
+  worker_subject    = "owner:${var.vercel_team_slug}:project:${var.worker_project_name}:environment:production"
+  verifier_subject  = "owner:${var.vercel_team_slug}:project:${var.verifier_project_name}:environment:production"
+  organizer_subject = "owner:${var.vercel_team_slug}:project:${var.organizer_project_name}:environment:production"
 
   encryption_context_keys = [
     "UnfiledOwnerId",
@@ -125,6 +127,11 @@ locals {
   verifier_generation_ids = sort([
     for registry_id, generation in local.root_key_generations : registry_id
     if generation.key_class == "ai_assisted" && generation.purpose == "object_wrap"
+  ])
+
+  organizer_generation_ids = sort([
+    for registry_id, generation in local.root_key_generations : registry_id
+    if generation.key_class == "ai_assisted"
   ])
 
   private_generation_ids = sort([
@@ -249,6 +256,34 @@ resource "aws_iam_role" "verifier" {
   })
 }
 
+resource "aws_iam_role" "organizer" {
+  name                 = "${var.resource_name_prefix}-organizer"
+  max_session_duration = 3600
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid    = "ExactVercelOrganizerProductionSubject"
+      Effect = "Allow"
+      Principal = {
+        Federated = aws_iam_openid_connect_provider.vercel.arn
+      }
+      Action = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "${local.issuer_hostpath}:aud" = var.oidc_audience
+          "${local.issuer_hostpath}:sub" = local.organizer_subject
+        }
+      }
+    }]
+  })
+
+  tags = merge(local.common_tags, {
+    Name     = "${var.resource_name_prefix}-organizer"
+    Workload = "encrypted-organizer-worker"
+  })
+}
+
 resource "aws_kms_key" "root" {
   for_each = local.root_key_generations
 
@@ -274,7 +309,9 @@ resource "aws_kms_key" "root" {
           Principal = {
             AWS = (
               each.value.key_class == "ai_assisted" && each.value.purpose == "object_wrap"
-              ? [aws_iam_role.web.arn, aws_iam_role.worker.arn, aws_iam_role.verifier.arn]
+              ? [aws_iam_role.web.arn, aws_iam_role.worker.arn, aws_iam_role.verifier.arn, aws_iam_role.organizer.arn]
+              : each.value.key_class == "ai_assisted"
+              ? [aws_iam_role.web.arn, aws_iam_role.organizer.arn]
               : [aws_iam_role.web.arn]
             )
           }
@@ -285,7 +322,13 @@ resource "aws_kms_key" "root" {
         Sid    = each.value.status == "active" ? "BoundActiveIntermediateKey" : "BoundRetiredIntermediateKeyDecryptOnly"
         Effect = "Allow"
         Principal = {
-          AWS = each.value.key_class == "ai_assisted" && each.value.purpose == "object_wrap" ? [aws_iam_role.web.arn, aws_iam_role.worker.arn] : [aws_iam_role.web.arn]
+          AWS = (
+            each.value.key_class == "ai_assisted" && each.value.purpose == "object_wrap"
+            ? [aws_iam_role.web.arn, aws_iam_role.worker.arn, aws_iam_role.organizer.arn]
+            : each.value.key_class == "ai_assisted"
+            ? [aws_iam_role.web.arn, aws_iam_role.organizer.arn]
+            : [aws_iam_role.web.arn]
+          )
         }
         Action   = each.value.status == "active" ? ["kms:Decrypt", "kms:GenerateDataKey"] : ["kms:Decrypt"]
         Resource = "*"
@@ -511,6 +554,55 @@ resource "aws_iam_role_policy" "verifier_kms" {
         Effect   = "Deny"
         Action   = "kms:*"
         Resource = [for registry_id in local.private_generation_ids : aws_kms_key.root[registry_id].arn]
+      }]
+    )
+  })
+}
+
+resource "aws_iam_role_policy" "organizer_kms" {
+  name = "unfiled-ai-only-organizer-key-custody"
+  role = aws_iam_role.organizer.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = concat(
+      [{
+        Sid      = "DescribeAiKeyGenerations"
+        Effect   = "Allow"
+        Action   = "kms:DescribeKey"
+        Resource = [for registry_id in local.organizer_generation_ids : aws_kms_key.root[registry_id].arn]
+      }],
+      [for registry_id in local.organizer_generation_ids : {
+        Sid      = "Use${replace(title(replace(registry_id, "_", " ")), " ", "")}"
+        Effect   = "Allow"
+        Action   = local.root_key_generations[registry_id].status == "active" ? ["kms:Decrypt", "kms:GenerateDataKey"] : ["kms:Decrypt"]
+        Resource = aws_kms_key.root[registry_id].arn
+        Condition = {
+          StringEquals = {
+            "kms:EncryptionContext:UnfiledKeyClass"   = "ai_assisted"
+            "kms:EncryptionContext:UnfiledKeyPurpose" = local.root_key_generations[registry_id].purpose
+          }
+          "ForAllValues:StringEquals" = {
+            "kms:EncryptionContextKeys" = local.encryption_context_keys
+          }
+          Null = local.required_context
+        }
+      } if local.root_key_generations[registry_id].status != "staged"],
+      [{
+        Sid      = "DenyEveryPrivateManualGenerationEvenIfAnotherPolicyChanges"
+        Effect   = "Deny"
+        Action   = "kms:*"
+        Resource = [for registry_id in local.private_generation_ids : aws_kms_key.root[registry_id].arn]
+      }],
+      [{
+        Sid    = "DenyRewrapAndGrantAuthorityEvenIfAnotherPolicyChanges"
+        Effect = "Deny"
+        Action = [
+          "kms:CreateGrant",
+          "kms:ReEncryptFrom",
+          "kms:ReEncryptTo",
+        ]
+        Resource = [for registry_id in local.organizer_generation_ids : aws_kms_key.root[registry_id].arn]
       }]
     )
   })

@@ -241,6 +241,76 @@ describe("aggregate verification MACs", () => {
     }
   );
 
+  it("authenticates organizer decisions as AI-assisted and binds the prepared decision ID", async () => {
+    const harness = await createHarness();
+    const input = {
+      surface: "organization_decision" as const,
+      decisionId: IDS.decision,
+      payload: {
+        schemaVersion: 1 as const,
+        candidateManifest: { generationId: null, candidates: [] },
+        signals: { deterministic: true },
+        validatedPlan: null,
+        band: "inbox" as const
+      }
+    };
+    const record = await harness.service.createAggregateVerificationMac(harness.accessA, input);
+
+    expect(record).toMatchObject({ keyClass: "ai_assisted", keyPurpose: "content_mac" });
+    await expect(
+      harness.service.verifyAggregateVerificationMac(harness.accessA, record, input)
+    ).resolves.toBe(true);
+    await expect(
+      harness.service.verifyAggregateVerificationMac(harness.accessA, record, {
+        ...input,
+        decisionId: "dec_01J6M9Q7G4BMKB33GSG3NJ6D1Y"
+      })
+    ).resolves.toBe(false);
+    await expect(
+      harness.service.verifyAggregateVerificationMac(harness.accessA, record, {
+        ...input,
+        payload: { ...input.payload, band: "review" }
+      })
+    ).resolves.toBe(false);
+  });
+
+  it.each(["ai_assisted", "private_manual"] as const)(
+    "authenticates organizer Review content under its source class %s",
+    async (sourcePrivacy) => {
+      const harness = await createHarness();
+      const input = {
+        surface: "review_item" as const,
+        reviewId: IDS.review,
+        recordVersion: 1,
+        sourcePrivacy,
+        payload: {
+          schemaVersion: 1 as const,
+          choices: [{ candidateId: IDS.note, label: "Groceries" }],
+          state: "open" as const,
+          resolution: null
+        }
+      };
+      const record = await harness.service.createAggregateVerificationMac(harness.accessA, input);
+
+      expect(record).toMatchObject({ keyClass: sourcePrivacy, keyPurpose: "content_mac" });
+      await expect(
+        harness.service.verifyAggregateVerificationMac(harness.accessA, record, input)
+      ).resolves.toBe(true);
+      await expect(
+        harness.service.verifyAggregateVerificationMac(harness.accessA, record, {
+          ...input,
+          recordVersion: 2
+        })
+      ).resolves.toBe(false);
+      await expect(
+        harness.service.verifyAggregateVerificationMac(harness.accessA, record, {
+          ...input,
+          sourcePrivacy: sourcePrivacy === "ai_assisted" ? "private_manual" : "ai_assisted"
+        })
+      ).rejects.toMatchObject({ code: "invalid_record" });
+    }
+  );
+
   it("verifies with the exact retired referenced key and fails closed when it is missing or altered", async () => {
     const harness = await createHarness();
     const binding = `${OWNER_A}:ai_assisted`;

@@ -1901,8 +1901,8 @@ select throws_ok(
         'privateReceiptVerificationMac', null
       )
   )$$,
-  'P0001', 'encrypted_organizer_write_unavailable',
-  'dual-write refuses fresh AI capture work until encrypted organizer commit exists'
+  '22023', 'invalid_encrypted_field',
+  'fresh AI capture rejects private-manual cipher and MAC material'
 );
 select ok(
   public.list_encrypted_captures(

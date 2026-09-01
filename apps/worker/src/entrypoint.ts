@@ -9,7 +9,10 @@ let application: WorkerApp | undefined;
 function unavailableResponse(request: Request): Response {
   const candidate = request.headers.get("x-request-id")?.trim();
   const requestId =
-    candidate !== undefined && /^[A-Za-z0-9_.:-]{1,80}$/.test(candidate) ? candidate : randomUUID();
+    candidate !== undefined &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(candidate)
+      ? candidate
+      : randomUUID();
   return Response.json(
     {
       code: "configuration_error",

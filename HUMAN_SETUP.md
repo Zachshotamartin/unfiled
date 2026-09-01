@@ -35,7 +35,7 @@ Complete these human validation items before treating Milestone 0 as approved:
 
 1. Create separate preview and production projects at Supabase.
 2. Enable Vault and confirm the project plan supports the required backup and point-in-time recovery targets.
-3. Store each project URL, anonymous key, service-role key, and database password only in the matching interactive web/API Vercel environment. The isolated `apps/worker` and `apps/verifier` projects must never receive a global Supabase service-role/secret key; their narrowly scoped C.5c database credentials are provisioned separately below.
+3. Store each project URL, anonymous key, service-role key, and database password only in the matching interactive web/API Vercel environment. The isolated `apps/worker`, `apps/verifier`, and `apps/organizer` projects must never receive a global Supabase service-role/secret key; their narrowly scoped C.5c database credentials are provisioned separately below.
 4. Link preview from a trusted shell: `pnpm supabase link --project-ref <preview-project-ref>`.
 5. Review migrations, then apply: `pnpm supabase db push --linked`.
 6. Never link a developer preview deployment to production data.
@@ -43,7 +43,7 @@ Complete these human validation items before treating Milestone 0 as approved:
 ## Vercel
 
 1. Import `Zachshotamartin/unfiled` into Vercel and set the root directory to `apps/web`.
-2. In the `apps/web` project, set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and provider application keys in the appropriate environment scopes. Do not copy the service-role key into the separate `apps/worker` project.
+2. In the `apps/web` project, set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and provider application keys in the appropriate environment scopes. Do not copy the service-role key into the separate worker, verifier, or organizer project.
 3. Generate a separate OTP rate-limit pepper for each deployed environment with
    `openssl rand -hex 32`. Add it with `vercel env add AUTH_RATE_LIMIT_PEPPER preview` and
    `vercel env add AUTH_RATE_LIMIT_PEPPER production`; never reuse a provider, Supabase, or cron
@@ -100,33 +100,35 @@ Complete these human validation items before treating Milestone 0 as approved:
 3. Add independent Preview values interactively with `vercel env add UNFILED_CONTENT_KEK_ID preview`, `vercel env add UNFILED_CONTENT_KEK preview`, `vercel env add UNFILED_CONTENT_FINGERPRINT_KEY preview`, and `vercel env add CRON_SECRET preview`. Interactive entry keeps values out of shell history. The environment-backed resolver is restricted to local and isolated Preview data.
 4. Do not launch Production capture storage with a root KEK in Vercel environment variables. C.5a now checks in the AWS KMS resolver, least-privilege identities, Terraform policies, and rotation contract, but Production remains blocked until the account-bound setup and evidence below pass and C.5b–d cut over the complete note path.
 5. Migration `20260830000012_durable_capture_workflow.sql` deliberately aborts with `legacy_capture_encryption_backfill_required` if an older environment contains capture text. For disposable Preview data, recreate the project. For data that must be retained, stop writes and use the audited backfill/verification tool delivered with the production key adapter; never edit the migration to discard or relabel plaintext.
-6. The checked-in Vercel Hobby schedule calls `/api/internal/captures/drain` daily at 03:07 UTC. `after()` and active clients provide normal prompt processing; the daily call is dormant-work recovery. On Vercel Pro or Enterprise, change only that capture schedule in `apps/web/vercel.json` to `* * * * *`, deploy, and confirm authenticated one-minute invocations. Hobby deployments reject schedules more frequent than daily.
+6. The checked-in Vercel Hobby schedule calls `/api/internal/captures/drain` daily at 03:07 UTC. In Vercel Production, `after()` and this recovery route make one content-free Trusted Sources call to the isolated organizer; they never run the organizer inside `apps/web` and never chain the organizer's 49-second budget to the index worker's 55-second budget. The encrypted organizer and index queues plus their separate authenticated recovery crons are authoritative. Local and Preview fixtures retain deterministic in-process organization only for synthetic development data. On Vercel Pro or Enterprise, change only that capture schedule in `apps/web/vercel.json` to `* * * * *`, deploy, and confirm authenticated one-minute invocations. Hobby deployments reject schedules more frequent than daily.
 7. After deploying Preview, create one synthetic canary capture, wait for its Inbox receipt, and inspect the `captures` row with an authorized administrative session. `raw_text` must equal `[encrypted]`, the canary must not appear anywhere in the row or logs, `content_envelope.version` must equal `1`, and `content_fingerprint` must be a 64-character keyed digest. Public API responses must contain the authenticated plaintext only after owner authorization and must never contain the envelope, fingerprint, or key identifier.
 
-### Production managed KMS, isolated worker, and isolated verifier — C.5 account evidence pending
+### Production managed KMS and four isolated workloads — C.5 account evidence pending
 
-The checked-in module at `infra/aws-kms` defines the exact production identities and four independently controlled KMS roots. These steps create billable, account-bound cloud resources. They do **not** authorize real note traffic yet: C.5d must still replace every plaintext aggregate/read path, the separate organizer must land, and the final cutover gate must pass.
+The checked-in module at `infra/aws-kms` defines the exact production identities for web, index worker, verifier, and organizer plus four independently controlled KMS roots. These steps create billable, account-bound cloud resources. They do **not** authorize real note traffic yet: C.5d must still replace every plaintext aggregate/read path and the final cutover gate must pass.
 
-1. Record ten exact values: AWS region; a dedicated non-runtime KMS administrator role/user ARN;
+1. Record twelve exact values: AWS region; a dedicated non-runtime KMS administrator role/user ARN;
    Vercel team slug and `team_...` owner ID; and the distinct project **name** plus `prj_...` ID
-   for web, worker, and verifier. Project names—not IDs—appear in OIDC subjects.
-2. Create or select three Vercel projects from this repository. Set their Root Directories to
-   `apps/web`, `apps/worker`, and `apps/verifier`. In all three projects, enable **Team Issuer** under
+   for web, worker, verifier, and organizer. Project names—not IDs—appear in OIDC subjects.
+2. Create or select four Vercel projects from this repository. Set their Root Directories to
+   `apps/web`, `apps/worker`, `apps/verifier`, and `apps/organizer`. In all four projects, enable **Team Issuer** under
    Settings → Security → Secure Backend Access (OIDC). Configure **Trusted Sources** separately on
-   the worker and verifier projects: authorize only web Production → that project's Production
-   deployment. Do not authorize Preview, worker → verifier, another project, or a team/project
+   the worker, verifier, and organizer projects: authorize only web Production → that project's Production
+   deployment. Do not authorize Preview, isolated-workload cross-calls, another project, or a team/project
    wildcard.
 3. From `infra/aws-kms`, copy `terraform.tfvars.example` to the ignored `terraform.tfvars`, replace every placeholder, and authenticate Terraform with an administrator identity. If the team's Vercel issuer already exists in that AWS account, use the import command in `infra/aws-kms/README.md` instead of creating a duplicate.
-4. Run `terraform init`, `terraform fmt -check -recursive`, `terraform validate`, `terraform test`, `terraform plan -out unfiled-kms.tfplan`, and finally `terraform apply unfiled-kms.tfplan`. Confirm the plan creates three exact-subject runtime roles and these four aliases:
+4. Run `terraform init`, `terraform fmt -check -recursive`, `terraform validate`, `terraform test`, `terraform plan -out unfiled-kms.tfplan`, and finally `terraform apply unfiled-kms.tfplan`. Confirm the plan creates four exact-subject runtime roles and these four aliases:
    - `alias/unfiled/ai-assisted/object-wrap`
    - `alias/unfiled/ai-assisted/content-mac`
    - `alias/unfiled/private-manual/object-wrap`
    - `alias/unfiled/private-manual/content-mac`
-5. Copy only Terraform's non-secret outputs into Vercel Production settings. All three projects
+5. Copy only Terraform's non-secret outputs into Vercel Production settings. All four projects
    receive `UNFILED_AWS_REGION`; each receives its matching `UNFILED_AWS_ROLE_ARN`. Web receives
    both active AI root ARNs. The worker and verifier receive only
    `UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN`: never give either isolated workload the AI content-MAC
-   ARN or a broad AI registry. Only web receives the
+   ARN or a broad AI registry. The organizer receives the active AI object-wrap and content-MAC
+   ARNs plus only its exact retired-root outputs; it never receives a private-manual ARN or the full
+   web registry. Only web receives the
    two active `UNFILED_PRIVATE_*_KMS_KEY_ARN` values and the complete web registry. In the worker set
    all of:
 
@@ -159,13 +161,36 @@ The checked-in module at `infra/aws-kms` defines the exact production identities
 
    Set the last value only to the literal result of
    `terraform output -raw verifier_retired_ai_object_wrap_roots_json` (initially `[]`). Vercel
-   injects `VERCEL_ENV` and `VERCEL_PROJECT_ID`; do not override them. Never configure AWS access
-   keys, a root KEK, an AI content-MAC or private KMS identifier, a user/browser session secret, `CRON_SECRET`, the
-   local drain bearer, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_SECRET_KEY`, or another global
-   Supabase service/secret variant in the worker or verifier project. The verifier must also reject
-   any AI content-MAC identifier, provider API key, or worker database credential.
+   injects `VERCEL_ENV` and `VERCEL_PROJECT_ID`; do not override them. In the organizer set all of:
 
-6. Deploy the worker and verifier first, but do not make an OIDC-bearing call to either one yet. The
+   ```dotenv
+   UNFILED_ORGANIZER_ENV=production
+   UNFILED_ORGANIZER_PROJECT_ID=<organizer-prj-id>
+   UNFILED_ORGANIZER_EXPECTED_OIDC_SUBJECT=<terraform-organizer_oidc_subject>
+   UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN=<active-ai-object-wrap-full-key-arn>
+   UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN=<active-ai-content-mac-full-key-arn>
+   UNFILED_ORGANIZER_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON=<terraform-organizer-object-wrap-retired-output>
+   UNFILED_ORGANIZER_RETIRED_AI_CONTENT_MAC_ROOTS_JSON=<terraform-organizer-content-mac-retired-output>
+   UNFILED_TRUSTED_SOURCE_TEAM_SLUG=<exact-team-slug>
+   UNFILED_TRUSTED_SOURCE_OWNER_ID=<team-id>
+   UNFILED_TRUSTED_SOURCE_WEB_PROJECT_ID=<web-prj-id>
+   UNFILED_TRUSTED_SOURCE_WEB_PROJECT_NAME=<exact-web-project-name>
+   UNFILED_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT=<terraform-web_oidc_subject>
+   UNFILED_ORGANIZER_TIMEOUT_MS=49000
+   ```
+
+   Copy the two organizer retired values only from
+   `terraform output -raw organizer_retired_ai_object_wrap_roots_json` and
+   `terraform output -raw organizer_retired_ai_content_mac_roots_json`. Never hand-convert the
+   broader registry. Never configure AWS access
+   keys, a root KEK, a private KMS identifier, a user/browser session secret, `CRON_SECRET`, the
+   local drain bearer, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_SECRET_KEY`, or another global
+   Supabase service/secret variant in any isolated project. The worker and verifier must also reject
+   every AI content-MAC identifier. All three reject provider API keys at this checkpoint; Milestone
+   D must add any evaluated planner credential only to the organizer's separately reviewed provider
+   boundary, never to web, worker, or verifier.
+
+6. Deploy the worker, verifier, and organizer first, but do not make an OIDC-bearing call to any one yet. The
    runtime cannot cryptographically derive a Vercel project ID from a `*.vercel.app` alias, so each
    exact origin is a sensitive bearer-token egress trust boundary. In Vercel's authenticated
    dashboard or REST API, select each project by its recorded `prj_...` ID and prove that the
@@ -176,11 +201,12 @@ The checked-in module at `infra/aws-kms` defines the exact production identities
    Vercel project mapping. Alias drift, project transfer, or alias reassignment invalidates this
    evidence and requires the corresponding caller to be disabled until the proof is repeated.
 
-   Only after both proofs, set these target values in the web Production project and deploy web:
+   Only after all three proofs, set these target values in the web Production project and deploy web:
 
    ```dotenv
    UNFILED_INDEX_WORKER_ORIGIN=https://<proved-worker-production-alias>.vercel.app
    UNFILED_RAG_VERIFIER_ORIGIN=https://<proved-verifier-production-alias>.vercel.app
+   UNFILED_ORGANIZER_ORIGIN=https://<proved-organizer-production-alias>.vercel.app
    ```
 
    Do not configure `UNFILED_INDEX_WORKER_PROJECT_ID`: an unverified project-ID string beside an
@@ -188,19 +214,19 @@ The checked-in module at `infra/aws-kms` defines the exact production identities
    do not add a shared caller secret, worker bearer, bypass secret, user token, or worker workload
    token to the web project.
 
-   Do not invoke either protected workload yet. Production composition intentionally fails closed
-   until the worker has its dedicated database/provider configuration and the verifier has its
-   dedicated database configuration. Alias proof establishes only the OIDC-token egress target; it
-   is not runtime, database, provider, or KMS readiness evidence. Complete the two dedicated-login
+   Do not invoke any protected workload yet. Production composition intentionally fails closed
+   until the worker has its dedicated database/provider configuration and both verifier and organizer
+   have their dedicated database configuration. Alias proof establishes only the OIDC-token egress target; it
+   is not runtime, database, provider, or KMS readiness evidence. Complete the three dedicated-login
    sections below before making a real protected call.
 
 7. Configure a CloudTrail trail that retains read and write **management events** and does not
    exclude KMS events. KMS cryptographic operations are management events, not CloudTrail data
    events. Encryption-context values are logged, so they must remain the four non-secret
    owner/class/purpose/key-record identifiers and must never contain note text or email addresses.
-   Add alerting for access denials, unusual KMS volume, key disable/deletion scheduling, and worker
-   attempts against private-manual roots.
-8. After the complete worker and verifier readiness/custody proofs below, follow
+   Add alerting for access denials, unusual KMS volume, key disable/deletion scheduling, and worker,
+   verifier, or organizer attempts against private-manual roots.
+8. After the complete worker, verifier, and organizer readiness/custody proofs below, follow
    `infra/aws-kms/README.md` for the staged → active/retired two-apply rotation. A 21st
    runtime-decryptable retired generation is intentionally blocked until a separately reviewed
    archived-root lifecycle exists. Complete and record KMS outage, intermediate/root rewrap,
@@ -396,6 +422,154 @@ decision, not a signature or MAC over plaintext.
    before the verifier controller resumes.
 
 Until those steps and C.5 pass, Unfiled may be shown as a portfolio work in progress but must not claim that the complete note library is encrypted or that private-manual mode is end-to-end encrypted.
+
+### Dedicated encrypted-organizer database login — provision separately
+
+Migration `20260830000020_encrypted_organizer_runtime.sql` creates the exact PostgreSQL role
+`unfiled_organizer_worker` as `NOLOGIN`, `NOINHERIT`, and `NOBYPASSRLS`. It has no table, sequence,
+private-schema, public-create, inherited-role, service-role, index-worker, verifier, or key-admin
+capability. It can execute exactly eight job/lease-scoped public RPCs. None accepts an owner UUID;
+ownership is derived from the currently leased organization job. The matching `apps/organizer`
+deployment is a fourth trust domain with a 49-second maximum request deadline and AI-assisted
+object-wrap/content-MAC custody only. Its production planner and content-mutation cipher remain
+deliberately unavailable until Milestone D, so this section can establish infrastructure readiness
+but cannot establish a real create-or-append result yet.
+
+1. Apply `supabase/roles.sql` and every migration through
+   `20260830000020_encrypted_organizer_runtime.sql` before provisioning the login. Inspect
+   `pg_auth_members`: zero membership rows touching `unfiled_organizer_worker` is preferred after a
+   real bootstrap-superuser cleanup. If the managed Supabase bootstrap grant cannot be removed, the
+   only permitted row is granted role `unfiled_organizer_worker`, member `postgres`, grantor
+   `supabase_admin`, `ADMIN=true`, `INHERIT=false`, and `SET=false`. Reject every other inbound or
+   outbound membership and do not weaken the checked migration guard.
+2. In the Supabase dashboard, enable database SSL enforcement and download the canonical CA chain
+   plus the exact serverless transaction-pooler connection template. From a trusted administrator
+   `psql` session that already uses hostname- and certificate-verified TLS, provision the role itself
+   as the login and enter its independently generated password only at the interactive prompt:
+
+   ```psql
+   ALTER ROLE unfiled_organizer_worker LOGIN;
+   \password unfiled_organizer_worker
+   ```
+
+   Never grant `service_role`, `authenticator`, a controller parent role, `INHERIT`, `BYPASSRLS`,
+   `SUPERUSER`, `CREATEDB`, `CREATEROLE`, or `REPLICATION`. A migration replay intentionally returns
+   the role to `NOLOGIN`; repeat this explicit procedure rather than changing the migration.
+
+3. Build the Production URI from the dashboard template. The shared Supavisor pooler transport
+   username is `unfiled_organizer_worker.<project-ref>`; a direct or dedicated endpoint uses the
+   unsuffixed role. Use `sslmode=verify-full`, the exact displayed host/port/database, the exact
+   20-character project ref, and the downloaded CA. Store only these values in the organizer
+   Production project:
+
+   ```dotenv
+   UNFILED_ORGANIZER_DATABASE_URL=<exact-postgresql-uri-with-sslmode-verify-full>
+   UNFILED_ORGANIZER_DATABASE_EXPECTED_HOST=<exact-canonical-host>
+   UNFILED_ORGANIZER_DATABASE_PROJECT_REF=<exact-20-character-project-ref>
+   UNFILED_ORGANIZER_DATABASE_CA_PEM_BASE64=<canonical-PEM-chain-as-base64>
+   UNFILED_ORGANIZER_DATABASE_CONNECT_TIMEOUT_MS=3000
+   UNFILED_ORGANIZER_DATABASE_STATEMENT_TIMEOUT_MS=1500
+   ```
+
+   The runtime pins the pooler username shape separately, enables channel binding, requires TLS
+   1.2 or newer, verifies the certificate and hostname, and checks the database identity when a
+   connection enters the pool. Do not copy this URI, password, CA value, or project ref into web,
+   worker, verifier, Preview, CI, Terraform, logs, tickets, or source control. Never substitute a
+   Supabase HTTP API key or an RLS-bypassing database URL.
+
+4. Configure the bounded organizer runtime from `apps/organizer/.env.example`:
+
+   ```dotenv
+   UNFILED_ORGANIZER_MAX_REQUEST_BYTES=1024
+   UNFILED_ORGANIZER_TIMEOUT_MS=49000
+   UNFILED_ORGANIZER_CLAIM_LIMIT=2
+   UNFILED_ORGANIZER_CONCURRENCY=2
+   UNFILED_ORGANIZER_LEASE_SECONDS=120
+   UNFILED_ORGANIZER_RECOVERY_LIMIT=100
+   ```
+
+   Production must not contain `UNFILED_ORGANIZER_DRAIN_SECRET` or `CRON_SECRET`; exact web
+   Trusted Sources identity is the only drain authorization. It must also reject static AWS access
+   keys, private-manual KMS identifiers, a global Supabase key/URL, a browser/user secret, and
+   `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `UNFILED_OPENAI_API_KEY`,
+   `UNFILED_ANTHROPIC_API_KEY`, or `UNFILED_ORGANIZATION_MODEL_API_KEY`. Milestone D must introduce
+   any evaluated provider credential through a separately reviewed organizer-only boundary.
+
+5. Open a connection through the deployed organizer adapter and record a content-free readiness
+   result proving both `session_user` and `current_user` equal exactly
+   `unfiled_organizer_worker`. `SET ROLE`, an unsuffixed/suffixed-name mismatch after pooler
+   authentication, encryption without hostname verification, or a session that reports `postgres`,
+   `service_role`, or `authenticator` fails the gate. Record only host class, deployment ID, exact
+   role names, TLS mode, timestamp, and pass/fail—never the URI, certificate bytes, password, token,
+   ciphertext, or query result content.
+6. Run the deployed privilege probe and prove EXECUTE on exactly these signatures:
+
+   - `claim_encrypted_organizer_jobs(text,integer,integer)`
+   - `heartbeat_encrypted_organizer_job(text,text,integer,jsonb)`
+   - `list_encrypted_organizer_candidates(text,text,integer)`
+   - `prepare_encrypted_organizer_create(text,text,text,text)`
+   - `prepare_encrypted_organizer_append(text,text,text,bigint,text)`
+   - `commit_encrypted_organizer_job(text,text,jsonb)`
+   - `fail_encrypted_organizer_job(text,text,text,boolean)`
+   - `recover_stale_encrypted_organizer_jobs(integer)`
+
+   Prove zero direct SELECT/INSERT/UPDATE/DELETE or sequence privilege on `public` and `private`, no
+   `private` schema use, no public-schema create, and no EXECUTE on any other public or private
+   function. Explicitly prove denial for root/key registration, activation, revocation, rewrap,
+   plaintext/legacy note functions, service-only aggregate/backfill/rollout functions, all six index
+   RPCs, both verifier RPCs, and arbitrary direct relation access. Also prove `anon`,
+   `authenticated`, `service_role`, `unfiled_index_worker`, and `unfiled_rag_verifier` cannot execute
+   any organizer RPC. Record function names, privilege booleans or SQLSTATEs, deployment ID, and
+   timestamps only.
+
+7. Test the data boundary with synthetic ciphertext and content-free reports. A claim must return no
+   more than the configured limit; candidate projection must return at most eight AI-assisted
+   candidates within its fixed byte budget; private/deleted/stale/cross-owner rows must return no
+   projection. A request cannot supply or switch an owner. Lose or replace the lease, flip privacy,
+   delete the capture/note, change consent controls, and advance an append revision at each
+   disclosure/publication race point. Every race must fail closed, replan at most once, or produce
+   Review; it must never disclose private content, publish against stale authority, or loop.
+8. From web Production, invoke the exact proved organizer Production alias with an empty synthetic
+   queue. Prove Vercel preserves `x-vercel-trusted-oidc-idp-token`; the organizer verifies the exact
+   issuer, audience, subject, team slug/ID, web project name/ID, and Production environment; and the
+   response is content-free `{"claimed":0,"completed":0,"failed":0,"retryScheduled":0}` with
+   `Cache-Control: no-store`. Direct public, Preview, wrong-project, expired-token, cookie,
+   `Authorization`, and protection-bypass requests must fail. The organizer must abort by 49 seconds;
+   web's 54-second default leaves cleanup margin. A health response or locally decoded JWT is not
+   trusted-caller evidence.
+9. With the real organizer workload token, prove STS assumes only the exact organizer role. The
+   allowed canary may GenerateDataKey/Decrypt on the active AI-assisted object-wrap and content-MAC
+   roots and Decrypt only the exact retired roots supplied through the two organizer retired-root
+   outputs. Controlled direct probes must deny every private-manual generation, staged-root
+   generation/decryption, retired-root generation, wrong-context use, `ReEncrypt`, grant creation,
+   key administration, and another workload's authority. Match allowed and denied calls to
+   content-free CloudTrail management events. Never record tokens, plaintext, ciphertext, email,
+   owner IDs, or encryption-context values.
+10. Do not submit a real organization canary at C.5c-3. The checked Production composition has an
+    unavailable planner and cipher by design and must fail safely rather than call an unevaluated
+    provider or write a partial note. After Milestone D lands, run create, append, explicit
+    destination, ambiguous Review, revision-race/replan, response-loss replay, and provider/KMS/DB
+    outage canaries. Each successful terminal transaction must atomically publish encrypted note
+    state, revision/mutation, decision, receipt/Review, terminal lease state, and one content-free
+    index job. Then invoke the independent index recovery path and prove that job completes. The
+    organizer response must never synchronously chain the index worker's long-running drain.
+11. Exercise connection loss, statement timeout, 49-second request cancellation, stale lease
+    recovery, credential revocation, and Vercel alias drift. Jobs must remain encrypted and queued,
+    retry within bounded attempts, enter Review/dead-letter deterministically, or recover through
+    the exact RPC. There must be no fallback to `apps/web`, a Local/Preview deterministic planner,
+    direct tables, a broad Supabase credential, static AWS credentials, plaintext persistence, or
+    private-manual custody.
+12. Rotate this credential independently of the web, worker, verifier, and Supabase service keys.
+    Pause organizer invocations, use the trusted verified-TLS `\password unfiled_organizer_worker`
+    prompt, update only the organizer Production secret, redeploy/recycle its pool, prove the old
+    credential is rejected and the new session preserves the exact eight-RPC ACL, run the empty-queue
+    readiness and denial probes again, then resume. Re-prove alias ownership, OIDC, database session,
+    and KMS denials after a project transfer, alias change, role/policy change, CA rotation, database
+    restore, or migration replay.
+
+Until the production planner/cipher, C.5d cutover, account canaries, rotation/restore evidence, and
+backup-expiry gates pass, the organizer is an implemented fail-closed security substrate—not a
+production routing claim or proof that the complete note library is encrypted.
 
 ### Preview release evidence
 

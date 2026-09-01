@@ -26,6 +26,7 @@ import { createStructuredLogger } from "../src/logging";
 
 const SECRET = "worker-only-drain-secret-with-adequate-length";
 const TRUSTED_SOURCE_TOKEN = "source.header.signature";
+const REQUEST_ID = "0d4259cf-4596-45b0-8f62-260189d863f3";
 
 const trustedSource: VercelTrustedSource = {
   audience: "https://vercel.com/team-example",
@@ -188,7 +189,7 @@ describe("isolated worker HTTP app", () => {
 
     const response = await app(
       drainRequest('{"trigger":"manual"}', {
-        headers: { "x-request-id": "worker-request-01" }
+        headers: { "x-request-id": REQUEST_ID }
       })
     );
 
@@ -201,12 +202,39 @@ describe("isolated worker HTTP app", () => {
     });
     const drainInput = vi.mocked(drainPort.drain).mock.calls[0]?.[0];
     expect(drainInput).toMatchObject({
-      requestId: "worker-request-01",
+      requestId: REQUEST_ID,
       trigger: "manual"
     });
     expect(isAiAssistedKeyAuthority(drainInput?.authority)).toBe(false);
     expect(Object.keys(drainInput?.authority ?? {})).toEqual([]);
     expect(drainInput?.signal).toBeInstanceOf(AbortSignal);
+    expect(lines.join("\n")).not.toContain(SECRET);
+  });
+
+  it("replaces caller-controlled request identifiers before logging or echoing them", async () => {
+    const lines: string[] = [];
+    const drainPort = drain();
+    const app = createWorkerApp({
+      config: config(),
+      drain: drainPort,
+      keyManagement: keyManagement(),
+      logger: logger(lines)
+    });
+
+    const response = await app(
+      drainRequest('{"trigger":"manual"}', {
+        headers: { "x-request-id": SECRET }
+      })
+    );
+    const generatedRequestId = response.headers.get("x-request-id");
+
+    expect(response.status).toBe(200);
+    expect(generatedRequestId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+    );
+    expect(generatedRequestId).not.toBe(SECRET);
+    expect(vi.mocked(drainPort.drain).mock.calls[0]?.[0].requestId).toBe(generatedRequestId);
+    expect(lines.join("\n")).toContain(generatedRequestId ?? "missing-generated-request-id");
     expect(lines.join("\n")).not.toContain(SECRET);
   });
 
@@ -385,7 +413,7 @@ describe("isolated worker HTTP app", () => {
     const request = drainRequest(undefined, {
       authorization: null,
       headers: {
-        "x-request-id": "production-request-1",
+        "x-request-id": REQUEST_ID,
         "x-vercel-oidc-token": "header.payload.signature",
         "x-vercel-trusted-oidc-idp-token": TRUSTED_SOURCE_TOKEN
       }

@@ -57,6 +57,15 @@ override_resource {
 }
 
 override_resource {
+  target          = aws_iam_role.organizer
+  override_during = plan
+  values = {
+    arn = "arn:aws:iam::123456789012:role/unfiled-production-organizer"
+    id  = "unfiled-production-organizer"
+  }
+}
+
+override_resource {
   target          = aws_kms_key.root["ai_assisted_object_wrap_v1"]
   override_during = plan
   values = {
@@ -97,10 +106,11 @@ variables {
   key_administrator_arns = [
     "arn:aws:iam::123456789012:role/unfiled-kms-admin",
   ]
-  vercel_team_slug      = "unfiled-team"
-  web_project_name      = "unfiled-web"
-  worker_project_name   = "unfiled-worker"
-  verifier_project_name = "unfiled-verifier"
+  vercel_team_slug       = "unfiled-team"
+  web_project_name       = "unfiled-web"
+  worker_project_name    = "unfiled-worker"
+  verifier_project_name  = "unfiled-verifier"
+  organizer_project_name = "unfiled-organizer"
 }
 
 run "four_active_roots_and_exact_workload_boundary" {
@@ -126,6 +136,7 @@ run "four_active_roots_and_exact_workload_boundary" {
       output.web_oidc_subject == "owner:unfiled-team:project:unfiled-web:environment:production"
       && output.worker_oidc_subject == "owner:unfiled-team:project:unfiled-worker:environment:production"
       && output.verifier_oidc_subject == "owner:unfiled-team:project:unfiled-verifier:environment:production"
+      && output.organizer_oidc_subject == "owner:unfiled-team:project:unfiled-organizer:environment:production"
     )
     error_message = "OIDC trust must stay pinned to the exact, distinct production project names."
   }
@@ -137,6 +148,8 @@ run "four_active_roots_and_exact_workload_boundary" {
       && jsondecode(aws_iam_role.web.assume_role_policy).Statement[0].Condition.StringEquals["oidc.vercel.com/unfiled-team:sub"] == output.web_oidc_subject
       && jsondecode(aws_iam_role.verifier.assume_role_policy).Statement[0].Condition.StringEquals["oidc.vercel.com/unfiled-team:aud"] == "sts.amazonaws.com"
       && jsondecode(aws_iam_role.verifier.assume_role_policy).Statement[0].Condition.StringEquals["oidc.vercel.com/unfiled-team:sub"] == output.verifier_oidc_subject
+      && jsondecode(aws_iam_role.organizer.assume_role_policy).Statement[0].Condition.StringEquals["oidc.vercel.com/unfiled-team:aud"] == "sts.amazonaws.com"
+      && jsondecode(aws_iam_role.organizer.assume_role_policy).Statement[0].Condition.StringEquals["oidc.vercel.com/unfiled-team:sub"] == output.organizer_oidc_subject
     )
     error_message = "AWS role trust must keep the fixed STS audience and exact Vercel subjects."
   }
@@ -252,6 +265,46 @@ run "four_active_roots_and_exact_workload_boundary" {
       ])
     )
     error_message = "The worker must explicitly deny every AI content-MAC and private-manual generation."
+  }
+
+  assert {
+    condition = (
+      toset(one([
+        for statement in jsondecode(aws_iam_role_policy.organizer_kms.policy).Statement : statement
+        if statement.Sid == "DescribeAiKeyGenerations"
+        ]).Resource) == toset([
+        aws_kms_key.root["ai_assisted_object_wrap_v1"].arn,
+        aws_kms_key.root["ai_assisted_content_mac_v1"].arn,
+      ])
+      && length([
+        for statement in jsondecode(aws_iam_role_policy.organizer_kms.policy).Statement : statement
+        if startswith(statement.Sid, "Use")
+        && toset(statement.Action) == toset(["kms:Decrypt", "kms:GenerateDataKey"])
+        && statement.Condition.StringEquals["kms:EncryptionContext:UnfiledKeyClass"] == "ai_assisted"
+        && contains(["object_wrap", "content_mac"], statement.Condition.StringEquals["kms:EncryptionContext:UnfiledKeyPurpose"])
+        && toset(statement.Condition["ForAllValues:StringEquals"]["kms:EncryptionContextKeys"]) == toset(local.encryption_context_keys)
+      ]) == 2
+      && toset(one([
+        for statement in jsondecode(aws_iam_role_policy.organizer_kms.policy).Statement : statement
+        if statement.Sid == "DenyEveryPrivateManualGenerationEvenIfAnotherPolicyChanges"
+        ]).Resource) == toset([
+        aws_kms_key.root["private_manual_object_wrap_v1"].arn,
+        aws_kms_key.root["private_manual_content_mac_v1"].arn,
+      ])
+      && toset(one([
+        for statement in jsondecode(aws_iam_role_policy.organizer_kms.policy).Statement : statement
+        if statement.Sid == "DenyRewrapAndGrantAuthorityEvenIfAnotherPolicyChanges"
+      ]).Action) == toset(["kms:CreateGrant", "kms:ReEncryptFrom", "kms:ReEncryptTo"])
+      && length(output.organizer_root_key_registry) == 2
+      && alltrue([for generation in values(output.organizer_root_key_registry) : generation.key_class == "ai_assisted"])
+      && jsondecode(output.organizer_retired_ai_object_wrap_roots_json) == []
+      && jsondecode(output.organizer_retired_ai_content_mac_roots_json) == []
+      && length(regexall(aws_iam_role.organizer.arn, aws_kms_key.root["ai_assisted_object_wrap_v1"].policy)) > 0
+      && length(regexall(aws_iam_role.organizer.arn, aws_kms_key.root["ai_assisted_content_mac_v1"].policy)) > 0
+      && length(regexall(aws_iam_role.organizer.arn, aws_kms_key.root["private_manual_object_wrap_v1"].policy)) == 0
+      && length(regexall(aws_iam_role.organizer.arn, aws_kms_key.root["private_manual_content_mac_v1"].policy)) == 0
+    )
+    error_message = "The organizer must use only context-bound AI object-wrap/content-MAC roots, explicitly deny private roots and rewrap/grant authority, and receive no private identifier."
   }
 
   assert {

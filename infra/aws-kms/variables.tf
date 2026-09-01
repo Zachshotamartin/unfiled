@@ -55,6 +55,21 @@ variable "verifier_project_name" {
   }
 }
 
+variable "organizer_project_name" {
+  description = "Exact Vercel project name for the isolated encrypted organizer worker."
+  type        = string
+
+  validation {
+    condition = (
+      can(regex("^[a-z0-9](?:[a-z0-9_-]{0,98}[a-z0-9])?$", var.organizer_project_name)) &&
+      var.organizer_project_name != var.web_project_name &&
+      var.organizer_project_name != var.worker_project_name &&
+      var.organizer_project_name != var.verifier_project_name
+    )
+    error_message = "organizer_project_name must be an exact Vercel project name distinct from web_project_name, worker_project_name, and verifier_project_name."
+  }
+}
+
 variable "key_administrator_arns" {
   description = "Dedicated human or break-glass IAM principals that administer keys and can recover policy control. Every ARN must belong to the current account and partition."
   type        = list(string)
