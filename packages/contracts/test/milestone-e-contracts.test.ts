@@ -20,7 +20,8 @@ import {
   UserSettingsDtoSchema,
   UserSettingsUpdateRequestSchema,
   manualNoteFixtures,
-  openApiDocument
+  openApiDocument,
+  reviewResolutionMatchesSemantics
 } from "../src/index.js";
 
 const NOTE_A = "note_01J6M9Q7G4BMKB33GSG3NJ6D1X";
@@ -114,11 +115,17 @@ describe("Milestone E public contracts", () => {
       note: mutation.note,
       revision: mutation.revision,
       mutationId: mutation.mutationId,
-      undo: mutation.undo
+      undo: { eligible: false, expiresAt: null }
     };
     expect(
       MutationBatchUndoResponseSchema.parse({ members: [member], replayed: false })
     ).toHaveProperty("members.0.mutationId", member.mutationId);
+    expect(
+      MutationBatchUndoResponseSchema.safeParse({
+        members: [{ ...member, undo: mutation.undo }],
+        replayed: false
+      }).success
+    ).toBe(false);
     expect(
       MutationBatchUndoResponseSchema.safeParse({
         members: [member, member],
@@ -255,6 +262,49 @@ describe("Milestone E public contracts", () => {
         },
         state: "resolved",
         resolution: { type: "keep_inbox" },
+        resolvedAt: NOW
+      }).success
+    ).toBe(false);
+
+    const failedProposal = {
+      type: "failed_job",
+      errorCode: "provider_unavailable"
+    } as const;
+    expect(
+      reviewResolutionMatchesSemantics("failed_job", failedProposal, { type: "keep_inbox" })
+    ).toBe(true);
+    expect(
+      reviewResolutionMatchesSemantics("failed_job", failedProposal, {
+        type: "route",
+        noteId: NOTE_B,
+        expectedRevision: 2
+      })
+    ).toBe(false);
+    expect(
+      reviewResolutionMatchesSemantics("failed_job", failedProposal, {
+        type: "create",
+        title: "Retry destination",
+        noteType: "generic",
+        spaceId: null
+      })
+    ).toBe(false);
+    expect(
+      ReviewItemDtoSchema.safeParse({
+        ...openReview,
+        type: "failed_job",
+        proposal: failedProposal,
+        state: "resolved",
+        resolution: { type: "keep_inbox" },
+        resolvedAt: NOW
+      }).success
+    ).toBe(true);
+    expect(
+      ReviewItemDtoSchema.safeParse({
+        ...openReview,
+        type: "failed_job",
+        proposal: failedProposal,
+        state: "resolved",
+        resolution: { type: "route", noteId: NOTE_B, expectedRevision: 2 },
         resolvedAt: NOW
       }).success
     ).toBe(false);

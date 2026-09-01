@@ -1,14 +1,46 @@
 import Foundation
 
+enum ReceiptContentKind: String, Equatable, Sendable {
+    case captured
+    case aiGenerated
+}
+
+struct ReceiptContentPresentation: Equatable, Identifiable, Sendable {
+    let id: String
+    let kind: ReceiptContentKind
+    let content: String
+
+    var provenanceLabel: String? {
+        kind == .aiGenerated ? "AI-generated" : nil
+    }
+}
+
+enum ReceiptActionPresentation: Equatable, Identifiable, Sendable {
+    case open(noteID: String)
+    case move(noteID: String, decisionID: String)
+    case undo(mutationID: String, expectedRevision: Int)
+
+    var id: String {
+        switch self {
+        case .open: "open"
+        case .move: "move"
+        case .undo: "undo"
+        }
+    }
+}
+
 struct ReceiptPresentation: Equatable, Identifiable, Sendable {
     let id: String
     let category: String
     let time: String
     let headline: String
     let original: String
+    let outcome: CaptureReceiptOutcome?
     let destinationNoteID: String?
-    let undoMutationID: String?
-    let expectedRevision: Int?
+    let destinationTitle: String?
+    let reviewItemID: String?
+    let insertedContent: [ReceiptContentPresentation]
+    let actions: [ReceiptActionPresentation]
     let pending: Bool
     let retryable: Bool
 }
@@ -22,6 +54,7 @@ struct NotePresentation: Equatable, Identifiable, Sendable {
     let updatedAt: String
     let spaceID: String?
     let currentRevision: Int
+    let isOpen: Bool
     let archived: Bool
     let deleted: Bool
     let pinned: Bool
@@ -61,13 +94,51 @@ struct SearchResultPresentation: Equatable, Identifiable, Sendable {
     let updatedLabel: String
 }
 
+enum ReviewActionKind: String, Equatable, Sendable {
+    case route
+    case create
+    case keepInbox
+    case dismiss
+    case keepBoth
+}
+
+struct ReviewDestinationPresentation: Equatable, Identifiable, Sendable {
+    let id: String
+    let title: String
+    let revision: Int
+}
+
+struct ReviewNewNotePresentation: Equatable, Sendable {
+    let title: String
+    let noteType: NoteType
+    let spaceID: String?
+}
+
 struct ReviewPresentation: Equatable, Identifiable, Sendable {
     let id: String
+    let type: ReviewType
     let original: String
     let proposedDestination: String
     let actionSummary: String
     let captureID: String?
     let noteID: String?
+    let suggestedDestinations: [ReviewDestinationPresentation]
+    let suggestedNewNote: ReviewNewNotePresentation?
+    let relatedNotes: [ReviewDestinationPresentation]
+    let allowedActions: [ReviewActionKind]
+
+    func allows(_ action: ReviewActionKind) -> Bool {
+        allowedActions.contains(action)
+    }
+}
+
+enum ReviewUserAction: Sendable {
+    case route(noteID: String)
+    case chooseDestination
+    case createNote
+    case keepInbox
+    case dismiss
+    case keepBoth
 }
 
 struct RevisionPresentation: Equatable, Identifiable, Sendable {

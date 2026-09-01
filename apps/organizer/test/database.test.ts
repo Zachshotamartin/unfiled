@@ -1,3 +1,4 @@
+import { UtcInstantSchema } from "@unfiled/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -23,6 +24,8 @@ const GENERATION_ID = `igen_${ULID}`;
 const OWNER_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const LEASE = "11111111-1111-4111-8111-111111111111";
 const NOW = "2026-08-31T20:00:00.000Z";
+const POSTGRES_OFFSET_TIMESTAMP = "2026-09-01T01:30:00.123456+05:30";
+const CANONICAL_OFFSET_TIMESTAMP = "2026-08-31T20:00:00.123456Z";
 const controls = Object.freeze({ expansionDisabled: false, explicitDestinationNoteId: null });
 const RAG_PAGE_BYTES = 262_160;
 const ragSnapshot = Object.freeze({
@@ -138,7 +141,11 @@ function claim(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function candidateEntry(noteId: typeof NOTE_ID | typeof SECOND_NOTE_ID, revision: number) {
+function candidateEntry(
+  noteId: typeof NOTE_ID | typeof SECOND_NOTE_ID,
+  revision: number,
+  updatedAt = NOW
+) {
   const aggregate = projection("note_content", noteId, revision);
   const { serializedBytes, ...aggregateProjection } = aggregate;
   return {
@@ -156,7 +163,7 @@ function candidateEntry(noteId: typeof NOTE_ID | typeof SECOND_NOTE_ID, revision
         pinnedAt: null,
         spaceId: null,
         tagIds: [],
-        updatedAt: NOW
+        updatedAt
       },
       aggregate: aggregateProjection
     },
@@ -430,6 +437,84 @@ describe("organizer database adapter", () => {
     ]);
     expect(ORGANIZER_RPC_SQL.heartbeat).toContain("$2::text");
     expect(ORGANIZER_RPC_SQL.heartbeat).toContain("$4::jsonb");
+  });
+
+  it("canonicalizes PostgreSQL offset timestamps before exposing organizer contracts", async () => {
+    const source = projection("capture", CAPTURE_ID, 1);
+    const { serializedBytes, ...sourceProjection } = source;
+    const offsetCandidate = candidateEntry(NOTE_ID, 2, POSTGRES_OFFSET_TIMESTAMP);
+    const candidate = {
+      ...offsetCandidate.candidate,
+      metadata: {
+        ...offsetCandidate.candidate.metadata,
+        pinnedAt: POSTGRES_OFFSET_TIMESTAMP
+      }
+    };
+    const db = executor([
+      rpc({
+        ...claim({
+          leaseExpiresAt: POSTGRES_OFFSET_TIMESTAMP,
+          occurredAt: POSTGRES_OFFSET_TIMESTAMP,
+          source: sourceProjection
+        }),
+        sourceEnvelopeBytes: serializedBytes
+      }),
+      rpc(
+        candidatePage({
+          candidates: [candidate]
+        })
+      ),
+      rpc({
+        candidateCount: 1,
+        currentRevision: 2,
+        disclosureAuthorized: true,
+        jobId: JOB_ID,
+        leaseExpiresAt: POSTGRES_OFFSET_TIMESTAMP,
+        outcome: "authorized",
+        replanCount: 0
+      })
+    ]);
+    const repository = createOrganizerRepository(db);
+    const jobs = await repository.claim({
+      leaseSeconds: 120,
+      limit: 1,
+      signal,
+      workerId: "worker-1"
+    });
+    const page = await repository.candidates({
+      jobId: JOB_ID,
+      leaseToken: LEASE,
+      limit: 8,
+      signal
+    });
+    const heartbeat = await repository.heartbeat({
+      candidateManifest: {
+        candidates: page.candidates.map(({ candidateId, isOpen, noteId, revision }) => ({
+          candidateId,
+          isOpen,
+          noteId,
+          revision
+        })),
+        controls: page.controls
+      },
+      jobId: JOB_ID,
+      leaseSeconds: 120,
+      leaseToken: LEASE,
+      signal
+    });
+    expect(jobs[0]).toMatchObject({
+      leaseExpiresAt: CANONICAL_OFFSET_TIMESTAMP,
+      occurredAt: CANONICAL_OFFSET_TIMESTAMP,
+      source: { key: { createdAt: NOW } }
+    });
+    expect(UtcInstantSchema.parse(jobs[0]?.occurredAt)).toBe(CANONICAL_OFFSET_TIMESTAMP);
+    expect(page.candidates[0]).toMatchObject({
+      pinnedAt: CANONICAL_OFFSET_TIMESTAMP,
+      source: { key: { createdAt: NOW } },
+      updatedAt: CANONICAL_OFFSET_TIMESTAMP
+    });
+    expect(UtcInstantSchema.parse(page.candidates[0]?.updatedAt)).toBe(CANONICAL_OFFSET_TIMESTAMP);
+    expect(heartbeat).toMatchObject({ leaseExpiresAt: CANONICAL_OFFSET_TIMESTAMP });
   });
 
   it("parses encrypted RAG pages and sends the exact lease-bound paging parameters", async () => {

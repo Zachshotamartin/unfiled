@@ -5,6 +5,8 @@
 - Depends on: ADR-0006 encrypted content, ADR-0008 reservation/replay, and ADR-0009 organizer isolation
 - Decision drivers: make correction and Review resolution atomic across encrypted aggregates; keep private rule text outside AI workloads; preserve exact user-authored content; make learned behavior visible and consensual; prevent duplicate and expansion suggestions from becoming destructive model effects.
 
+Implementation status: E0 and the E1 correction/Review/batch-Undo portion are implemented and locally verified. E2 private rules/personalization, E3 generated blocks/duplicate suggestions, E4 settings/Vault-only BYOK, and Milestones F–G remain pending. This ADR does not claim deployment or account evidence.
+
 ## Context
 
 Milestone D can create or append one encrypted note from a leased organization job, or publish an encrypted Review item. Milestone E adds interactive effects initiated by an authenticated owner: move a prior decision to a different note, undo a mutation batch, resolve Review, manage routing rules, accept or reject a generated expansion, and act on a duplicate suggestion.
@@ -25,9 +27,9 @@ The organizer remains a lease-driven AI-assisted workload. It does not receive a
 
 Every interactive encrypted write whose result contains new ciphertext uses prepare then commit:
 
-1. The prepare RPC derives or verifies the owner, claims the global owner/idempotency namespace, validates the requested decision or Review item and expected revisions, creates stable revision/mutation/feedback/resolution identities, and issues exact owner/class/purpose/resource/version-bound wrap reservations.
+1. The prepare RPC derives or verifies the owner, claims the global owner/idempotency namespace, validates the requested decision or Review item and expected revisions, creates stable revision/mutation/feedback/resolution identities, and issues exact owner/class/purpose/resource/version-bound wrap reservations. Correction prepare is outcome-neutral: it returns discovery ciphertext plus mutually exclusive prepared `applied` and `needs_review` branches because exact inverse safety is knowable only after owner-authorized decryption.
 2. The web service opens the authorized source envelopes, derives the complete before/after payloads in bounded memory, seals every prepared object, self-verifies the envelopes, and computes the canonical logical-request MAC using the prepared content-MAC key reference.
-3. The commit RPC compares the request MAC before accepting randomized ciphertext, consumes each reservation exactly once, and either publishes every related row/event/index job or publishes nothing. A response-lost retry reuses the same prepared identities and returns the same encrypted result.
+3. The commit RPC compares the request MAC before accepting randomized ciphertext, consumes each reservation in the selected branch exactly once, atomically invalidates every unused sibling reservation, and either publishes every related row/event/index job or publishes nothing. A response-lost retry reuses the same prepared identities and returns the same encrypted result.
 
 Prepare does not hold a database lock across decryption or encryption. Commit acquires every affected note lock in ascending note-ID order, followed by the decision/Review/idempotency rows in a fixed documented order. It validates all ownership, lifecycle, privacy class, current revision, mutation lineage, prepared identity, MAC, envelope shape, key reference, reservation, relation, and destination predicates before its first durable write. A stale or invalid member aborts the transaction without a partial revision, feedback event, Review resolution, receipt, cursor event, or index job.
 
@@ -35,11 +37,17 @@ Prepare does not hold a database lock across decryption or encryption. Commit ac
 
 A decision correction may remove content from the old destination only when the original mutation's stored inverse is exactly applicable to the current source snapshot. Compatibility includes the original inserted stable identifiers, expected content/structure, mutation lineage, and every dependency declared by the typed inverse contract. The implementation may not reconstruct an inverse from model output, normalized text, fuzzy matching, or a current note diff.
 
-When the inverse is safe, one atomic commit applies it to the old destination and the new typed append/create effect to the selected destination. It creates two independently reversible note mutations when two notes change. One prepared feedback event anchors both mutations and records the source decision plus old and new destinations; retries cannot create a second feedback event.
+Every applied correction also requires the authenticated encrypted source capture. The service rebinds the validated typed plan to the selected destination while preserving that original capture contribution; it does not recreate list items, log entries, structured patches, or prose from a decision summary or mutation diff. A missing, deleted, retention-expired, or otherwise unavailable source capture makes exact application unavailable and therefore takes the zero-note-change Review path.
+
+When the inverse is safe, one atomic commit applies it to the old destination and the new typed append/create effect to the selected destination. It creates two distinct note mutations when two notes change, records them as one server-derived correction batch, and permits reversal only through that complete batch rather than legacy single-member Undo. One prepared feedback event anchors both mutations and records the source decision plus old and new destinations; retries cannot create a second feedback event.
 
 When the inverse cannot be proven safe—including intervening dependent edits, missing inserted IDs, stale revisions, deleted destinations, or incompatible structure—the correction changes no note. It creates or updates one encrypted Review item that explains the conflict and offers explicit owner actions. It never falls back to deleting matching prose or duplicating the capture into the new destination.
 
-Undo of a mutation batch uses the same rule: every inverse in the batch must be exactly compatible before any member is applied. Otherwise the entire batch remains unchanged and enters Review.
+The unsafe-correction transaction also repoints the source capture receipt to that Review item and records the `needs_review` outcome. This keeps capture history and Review navigation consistent without representing any note mutation as applied. The public correction endpoint returns the typed `needs_review` success response because the requested safe fallback has been durably created.
+
+Undo of a mutation batch uses the same rule: every inverse in the batch must be exactly compatible before any member is applied. Otherwise the entire batch remains unchanged and enters Review. An applied batch Undo is terminal: the generated Undo batch cannot be used as another batch source, and its restored receipt carries no undo action or undo targets.
+
+`get_encrypted_mutation_batch` is the outcome-neutral preparation boundary for batch undo. The server records a canonical anchor when a correction/organization batch is created; the caller may submit that one mutation ID, but cannot choose the anchor or supply a member list. The function rejects a grouped non-anchor and every member of an Undo-generated batch, derives the complete authenticated batch itself, limits it to 1-16 distinct owned notes, returns every encrypted discovery projection plus mutually exclusive applied and Review plans, and allocates stable output identities and reservations. Web selects a branch only after decrypting and validating every exact inverse. If any member is unsafe, `undo_encrypted_mutation_batch` atomically persists the encrypted Review fallback and then the HTTP endpoint returns private `409 conflict_requires_review`; the success-only batch response is never fabricated for a no-op.
 
 #### 3.1 Bind Review metadata to authenticated proposal semantics
 
@@ -49,10 +57,12 @@ The operational Review type must agree with the proposal inside the authenticate
 | ---------------------- | -------------------------------------------------------------------- | ------------------------------------------------- |
 | `low_confidence`       | `route_capture` with a validated organization plan                   | `route`, `create`, `keep_inbox`, `dismiss`        |
 | `revision_conflict`    | `conflict/revision`                                                  | `route`, `create`, `keep_inbox`, `dismiss`        |
-| `failed_job`           | `failed_job` with a stable error code                                | `route`, `create`, `keep_inbox`, `dismiss`        |
+| `failed_job`           | `failed_job` with a stable error code                                | `keep_inbox`, `dismiss`                           |
 | `duplicate_suggestion` | `duplicate_notes` with two or three distinct revisioned note choices | `keep_both`, `dismiss`                            |
 | `pending_expansion`    | `generated_block` with its exact block ID                            | `accept_expansion`, `reject_expansion`, `dismiss` |
 | `structure_conflict`   | `conflict/candidate_eligibility` or `conflict/structure`             | `route`, `create`, `keep_inbox`, `dismiss`        |
+
+The table is the base type/proposal contract; authenticated provenance may narrow it further. E1's unsafe correction fallback retains the exact decision and source-capture lineage, so its `revision_conflict` permits `route`, `create`, `keep_inbox`, or `dismiss`. An unsafe batch-Undo fallback intentionally has no decision lineage, so its otherwise compatible `revision_conflict` permits only `keep_inbox` or `dismiss`. Route/create is rejected before any write for that decision-less item.
 
 Milestone D's temporary `pending_expansion` + `conflict/consent_controls` item is readable only as an open consent hold and may only be dismissed; it cannot accept or reject text that E3 has not durably preserved. Route, create, and keep-inbox actions additionally require prepare to bind an exact authorized source capture or plan. If that source cannot be proven, the server leaves the item unchanged and fails closed. Legacy V1 Review payloads are readable only while open with no resolution, and only when their typed semantics can be reconstructed without interpreting arbitrary strings.
 
@@ -82,7 +92,7 @@ The following ownership prevents parallel migrations and adapters from inventing
 | E2 rules and personalization | `20260901000003_encrypted_routing_rules_and_personalization.sql`          | `prepare_encrypted_routing_rule_write`, `commit_encrypted_routing_rule_write`, `delete_encrypted_routing_rule`                                                                                                                |
 | E3 expansions and duplicates | `20260901000004_encrypted_generated_blocks_and_duplicate_suggestions.sql` | extend the existing `prepare_encrypted_organizer_create`, `prepare_encrypted_organizer_append`, and `commit_encrypted_organizer_job` payloads; add `resolve_encrypted_generated_block`                                        |
 
-`20260901000001_milestone_e0_interaction_contracts.sql` now implements the shared Milestone E foundation and remains unavailable to parallel feature lanes. E4's separately governed Vault/BYOK slot and RPCs are frozen in ADR-0012.
+`20260901000001_milestone_e0_interaction_contracts.sql` implements the shared Milestone E foundation, and `20260901000002_encrypted_decision_corrections.sql` implements the E1 lane. The latter includes one migration-owned, runtime-inaccessible compatibility repair for legacy organizer receipt timestamps: it requires exact job/capture/preparation/reservation/envelope/verification attestation, changes only the relational timestamp to authoritative capture occurrence time, preserves ciphertext/revision/verification, restores the ordinary write guard, and fails the upgrade if any candidate is unattested. E2–E3 remain unavailable to other lanes, and E4's separately governed Vault/BYOK slot and RPCs are frozen in ADR-0012.
 
 ## Alternatives considered
 
@@ -99,6 +109,6 @@ Interactive correction costs more envelope operations and requires fixed lock-or
 
 The web service becomes the bounded plaintext evaluation point for routing rules, so rule pagination, memory lifetime, cancellation, log canaries, and capture/job snapshot integrity are release-gating. The organizer stays narrower and can short-circuit from a content-free database-bound result.
 
-E1–E3 must test cross-owner denial, replay, stale revisions, sorted-lock concurrency, reservation/MAC substitution, partial-failure rollback, private-key denial, and plaintext-canary absence. No Milestone D result establishes expansion preservation, correction resolution, duplicate merge behavior, or learned-rule activation.
+E1 tests cover cross-owner denial, replay, stale revisions, canonical-anchor and membership enforcement, sorted-lock concurrency, reservation/MAC substitution, partial-failure rollback, private-key denial, plaintext-canary absence, terminal Undo, action-limited conflict Review, and the attested timestamp projection repair. E2–E3 must extend those properties to private rules, generated blocks, and duplicate suggestions. No E1 result establishes expansion preservation, duplicate behavior, or learned-rule activation.
 
 User-facing semantic search remains outside this decision. Adding query embeddings requires a separate trust decision and separately deployable service. It may not reuse organizer or index-worker workload keys: no database password, provider API key, OIDC credential, KMS grant, runtime secret, or plaintext cache may be copied into search. Whether a new exact search principal may be separately authorized to unwrap the existing AI-assisted index envelopes must be decided explicitly before Milestone F hybrid search; current owner-authorized lexical search remains the only accepted user search path.

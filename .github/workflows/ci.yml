@@ -39,6 +39,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify PostgreSQL client for local HTTP E2E
+        run: psql --version
+
       - name: Audit production dependency graph
         run: pnpm audit --prod --audit-level high
 
@@ -101,8 +104,8 @@ jobs:
       - name: Run organizer lock-order concurrency regression
         run: pnpm test:db:concurrency
 
-      - name: Run local HTTP E2E
-        run: bash .github/workflows/scripts/milestone-b-http-e2e.sh
+      - name: Run Milestones B–E1 local HTTP E2E
+        run: pnpm test:http:e2e
 
       - name: Stop local Supabase
         if: ${{ always() && steps.supabase-cli.outcome == 'success' }}

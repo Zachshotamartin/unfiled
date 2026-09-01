@@ -12,7 +12,7 @@ This file contains only steps that require a human account, physical device, pai
 
 ## Remaining release gates at a glance
 
-The Milestone D organizer, cipher, encrypted RAG path, and OpenAI adapters are implemented in code. The following steps still require a human-controlled account, credential, environment, or device and remain release-blocking:
+The Milestone D organizer, cipher, encrypted RAG path, and OpenAI adapters and the Milestone E1 encrypted correction/Review/batch-Undo slice are implemented in code. E2–E4 and Milestones F–G remain pending. The following steps still require a human-controlled account, credential, environment, or device and remain release-blocking:
 
 1. Create the dedicated OpenAI Production project/service account, restrict its model/key authority, set rate/spend controls, decide and document its data-retention posture, and place the key only in the organizer Production secret store.
 2. Keep `pnpm eval:routing` as the deterministic mock safety gate and run `pnpm eval:routing:pipeline` for the deterministic production-component seam. Its report names the real components exercised and the database/runtime guarantees it excludes. The optional credentialed runner is checked in as `pnpm eval:routing:live`; it requires only `UNFILED_ROUTING_EVAL_OPENAI_API_KEY`, runs exactly three samples per eligible synthetic case, and emits safe content-free telemetry. No credentialed live run or stochastic provider report exists yet.
@@ -20,7 +20,7 @@ The Milestone D organizer, cipher, encrypted RAG path, and OpenAI adapters are i
 4. Run the staged synthetic organizer canaries and outage/race/replay cases, verify ciphertext-only durable state, and record the disable/rollback decision points before admitting a small cohort.
 5. Complete the restore drill, apply the one-way C.5d production contract from a real database-owner session, verify the post-contract canary, and track every pre-contract backup until expiry.
 6. Complete Apple signing, signed archive inspection, SQLCipher/Keychain/App Group checks, and the Lock Screen widget matrix on a physical iPhone.
-7. After E1–E4 code lands, run the owner-interaction and Vault-only BYOK gates below. No user BYOK or Anthropic control may be enabled from the current Milestone D state.
+7. Before enabling E1 in Production, run the deployed owner-interaction account/canary gates below. After E2–E4 code lands, extend that evidence through private rules, generated blocks/duplicates, and Vault-only BYOK. No user BYOK or Anthropic control may be enabled from the current E1 code state.
 
 The production storage promise is application encryption at rest with scoped server-side decryption. It is not end-to-end encryption or zero-knowledge storage.
 
@@ -698,23 +698,43 @@ The accepted contracts are [ADR-0011](docs/decisions/ADR-0011-encrypted-owner-in
 and [ADR-0012](docs/decisions/ADR-0012-vault-only-lease-bound-byok-credentials.md). Shared E0
 migration `20260901000001_milestone_e0_interaction_contracts.sql` now installs revisioned settings,
 Vault-only metadata constraints, immutable content-free job snapshots, and the common interaction
-lifecycle without adding E1–E4 public RPCs. E1 through E4 retain migrations
-`20260901000002`–`00005`. The complete release gate below must wait until those slices land;
-Milestone D still discards returned generated-expansion text and rejects user BYOK.
+lifecycle without adding E1–E4 public RPCs. E1 migration
+`20260901000002_encrypted_decision_corrections.sql` now implements its six exact capabilities and
+the owner-authorized web/native interactions. E2 through E4 retain assigned migrations
+`20260901000003`–`00005`. The credential-free E1 gate is green: the full built-local HTTP B–E1
+suite passed; web passed 78 files / 651 tests; organizer, worker, and verifier passed 18 / 281,
+18 / 159, and 11 / 168 respectively; a clean database reset plus strict private/public schema lint
+passed with zero warnings, followed by 36 pgTAP files / 1,671 assertions and the database
+concurrency gate; and Xcode built the Swift app plus `QuickCaptureWidget` and passed 135/135 tests.
+The workspace format/lint/typecheck/coverage gate passed 26/26 tasks, the build passed 16/16 tasks,
+all three built-server smokes passed, deterministic routing passed 175/175 cases, the production
+component seam passed 15/15 cases, verifier capacity passed 1/1, and the 1,000-note organizer
+retrieval gate recorded cold p95 407.03 ms and warm p95 18.07 ms. Dependency audit reported no
+known vulnerabilities; boundaries and OpenAPI were green. None of this replaces the
+human-controlled deployment/account checks below. Milestone D still discards returned
+generated-expansion text, and user BYOK remains disabled.
 
-1. From a clean release candidate, verify the database applied the shared E0 migration followed by
-   exactly these feature migrations in order:
+1. From the current E1 release candidate, verify the database applied the shared E0 migration
+   followed immediately by the E1 migration. When E2–E4 land, the complete release candidate must
+   apply exactly these feature migrations in order:
    `20260901000001_milestone_e0_interaction_contracts.sql`,
    `20260901000002_encrypted_decision_corrections.sql`,
    `20260901000003_encrypted_routing_rules_and_personalization.sql`,
    `20260901000004_encrypted_generated_blocks_and_duplicate_suggestions.sql`, and
    `20260901000005_vault_byok_and_ai_settings.sql`. Confirm no parallel change reused an assigned
-   timestamp or renamed the public RPCs listed in the ADRs.
+   timestamp or renamed the public RPCs listed in the ADRs. On an upgrade with legacy organizer
+   receipts, confirm E1 repaired only `capture_receipts.created_at` to authoritative
+   `captures.client_created_at`, retained the exact ciphertext/revision/verification evidence, and
+   left no mismatch; any unattested candidate must abort the migration rather than be rewritten.
 2. Before testing personal data, use two synthetic owners to run correction, Review resolution, and
    batch undo races. Record content-free evidence that commits lock note IDs in ascending order,
    validate every note/revision/reservation/MAC before writing, create two mutations plus exactly one
    feedback event for a successful two-note correction, and publish no note change when the original
-   exact inverse is unsafe. Exercise lost responses and stale revisions; replay must be exact.
+   exact inverse is unsafe. Verify correction fallback retains decision/capture lineage and only
+   offers route/create/keep-inbox/dismiss; batch-conflict Review has no decision lineage and offers
+   only keep-inbox/dismiss. Prove the server rejects non-canonical batch members and every
+   Undo-generated mutation as a new anchor, while receipt/history ciphertext remains owner-bound.
+   Exercise lost responses and stale revisions; replay must be exact.
 3. Create an explicit routing rule and a repeated-correction proposal. Inspect authorized decrypted
    results only through web, then prove the condition/alias is private-manual ciphertext everywhere
    durable and absent from organizer/provider requests, jobs, Realtime, logs, and telemetry. The

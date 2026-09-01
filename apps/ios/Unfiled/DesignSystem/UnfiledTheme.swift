@@ -12,6 +12,7 @@ enum UnfiledTheme {
     static let screenPadding: CGFloat = 22
     static let controlRadius: CGFloat = 13
     static let controlStackSpacing: CGFloat = 12
+    static let formActionSpacing: CGFloat = 18
     static let minimumTouchTarget: CGFloat = 44
 }
 extension View {

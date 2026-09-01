@@ -136,20 +136,20 @@ AC: with the model provider unreachable, captures accumulate in Inbox with a sta
 
 ### E5 — Review, correction, and undo (Milestones D/E)
 
-Implementation note: Milestone D can publish ambiguity/conflict Review outcomes, but it currently discards model-returned generated-expansion text. Duplicate suggestions, persisted proposed expansions, and the interactive resolution/correction capabilities below remain Milestone E work; an ADR or schema placeholder is not acceptance evidence.
+Implementation note: Milestone D publishes ambiguity/conflict Review outcomes and still discards model-returned generated-expansion text. Milestone E1 now implements owner-authorized encrypted Review reads/resolution, exact decision correction, and server-derived all-or-nothing mutation-batch Undo across the web runtime, database, and native UI. Unsafe correction changes no note, creates a decision-bound encrypted Review with route/create/keep-inbox/dismiss actions, and moves the receipt to `needs_review`. Unsafe batch changes no note, persists a decision-less encrypted Review restricted to keep-inbox/dismiss, and returns private `409 conflict_requires_review`. The database derives the canonical batch anchor and hidden members; grouped non-anchor members and every Undo-generated mutation are rejected as new batch anchors. Receipts and interaction history remain encrypted and owner-bound. Personal routing rules remain E2, duplicate suggestions and persisted proposed expansions remain E3, provider settings/Vault-only BYOK remain E4, and Milestones F–G remain pending; neither an ADR nor a reserved migration is acceptance evidence for those later slices.
 
 **REQ-V1 (M): Review queue.**
 AC: Review lists low-confidence routes, conflicts, failed jobs, duplicate suggestions, and pending expansions; resolving any item updates the source capture's state; the empty state explains that captures are safe in Inbox.
 
 **REQ-V2 (M): Correction (Move).**
-AC: Move re-homes the routed content only when the original mutation's exact typed inverse is safe against the current source note. One transaction locks affected notes in sorted order, validates every member before writing, reverts the old note, updates the new note, gives both new revisions, and anchors both mutations to one feedback event. If exact safety cannot be proven, neither note changes and the correction enters Review. A successful correction visibly influences the next similar capture through a rule proposal or tested ranking change per AI spec §8.
+AC: Move re-homes the routed content only when the original mutation's exact typed inverse is safe against the current source note and the authenticated encrypted source capture is still available. The service must preserve the original capture contribution instead of reconstructing prose or structured operations from a decision summary or mutation diff. One transaction locks affected notes in sorted order, validates every member before writing, reverts the old note, updates the new note, gives both new revisions, and anchors both mutations to one feedback event. If exact safety or source-capture availability cannot be proven, neither note changes and the correction enters Review. A successful correction visibly influences the next similar capture through a rule proposal or tested ranking change per AI spec §8.
 
 **REQ-V3 (M): Undo.**
 AC:
 
 - Undo within the guaranteed window reverses the mutation via its inverse and creates a new revision; the note content equals the before state (hash-verified in tests).
 - If later edits make the exact inverse unsafe, undo changes nothing and opens a focused Review; any later removal is an explicit owner action, never a fuzzy text deletion.
-- Undo of an undo is possible via revision restore.
+- A completed E1 batch Undo is terminal for one-tap Undo: its generated mutations cannot anchor another batch Undo, and the restored receipt exposes no undo action. Any future reversal is a separately authorized revision-restore operation, never recursive batch Undo.
 
 **REQ-V4 (M): Rule creation from correction.**
 AC: after the same correction pattern twice, the product offers a rule (`Always put X in Y?`); accepting creates a visible, editable, deletable rule; declining suppresses the offer for that pattern; no prefix, phrase, alias, or destination rule is activated without explicit confirmation.

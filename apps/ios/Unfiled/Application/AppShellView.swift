@@ -60,6 +60,25 @@ struct AppShellView: View {
                 }
             }
         }
+        .sheet(item: $model.destinationPickerSheet) { sheet in
+            ZStack {
+                DestinationPickerView(
+                    sheet: sheet,
+                    notes: model.notes,
+                    spaces: model.spaces,
+                    isSubmitting: model.isSubmittingInteraction(sheet.purpose.operationID),
+                    errorMessage: model.interactionError(for: sheet.purpose.operationID),
+                    onCancel: { model.destinationPickerSheet = nil },
+                    onSubmit: { choice in
+                        await model.submitDestination(choice, for: sheet)
+                    }
+                )
+                if scenePhase != .active {
+                    PrivacyCurtainView()
+                        .zIndex(100)
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -69,17 +88,23 @@ struct AppShellView: View {
             TodayView(
                 receipts: model.receipts,
                 isLoading: model.isLoadingLibrary,
+                submittingInteractionIDs: model.submittingInteractionIDs,
+                interactionErrors: model.interactionErrors,
                 onRefresh: model.refreshAll,
                 onOpenSettings: { model.navigationPath.append(.settings) },
+                onOpenCapture: model.openCapture,
                 onOpenNote: model.openNote,
-                onUndo: { mutationID, expectedRevision in
+                onMove: model.presentCorrection,
+                onUndo: { captureID, mutationID, expectedRevision in
                     Task { @MainActor in
-                        await model.undo(
+                        await model.undoReceipt(
+                            captureID: captureID,
                             mutationID: mutationID,
                             expectedRevision: expectedRevision
                         )
                     }
                 },
+                onShowReview: { model.showReview(reviewID: $0) },
                 onRetryCapture: { captureID in
                     Task { @MainActor in await model.retryCapture(captureID: captureID) }
                 },
@@ -103,8 +128,16 @@ struct AppShellView: View {
                 items: model.reviewItems,
                 isLoading: model.isLoadingReview,
                 errorMessage: model.reviewError,
+                submittingInteractionIDs: model.submittingInteractionIDs,
+                interactionErrors: model.interactionErrors,
+                requestedFocusID: model.requestedReviewFocusID,
                 onRefresh: model.refreshAll,
-                onOpenRelatedNote: model.openNote
+                onOpenRelatedNote: model.openNote,
+                onAction: { reviewID, action in
+                    Task { @MainActor in
+                        await model.handleReviewAction(reviewID: reviewID, action: action)
+                    }
+                }
             )
         case .search:
             SearchView(
@@ -122,6 +155,8 @@ struct AppShellView: View {
         switch route {
         case let .note(noteID):
             NoteDestinationView(model: model, noteID: noteID)
+        case let .capture(captureID):
+            CaptureReceiptDestinationView(model: model, captureID: captureID)
         case let .revisions(noteID):
             RevisionHistoryDestinationView(model: model, noteID: noteID)
         case let .revisionPreview(_, revisionID):
@@ -162,6 +197,35 @@ struct AppShellView: View {
                 onSignOut: model.signOut
             )
         }
+    }
+}
+
+private struct CaptureReceiptDestinationView: View {
+    @ObservedObject var model: AppModel
+    let captureID: String
+
+    var body: some View {
+        CaptureReceiptDetailView(
+            receipt: model.captureDetail(captureID),
+            isLoading: model.captureDetailLoadingIDs.contains(captureID),
+            errorMessage: model.captureDetailErrors[captureID],
+            submittingInteractionIDs: model.submittingInteractionIDs,
+            interactionErrors: model.interactionErrors,
+            onRefresh: { await model.loadCaptureDetail(captureID: captureID) },
+            onOpenNote: model.openNote,
+            onMove: model.presentCorrection,
+            onUndo: { receiptCaptureID, mutationID, expectedRevision in
+                Task { @MainActor in
+                    await model.undoReceipt(
+                        captureID: receiptCaptureID,
+                        mutationID: mutationID,
+                        expectedRevision: expectedRevision
+                    )
+                }
+            },
+            onShowReview: { model.showReview(reviewID: $0) }
+        )
+        .task { await model.loadCaptureDetail(captureID: captureID) }
     }
 }
 

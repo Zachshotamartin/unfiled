@@ -24,6 +24,9 @@ const OTHER_LINK_ID = `lnk_${"C".repeat(26)}` as const;
 const CREATED_AT = "2026-08-30T20:00:00.000000+00:00";
 const UPDATED_AT = "2026-08-30T22:54:12.345200+00:00";
 const OLDER_UPDATED_AT = "2026-08-30T22:54:12.345100+00:00";
+const CANONICAL_CREATED_AT = "2026-08-30T20:00:00.000Z";
+const CANONICAL_UPDATED_AT = "2026-08-30T22:54:12.3452Z";
+const CANONICAL_OLDER_UPDATED_AT = "2026-08-30T22:54:12.3451Z";
 const RESPONSE_CANARY = "legacy-plaintext-note-body";
 
 type TestKind =
@@ -147,10 +150,12 @@ function noteDetail(
       currentRevision: 2,
       parentId: PARENT_SPACE_ID,
       displayCipher: cipher("space_display", SPACE_ID, 2, "private_manual"),
+      displayMac: snapshotMac("private_manual"),
       parent: {
         spaceId: PARENT_SPACE_ID,
         currentRevision: 1,
-        displayCipher: cipher("space_display", PARENT_SPACE_ID, 1, "private_manual")
+        displayCipher: cipher("space_display", PARENT_SPACE_ID, 1, "private_manual"),
+        displayMac: snapshotMac("private_manual")
       }
     },
     tags: [
@@ -158,7 +163,8 @@ function noteDetail(
         tagId: TAG_ID,
         currentRevision: 4,
         createdAt: CREATED_AT,
-        displayCipher: cipher("tag_display", TAG_ID, 4, "private_manual")
+        displayCipher: cipher("tag_display", TAG_ID, 4, "private_manual"),
+        displayMac: snapshotMac("private_manual")
       }
     ],
     links: [
@@ -218,7 +224,8 @@ function mutationSnapshot(
     revisionId,
     revision: revisionNumber,
     privacy,
-    snapshotCipher: cipher("note_revision", revisionId, revisionNumber, keyClass)
+    snapshotCipher: cipher("note_revision", revisionId, revisionNumber, keyClass),
+    snapshotMac: snapshotMac(keyClass)
   };
 }
 
@@ -283,12 +290,19 @@ describe("encrypted note read RPC adapter", () => {
 
     expect(rpc).toHaveBeenCalledWith("list_encrypted_notes", {
       p_owner_id: OWNER_ID,
-      p_after_updated_at: "2026-08-30T22:54:12.345300+00:00",
+      p_after_updated_at: "2026-08-30T22:54:12.3453Z",
       p_after_note_id: THIRD_NOTE_ID,
       p_limit: 2
     });
     expect(result.notes.map((note) => note.noteId)).toEqual([OTHER_NOTE_ID, NOTE_ID]);
-    expect(result.nextCursor).toEqual({ updatedAt: OLDER_UPDATED_AT, noteId: NOTE_ID });
+    expect(result.notes.map((note) => note.updatedAt)).toEqual([
+      CANONICAL_UPDATED_AT,
+      CANONICAL_OLDER_UPDATED_AT
+    ]);
+    expect(result.nextCursor).toEqual({
+      updatedAt: CANONICAL_OLDER_UPDATED_AT,
+      noteId: NOTE_ID
+    });
     expect(result.notes[0]?.contentCipher).toMatchObject({
       ownerId: OWNER_ID,
       resourceId: OTHER_NOTE_ID,
@@ -404,8 +418,12 @@ describe("encrypted note read RPC adapter", () => {
     }
   });
 
-  it("parses the exact note, space, parent, tag, and linked-note projections", async () => {
-    const rpc = vi.fn<ServiceRpcClient["rpc"]>().mockResolvedValue(noteDetail());
+  it("parses relations and canonicalizes every note lifecycle timestamp", async () => {
+    const projection = noteDetail();
+    projection.pinnedAt = "2026-08-30T15:54:12.345201-07:00";
+    projection.archivedAt = "2026-08-30T22:54:12.345202+00:00";
+    projection.deletedAt = "2026-08-30T22:54:12.345203+00:00";
+    const rpc = vi.fn<ServiceRpcClient["rpc"]>().mockResolvedValue(projection);
     const result = await createEncryptedNoteReadRpcAdapter(serviceClient(rpc)).getNote({
       ownerId: OWNER_ID,
       noteId: NOTE_ID
@@ -424,7 +442,17 @@ describe("encrypted note read RPC adapter", () => {
     });
     expect(result.space?.parent?.displayCipher.resourceId).toBe(PARENT_SPACE_ID);
     expect(result.tags[0]?.displayCipher).toMatchObject({ resourceId: TAG_ID, recordVersion: 4 });
-    expect(result.tags[0]?.createdAt).toBe(CREATED_AT);
+    expect(result.space?.displayMac.keyClass).toBe("private_manual");
+    expect(result.space?.parent?.displayMac.keyClass).toBe("private_manual");
+    expect(result.tags[0]?.displayMac.keyClass).toBe("private_manual");
+    expect(result).toMatchObject({
+      pinnedAt: "2026-08-30T22:54:12.345201Z",
+      archivedAt: "2026-08-30T22:54:12.345202Z",
+      deletedAt: "2026-08-30T22:54:12.345203Z",
+      createdAt: CANONICAL_CREATED_AT,
+      updatedAt: CANONICAL_UPDATED_AT
+    });
+    expect(result.tags[0]?.createdAt).toBe(CANONICAL_CREATED_AT);
     expect(result.links[0]?.targetContentCipher).toMatchObject({
       resourceId: OTHER_NOTE_ID,
       recordVersion: 5,
@@ -447,6 +475,10 @@ describe("encrypted note read RPC adapter", () => {
     const wrongTagClass = clone(valid);
     const tag = first(wrongTagClass.tags as Record<string, unknown>[]);
     tag.displayCipher = cipher("tag_display", TAG_ID, 4, "ai_assisted");
+    const wrongSpaceMac = clone(valid);
+    (wrongSpaceMac.space as Record<string, unknown>).displayMac = snapshotMac("ai_assisted");
+    const wrongTagMac = clone(valid);
+    first(wrongTagMac.tags as Record<string, unknown>[]).displayMac = snapshotMac("ai_assisted");
     const wrongTagTimestamp = clone(valid);
     first(wrongTagTimestamp.tags as Record<string, unknown>[]).createdAt = "not-a-timestamp";
     const wrongTargetResource = clone(valid);
@@ -488,6 +520,8 @@ describe("encrypted note read RPC adapter", () => {
       wrongSpaceRevision,
       wrongParent,
       wrongTagClass,
+      wrongSpaceMac,
+      wrongTagMac,
       wrongTagTimestamp,
       wrongTargetResource,
       linkPlaintext,
@@ -534,6 +568,7 @@ describe("encrypted note read RPC adapter", () => {
       keyPurpose: "content_mac",
       keyVersion: 1
     });
+    expect(result.revisions[0]?.createdAt).toBe(CANONICAL_UPDATED_AT);
   });
 
   it("rejects revision plaintext, context, MAC, privacy, and pagination tampering", async () => {
@@ -588,7 +623,9 @@ describe("encrypted note read RPC adapter", () => {
   });
 
   it("parses an AI-to-private mutation using before/after privacy and exact history class", async () => {
-    const rpc = vi.fn<ServiceRpcClient["rpc"]>().mockResolvedValue(mutationProjection());
+    const projection = mutationProjection();
+    projection.undoneAt = "2026-08-30T22:54:13.000001+00:00";
+    const rpc = vi.fn<ServiceRpcClient["rpc"]>().mockResolvedValue(projection);
     const result = await createEncryptedNoteReadRpcAdapter(serviceClient(rpc)).getMutation({
       ownerId: OWNER_ID,
       mutationId: MUTATION_ID
@@ -600,8 +637,12 @@ describe("encrypted note read RPC adapter", () => {
     });
     expect(result.beforeSnapshot).toMatchObject({ revision: 1, privacy: "ai_assisted" });
     expect(result.afterSnapshot).toMatchObject({ revision: 2, privacy: "private_manual" });
+    expect(result.beforeSnapshot?.snapshotMac.keyClass).toBe("ai_assisted");
+    expect(result.afterSnapshot.snapshotMac.keyClass).toBe("private_manual");
     expect(result.mutationCipher.keyClass).toBe("private_manual");
     expect(result.currentNote.currentRevision).toBe(2);
+    expect(result.createdAt).toBe(CANONICAL_UPDATED_AT);
+    expect(result.undoneAt).toBe("2026-08-30T22:54:13.000001Z");
   });
 
   it("accepts the exact create-mutation null-before projection", async () => {
@@ -620,6 +661,44 @@ describe("encrypted note read RPC adapter", () => {
     expect(result.mutationCipher.keyClass).toBe("ai_assisted");
   });
 
+  it("accepts a decision-bound organizer create mutation without loosening user creates", async () => {
+    const projection = mutationProjection();
+    projection.beforeRevision = 0;
+    projection.afterRevision = 1;
+    projection.idempotencyKey = `organizer:job_${"A".repeat(26)}`;
+    projection.beforeSnapshot = null;
+    projection.afterSnapshot = mutationSnapshot(OTHER_REVISION_ID, 1, "ai_assisted");
+    projection.mutationCipher = cipher("note_mutation", MUTATION_ID, 1, "ai_assisted");
+    projection.currentNote = noteDetail({ currentRevision: 1, privacy: "ai_assisted" });
+
+    const result = await createEncryptedNoteReadRpcAdapter(
+      serviceClient(vi.fn<ServiceRpcClient["rpc"]>().mockResolvedValue(projection))
+    ).getMutation({ ownerId: OWNER_ID, mutationId: MUTATION_ID });
+
+    expect(result.beforeSnapshot).toBeNull();
+    expect(result.decisionId).toBe(DECISION_ID);
+    expect(result.idempotencyKey).toBe(`organizer:job_${"A".repeat(26)}`);
+  });
+
+  it("accepts a decision-bound owner-interaction create mutation with exact member provenance", async () => {
+    const projection = mutationProjection();
+    projection.beforeRevision = 0;
+    projection.afterRevision = 1;
+    projection.idempotencyKey = "review-create-request:member:0";
+    projection.beforeSnapshot = null;
+    projection.afterSnapshot = mutationSnapshot(OTHER_REVISION_ID, 1, "ai_assisted");
+    projection.mutationCipher = cipher("note_mutation", MUTATION_ID, 1, "ai_assisted");
+    projection.currentNote = noteDetail({ currentRevision: 1, privacy: "ai_assisted" });
+
+    const result = await createEncryptedNoteReadRpcAdapter(
+      serviceClient(vi.fn<ServiceRpcClient["rpc"]>().mockResolvedValue(projection))
+    ).getMutation({ ownerId: OWNER_ID, mutationId: MUTATION_ID });
+
+    expect(result.beforeSnapshot).toBeNull();
+    expect(result.decisionId).toBe(DECISION_ID);
+    expect(result.idempotencyKey).toBe("review-create-request:member:0");
+  });
+
   it("rejects mutation plaintext, continuity, privacy, class, and current-note drift", async () => {
     const valid = mutationProjection();
     const plaintext = { ...clone(valid), operations: RESPONSE_CANARY };
@@ -636,6 +715,11 @@ describe("encrypted note read RPC adapter", () => {
       2,
       "ai_assisted"
     );
+    const missingSnapshotMac = clone(valid);
+    delete (missingSnapshotMac.afterSnapshot as Record<string, unknown>).snapshotMac;
+    const wrongSnapshotMacClass = clone(valid);
+    (wrongSnapshotMacClass.afterSnapshot as Record<string, unknown>).snapshotMac =
+      snapshotMac("ai_assisted");
     const wrongCurrentNote = clone(valid);
     (wrongCurrentNote.currentNote as Record<string, unknown>).noteId = OTHER_NOTE_ID;
     const staleCurrentNote = clone(valid);
@@ -661,6 +745,8 @@ describe("encrypted note read RPC adapter", () => {
     createWithDecision.afterSnapshot = mutationSnapshot(OTHER_REVISION_ID, 1, "ai_assisted");
     createWithDecision.mutationCipher = cipher("note_mutation", MUTATION_ID, 1, "ai_assisted");
     createWithDecision.currentNote = noteDetail({ currentRevision: 1, privacy: "ai_assisted" });
+    const createWithInvalidOwnerInteractionMember = clone(createWithDecision);
+    createWithInvalidOwnerInteractionMember.idempotencyKey = "review-create-request:member:16";
 
     for (const projection of [
       plaintext,
@@ -668,13 +754,16 @@ describe("encrypted note read RPC adapter", () => {
       wrongAfterRevision,
       wrongMutationClass,
       wrongAfterClass,
+      missingSnapshotMac,
+      wrongSnapshotMacClass,
       wrongCurrentNote,
       staleCurrentNote,
       currentPrivacyDrift,
       missingPrivacy,
       reusedRevisionIdentity,
       createWithBefore,
-      createWithDecision
+      createWithDecision,
+      createWithInvalidOwnerInteractionMember
     ]) {
       const adapter = createEncryptedNoteReadRpcAdapter(
         serviceClient(vi.fn<ServiceRpcClient["rpc"]>().mockResolvedValue(projection))

@@ -86,9 +86,11 @@ export type ReviewResolution = z.infer<typeof ReviewResolutionSchema>;
  * - pending expansion -> generated block, or D's temporary consent hold
  * - structure conflict -> candidate-eligibility or structure conflict
  *
- * Dismiss is the only resolution shared by every type. Routing, revision,
- * failed-job, and structure items otherwise permit route/create/keep-inbox;
- * duplicates permit keep-both; persisted expansions permit accept/reject.
+ * Dismiss is the only resolution shared by every type. Routing, revision, and
+ * structure items otherwise permit route/create/keep-inbox; failed jobs permit
+ * keep-inbox only; duplicates permit keep-both; persisted expansions permit
+ * accept/reject. Operational route/create availability additionally requires
+ * server-validated receipt and decision lineage and is not implied by type.
  *
  * The consent hold is intentionally resolution-inert until E3 persists a
  * generated block. It may remain open or be dismissed, but it cannot accept or
@@ -136,9 +138,10 @@ export function reviewResolutionMatchesSemantics(
         proposal.type === "generated_block" &&
         (resolution.type === "accept_expansion" || resolution.type === "reject_expansion")
       );
+    case "failed_job":
+      return resolution.type === "keep_inbox";
     case "low_confidence":
     case "revision_conflict":
-    case "failed_job":
     case "structure_conflict":
       return (
         resolution.type === "route" ||

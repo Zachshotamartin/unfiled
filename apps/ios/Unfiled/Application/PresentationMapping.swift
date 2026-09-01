@@ -11,6 +11,7 @@ enum PresentationMapping {
             updatedAt: APIJSON.dateString(value.updatedAt),
             spaceID: value.spaceId?.rawValue,
             currentRevision: value.currentRevision,
+            isOpen: value.isOpen,
             archived: value.archivedAt != nil,
             deleted: value.deletedAt != nil,
             pinned: value.pinnedAt != nil
@@ -27,6 +28,7 @@ enum PresentationMapping {
             updatedAt: APIJSON.dateString(value.updatedAt),
             spaceID: value.spaceId?.rawValue,
             currentRevision: value.currentRevision,
+            isOpen: value.isOpen,
             archived: value.archivedAt != nil,
             deleted: value.deletedAt != nil,
             pinned: value.pinnedAt != nil
@@ -81,15 +83,34 @@ enum PresentationMapping {
         )
     }
 
-    static func review(_ value: ReviewItem) -> ReviewPresentation {
-        let summary = reviewProposalSummary(value.proposal)
+    static func review(
+        _ value: ReviewItem,
+        notesByID: [String: Note] = [:],
+        capturesByID: [String: CaptureDetail] = [:]
+    ) -> ReviewPresentation {
+        let capture = value.captureId.flatMap { capturesByID[$0.rawValue] }
+        let summary = reviewProposalSummary(
+            value.proposal,
+            capture: capture,
+            notesByID: notesByID
+        )
+        let suggestedDestinations = reviewSuggestedDestinations(
+            value.proposal,
+            notesByID: notesByID
+        )
+        let relatedNotes = reviewRelatedNotes(value.proposal, notesByID: notesByID)
         return ReviewPresentation(
             id: value.id.rawValue,
+            type: value.type,
             original: summary.original,
             proposedDestination: summary.destination,
             actionSummary: reviewTypeLabel(value.type),
             captureID: value.captureId?.rawValue,
-            noteID: value.noteId?.rawValue
+            noteID: value.noteId?.rawValue,
+            suggestedDestinations: suggestedDestinations,
+            suggestedNewNote: reviewSuggestedNewNote(value.proposal),
+            relatedNotes: relatedNotes,
+            allowedActions: reviewAllowedActions(for: value, capture: capture)
         )
     }
 
@@ -105,21 +126,18 @@ enum PresentationMapping {
 
     static func receipt(_ value: CaptureDetail, now: Date = Date()) -> ReceiptPresentation {
         let receipt = value.receipt
-        let undo = receipt?.actions.compactMap { action -> (String, Int)? in
-            if case let .undo(mutationID, expectedRevision) = action {
-                return (mutationID.rawValue, expectedRevision)
-            }
-            return nil
-        }.first
         return ReceiptPresentation(
             id: value.id.rawValue,
             category: captureStatusLabel(value.status),
             time: relativeDate(value.receivedAt, now: now),
             headline: receipt?.headline ?? captureHeadline(value.status),
             original: value.rawContent,
+            outcome: receipt?.outcome,
             destinationNoteID: receipt?.destination?.noteId.rawValue,
-            undoMutationID: undo?.0,
-            expectedRevision: undo?.1,
+            destinationTitle: receipt?.destination?.title,
+            reviewItemID: receipt?.reviewItemId?.rawValue,
+            insertedContent: receipt.map(receiptContent) ?? [],
+            actions: receipt?.actions.map(receiptAction) ?? [],
             pending: value.status == .queued || value.status == .processing,
             retryable: false
         )
@@ -132,9 +150,12 @@ enum PresentationMapping {
             time: relativeDate(value.receivedAt, now: now),
             headline: captureHeadline(value.status),
             original: value.rawContentPreview,
+            outcome: nil,
             destinationNoteID: nil,
-            undoMutationID: nil,
-            expectedRevision: nil,
+            destinationTitle: nil,
+            reviewItemID: nil,
+            insertedContent: [],
+            actions: [],
             pending: value.status == .queued || value.status == .processing,
             retryable: false
         )
@@ -148,12 +169,51 @@ enum PresentationMapping {
             time: relativeDate(timestamp, now: now),
             headline: localCaptureHeadline(value.state),
             original: value.draft.rawContent,
+            outcome: nil,
             destinationNoteID: nil,
-            undoMutationID: nil,
-            expectedRevision: nil,
+            destinationTitle: nil,
+            reviewItemID: nil,
+            insertedContent: [],
+            actions: [],
             pending: value.state != .synced && value.state != .failed,
             retryable: value.state == .failed
         )
+    }
+
+    private static func receiptContent(_ receipt: CaptureReceipt) -> [ReceiptContentPresentation] {
+        receipt.insertedContent.enumerated().map { index, value in
+            switch value {
+            case let .captured(itemID, content):
+                return ReceiptContentPresentation(
+                    id: itemID.map(capturedItemID) ?? "captured-\(index)",
+                    kind: .captured,
+                    content: content
+                )
+            case let .aiGenerated(blockID, content):
+                return ReceiptContentPresentation(
+                    id: blockID.rawValue,
+                    kind: .aiGenerated,
+                    content: content
+                )
+            }
+        }
+    }
+
+    private static func capturedItemID(_ value: CapturedItemID) -> String {
+        switch value {
+        case let .item(id): id.rawValue
+        case let .entry(id): id.rawValue
+        }
+    }
+
+    private static func receiptAction(_ action: CaptureReceiptAction) -> ReceiptActionPresentation {
+        switch action {
+        case let .open(noteID): .open(noteID: noteID.rawValue)
+        case let .move(noteID, decisionID):
+            .move(noteID: noteID.rawValue, decisionID: decisionID.rawValue)
+        case let .undo(mutationID, expectedRevision):
+            .undo(mutationID: mutationID.rawValue, expectedRevision: expectedRevision)
+        }
     }
 
     private static func preview(_ markdown: String) -> String {
@@ -194,22 +254,149 @@ enum PresentationMapping {
     }
 
     private static func reviewProposalSummary(
-        _ proposal: ReviewProposal
+        _ proposal: ReviewProposal,
+        capture: CaptureDetail?,
+        notesByID: [String: Note]
     ) -> (original: String, destination: String) {
+        let capturedText = capture?.rawContent
         switch proposal {
         case let .routeCapture(plan):
+            let candidateTitle = plan.destination.candidateId
+                .flatMap { notesByID[$0.rawValue]?.title }
             let destination = plan.destination.newNote?.title
-                ?? plan.destination.candidateId?.rawValue
+                ?? candidateTitle
                 ?? "Unfiled"
-            return ("A capture needs a destination decision.", destination)
+            return (capturedText ?? "A capture needs a destination decision.", destination)
         case .generatedBlock:
-            return ("An AI-generated expansion is waiting for approval.", "Generated block")
+            return (
+                capturedText ?? "A proposed expansion is waiting safely for a later review step.",
+                "Proposed expansion"
+            )
         case let .duplicateNotes(notes):
             return ("These notes may describe the same thing.", "Compare \(notes.count) notes")
         case let .conflict(reason):
-            return ("A safe automatic change could not be completed.", conflictLabel(reason))
-        case let .failedJob(errorCode):
-            return ("The capture remains safe and unfiled.", errorCode.rawValue)
+            return (
+                capturedText ?? "A safe automatic change could not be completed.",
+                conflictLabel(reason)
+            )
+        case .failedJob:
+            return (capturedText ?? "The capture remains safe and unfiled.", "Choose what happens next")
+        }
+    }
+
+    private static func reviewSuggestedDestinations(
+        _ proposal: ReviewProposal,
+        notesByID: [String: Note]
+    ) -> [ReviewDestinationPresentation] {
+        guard case let .routeCapture(plan) = proposal else { return [] }
+        var seen = Set<String>()
+        let ids = ([plan.destination.candidateId].compactMap { $0 } + plan.alternatives)
+            .filter { seen.insert($0.rawValue).inserted }
+            .prefix(3)
+        return ids.compactMap { id in
+            guard let note = notesByID[id.rawValue], reviewDestinationIsEligible(note) else {
+                return nil
+            }
+            return ReviewDestinationPresentation(
+                id: id.rawValue,
+                title: note.title,
+                revision: note.currentRevision
+            )
+        }
+    }
+
+    static func reviewDestinationIsEligible(_ note: Note) -> Bool {
+        note.isOpen && note.archivedAt == nil && note.deletedAt == nil
+    }
+
+    private static func reviewSuggestedNewNote(
+        _ proposal: ReviewProposal
+    ) -> ReviewNewNotePresentation? {
+        guard case let .routeCapture(plan) = proposal,
+              let newNote = plan.destination.newNote else { return nil }
+        return ReviewNewNotePresentation(
+            title: newNote.title,
+            noteType: newNote.noteType,
+            spaceID: newNote.spaceCandidateId?.rawValue
+        )
+    }
+
+    private static func reviewRelatedNotes(
+        _ proposal: ReviewProposal,
+        notesByID: [String: Note]
+    ) -> [ReviewDestinationPresentation] {
+        guard case let .duplicateNotes(notes) = proposal else { return [] }
+        return notes.map { reference in
+            ReviewDestinationPresentation(
+                id: reference.noteId.rawValue,
+                title: notesByID[reference.noteId.rawValue]?.title ?? "Unavailable note",
+                revision: reference.revision
+            )
+        }
+    }
+
+    static func reviewAllowedActions(
+        for item: ReviewItem,
+        capture: CaptureDetail?
+    ) -> [ReviewActionKind] {
+        guard item.state == .open else { return [] }
+        let boundReceipt: CaptureReceipt? = {
+            guard let captureID = item.captureId,
+                  let capture,
+                  capture.id == captureID,
+                  let receipt = capture.receipt,
+                  receipt.captureId == captureID,
+                  receipt.reviewItemId == item.id else { return nil }
+            return receipt
+        }()
+        return reviewAllowedActions(
+            type: item.type,
+            proposal: item.proposal,
+            hasBoundReceipt: boundReceipt != nil,
+            hasBoundDecision: boundReceipt?.decisionId != nil,
+            receiptReasonCodes: boundReceipt?.reasonCodes ?? []
+        )
+    }
+
+    static func reviewAllowedActions(
+        type: ReviewType,
+        proposal: ReviewProposal,
+        hasBoundReceipt: Bool,
+        hasBoundDecision: Bool,
+        receiptReasonCodes: [String] = []
+    ) -> [ReviewActionKind] {
+        switch (type, proposal) {
+        case (.lowConfidence, .routeCapture):
+            var actions: [ReviewActionKind] = []
+            if hasBoundReceipt && hasBoundDecision {
+                actions.append(contentsOf: [.route, .create])
+            }
+            if hasBoundReceipt { actions.append(.keepInbox) }
+            actions.append(.dismiss)
+            return actions
+        case (.revisionConflict, .conflict(reason: .revision)),
+             (.structureConflict, .conflict(reason: .candidateEligibility)),
+             (.structureConflict, .conflict(reason: .structure)):
+            var actions: [ReviewActionKind] = []
+            let isAcknowledgementOnly = receiptReasonCodes.contains(
+                APIErrorCode.conflictRequiresReview.rawValue
+            )
+            if hasBoundReceipt && hasBoundDecision && !isAcknowledgementOnly {
+                actions.append(contentsOf: [.route, .create])
+            }
+            if hasBoundReceipt { actions.append(.keepInbox) }
+            actions.append(.dismiss)
+            return actions
+        case (.failedJob, .failedJob):
+            return hasBoundReceipt ? [.keepInbox, .dismiss] : [.dismiss]
+        case (.duplicateSuggestion, .duplicateNotes):
+            return [.keepBoth, .dismiss]
+        case (.pendingExpansion, .generatedBlock),
+             (.pendingExpansion, .conflict(reason: .consentControls)):
+            // Generated-block acceptance remains an E3 capability. E1 can only clear the hold.
+            return [.dismiss]
+        default:
+            return []
         }
     }
 

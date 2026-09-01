@@ -2,7 +2,7 @@
 
 Product and repository name: **Unfiled**. Trademark, App Store, package-name, social-handle, and domain review remain required before public launch.
 
-Implementation status: **The server/web portions of Milestones A–C are complete; [ADR-0010](./decisions/ADR-0010-native-ios-client-replacement.md) makes `apps/ios` the canonical phone client and reopens native release evidence. C.5a–d are implemented and locally verified in code, including the encrypted aggregate, private RAG/index boundary, isolated verifier and organizer, complete encrypted web repository composition, and the explicit irreversible plaintext-storage contract. Milestone D now has an integrated production cipher, encrypted exact-scan RAG candidate path, deterministic policy/application layer, dedicated OpenAI embedding/Responses adapters, a deterministic production-component evaluation seam, and an optional explicit-key live runner.** Migration 27 installs expand-compatibly; production has not executed its database-owner-only contraction operation. The component seam explicitly excludes database lease/heartbeat, encrypted seal/persist, and repository select/commit generation revalidation. The live runner is fixed at three samples per eligible synthetic case and safe content-free telemetry, but it has not been executed with credentials and no stochastic report exists. Account-bound OpenAI/Vercel/AWS/database, CloudTrail, live stochastic evaluation, canary/rollback, rotation, restore, pre-cutover-backup expiry, native SQLCipher, Apple signing, archive, and physical-device evidence remain human gates. Those production proofs and the native release gate remain launch-blocking, so local implementation evidence is not yet a production encrypted-library or native-release claim.
+Implementation status: **The server/web portions of Milestones A–C are complete; [ADR-0010](./decisions/ADR-0010-native-ios-client-replacement.md) makes `apps/ios` the canonical phone client and reopens native release evidence. C.5a–d are implemented and locally verified in code, including the encrypted aggregate, private RAG/index boundary, isolated verifier and organizer, complete encrypted web repository composition, and the explicit irreversible plaintext-storage contract. Milestone D has an integrated production cipher, encrypted exact-scan RAG candidate path, deterministic policy/application layer, dedicated OpenAI embedding/Responses adapters, a deterministic production-component evaluation seam, and an optional explicit-key live runner. Milestone E0 and E1 now implement the shared interaction foundation plus owner-authorized encrypted decision correction, Review resolution, and server-derived mutation-batch undo; E2–E4 and Milestones F–G remain pending.** Migration 27 installs expand-compatibly; production has not executed its database-owner-only contraction operation. The component seam explicitly excludes database lease/heartbeat, encrypted seal/persist, and repository select/commit generation revalidation. The live runner is fixed at three samples per eligible synthetic case and safe content-free telemetry, but it has not been executed with credentials and no stochastic report exists. Account-bound OpenAI/Vercel/AWS/database, CloudTrail, live stochastic evaluation, canary/rollback, rotation, restore, pre-cutover-backup expiry, native SQLCipher, Apple signing, archive, and physical-device evidence remain human gates. Those production proofs and the native release gate remain launch-blocking, so local implementation evidence is not yet a production encrypted-library or native-release claim.
 
 This plan is the spine of a full documentation set; see [docs/README.md](./README.md) for reading order. Companion documents:
 
@@ -1487,10 +1487,11 @@ Deleting a capture removes the capture itself. Note content it produced stays in
 
 ### Review and undo
 
-- `GET /api/v1/review`
-- `POST /api/v1/review/:id/resolve`
-- `POST /api/v1/mutations/:id/undo`
-- `POST /api/v1/decisions/:id/correct`
+- `GET /api/v1/review-items`
+- `POST /api/v1/review-items/:reviewItemId/resolve`
+- `POST /api/v1/mutations/:mutationId/undo` for a legacy single mutation that is not part of an E1 batch
+- `POST /api/v1/mutation-batches/:mutationId/undo` with an anchor mutation; the server derives and validates every hidden member
+- `POST /api/v1/decisions/:decisionId/correct`
 
 ### Search and sync
 
@@ -1950,6 +1951,16 @@ Never point preview deployments at production user data.
 
 Effort assumes one developer working part-time with AI assistance, including tests and documentation. Calendar time depends on native build and account setup. Do not trade milestone evidence for a promised date.
 
+### Checkpoint execution protocol
+
+Use this protocol for every remaining checkpoint so parallel work converges once instead of discovering shared-contract gaps at the release gate:
+
+1. **Freeze first:** before implementation, freeze the migration/API/payload contract, trust and ownership boundaries, lifecycle and failure invariants, and one acceptance matrix covering success, denial, stale/replay, migration/upgrade, and built HTTP/native paths. Every row has one owning lane and an executable test or named human gate.
+2. **Parallelize by ownership boundary:** after that freeze, run non-overlapping database, web/runtime, native, and documentation/security-audit lanes concurrently. Keep one writer for each migration and shared contract; integration follows the frozen dependency order, and a lane may not silently redefine another lane's DTO, timestamp, or state machine.
+3. **Audit forward compatibility during implementation:** each lane tests both its local behavior and the next consumer's assumptions, including legacy/backfill state, response-loss replay, terminal history, authorization, and the real process boundary. Run the smallest vertical built-path smoke as soon as the first complete slice exists instead of waiting for final polish.
+4. **Batch the release gate once:** after integration, run one clean from-zero database/lint/concurrency gate and one repository batch covering tests/coverage, builds, built-server smokes, HTTP E2E, native, capacity/evaluation, dependency/security checks, boundaries, and OpenAPI. Record one consistent evidence snapshot in the docs; rerun only the affected slice plus the final batch when a release-blocking fix changes code.
+5. **Do not expand scope late:** a newly desired capability goes into the next checkpoint unless it fixes a proven invariant, security, data-loss, or acceptance failure. A true blocker requires an explicit contract amendment, updated acceptance rows, and targeted regression coverage before implementation resumes.
+
 ### Milestone 0: Design sprint and clickable prototype, 4-7 days
 
 Deliver:
@@ -2123,31 +2134,41 @@ The live OpenAI evaluation and deployed canary have not been run from this repos
 
 ### Milestone E: Correction, undo, and personalization, 1-2 weeks
 
-**Foundation status (2026-09-01): E0 implemented and locally verified; E1-E4 product capabilities pending.** The shared strict contracts, OpenAPI/client surfaces, Vault-only schema preconditions, immutable settings-only job snapshots, lifecycle invariants, fail-closed legacy Review reads, typed Review V2 writes, correction outcome/batch-undo response contracts, and native Swift models are in place. Decrypted Review and personal-rule responses are private/no-store. The E0 database gate passes 34 pgTAP files / 1,512 assertions, lint, reset, and concurrency checks; the native suite passes 112 tests. [ADR-0011](./decisions/ADR-0011-encrypted-owner-interactions-and-personal-rules.md) keeps correction, Review resolution, rule plaintext, and generated-block resolution in the owner-authorized web trust domain. [ADR-0012](./decisions/ADR-0012-vault-only-lease-bound-byok-credentials.md) makes Supabase Vault the sole BYOK store and adds one lease-bound organizer credential capability only in E4. These foundations do not claim that the E1-E4 handlers, database capabilities, UI actions, or organizer provider lease are implemented.
+**Implementation status (2026-09-01): E0 and E1 are implemented and locally verified; E2–E4 remain pending.** E1 adds the six reserved database capabilities, owner-authorized web runtime and public handlers, and SwiftUI correction, Review-resolution, receipt-detail, destination-picker, and batch-Undo interactions. Correction prepare is outcome-neutral; web authenticates and decrypts the source material, selects exactly one sealed branch, and commit either publishes an exact two-note/two-mutation/one-feedback correction or changes no note and creates encrypted Review. The correction fallback retains authenticated decision/capture lineage, so its Review permits `route`, `create`, `keep_inbox`, or `dismiss`. Batch membership and its canonical anchor are server-derived, bounded to 1–16 distinct owned notes, and all-or-nothing; a non-anchor member and every mutation created by a prior batch Undo are rejected as new anchors. An unsafe batch creates a decision-less encrypted Review that permits only `keep_inbox` or `dismiss` and returns private `409 conflict_requires_review` without fabricating a success response. Receipts, Review payloads, mutations, and replay history remain encrypted and owner-bound throughout both paths.
+
+The recorded credential-free E1 gate is green: the full built-local HTTP B–E1 suite passed; web passed 78 files / 651 tests; organizer, worker, and verifier passed 18 / 281, 18 / 159, and 11 / 168 respectively; a clean database reset plus strict private/public schema lint passed with zero warnings, followed by 36 pgTAP files / 1,671 assertions and the database concurrency gate; and Xcode built the Swift app plus `QuickCaptureWidget` and passed 135/135 tests. The workspace format/lint/typecheck/coverage gate passed 26/26 tasks, the build passed 16/16 tasks, all three built-server smokes passed, boundaries and OpenAPI were green, and the dependency audit reported no known vulnerabilities. Deterministic routing passed 175/175 cases, the production-component seam passed 15/15 cases, verifier capacity passed 1/1, and the 1,000-note organizer retrieval gate recorded cold p95 407.03 ms and warm p95 18.07 ms. This evidence does not establish Production KMS/Vercel/provider/account evidence, Apple signing, deployment, or physical-device behavior.
+
+E1 also contains a migration-owned, runtime-inaccessible repair for legacy organizer receipt timestamp projections. It runs only during upgrade after proving the exact owner/job/capture/preparation/reservation/envelope/verification chain, changes only `capture_receipts.created_at` to the authoritative capture `client_created_at`, preserves the ciphertext envelope, receipt revision, and verification evidence, restores the encrypted-write guard, and is idempotent. Unattested or incomplete state aborts the upgrade.
+
+[ADR-0011](./decisions/ADR-0011-encrypted-owner-interactions-and-personal-rules.md) keeps correction, Review resolution, rule plaintext, and generated-block resolution in the owner-authorized web trust domain. [ADR-0012](./decisions/ADR-0012-vault-only-lease-bound-byok-credentials.md) makes Supabase Vault the sole BYOK store and adds one lease-bound organizer credential capability only in E4.
 
 Implementation lanes are dependency-ordered at the shared contract, then may proceed independently without migration/RPC collisions:
 
-| Lane                     | Reserved migration                                                        | Frozen capability boundary                                                                                                                                                                                                    |
-| ------------------------ | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| E1 correction/Review     | `20260901000002_encrypted_decision_corrections.sql`                       | `prepare_encrypted_decision_correction`, `commit_encrypted_decision_correction`, `prepare_encrypted_review_resolution`, `commit_encrypted_review_resolution`, `get_encrypted_mutation_batch`, `undo_encrypted_mutation_batch` |
-| E2 rules/personalization | `20260901000003_encrypted_routing_rules_and_personalization.sql`          | `prepare_encrypted_routing_rule_write`, `commit_encrypted_routing_rule_write`, `delete_encrypted_routing_rule`                                                                                                                |
-| E3 expansions/duplicates | `20260901000004_encrypted_generated_blocks_and_duplicate_suggestions.sql` | extend existing organizer prepare/commit payloads; add `resolve_encrypted_generated_block`                                                                                                                                    |
-| E4 settings/BYOK         | `20260901000005_vault_byok_and_ai_settings.sql`                           | `get_owner_ai_settings`, `update_owner_ai_settings`, `get_user_provider_key_status`, `put_user_provider_key`, `delete_user_provider_key`, `get_lease_bound_organizer_provider_credential`                                     |
+| Lane                     | Status      | Assigned migration                                                        | Frozen capability boundary                                                                                                                                                                                                    |
+| ------------------------ | ----------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| E1 correction/Review     | Implemented | `20260901000002_encrypted_decision_corrections.sql`                       | `prepare_encrypted_decision_correction`, `commit_encrypted_decision_correction`, `prepare_encrypted_review_resolution`, `commit_encrypted_review_resolution`, `get_encrypted_mutation_batch`, `undo_encrypted_mutation_batch` |
+| E2 rules/personalization | Pending     | `20260901000003_encrypted_routing_rules_and_personalization.sql`          | `prepare_encrypted_routing_rule_write`, `commit_encrypted_routing_rule_write`, `delete_encrypted_routing_rule`                                                                                                                |
+| E3 expansions/duplicates | Pending     | `20260901000004_encrypted_generated_blocks_and_duplicate_suggestions.sql` | extend existing organizer prepare/commit payloads; add `resolve_encrypted_generated_block`                                                                                                                                    |
+| E4 settings/BYOK         | Pending     | `20260901000005_vault_byok_and_ai_settings.sql`                           | `get_owner_ai_settings`, `update_owner_ai_settings`, `get_user_provider_key_status`, `put_user_provider_key`, `delete_user_provider_key`, `get_lease_bound_organizer_provider_credential`                                     |
 
-`20260901000001_milestone_e0_interaction_contracts.sql` implements the shared Milestone E foundation and must not be reused by a parallel lane. E4 changes the organizer allowlist from ten to eleven RPCs only when its migration, exact-role denial tests, and deployed Vault evidence are green.
+`20260901000001_milestone_e0_interaction_contracts.sql` implements the shared Milestone E foundation, and E1 now owns its assigned `00002` migration. The pending E2–E4 timestamps must not be reused by another lane. E4 changes the organizer allowlist from ten to eleven RPCs only when its migration, exact-role denial tests, and deployed Vault evidence are green.
 
-Deliver:
+Implemented in E1:
 
 - owner-authorized two-phase correction and Review resolution with request MACs, one feedback event, sorted multi-note locks, and all validation before the first write
-- mutation-batch history and exact safe inverse operations; an incompatible inverse changes no note and enters Review
+- mutation-batch history and exact safe inverse operations; an incompatible decision-bound correction changes no note, creates a routable Review, and repoints the receipt to `needs_review`; an incompatible decision-less batch changes no note, persists acknowledgement-only Review, and returns private `409 conflict_requires_review`
+- server-derived batch membership and canonical anchor through `get_encrypted_mutation_batch`; callers cannot choose or omit hidden members, non-anchor members fail closed, and batch Undo is terminal rather than an undo-of-undo source
+- one feedback event that anchors both sides of a correction plus content-free feedback metrics
+
+Remaining in E2–E4:
+
 - editable encrypted routing rules whose plaintext is evaluated only by web; the organizer receives only a content-free rule ID/revision/destination snapshot
 - learned-rule proposals that require explicit confirmation before any prefix, phrase, alias, or destination rule is enabled
 - Vault-only bring-your-own-key management, immutable non-secret per-job settings snapshots, and model-effort settings; Anthropic/tier choices stay hidden until adapter and eval gates pass
 - duplicate-note suggestions that never merge, delete, archive, or rewrite a note automatically
 - separately encrypted generated-expansion proposals with accept/reject behavior; E3 closes D's current discard gap
-- one feedback event that anchors both sides of a correction plus content-free feedback metrics
 
-Gate:
+Remaining aggregate Milestone E gate:
 
 - every AI-applied mutation in scope can be undone or restored through revision history
 - stale revisions cannot overwrite manual edits

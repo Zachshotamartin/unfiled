@@ -21,6 +21,7 @@ import {
   type OrganizationApplicationError,
   type OrganizationApplicationErrorCodeValue
 } from "../src/index.js";
+import { applyOwnerAuthorizedMaterializedOrganizationCommand } from "../src/application.js";
 
 const OWNER_ID = "00000000-0000-4000-8000-000000000001";
 const OTHER_OWNER_ID = "00000000-0000-4000-8000-000000000002";
@@ -265,6 +266,74 @@ describe("deterministic organization application", () => {
     });
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen(result.noteMutationPayload.afterSnapshot)).toBe(true);
+  });
+
+  it("creates a private-manual note only through the owner-authorized entry point", () => {
+    const capture = "Private workout note";
+    const command = createCommand("generic", [{ type: "append_raw", content: capture }], "Workout");
+
+    const result = applyOwnerAuthorizedMaterializedOrganizationCommand({
+      command,
+      ownerId: OWNER_ID,
+      captureText: capture,
+      occurredAt: OCCURRED_AT,
+      idFactory: deterministicFactory(),
+      sourcePrivacy: null,
+      targetPrivacy: "private_manual"
+    });
+
+    expect(result.note).toMatchObject({
+      id: IDS.createdNote,
+      privacy: "private_manual",
+      bodyMarkdown: capture
+    });
+    expect(result.noteRevisionPayload.snapshot.privacy).toBe("private_manual");
+    expect(result.noteMutationPayload.afterSnapshot.privacy).toBe("private_manual");
+  });
+
+  it("updates a private-manual note only through an exact owner-authorized privacy binding", () => {
+    const before = currentNote("generic", {
+      bodyMarkdown: "Existing private source.",
+      privacy: "private_manual"
+    });
+    const command = appendCommand(before, [
+      { type: "append_raw", content: "Owner-approved addition" }
+    ]);
+
+    expectCode(
+      () =>
+        applyOwnerAuthorizedMaterializedOrganizationCommand({
+          command,
+          ownerId: OWNER_ID,
+          currentNote: before,
+          captureText: "Owner-approved addition",
+          occurredAt: OCCURRED_AT,
+          idFactory: deterministicFactory(),
+          sourcePrivacy: "ai_assisted",
+          targetPrivacy: "private_manual"
+        }),
+      OrganizationApplicationErrorCode.INVALID_NOTE_STATE
+    );
+
+    const result = applyOwnerAuthorizedMaterializedOrganizationCommand({
+      command,
+      ownerId: OWNER_ID,
+      currentNote: before,
+      captureText: "Owner-approved addition",
+      occurredAt: OCCURRED_AT,
+      idFactory: deterministicFactory(),
+      sourcePrivacy: "private_manual",
+      targetPrivacy: "private_manual"
+    });
+
+    expect(result.note).toMatchObject({
+      privacy: "private_manual",
+      bodyMarkdown: "Existing private source.\n\nOwner-approved addition"
+    });
+    expect(result.noteMutationPayload).toMatchObject({
+      beforeSnapshot: { privacy: "private_manual" },
+      afterSnapshot: { privacy: "private_manual" }
+    });
   });
 
   it("applies append_paragraphs through one undoable authoritative revision", () => {

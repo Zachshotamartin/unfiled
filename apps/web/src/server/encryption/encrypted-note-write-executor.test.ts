@@ -1,11 +1,18 @@
 import {
   authorizeAggregateOwner,
+  createEncryptedAggregateService,
   type AggregateContentKind,
   type EncryptedAggregateService,
   type KeyedMacRecord,
   type PayloadCodec,
   type SealedEncryptedAggregateRecord
 } from "@unfiled/encrypted-aggregate";
+import { generateKeyEncryptionKey } from "@unfiled/content-crypto";
+import type {
+  ManagedContentMacKey,
+  ManagedObjectWrappingKey,
+  OwnerBoundKeyResolver
+} from "@unfiled/key-management";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
@@ -245,6 +252,114 @@ function harness(
   };
 }
 
+async function realAggregateHarness() {
+  const objectKey = await generateKeyEncryptionKey("private-wrap-v1");
+  const contentMacCryptoKey = await crypto.subtle.generateKey(
+    { name: "HMAC", hash: "SHA-256", length: 256 },
+    false,
+    ["sign", "verify"]
+  );
+  const objectReference = Object.freeze({
+    ownerId: OWNER,
+    keyClass: "private_manual" as const,
+    purpose: "object_wrap" as const,
+    keyId: objectKey.keyId,
+    keyVersion: 1
+  });
+  const contentMacReference = Object.freeze({
+    ownerId: OWNER,
+    keyClass: "private_manual" as const,
+    purpose: "content_mac" as const,
+    keyId: mac.keyId,
+    keyVersion: mac.keyVersion
+  });
+  const managedObjectKey: ManagedObjectWrappingKey = Object.freeze({
+    reference: objectReference,
+    key: objectKey
+  });
+  const managedContentMacKey: ManagedContentMacKey = Object.freeze({
+    reference: contentMacReference,
+    key: contentMacCryptoKey
+  });
+  const matchesBinding = (ownerId: string, keyClass: string) =>
+    ownerId === OWNER && keyClass === "private_manual";
+  const keyResolver: OwnerBoundKeyResolver = Object.freeze({
+    activeContentMacKey(binding) {
+      return matchesBinding(binding.ownerId, binding.keyClass)
+        ? Promise.resolve(managedContentMacKey)
+        : Promise.reject(new Error("unexpected content-MAC binding"));
+    },
+    activeObjectWrappingKey(binding) {
+      return matchesBinding(binding.ownerId, binding.keyClass)
+        ? Promise.resolve(managedObjectKey)
+        : Promise.reject(new Error("unexpected object-wrap binding"));
+    },
+    contentKeyResolver(binding) {
+      return (keyId) =>
+        Promise.resolve(
+          matchesBinding(binding.ownerId, binding.keyClass) && keyId === objectKey.keyId
+            ? objectKey
+            : null
+        );
+    },
+    resolveContentMacKey(selector) {
+      return matchesBinding(selector.ownerId, selector.keyClass) &&
+        selector.keyId === contentMacReference.keyId
+        ? Promise.resolve(managedContentMacKey)
+        : Promise.resolve(null);
+    },
+    resolveObjectWrappingKey(selector) {
+      return matchesBinding(selector.ownerId, selector.keyClass) &&
+        selector.keyId === objectReference.keyId
+        ? Promise.resolve(managedObjectKey)
+        : Promise.resolve(null);
+    }
+  });
+  let reservationSequence = 0;
+  const aggregate = createEncryptedAggregateService({
+    keyResolver,
+    objectWrapReservations: Object.freeze({
+      reserveObjectWrappingKey() {
+        reservationSequence += 1;
+        return Promise.resolve(
+          Object.freeze({
+            reservationId: `reservation_${reservationSequence}`,
+            reference: objectReference
+          })
+        );
+      }
+    })
+  });
+  const prepared = claim();
+  const createNote = vi.fn<EncryptedNoteRpcAdapter["createNote"]>(({ command }) =>
+    Promise.resolve({
+      noteId: NOTE,
+      mutationId: MUTATION,
+      currentRevision: 1,
+      encryptedResponse: command.responseCipher,
+      replayed: false,
+      indexJobCount: 0
+    })
+  );
+  const adapter = Object.freeze({
+    getWriteClaim: vi.fn<EncryptedNoteRpcAdapter["getWriteClaim"]>(() => Promise.resolve(null)),
+    prepareWrite: vi.fn<EncryptedNoteRpcAdapter["prepareWrite"]>(() =>
+      Promise.resolve({ claim: prepared, replayed: false })
+    ),
+    createNote,
+    applyMutation: vi.fn(() => Promise.reject(new Error("unexpected mutation")))
+  }) satisfies EncryptedNoteRpcAdapter;
+  return Object.freeze({
+    adapter,
+    aggregate,
+    createNote,
+    access: authorizeAggregateOwner({
+      authenticatedOwnerId: OWNER,
+      resourceOwnerId: OWNER
+    })
+  });
+}
+
 function input(buildMaterial = vi.fn(() => Promise.resolve(material()))) {
   return Object.freeze({
     coordinates: Object.freeze({
@@ -265,6 +380,19 @@ function input(buildMaterial = vi.fn(() => Promise.resolve(material()))) {
 }
 
 describe("encrypted note write execution", () => {
+  it("round-trips the MAC-protected revision through the real aggregate service", async () => {
+    const dependencies = await realAggregateHarness();
+
+    await expect(executeEncryptedNoteWrite(dependencies, input())).resolves.toEqual({
+      response: { accepted: true },
+      replayed: false,
+      noteId: NOTE,
+      mutationId: MUTATION,
+      currentRevision: 1
+    });
+    expect(dependencies.createNote).toHaveBeenCalledOnce();
+  });
+
   it("opens every payload, verifies each evidence MAC, commits once, then opens the DB response", async () => {
     const dependencies = harness();
     const result = await executeEncryptedNoteWrite(dependencies, input());
@@ -314,6 +442,10 @@ describe("encrypted note write execution", () => {
       title: `e-${NOTE.toLowerCase()}`,
       bodyMarkdown: "",
       structuredData: { schemaVersion: 1 }
+    });
+    expect(command?.mutation).toMatchObject({
+      operations: [{ type: "create_note" }],
+      inverse: { type: "soft_delete_created_note" }
     });
     const serialized = JSON.stringify(command);
     expect(serialized).not.toContain("Groceries");

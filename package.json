@@ -41,6 +41,7 @@
     "test:coverage": "turbo run test:coverage --filter=@unfiled/web --filter=@unfiled/worker --filter=@unfiled/verifier --filter=@unfiled/organizer --filter='./packages/*'",
     "test:db": "supabase test db",
     "test:db:concurrency": "pnpm --filter @unfiled/organizer test:lock-order && pnpm --filter @unfiled/organizer test:storage-contract-concurrency",
+    "test:http:e2e": "bash .github/workflows/scripts/milestone-b-http-e2e.sh",
     "test:retrieval-capacity": "pnpm --filter @unfiled/organizer test:retrieval-capacity",
     "typecheck": "turbo run typecheck --filter=@unfiled/web --filter=@unfiled/worker --filter=@unfiled/verifier --filter=@unfiled/organizer --filter='./packages/*'"
   },

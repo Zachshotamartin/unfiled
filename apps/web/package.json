@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@phosphor-icons/react": "2.1.10",
+    "@unfiled/ai-routing": "workspace:*",
     "@unfiled/api-client": "workspace:*",
     "@unfiled/contracts": "workspace:*",
     "@unfiled/content-crypto": "workspace:*",

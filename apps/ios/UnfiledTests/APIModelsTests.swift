@@ -3,6 +3,32 @@ import XCTest
 @testable import Unfiled
 
 final class APIModelsTests: XCTestCase {
+    func testPaginationIdentityValidationRejectsSamePageAndCrossPageDuplicates() throws {
+        var samePage = PaginationIdentityValidator()
+        XCTAssertThrowsError(try samePage.accept(["rvw_a", "rvw_a"]))
+
+        var crossPage = PaginationIdentityValidator()
+        XCTAssertNoThrow(try crossPage.accept(["rvw_a", "rvw_b"]))
+        XCTAssertThrowsError(try crossPage.accept(["rvw_c", "rvw_b"]))
+        XCTAssertNoThrow(try crossPage.accept(["rvw_d"]))
+    }
+
+    func testPaginationCursorValidationRejectsRepeatedAndInconsistentCursors() throws {
+        let decoder = APIJSON.makeDecoder()
+        let first = try decoder.decode(
+            PageInfo.self,
+            from: Data(#"{"hasMore":true,"nextCursor":"cursor-a"}"#.utf8)
+        )
+        let terminal = try decoder.decode(
+            PageInfo.self,
+            from: Data(#"{"hasMore":false,"nextCursor":null}"#.utf8)
+        )
+        var seen = Set<String>()
+        XCTAssertEqual(try AppModel.validatedNextCursor(first, seen: &seen), "cursor-a")
+        XCTAssertThrowsError(try AppModel.validatedNextCursor(first, seen: &seen))
+        XCTAssertNil(try AppModel.validatedNextCursor(terminal, seen: &seen))
+    }
+
     func testAuthSessionDecodesOffsetTimestampAndStrictUUID() throws {
         let data = Data(#"{"accessToken":"a","refreshToken":"r","expiresAt":"2026-08-31T12:30:45.123-07:00","user":{"id":"11111111-1111-1111-1111-111111111111","email":"p@example.com"}}"#.utf8)
         let session = try APIJSON.makeDecoder().decode(AuthSession.self, from: data)
@@ -167,6 +193,53 @@ final class APIModelsTests: XCTestCase {
         XCTAssertThrowsError(
             try decoder.decode(CaptureDetail.self, from: Data(oversizedInsertedContent.utf8))
         )
+    }
+
+    func testReceiptPresentationPreservesServerActionsAndContentProvenance() throws {
+        let decoder = APIJSON.makeDecoder()
+        let detail = try decoder.decode(
+            CaptureDetail.self,
+            from: Data(Self.validCaptureDetailJSON.utf8)
+        )
+        let presentation = PresentationMapping.receipt(detail)
+
+        XCTAssertEqual(presentation.id, "cap_00000000000000000000000000")
+        XCTAssertEqual(presentation.destinationTitle, "Groceries")
+        XCTAssertEqual(
+            presentation.actions,
+            [
+                .open(noteID: "note_00000000000000000000000000"),
+                .move(
+                    noteID: "note_00000000000000000000000000",
+                    decisionID: "dec_00000000000000000000000000"
+                ),
+                .undo(
+                    mutationID: "mut_00000000000000000000000000",
+                    expectedRevision: 4
+                )
+            ]
+        )
+        XCTAssertEqual(presentation.insertedContent.count, 1)
+        XCTAssertEqual(presentation.insertedContent.first?.kind, .captured)
+        XCTAssertNil(presentation.insertedContent.first?.provenanceLabel)
+
+        let aiJSON = Self.validCaptureDetailJSON.replacingOccurrences(
+            of: #"{"type":"captured","itemId":null,"content":"buy oat milk"}"#,
+            with: #"{"type":"ai_generated","blockId":"blk_00000000000000000000000000","content":"Remember shelf-stable milk too"}"#
+        )
+        let aiDetail = try decoder.decode(CaptureDetail.self, from: Data(aiJSON.utf8))
+        let aiPresentation = PresentationMapping.receipt(aiDetail)
+        XCTAssertEqual(aiPresentation.insertedContent.first?.kind, .aiGenerated)
+        XCTAssertEqual(aiPresentation.insertedContent.first?.provenanceLabel, "AI-generated")
+    }
+
+    func testReceiptAccessibilityIdentifiersRemainCaptureScoped() {
+        let captureID = "cap_00000000000000000000000000"
+        XCTAssertEqual(ReceiptAccessibilityIdentifier.detail(captureID), "receipt.detail.\(captureID)")
+        XCTAssertEqual(ReceiptAccessibilityIdentifier.open(captureID), "receipt.open.\(captureID)")
+        XCTAssertEqual(ReceiptAccessibilityIdentifier.move(captureID), "receipt.move.\(captureID)")
+        XCTAssertEqual(ReceiptAccessibilityIdentifier.undo(captureID), "receipt.undo.\(captureID)")
+        XCTAssertEqual(ReceiptAccessibilityIdentifier.review(captureID), "receipt.review.\(captureID)")
     }
 
     func testSearchResultRequiresStrictBoundedContractShape() throws {

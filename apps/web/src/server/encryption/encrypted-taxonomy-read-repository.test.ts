@@ -50,7 +50,16 @@ function object<Surface extends EncryptedLibrarySurface>(
       resourceId,
       keyClass
     } as EncryptedLibraryObject<Surface>["encrypted"],
-    contentMac: null
+    contentMac:
+      surface === "space_display" || surface === "tag_display"
+        ? {
+            value: "a".repeat(64),
+            keyId: "private-taxonomy-mac-v1",
+            keyClass: "private_manual",
+            keyPurpose: "content_mac",
+            keyVersion: 1
+          }
+        : null
   };
 }
 
@@ -67,19 +76,19 @@ function dependencies(
     )
   } as unknown as EncryptedLibraryRpcStore;
   const aggregate = {
-    openSpaceDisplay: vi.fn((_access: unknown, record: { resourceId: string }) =>
+    openSpaceDisplay: vi.fn((_access: unknown, record: { encrypted: { resourceId: string } }) =>
       Promise.resolve(
-        record.resourceId === SPACE_A
+        record.encrypted.resourceId === SPACE_A
           ? { schemaVersion: 1, name: "Projects", slug: "projects" }
-          : record.resourceId === SPACE_B
+          : record.encrypted.resourceId === SPACE_B
             ? { schemaVersion: 1, name: "Unfiled", slug: "unfiled" }
             : { schemaVersion: 1, name: "Archive", slug: "archive" }
       )
     ),
-    openTagDisplay: vi.fn((_access: unknown, record: { resourceId: string }) =>
+    openTagDisplay: vi.fn((_access: unknown, record: { encrypted: { resourceId: string } }) =>
       Promise.resolve({
         schemaVersion: 1,
-        name: record.resourceId === TAG_A ? "zebra" : "alpha"
+        name: record.encrypted.resourceId === TAG_A ? "zebra" : "alpha"
       })
     ),
     openReview: vi.fn((_access: unknown, record: { resourceId: string }) =>
@@ -134,6 +143,11 @@ describe("encrypted taxonomy and Review reads", () => {
       expect.objectContaining({ id: SPACE_A })
     ]);
     expect(input.aggregate.openSpaceDisplay).toHaveBeenCalledTimes(6);
+    expect(input.aggregate.openSpaceDisplay).toHaveBeenCalledWith(
+      input.access,
+      { encrypted: root.encrypted, contentMac: root.contentMac },
+      { spaceId: SPACE_A, currentRevision: 2 }
+    );
   });
 
   it("decrypts and alphabetizes tags without exposing ciphertext metadata", async () => {
@@ -145,14 +159,49 @@ describe("encrypted taxonomy and Review reads", () => {
       createdAt: UPDATED,
       updatedAt: UPDATED
     });
-    const repository = new EncryptedTaxonomyReadRepository(
-      dependencies({ tag_display: [first, second] })
-    );
+    const input = dependencies({ tag_display: [first, second] });
+    const repository = new EncryptedTaxonomyReadRepository(input);
 
     await expect(repository.listTags({ limit: 10, offset: 0 })).resolves.toEqual([
       { id: TAG_B, name: "alpha", currentRevision: 1, createdAt: UPDATED },
       { id: TAG_A, name: "zebra", currentRevision: 4, createdAt: CREATED }
     ]);
+    expect(input.aggregate.openTagDisplay).toHaveBeenCalledWith(
+      input.access,
+      { encrypted: first.encrypted, contentMac: first.contentMac },
+      { tagId: TAG_A, currentRevision: 4 }
+    );
+  });
+
+  it("fails closed before opening taxonomy ciphertext when its content MAC is absent", async () => {
+    const space = {
+      ...object("space_display", SPACE_A, 1, {
+        parentId: null,
+        sortKey: "a0",
+        archivedAt: null,
+        createdAt: CREATED,
+        updatedAt: UPDATED
+      }),
+      contentMac: null
+    };
+    const tag = {
+      ...object("tag_display", TAG_A, 1, {
+        createdAt: CREATED,
+        updatedAt: UPDATED
+      }),
+      contentMac: null
+    };
+    const spaceInput = dependencies({ space_display: [space] });
+    const tagInput = dependencies({ tag_display: [tag] });
+
+    await expect(
+      new EncryptedTaxonomyReadRepository(spaceInput).listSpaces(true)
+    ).rejects.toMatchObject({ code: ServiceRpcErrorCode.PROVIDER_UNAVAILABLE });
+    await expect(new EncryptedTaxonomyReadRepository(tagInput).listTags()).rejects.toMatchObject({
+      code: ServiceRpcErrorCode.PROVIDER_UNAVAILABLE
+    });
+    expect(spaceInput.aggregate.openSpaceDisplay).not.toHaveBeenCalled();
+    expect(tagInput.aggregate.openTagDisplay).not.toHaveBeenCalled();
   });
 
   it("filters Review metadata before opening content and returns newest first", async () => {

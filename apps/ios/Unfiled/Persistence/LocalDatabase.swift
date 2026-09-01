@@ -655,6 +655,26 @@ actor LocalDatabase {
         }
     }
 
+    func pruneCachedNotes(profileID: String, retaining noteIDs: Set<String>) throws {
+        try Self.validateProfile(profileID)
+        guard noteIDs.allSatisfy(Self.isValidNoteID) else {
+            throw LocalDatabaseError.invalidCapture
+        }
+        try database.write { database in
+            let cachedIDs = try String.fetchAll(
+                database,
+                sql: "SELECT note_id FROM cached_notes WHERE profile_id = ?",
+                arguments: [profileID]
+            )
+            for noteID in cachedIDs where !noteIDs.contains(noteID) {
+                try database.execute(
+                    sql: "DELETE FROM cached_notes WHERE profile_id = ? AND note_id = ?",
+                    arguments: [profileID, noteID]
+                )
+            }
+        }
+    }
+
     func removeProfile(profileID: String) throws {
         try Self.validateProfile(profileID)
         try database.write { database in
@@ -840,6 +860,12 @@ actor LocalDatabase {
         guard value.count == 30, value.hasPrefix("cap_") else { return false }
         let alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
         return value.dropFirst(4).allSatisfy(alphabet.contains)
+    }
+
+    private static func isValidNoteID(_ value: String) -> Bool {
+        guard value.count == 31, value.hasPrefix("note_") else { return false }
+        let alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+        return value.dropFirst(5).allSatisfy(alphabet.contains)
     }
 
     private static func hexEncodedPassphrase(_ key: Data) -> Data {

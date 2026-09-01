@@ -20,6 +20,7 @@ const OTHER_MUTATION_ID = `mut_${"7".repeat(26)}` as const;
 const DECISION_ID = `dec_${"4".repeat(26)}` as const;
 const IDEMPOTENCY_KEY = "note-write-request-1";
 const OCCURRED_AT = "2026-08-30T22:54:12.345+00:00";
+const CANONICAL_OCCURRED_AT = "2026-08-30T22:54:12.345Z";
 const REQUEST_MAC = "a".repeat(64);
 const RESPONSE_CANARY = "plaintext-response-canary";
 const RESERVATIONS = [
@@ -189,6 +190,7 @@ function incompleteClaim(
     historyKeyClass?: TestKeyClass;
     sourcePrivacy?: TestKeyClass;
     targetPrivacy?: TestKeyClass;
+    commandProjection?: "legacy" | "encrypted_only";
   }> = {}
 ): IncompleteEncryptedNoteWriteClaim {
   const historyKeyClass = options.historyKeyClass ?? "ai_assisted";
@@ -205,7 +207,7 @@ function incompleteClaim(
     revisionId: REVISION_ID,
     mutationId: MUTATION_ID,
     occurredAt: OCCURRED_AT,
-    commandProjection: "legacy",
+    commandProjection: options.commandProjection ?? "legacy",
     requestMacKey: {
       keyId: keyId(historyKeyClass, "content_mac"),
       keyClass: historyKeyClass,
@@ -291,6 +293,24 @@ function command(claim: IncompleteEncryptedNoteWriteClaim): EncryptedNoteWriteCo
   };
 }
 
+function encryptedOnlyCommand(claim: IncompleteEncryptedNoteWriteClaim): EncryptedNoteWriteCommand {
+  const base = command(claim);
+  return {
+    ...base,
+    noteState: {
+      ...base.noteState,
+      title: `e-${claim.noteId.toLowerCase()}`,
+      bodyMarkdown: "",
+      structuredData: { schemaVersion: 1 }
+    },
+    mutation: {
+      ...base.mutation,
+      operations: [{ type: "create_note" }],
+      inverse: { type: "soft_delete_created_note" }
+    }
+  };
+}
+
 function writeResult(
   claim: IncompleteEncryptedNoteWriteClaim,
   submitted: EncryptedNoteWriteCommand,
@@ -356,7 +376,7 @@ describe("encrypted note write RPC adapter", () => {
         historyKeyClass: "ai_assisted",
         revisionId: REVISION_ID,
         mutationId: MUTATION_ID,
-        occurredAt: OCCURRED_AT,
+        occurredAt: CANONICAL_OCCURRED_AT,
         commandProjection: "legacy",
         requestMacKey: {
           keyId: keyId("ai_assisted", "content_mac"),
@@ -377,6 +397,23 @@ describe("encrypted note write RPC adapter", () => {
       p_expected_revision: 0,
       p_target_privacy: "ai_assisted",
       p_request_mac: request.requestMac
+    });
+  });
+
+  it("canonicalizes PostgREST offsets without losing microseconds", async () => {
+    const request = createRequest();
+    const rpc = vi.fn<ServiceRpcClient["rpc"]>().mockResolvedValue({
+      ...claimProjection(request, {
+        occurredAt: "2026-08-30T15:54:12.345001-07:00"
+      }),
+      replayed: false
+    });
+
+    await expect(
+      createEncryptedNoteRpcAdapter(client(rpc)).prepareWrite(request)
+    ).resolves.toMatchObject({
+      claim: { occurredAt: "2026-08-30T22:54:12.345001Z" },
+      replayed: false
     });
   });
 
@@ -436,6 +473,7 @@ describe("encrypted note write RPC adapter", () => {
       idempotencyKey: IDEMPOTENCY_KEY
     });
     expect(existing).toMatchObject({
+      occurredAt: CANONICAL_OCCURRED_AT,
       requestMacKey: {
         keyId: "key_ai_assisted_content_mac_retired_v7",
         keyVersion: 7
@@ -606,6 +644,90 @@ describe("encrypted note write RPC adapter", () => {
       p_idempotency_key: IDEMPOTENCY_KEY,
       p_command: submitted
     });
+  });
+
+  it("accepts the exact content-free create/inverse projection for an encrypted-only create", async () => {
+    const claim = incompleteClaim("create_encrypted_note", {
+      commandProjection: "encrypted_only"
+    });
+    const submitted = encryptedOnlyCommand(claim);
+    const rpc = vi.fn<ServiceRpcClient["rpc"]>().mockResolvedValue(writeResult(claim, submitted));
+    const adapter = createEncryptedNoteRpcAdapter(client(rpc));
+
+    await expect(adapter.createNote({ claim, command: submitted })).resolves.toMatchObject({
+      noteId: NOTE_ID,
+      mutationId: MUTATION_ID,
+      currentRevision: 1,
+      replayed: false
+    });
+    expect(rpc).toHaveBeenCalledWith("create_encrypted_note", {
+      p_owner_id: OWNER_ID,
+      p_note_id: NOTE_ID,
+      p_idempotency_key: IDEMPOTENCY_KEY,
+      p_command: submitted
+    });
+  });
+
+  it("rejects plaintext or malformed mutation projections for an encrypted-only create", async () => {
+    const claim = incompleteClaim("create_encrypted_note", {
+      commandProjection: "encrypted_only"
+    });
+    const valid = encryptedOnlyCommand(claim);
+    const invalidCommands: unknown[] = [
+      {
+        ...valid,
+        mutation: {
+          ...valid.mutation,
+          operations: [{ type: "create_note" }, { type: "create_note" }]
+        }
+      },
+      {
+        ...valid,
+        mutation: {
+          ...valid.mutation,
+          operations: [{ type: "set_title", title: RESPONSE_CANARY }]
+        }
+      },
+      {
+        ...valid,
+        mutation: {
+          ...valid.mutation,
+          operations: [{ type: "set_privacy", privacy: "private_manual" }]
+        }
+      },
+      {
+        ...valid,
+        mutation: {
+          ...valid.mutation,
+          operations: [{ type: "set_privacy", privacy: "ai_assisted", extra: RESPONSE_CANARY }]
+        }
+      },
+      {
+        ...valid,
+        mutation: {
+          ...valid.mutation,
+          inverse: [{ type: "soft_delete_created_note" }]
+        }
+      },
+      {
+        ...valid,
+        mutation: {
+          ...valid.mutation,
+          inverse: [{ type: "set_title", title: RESPONSE_CANARY }]
+        }
+      }
+    ];
+
+    for (const invalid of invalidCommands) {
+      const rpc = vi.fn<ServiceRpcClient["rpc"]>();
+      const adapter = createEncryptedNoteRpcAdapter(client(rpc));
+      await expectServiceFailure(
+        adapter.createNote({ claim, command: invalid } as never),
+        ServiceRpcErrorCode.VALIDATION_FAILED,
+        RESPONSE_CANARY
+      );
+      expect(rpc).not.toHaveBeenCalled();
+    }
   });
 
   it("submits mutation CAS parameters and accepts original ciphertext on replay", async () => {

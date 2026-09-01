@@ -101,6 +101,13 @@ const MAX_CAPTURE_SCAN = 10_000;
 const READ_BATCH_SIZE = 100;
 const GENERATED_BLOCK_BATCH_SIZE = 100;
 const MAX_CAPTURE_UNDO_PLAINTEXT_BYTES = 1_000_000;
+const ENCRYPTED_ORGANIZER_REASON_SENTINEL = "encrypted_organizer";
+
+function captureAggregateDiagnostic(stage: string): void {
+  if (process.env.UNFILED_E1_HTTP_DIAGNOSTICS === "1") {
+    process.stderr.write(`[unfiled-e1-capture-aggregate] ${stage}\n`);
+  }
+}
 
 const RetryIntentSchema = z.strictObject({ action: z.literal("retry") });
 const DeleteExpectedNoteRevisionsSchema = z
@@ -356,6 +363,16 @@ function receiptMatchesProjection(
   payload: CaptureReceiptPayload,
   row: EncryptedCaptureReceiptRead
 ): boolean {
+  const exactReasonsMatch = sameStringArray(payload.reasonCodes, row.reasonCodes);
+  const organizerReasonProjectionMatches =
+    row.privacy === "ai_assisted" &&
+    row.recordVersion === 1 &&
+    row.decisionId !== null &&
+    row.reviewItemId === null &&
+    row.mutationId !== null &&
+    (row.outcome === "created_note" || row.outcome === "added_to_note") &&
+    row.reasonCodes.length === 1 &&
+    row.reasonCodes[0] === ENCRYPTED_ORGANIZER_REASON_SENTINEL;
   return (
     payload.captureId === row.captureId &&
     payload.jobId === row.jobId &&
@@ -364,7 +381,7 @@ function receiptMatchesProjection(
     payload.mutationId === row.mutationId &&
     payload.outcome === row.outcome &&
     payload.destination?.noteId === (row.destinationNoteId ?? undefined) &&
-    sameStringArray(payload.reasonCodes, row.reasonCodes) &&
+    (exactReasonsMatch || organizerReasonProjectionMatches) &&
     sameInstant(payload.createdAt, row.createdAt)
   );
 }
@@ -571,7 +588,10 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
         ? Promise.resolve(null)
         : this.dependencies.aggregate.openNoteRevision(
             this.dependencies.access,
-            row.beforeSnapshot.snapshotCipher,
+            Object.freeze({
+              encrypted: row.beforeSnapshot.snapshotCipher,
+              contentMac: row.beforeSnapshot.snapshotMac
+            }),
             {
               revisionId: row.beforeSnapshot.revisionId,
               revision: row.beforeSnapshot.revision,
@@ -583,7 +603,10 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
           ),
       this.dependencies.aggregate.openNoteRevision(
         this.dependencies.access,
-        row.afterSnapshot.snapshotCipher,
+        Object.freeze({
+          encrypted: row.afterSnapshot.snapshotCipher,
+          contentMac: row.afterSnapshot.snapshotMac
+        }),
         {
           revisionId: row.afterSnapshot.revisionId,
           revision: row.afterSnapshot.revision,
@@ -702,7 +725,7 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
         currentRevision: result.note.currentRevision,
         privacy: result.note.privacy
       }),
-      this.dependencies.aggregate.openNoteRevision(this.dependencies.access, revision.encrypted, {
+      this.dependencies.aggregate.openNoteRevision(this.dependencies.access, revision, {
         revisionId,
         revision: result.note.currentRevision,
         transition
@@ -1194,12 +1217,39 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
     row: EncryptedCaptureReceiptRead,
     knownCapture?: OpenedCapture
   ): Promise<CaptureReceipt> {
+    captureAggregateDiagnostic("receipt.open-started");
     const payload = await this.dependencies.aggregate.openCaptureReceipt(
       this.dependencies.access,
       row.receiptCipher,
       { captureId: row.captureId, recordVersion: row.recordVersion, sourcePrivacy: row.privacy }
     );
-    if (!receiptMatchesProjection(payload, row)) return unavailable();
+    captureAggregateDiagnostic("receipt.cipher-opened");
+    if (!receiptMatchesProjection(payload, row)) {
+      if (payload.captureId !== row.captureId)
+        captureAggregateDiagnostic("receipt.mismatch-capture");
+      if (payload.jobId !== row.jobId) captureAggregateDiagnostic("receipt.mismatch-job");
+      if (payload.decisionId !== row.decisionId) {
+        captureAggregateDiagnostic("receipt.mismatch-decision");
+      }
+      if (payload.reviewItemId !== row.reviewItemId) {
+        captureAggregateDiagnostic("receipt.mismatch-review");
+      }
+      if (payload.mutationId !== row.mutationId) {
+        captureAggregateDiagnostic("receipt.mismatch-mutation");
+      }
+      if (payload.outcome !== row.outcome) captureAggregateDiagnostic("receipt.mismatch-outcome");
+      if (payload.destination?.noteId !== (row.destinationNoteId ?? undefined)) {
+        captureAggregateDiagnostic("receipt.mismatch-destination");
+      }
+      if (!sameStringArray(payload.reasonCodes, row.reasonCodes)) {
+        captureAggregateDiagnostic("receipt.mismatch-reasons");
+      }
+      if (!sameInstant(payload.createdAt, row.createdAt)) {
+        captureAggregateDiagnostic("receipt.mismatch-created-at");
+      }
+      return unavailable();
+    }
+    captureAggregateDiagnostic("receipt.projection-matched");
 
     let capture = knownCapture;
     if (
@@ -1210,15 +1260,28 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
         ownerId: this.ownerId,
         captureId: row.captureId
       });
+      captureAggregateDiagnostic("receipt.capture-loaded");
       capture = await this.openCapture(detail);
+      captureAggregateDiagnostic("receipt.capture-opened");
     }
     if (
       capture !== undefined &&
       (capture.row.captureId !== row.captureId ||
         capture.row.jobId !== row.jobId ||
         capture.row.privacy !== row.privacy)
-    )
+    ) {
+      if (capture.row.captureId !== row.captureId) {
+        captureAggregateDiagnostic("receipt.capture-binding-capture");
+      }
+      if (capture.row.jobId !== row.jobId) {
+        captureAggregateDiagnostic("receipt.capture-binding-job");
+      }
+      if (capture.row.privacy !== row.privacy) {
+        captureAggregateDiagnostic("receipt.capture-binding-privacy");
+      }
       return unavailable();
+    }
+    captureAggregateDiagnostic("receipt.capture-bound");
 
     const blockIds = [
       ...new Set(
@@ -1273,7 +1336,8 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
         });
       }
     );
-    return contract(CaptureReceiptSchema, {
+    captureAggregateDiagnostic("receipt.content-hydrated");
+    const publicReceipt = {
       schemaVersion: 1,
       captureId: payload.captureId,
       jobId: payload.jobId,
@@ -1287,7 +1351,35 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
       actions: payload.actions,
       reasonCodes: payload.reasonCodes,
       createdAt: payload.createdAt
-    });
+    } as const;
+    const parsedReceipt = CaptureReceiptSchema.safeParse(publicReceipt);
+    if (!parsedReceipt.success) {
+      const allowedFields = new Set([
+        "schemaVersion",
+        "captureId",
+        "jobId",
+        "decisionId",
+        "reviewItemId",
+        "mutationId",
+        "outcome",
+        "headline",
+        "destination",
+        "insertedContent",
+        "actions",
+        "reasonCodes",
+        "createdAt"
+      ]);
+      const fields = new Set(
+        parsedReceipt.error.issues.map(({ path }) => {
+          const field = path[0];
+          return typeof field === "string" && allowedFields.has(field) ? field : "root";
+        })
+      );
+      for (const field of fields) captureAggregateDiagnostic(`receipt.public-contract-${field}`);
+      return unavailable();
+    }
+    captureAggregateDiagnostic("receipt.public-contract-valid");
+    return contract(CaptureReceiptSchema, publicReceipt);
   }
 
   public async getCapture(

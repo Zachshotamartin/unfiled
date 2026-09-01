@@ -1,3 +1,6 @@
+import { generateKeyEncryptionKey } from "@unfiled/content-crypto";
+import { manualNoteFixtures } from "@unfiled/contracts";
+import type { ObjectWrapReservation } from "@unfiled/encrypted-aggregate";
 import type { InteractiveKeyCustodian, OwnerBoundKeyResolver } from "@unfiled/key-management";
 import { describe, expect, it, vi } from "vitest";
 
@@ -9,6 +12,8 @@ import type { ServiceRpcClient } from "./service-rpc-client";
 import type { InteractiveWebKeyRuntime } from "./web-key-runtime";
 
 const OWNER_ID = "11111111-1111-4111-8111-111111111111";
+const NOTE_ID = "note_01J6M9Q7G4BMKB33GSG3NJ6D1X" as const;
+const WRAP_KEY_ID = "key_owner_ai_wrap_v1";
 
 function resolver(): OwnerBoundKeyResolver {
   return Object.freeze({
@@ -27,6 +32,52 @@ function custodian(): InteractiveKeyCustodian {
     withUnwrappedIntermediateKey: vi.fn()
   });
 }
+
+async function sealingResolver(): Promise<OwnerBoundKeyResolver> {
+  const key = await generateKeyEncryptionKey(WRAP_KEY_ID);
+  return Object.freeze({
+    activeContentMacKey: vi.fn(),
+    activeObjectWrappingKey: vi.fn(),
+    contentKeyResolver: vi.fn(() => () => Promise.resolve(null)),
+    resolveContentMacKey: vi.fn(() => Promise.resolve(null)),
+    resolveObjectWrappingKey: vi.fn(({ ownerId, keyClass, keyId }) =>
+      Promise.resolve(
+        ownerId === OWNER_ID && keyClass === "ai_assisted" && keyId === WRAP_KEY_ID
+          ? Object.freeze({
+              key,
+              reference: Object.freeze({
+                ownerId: OWNER_ID,
+                keyClass: "ai_assisted" as const,
+                purpose: "object_wrap" as const,
+                keyId: WRAP_KEY_ID,
+                keyVersion: 1
+              })
+            })
+          : null
+      )
+    )
+  });
+}
+
+function reservation(id: string, ownerId = OWNER_ID): ObjectWrapReservation {
+  return Object.freeze({
+    reservationId: id,
+    reference: Object.freeze({
+      ownerId,
+      keyClass: "ai_assisted" as const,
+      purpose: "object_wrap" as const,
+      keyId: WRAP_KEY_ID,
+      keyVersion: 1
+    })
+  });
+}
+
+const noteContent = Object.freeze({
+  schemaVersion: 1 as const,
+  title: manualNoteFixtures.note.title,
+  bodyMarkdown: manualNoteFixtures.note.bodyMarkdown,
+  structuredData: manualNoteFixtures.note.structuredData
+});
 
 describe("owner encrypted aggregate runtime", () => {
   it("composes the local resolver without silently contacting managed KMS bootstrap", async () => {
@@ -92,6 +143,99 @@ describe("owner encrypted aggregate runtime", () => {
     ).resolves.toBe(true);
     expect(scope).toHaveBeenCalledWith(abort.signal);
     expect(rpc).toHaveBeenCalledTimes(4);
+  });
+
+  it("consumes a prepare-issued reservation plan exactly once and in order", async () => {
+    const runtime: InteractiveWebKeyRuntime = Object.freeze({
+      kind: "local",
+      keyResolver: await sealingResolver()
+    });
+    const client: ServiceRpcClient = Object.freeze({ rpc: vi.fn() });
+
+    await withOwnerEncryptedAggregateRuntime(
+      runtime,
+      client,
+      OWNER_ID,
+      { signal: new AbortController().signal },
+      async ({ access, createPreparedService }) => {
+        const first = reservation("11111111-1111-4111-8111-111111111111");
+        const prepared = createPreparedService([first]);
+        const sealed = await prepared.service.sealNoteContent(access, {
+          noteId: NOTE_ID,
+          currentRevision: 1,
+          privacy: "ai_assisted",
+          payload: noteContent
+        });
+        expect(sealed.reservationId).toBe(first.reservationId);
+        expect(() => prepared.assertConsumed()).not.toThrow();
+        expect(() => prepared.assertConsumed()).toThrow(
+          expect.objectContaining({ code: "reservation_invalid" })
+        );
+      }
+    );
+  });
+
+  it("fails closed for incomplete, exhausted, or owner-substituted prepared plans", async () => {
+    const runtime: InteractiveWebKeyRuntime = Object.freeze({
+      kind: "local",
+      keyResolver: await sealingResolver()
+    });
+    const client: ServiceRpcClient = Object.freeze({ rpc: vi.fn() });
+
+    await withOwnerEncryptedAggregateRuntime(
+      runtime,
+      client,
+      OWNER_ID,
+      { signal: new AbortController().signal },
+      async ({ access, createPreparedService }) => {
+        const incomplete = createPreparedService([
+          reservation("11111111-1111-4111-8111-111111111111"),
+          reservation("22222222-2222-4222-8222-222222222222")
+        ]);
+        await incomplete.service.sealNoteContent(access, {
+          noteId: NOTE_ID,
+          currentRevision: 1,
+          privacy: "ai_assisted",
+          payload: noteContent
+        });
+        expect(() => incomplete.assertConsumed()).toThrow(
+          expect.objectContaining({ code: "reservation_invalid" })
+        );
+
+        const exhausted = createPreparedService([
+          reservation("33333333-3333-4333-8333-333333333333")
+        ]);
+        await exhausted.service.sealNoteContent(access, {
+          noteId: NOTE_ID,
+          currentRevision: 1,
+          privacy: "ai_assisted",
+          payload: noteContent
+        });
+        await expect(
+          exhausted.service.sealNoteContent(access, {
+            noteId: NOTE_ID,
+            currentRevision: 2,
+            privacy: "ai_assisted",
+            payload: noteContent
+          })
+        ).rejects.toMatchObject({ code: "reservation_invalid" });
+
+        const substituted = createPreparedService([
+          reservation(
+            "44444444-4444-4444-8444-444444444444",
+            "22222222-2222-4222-8222-222222222222"
+          )
+        ]);
+        await expect(
+          substituted.service.sealNoteContent(access, {
+            noteId: NOTE_ID,
+            currentRevision: 1,
+            privacy: "ai_assisted",
+            payload: noteContent
+          })
+        ).rejects.toMatchObject({ code: "reservation_invalid" });
+      }
+    );
   });
 
   it("rejects an aborted local scope and an invalid owner before use", async () => {

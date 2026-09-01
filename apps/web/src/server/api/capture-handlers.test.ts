@@ -188,12 +188,19 @@ describe("capture route handlers", () => {
     const malformed = await handlers.getCapture(request("/api/v1/captures/nope"), {
       captureId: "nope"
     });
+    const malformedReceipt = await handlers.getReceipt(request("/api/v1/captures/nope/receipt"), {
+      captureId: "nope"
+    });
 
     await expect(detail.json()).resolves.toEqual(queuedDetail);
     await expect(receipt.json()).resolves.toEqual(inboxReceipt);
     expect(detail.headers.get("cache-control")).toBe("no-store");
-    expect(receipt.headers.get("cache-control")).toBe("no-store");
+    expect(receipt.headers.get("cache-control")).toBe("private, no-store");
+    expect(receipt.headers.get("pragma")).toBe("no-cache");
     expect(malformed.status).toBe(400);
+    expect(malformedReceipt.status).toBe(400);
+    expect(malformedReceipt.headers.get("cache-control")).toBe("private, no-store");
+    expect(malformedReceipt.headers.get("pragma")).toBe("no-cache");
     expect(scheduleDrain).toHaveBeenCalledTimes(2);
   });
 

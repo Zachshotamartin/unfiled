@@ -1,4 +1,20 @@
-export * from "./application.js";
+export {
+  OrganizationApplicationError,
+  OrganizationApplicationErrorCode,
+  applyMaterializedOrganizationCommand
+} from "./application.js";
+export type {
+  AppliedAppendOrganizationCommand,
+  AppliedCreateOrganizationCommand,
+  AppliedOrganizationCommand,
+  ApplyMaterializedAppendOrganizationCommandInput,
+  ApplyMaterializedCreateOrganizationCommandInput,
+  ApplyMaterializedOrganizationCommandInput,
+  OrganizationApplicationErrorCodeValue,
+  OrganizationNoteContentPayload,
+  OrganizationNoteMutationPayload,
+  OrganizationNoteRevisionPayload
+} from "./application.js";
 export * from "./extraction.js";
 export * from "./evaluation/corpus.js";
 export * from "./evaluation/harness.js";
