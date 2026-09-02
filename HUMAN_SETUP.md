@@ -153,7 +153,11 @@ API). The template could not be corrected: with Supabase's built-in SMTP the das
 template edits ("Set up custom SMTP to edit templates"), and the built-in service allows only two
 authentication emails per hour for the whole project. Until custom SMTP exists, real users
 receive a link without a code and cannot sign in; synthetic canaries still work because the
-operator mints codes through the Auth admin API.
+operator mints codes through the Auth admin API. The built-in service also delivers only to
+addresses of members of the Supabase organization: on 2026-09-02 a code request for a synthetic
+non-member address failed at Supabase and the deployed web app answered
+`503 provider_unavailable` ("The sign-in email could not be sent"), which is the expected fail-closed
+response, not a web defect.
 
 Required owner action:
 
