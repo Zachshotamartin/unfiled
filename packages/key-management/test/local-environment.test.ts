@@ -1,7 +1,8 @@
 import { openUtf8WithResolver, sealUtf8, type EncryptionContext } from "@unfiled/content-crypto";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import {
+  type DecryptOnlyOwnerBoundKeyResolver,
   KeyManagementError,
   KeyManagementErrorCode,
   createLocalEnvironmentKeyResolver,
@@ -115,6 +116,88 @@ describe("local-only environment key resolver", () => {
     ).resolves.toBeNull();
   });
 
+  it("gives the search worker a decrypt-only API and decrypt-only object keys", async () => {
+    const keys = [
+      entry(5),
+      entry(6, {
+        keyId: "local.key.search.retired",
+        keyVersion: 1,
+        status: "retired"
+      })
+    ];
+    const interactiveResolver = await createLocalEnvironmentKeyResolver({
+      environment: environment(keys),
+      workload: "interactive_api"
+    });
+    const searchResolver = await createLocalEnvironmentKeyResolver({
+      environment: environment(keys),
+      workload: "search_worker"
+    });
+
+    expectTypeOf(searchResolver).toEqualTypeOf<DecryptOnlyOwnerBoundKeyResolver>();
+    type UnexpectedSearchCapability = Extract<
+      keyof typeof searchResolver,
+      "activeContentMacKey" | "activeObjectWrappingKey" | "resolveContentMacKey"
+    >;
+    type HasUnexpectedSearchCapability = [UnexpectedSearchCapability] extends [never]
+      ? false
+      : true;
+    const hasUnexpectedSearchCapability: HasUnexpectedSearchCapability = false;
+    expect(hasUnexpectedSearchCapability).toBe(false);
+    expect(Object.keys(searchResolver).sort()).toEqual([
+      "contentKeyResolver",
+      "resolveObjectWrappingKey"
+    ]);
+
+    const activeForWriting = await interactiveResolver.activeObjectWrappingKey({
+      ownerId: OWNER_A,
+      keyClass: "ai_assisted"
+    });
+    expect(activeForWriting.key.key.usages).toEqual(["encrypt", "decrypt"]);
+
+    const activeForSearch = await searchResolver.resolveObjectWrappingKey({
+      ownerId: OWNER_A,
+      keyClass: "ai_assisted",
+      keyId: activeForWriting.reference.keyId
+    });
+    const retiredForSearch = await searchResolver.resolveObjectWrappingKey({
+      ownerId: OWNER_A,
+      keyClass: "ai_assisted",
+      keyId: "local.key.search.retired"
+    });
+    const activeFromContentResolver = await searchResolver.contentKeyResolver({
+      ownerId: OWNER_A,
+      keyClass: "ai_assisted"
+    })(activeForWriting.reference.keyId);
+
+    expect(activeForSearch?.key.key.usages).toEqual(["decrypt"]);
+    expect(retiredForSearch?.key.key.usages).toEqual(["decrypt"]);
+    expect(activeFromContentResolver?.key.usages).toEqual(["decrypt"]);
+    if (activeForSearch === null) throw new Error("Expected the active search key");
+    await expect(
+      globalThis.crypto.subtle.encrypt(
+        { name: "AES-GCM", iv: new Uint8Array(12) },
+        activeForSearch.key.key,
+        new Uint8Array([1])
+      )
+    ).rejects.toMatchObject({ name: "InvalidAccessError" });
+
+    const context: EncryptionContext = {
+      tenantId: OWNER_A,
+      resourceId: "note_search_local",
+      recordVersion: 1,
+      kind: "note"
+    };
+    const envelope = await sealUtf8("search can only open this", context, activeForWriting.key);
+    await expect(
+      openUtf8WithResolver(
+        envelope,
+        context,
+        searchResolver.contentKeyResolver({ ownerId: OWNER_A, keyClass: "ai_assisted" })
+      )
+    ).resolves.toBe("search can only open this");
+  });
+
   it("zeroes the local content-MAC import copy after Web Crypto rejects", async () => {
     let importedBytes: Uint8Array = new Uint8Array();
     let rejectImport: ((reason: Error) => void) | undefined;
@@ -191,17 +274,19 @@ describe("local-only environment key resolver", () => {
     }
   });
 
-  it("refuses to load content-MAC or private material into the index worker", async () => {
-    for (const forbidden of [
-      entry(9, { purpose: "content_mac", keyId: "ai.mac.local.v1" }),
-      entry(9, { keyClass: "private_manual", keyId: "private.local.v1" })
-    ]) {
-      await expect(
-        createLocalEnvironmentKeyResolver({
-          environment: environment([forbidden]),
-          workload: "index_worker"
-        })
-      ).rejects.toSatisfy(expectCode(KeyManagementErrorCode.CONFIGURATION_INVALID));
+  it("refuses to load content-MAC or private material into index and search workers", async () => {
+    for (const workload of ["index_worker", "search_worker"] as const) {
+      for (const forbidden of [
+        entry(9, { purpose: "content_mac", keyId: "ai.mac.local.v1" }),
+        entry(9, { keyClass: "private_manual", keyId: "private.local.v1" })
+      ]) {
+        await expect(
+          createLocalEnvironmentKeyResolver({
+            environment: environment([forbidden]),
+            workload
+          })
+        ).rejects.toSatisfy(expectCode(KeyManagementErrorCode.CONFIGURATION_INVALID));
+      }
     }
   });
 

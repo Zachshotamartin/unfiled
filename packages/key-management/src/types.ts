@@ -6,7 +6,8 @@ export const KEY_STATUSES = Object.freeze(["pending", "active", "retired", "revo
 export const KEY_WORKLOADS = Object.freeze([
   "interactive_api",
   "organization_worker",
-  "index_worker"
+  "index_worker",
+  "search_worker"
 ] as const);
 
 export type KeyClass = (typeof KEY_CLASSES)[number];
@@ -71,6 +72,9 @@ export type IndexWorkerRootKeySet = Readonly<{
   }>;
 }>;
 
+/** The user-search workload can open existing AI index envelopes only. */
+export type SearchWorkerRootKeySet = IndexWorkerRootKeySet;
+
 export type RootKeySet = Readonly<Record<KeyClass, PurposeRootKeySet>>;
 
 export type WorkloadRootKeySet = RootKeySet | AiAssistedRootKeySet | IndexWorkerRootKeySet;
@@ -88,6 +92,8 @@ export type IndexWorkerRetiredRootKeySet = Readonly<{
     object_wrap?: readonly string[];
   }>;
 }>;
+
+export type SearchWorkerRetiredRootKeySet = IndexWorkerRetiredRootKeySet;
 
 export type ManagedKeyStore = Readonly<{
   findActive(binding: KeyBinding): Promise<unknown>;
@@ -116,6 +122,15 @@ export type OwnerBoundKeyResolver = Readonly<{
   ): Promise<ManagedObjectWrappingKey | null>;
 }>;
 
+/**
+ * A decrypt-only resolver view for workloads that may open existing object
+ * envelopes but must never select active key material for new writes.
+ */
+export type DecryptOnlyOwnerBoundKeyResolver = Pick<
+  OwnerBoundKeyResolver,
+  "contentKeyResolver" | "resolveObjectWrappingKey"
+>;
+
 export type KeyCustodyOperationOptions = Readonly<{
   signal?: AbortSignal;
 }>;
@@ -132,6 +147,16 @@ export type IntermediateKeyCustodian = Readonly<{
     options?: KeyCustodyOperationOptions
   ): Promise<Result>;
 }>;
+
+/**
+ * A decrypt-only view used by workloads that must never mint intermediate
+ * keys. Keeping generation out of the object shape makes the boundary
+ * enforceable before an IAM denial is needed.
+ */
+export type DecryptOnlyIntermediateKeyCustodian = Pick<
+  IntermediateKeyCustodian,
+  "withUnwrappedIntermediateKey"
+>;
 
 export type InteractiveKeyCustodian = IntermediateKeyCustodian &
   Readonly<{

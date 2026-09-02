@@ -5,6 +5,7 @@ import {
   KeyManagementError,
   KeyManagementErrorCode,
   keyManagementFailure,
+  type DecryptOnlyOwnerBoundKeyResolver,
   type KeyBinding,
   type KeyClass,
   type KeyPurpose,
@@ -193,15 +194,45 @@ async function importContentMacKey(
   }
 }
 
+async function importObjectWrappingKey(
+  entry: LocalKeyEntry,
+  bytes: Uint8Array,
+  cryptoImplementation: Crypto,
+  decryptOnly: boolean
+): Promise<KeyEncryptionKey> {
+  if (!decryptOnly) {
+    return importKeyEncryptionKey(entry.keyId, bytes, cryptoImplementation);
+  }
+  const importBytes = Uint8Array.from(bytes);
+  try {
+    const key = await cryptoImplementation.subtle.importKey(
+      "raw",
+      importBytes,
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["decrypt"]
+    );
+    return Object.freeze({ keyId: entry.keyId, key });
+  } finally {
+    importBytes.fill(0);
+  }
+}
+
 async function importEntry(
   entry: LocalKeyEntry,
-  cryptoImplementation: Crypto
+  cryptoImplementation: Crypto,
+  decryptObjectWrappingKeysOnly: boolean
 ): Promise<ImportedLocalKey> {
   const bytes = decodeBase64Url(entry.keyMaterial, KEY_BYTES, KEY_BYTES);
   try {
     const key =
       entry.purpose === "object_wrap"
-        ? await importKeyEncryptionKey(entry.keyId, bytes, cryptoImplementation)
+        ? await importObjectWrappingKey(
+            entry,
+            bytes,
+            cryptoImplementation,
+            decryptObjectWrappingKeysOnly
+          )
         : await importContentMacKey(bytes, cryptoImplementation);
     const metadata: LocalKeyMetadata = Object.freeze({
       ownerId: entry.ownerId,
@@ -219,15 +250,19 @@ async function importEntry(
   }
 }
 
-export type LocalEnvironmentKeyResolverOptions = Readonly<{
-  crypto?: Crypto;
-  environment?: Readonly<Record<string, string | undefined>>;
-  workload: KeyWorkload;
-}>;
+export type LocalEnvironmentKeyResolverOptions<Workload extends KeyWorkload = KeyWorkload> =
+  Readonly<{
+    crypto?: Crypto;
+    environment?: Readonly<Record<string, string | undefined>>;
+    workload: Workload;
+  }>;
 
-export async function createLocalEnvironmentKeyResolver(
-  options: LocalEnvironmentKeyResolverOptions
-): Promise<OwnerBoundKeyResolver> {
+export type LocalEnvironmentKeyResolverForWorkload<Workload extends KeyWorkload> =
+  Workload extends "search_worker" ? DecryptOnlyOwnerBoundKeyResolver : OwnerBoundKeyResolver;
+
+export async function createLocalEnvironmentKeyResolver<const Workload extends KeyWorkload>(
+  options: LocalEnvironmentKeyResolverOptions<Workload>
+): Promise<LocalEnvironmentKeyResolverForWorkload<Workload>> {
   assertWorkload(options.workload);
   const environment = options.environment ?? process.env;
   assertLocalOnly(environment);
@@ -236,13 +271,15 @@ export async function createLocalEnvironmentKeyResolver(
   if (
     (options.workload === "organization_worker" &&
       entries.some((entry) => entry.keyClass === "private_manual")) ||
-    (options.workload === "index_worker" &&
+    ((options.workload === "index_worker" || options.workload === "search_worker") &&
       entries.some((entry) => entry.keyClass !== "ai_assisted" || entry.purpose !== "object_wrap"))
   ) {
     failConfiguration();
   }
   const imported = await Promise.all(
-    entries.map((entry) => importEntry(entry, cryptoImplementation))
+    entries.map((entry) =>
+      importEntry(entry, cryptoImplementation, options.workload === "search_worker")
+    )
   );
   const byId = new Map(imported.map((item) => [selectorIdentity(item.entry), item]));
   const active = new Map(
@@ -292,6 +329,33 @@ export async function createLocalEnvironmentKeyResolver(
     return Object.freeze({ reference: reference(item.entry), key: item.key });
   }
 
+  const contentKeyResolver: OwnerBoundKeyResolver["contentKeyResolver"] = (bindingValue) => {
+    const binding = bindingWithPurpose(bindingValue, "object_wrap");
+    assertWorkloadCanAccess(options.workload, binding.keyClass, binding.purpose);
+    return (keyId: string): Promise<KeyEncryptionKey | null> => {
+      return Promise.resolve().then(() => {
+        const item = getById(parseKeySelector({ ...binding, keyId }));
+        return item === null ? null : objectResult(item).key;
+      });
+    };
+  };
+
+  const resolveObjectWrappingKey: OwnerBoundKeyResolver["resolveObjectWrappingKey"] = (
+    selectorValue
+  ) => {
+    return Promise.resolve().then(() => {
+      const item = getById(selectorWithPurpose(selectorValue, "object_wrap"));
+      return item === null ? null : objectResult(item);
+    });
+  };
+
+  if (options.workload === "search_worker") {
+    return Object.freeze({
+      contentKeyResolver,
+      resolveObjectWrappingKey
+    }) as LocalEnvironmentKeyResolverForWorkload<Workload>;
+  }
+
   return Object.freeze({
     activeContentMacKey(bindingValue): Promise<ManagedContentMacKey> {
       return Promise.resolve().then(() =>
@@ -303,28 +367,14 @@ export async function createLocalEnvironmentKeyResolver(
         objectResult(getActive(bindingWithPurpose(bindingValue, "object_wrap")))
       );
     },
-    contentKeyResolver(bindingValue) {
-      const binding = bindingWithPurpose(bindingValue, "object_wrap");
-      assertWorkloadCanAccess(options.workload, binding.keyClass, binding.purpose);
-      return (keyId: string): Promise<KeyEncryptionKey | null> => {
-        return Promise.resolve().then(() => {
-          const item = getById(parseKeySelector({ ...binding, keyId }));
-          return item === null ? null : objectResult(item).key;
-        });
-      };
-    },
+    contentKeyResolver,
     resolveContentMacKey(selectorValue): Promise<ManagedContentMacKey | null> {
       return Promise.resolve().then(() => {
         const item = getById(selectorWithPurpose(selectorValue, "content_mac"));
         return item === null ? null : macResult(item);
       });
     },
-    resolveObjectWrappingKey(selectorValue): Promise<ManagedObjectWrappingKey | null> {
-      return Promise.resolve().then(() => {
-        const item = getById(selectorWithPurpose(selectorValue, "object_wrap"));
-        return item === null ? null : objectResult(item);
-      });
-    }
+    resolveObjectWrappingKey
   });
 }
 

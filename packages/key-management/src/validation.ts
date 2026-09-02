@@ -400,7 +400,7 @@ export function parseRootKeySet(value: unknown): RootKeySet {
 
 export function parseWorkloadRootKeySet(value: unknown, workload: KeyWorkload): WorkloadRootKeySet {
   assertWorkload(workload);
-  if (workload === "index_worker") {
+  if (workload === "index_worker" || workload === "search_worker") {
     return parseRootKeyClasses(value, ["ai_assisted"], ["object_wrap"]) as IndexWorkerRootKeySet;
   }
   if (workload === "organization_worker") {
@@ -501,7 +501,8 @@ export function assertWorkloadCanAccess(
   assertWorkload(workload);
   if (
     (workload === "organization_worker" && keyClass === "private_manual") ||
-    (workload === "index_worker" && (keyClass !== "ai_assisted" || purpose !== "object_wrap"))
+    ((workload === "index_worker" || workload === "search_worker") &&
+      (keyClass !== "ai_assisted" || purpose !== "object_wrap"))
   ) {
     keyManagementFailure(KeyManagementErrorCode.ACCESS_DENIED, "Key access is denied");
   }

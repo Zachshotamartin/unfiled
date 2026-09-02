@@ -82,6 +82,37 @@ importers:
         specifier: 0.28.2
         version: 0.28.2
 
+  apps/search:
+    dependencies:
+      '@unfiled/content-crypto':
+        specifier: workspace:*
+        version: link:../../packages/content-crypto
+      '@unfiled/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@unfiled/encrypted-aggregate':
+        specifier: workspace:*
+        version: link:../../packages/encrypted-aggregate
+      '@unfiled/key-management':
+        specifier: workspace:*
+        version: link:../../packages/key-management
+      '@unfiled/search':
+        specifier: workspace:*
+        version: link:../../packages/search
+      '@vercel/oidc':
+        specifier: 3.8.5
+        version: 3.8.5
+      pg:
+        specifier: 8.23.0
+        version: 8.23.0
+    devDependencies:
+      '@types/pg':
+        specifier: 8.23.1
+        version: 8.23.1
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
+
   apps/verifier:
     dependencies:
       '@aws-sdk/client-kms':

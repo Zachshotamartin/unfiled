@@ -382,4 +382,49 @@ describe("Supabase manual-note repository", () => {
     expect(replay.mutation).toMatchObject({ id: first.mutation.id, replayed: true });
     expect(fetchMock).toHaveBeenCalledTimes(7);
   });
+
+  it("hydrates lexical display fields and score from the current owner-authorized note", async () => {
+    configure();
+    const staleCanary = "STALE SEARCH ROW MUST NOT ESCAPE";
+    const currentNote = {
+      ...storedMutation(3, "Fresh current body for alpha").note,
+      title: "Current alpha",
+      spacePath: "Current / Space"
+    };
+    const responses = [
+      [
+        {
+          note_id: NOTE_ID,
+          rank: 999,
+          snippet: staleCanary,
+          space_path: staleCanary
+        }
+      ],
+      [currentNote],
+      [],
+      []
+    ];
+    const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(json(responses.shift())));
+    vi.stubGlobal("fetch", fetchMock);
+    const repository = new SupabaseHttpManualNotesRepository();
+
+    const result = await repository.search(context, "current alpha", {
+      archived: "exclude",
+      limit: 10,
+      offset: 0
+    });
+
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0]).toMatchObject({
+      note: {
+        id: NOTE_ID,
+        spacePath: "Current / Space",
+        title: "Current alpha"
+      },
+      score: 1,
+      snippet: "Fresh current body for alpha"
+    });
+    expect(JSON.stringify(result)).not.toContain(staleCanary);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
 });

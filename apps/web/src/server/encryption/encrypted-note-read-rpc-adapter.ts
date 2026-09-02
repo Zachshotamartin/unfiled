@@ -421,7 +421,7 @@ function keyClass(value: unknown, failure: Failure): KeyClass {
   return value;
 }
 
-function parseStoredCipher<Kind extends AggregateContentKind>(
+export function parseStoredCipher<Kind extends AggregateContentKind>(
   value: unknown,
   expected: Readonly<{
     ownerId: string;
@@ -470,7 +470,11 @@ function parseStoredCipher<Kind extends AggregateContentKind>(
   });
 }
 
-function parseStoredMac(value: unknown, expectedClass: KeyClass, failure: Failure): KeyedMacRecord {
+export function parseStoredMac(
+  value: unknown,
+  expectedClass: KeyClass,
+  failure: Failure
+): KeyedMacRecord {
   const record = exactRecord(
     value,
     ["mac", "keyId", "keyClass", "keyPurpose", "keyVersion"],

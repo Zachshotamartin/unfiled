@@ -13,6 +13,7 @@ import type {
   NoteListFilters,
   NoteMutationResult,
   NoteRecord,
+  NoteSearchOptions,
   RevisionRecord,
   SearchResponse,
   SpaceMutationRecord,
@@ -145,8 +146,7 @@ export interface ManualNotesRepository {
   search(
     context: RepositoryContext,
     query: string,
-    archived: "exclude" | "include" | "only",
-    page?: RepositoryPage
+    options: NoteSearchOptions
   ): Promise<SearchResponse>;
   unlinkTag(
     context: RepositoryContext,

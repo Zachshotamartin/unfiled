@@ -15,18 +15,26 @@ import type {
   MutationResult,
   NoteDetailResponse,
   NoteDto,
+  LogFieldValue,
   PrivacyMode
 } from "@unfiled/contracts";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { browserApi, isStaleRevision, productErrorMessage } from "@/lib/product/browser-api";
+import {
+  browserApi,
+  isAmbiguousProductMutationFailure,
+  isStaleRevision,
+  productErrorMessage,
+  retryAmbiguousProductMutation
+} from "@/lib/product/browser-api";
 import { announceProductChange, createIdempotencyKey } from "@/lib/product/client";
 import { draftSaveAttempt, type DraftSaveAttempt } from "@/lib/product/draft-save";
 import { useLiveResource } from "@/lib/product/use-live-resource";
 
 import { ChecklistSurface } from "./checklist-surface";
 import { GeneratedBlocksSurface } from "./generated-blocks-surface";
+import { LogSurface, noteWithUpdatedLogField } from "./log-surface";
 import { MarkdownPreview } from "./markdown-preview";
 import { NoteInspector } from "./note-inspector";
 import { ResourceError, ResourceSkeleton } from "./resource-states";
@@ -80,6 +88,7 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
   const [pastDrafts, setPastDrafts] = useState<readonly DraftSnapshot[]>([]);
   const [futureDrafts, setFutureDrafts] = useState<readonly DraftSnapshot[]>([]);
   const saveAttempt = useRef<DraftSaveAttempt | null>(null);
+  const logSaveAttempt = useRef<DraftSaveAttempt | null>(null);
 
   useEffect(() => {
     if (note === null) return;
@@ -93,6 +102,7 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
       setPastDrafts([]);
       setFutureDrafts([]);
       saveAttempt.current = null;
+      logSaveAttempt.current = null;
       return;
     }
     if (dirty && draftRevision !== note.currentRevision) {
@@ -131,6 +141,7 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
       setPastDrafts([]);
       setFutureDrafts([]);
       saveAttempt.current = null;
+      logSaveAttempt.current = null;
       setUndo(
         result.undo.eligible
           ? { mutationId: result.mutationId, revision: result.note.currentRevision }
@@ -158,6 +169,7 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
       setDirty(differsFromNote(next, note));
       setMessage(null);
       saveAttempt.current = null;
+      logSaveAttempt.current = null;
     },
     [body, note, privacy, title]
   );
@@ -174,6 +186,7 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
     setDirty(differsFromNote(previous, note));
     setMessage("Draft edit undone");
     saveAttempt.current = null;
+    logSaveAttempt.current = null;
   }, [body, note, pastDrafts, pending, privacy, title]);
 
   const redoDraft = useCallback((): void => {
@@ -263,6 +276,60 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
       if (isStaleRevision(reason))
         setConflict(productErrorMessage(reason, "This note changed elsewhere."));
       else setError(productErrorMessage(reason, "The checklist change did not save."));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function updateLogField(
+    entryId: EntityId<"ent">,
+    fieldKey: string,
+    value: LogFieldValue
+  ): Promise<void> {
+    if (note === null || pending || dirty || conflict !== null) return;
+    const before = note;
+    const optimistic = noteWithUpdatedLogField(note, { entryId, fieldKey, value });
+    const fingerprint = JSON.stringify({
+      entryId,
+      expectedRevision: note.currentRevision,
+      fieldKey,
+      noteId: note.id,
+      value
+    });
+    const attempt = draftSaveAttempt(logSaveAttempt.current, fingerprint, createIdempotencyKey);
+    logSaveAttempt.current = attempt;
+    const request = {
+      expectedRevision: note.currentRevision,
+      idempotencyKey: attempt.idempotencyKey,
+      operations: [{ type: "update_log_field" as const, entryId, fieldPath: [fieldKey], value }]
+    };
+    resource.setData({ note: optimistic });
+    setPending(true);
+    setError(null);
+    try {
+      // A response can disappear after the server commits. Replay the exact
+      // request once so the durable idempotency receipt decides the outcome.
+      const result = await retryAmbiguousProductMutation(() =>
+        browserApi.applyNoteOperations(note.id, request)
+      );
+      acceptMutation(result, `${fieldKey} updated`);
+      logSaveAttempt.current = null;
+      announceProductChange(`note:${note.id}`);
+    } catch (reason) {
+      if (!isAmbiguousProductMutationFailure(reason)) logSaveAttempt.current = null;
+      resource.setData({ note: before });
+      await resource.refresh();
+      if (isStaleRevision(reason))
+        setConflict(productErrorMessage(reason, "This log changed elsewhere."));
+      else
+        setError(
+          productErrorMessage(
+            reason,
+            isAmbiguousProductMutationFailure(reason)
+              ? "The result could not be confirmed. Retry to check the same change safely."
+              : "The log field change did not save."
+          )
+        );
     } finally {
       setPending(false);
     }
@@ -427,16 +494,25 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
                 maxLength={200}
                 onChange={(event) => updateDraft({ title: event.target.value, body, privacy })}
               />
-              <label htmlFor="note-body" className="sr-only">
-                Note body in Markdown
-              </label>
-              <textarea
-                id="note-body"
-                className="editor-body"
-                value={body}
-                maxLength={200_000}
-                onChange={(event) => updateDraft({ title, body: event.target.value, privacy })}
-              />
+              {note.type === "log" ? (
+                <p className="log-editor-guidance">
+                  Edit this note’s structured values below. Each saved field creates a revision you
+                  can undo.
+                </p>
+              ) : (
+                <>
+                  <label htmlFor="note-body" className="sr-only">
+                    Note body in Markdown
+                  </label>
+                  <textarea
+                    id="note-body"
+                    className="editor-body"
+                    value={body}
+                    maxLength={200_000}
+                    onChange={(event) => updateDraft({ title, body: event.target.value, privacy })}
+                  />
+                </>
+              )}
             </>
           )}
         </div>
@@ -445,6 +521,12 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
           note={note}
           disabled={pending || conflict !== null}
           onToggle={(itemId, checked) => void toggleItem(itemId, checked)}
+        />
+
+        <LogSurface
+          note={note}
+          disabled={pending || dirty || conflict !== null || resource.offline}
+          onUpdate={({ entryId, fieldKey, value }) => void updateLogField(entryId, fieldKey, value)}
         />
 
         <GeneratedBlocksSurface noteId={note.id} />

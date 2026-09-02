@@ -8,6 +8,7 @@ import { useLiveResource } from "@/lib/product/use-live-resource";
 
 import { ResourceError, ResourceSkeleton } from "./resource-states";
 import { AiSettings } from "./ai-settings";
+import { AccountDataControls } from "./account-data-controls";
 import { RoutingRulesSettings } from "./routing-rules-settings";
 
 export function SettingsView() {
@@ -40,6 +41,7 @@ export function SettingsView() {
       </section>
       <AiSettings />
       <RoutingRulesSettings />
+      <AccountDataControls />
       <section className="settings-row">
         <div>
           <h2 className="text-lg font-medium">Private manual notes</h2>

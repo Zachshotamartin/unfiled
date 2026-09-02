@@ -42,12 +42,21 @@ struct SettingsView: View {
     let hasPendingProviderKeyRetry: Bool
     let aiSettingsError: String?
     let providerKeyError: String?
+    let accountExportArtifact: AccountExportArtifact?
+    let isPreparingAccountExport: Bool
+    let accountExportError: String?
+    let isDeletingAccount: Bool
+    let hasPendingAccountDeletionReplay: Bool
+    let accountDeletionError: String?
     let onRefreshAISettings: @MainActor () async -> Void
     let onSaveAISettings: @MainActor (AISettingsDraft) async -> Bool
     let onDiscardAISettingsRetry: @MainActor () async -> UserSettings?
     let onSaveProviderKey: @MainActor (String) async -> Bool
     let onDiscardProviderKeyRetry: @MainActor () -> Void
     let onDeleteProviderKey: @MainActor () async -> Bool
+    let onPrepareAccountExport: @MainActor () async -> Void
+    let onDiscardAccountExport: @MainActor (AccountExportArtifact) -> Void
+    let onDeleteAccount: @MainActor () async -> Bool
     let onOpenRoutingRules: @MainActor () -> Void
     let onSignOut: @MainActor () async -> Void
 
@@ -81,6 +90,17 @@ struct SettingsView: View {
                 }
 
                 accountAndDeviceSettings
+                AccountDataControls(
+                    exportArtifact: accountExportArtifact,
+                    isPreparingExport: isPreparingAccountExport,
+                    exportError: accountExportError,
+                    isDeletingAccount: isDeletingAccount,
+                    hasPendingDeletionReplay: hasPendingAccountDeletionReplay,
+                    deletionError: accountDeletionError,
+                    onPrepareExport: onPrepareAccountExport,
+                    onDiscardExport: onDiscardAccountExport,
+                    onDeleteAccount: onDeleteAccount
+                )
                 signOutAction
             }
             .padding(.horizontal, UnfiledTheme.screenPadding)
@@ -578,7 +598,8 @@ struct SettingsView: View {
 
     private var isBusy: Bool {
         isLoadingAISettings || isSavingAISettings || isMutatingProviderKey ||
-            isReconcilingAISettingsRetry || isSigningOut
+            isReconcilingAISettingsRetry || isSigningOut || isPreparingAccountExport ||
+            isDeletingAccount
     }
 
     private var canSubmitProviderKey: Bool {

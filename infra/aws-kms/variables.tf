@@ -1,10 +1,21 @@
 variable "aws_region" {
-  description = "AWS region that owns the Unfiled production KMS keys."
+  description = "AWS region that owns this Unfiled environment's KMS keys."
   type        = string
 
   validation {
     condition     = can(regex("^[a-z]{2}(?:-gov)?-[a-z]+-[0-9]+$", var.aws_region))
     error_message = "aws_region must be a valid AWS region identifier."
+  }
+}
+
+variable "deployment_environment" {
+  description = "Exact Vercel deployment environment trusted by this isolated Terraform stack. Production and Preview must use separate state, role names, aliases, and KMS keys."
+  type        = string
+  default     = "production"
+
+  validation {
+    condition     = contains(["production", "preview"], var.deployment_environment)
+    error_message = "deployment_environment must be exactly production or preview."
   }
 }
 
@@ -70,19 +81,35 @@ variable "organizer_project_name" {
   }
 }
 
+variable "search_project_name" {
+  description = "Exact Vercel project name for the isolated owner-search workload. Each stack trusts only this project's exact selected-environment subject; Preview requires separate state, roles, and keys."
+  type        = string
+
+  validation {
+    condition = (
+      can(regex("^[a-z0-9](?:[a-z0-9_-]{0,98}[a-z0-9])?$", var.search_project_name)) &&
+      var.search_project_name != var.web_project_name &&
+      var.search_project_name != var.worker_project_name &&
+      var.search_project_name != var.verifier_project_name &&
+      var.search_project_name != var.organizer_project_name
+    )
+    error_message = "search_project_name must be an exact Vercel project name distinct from web_project_name, worker_project_name, verifier_project_name, and organizer_project_name."
+  }
+}
+
 variable "key_administrator_arns" {
-  description = "Dedicated human or break-glass IAM principals that administer keys and can recover policy control. Every ARN must belong to the current account and partition."
+  description = "At least two distinct dedicated human or break-glass IAM principals that administer keys and can independently recover policy control. Every ARN must belong to the current account and partition."
   type        = list(string)
 
   validation {
     condition = (
-      length(var.key_administrator_arns) > 0 &&
+      length(var.key_administrator_arns) >= 2 &&
       length(distinct(var.key_administrator_arns)) == length(var.key_administrator_arns) &&
       alltrue([
         for arn in var.key_administrator_arns : can(regex("^arn:[^:]+:iam::[0-9]{12}:(?:role|user)/.+$", arn))
       ])
     )
-    error_message = "Provide at least one unique explicit IAM role/user ARN for key administration."
+    error_message = "Provide at least two distinct explicit IAM role/user ARNs for independent key-policy recovery."
   }
 }
 
@@ -212,18 +239,29 @@ variable "oidc_audience" {
 
   validation {
     condition     = var.oidc_audience == "sts.amazonaws.com"
-    error_message = "The checked-in production policy intentionally accepts only sts.amazonaws.com."
+    error_message = "Every environment policy intentionally accepts only sts.amazonaws.com."
   }
 }
 
 variable "resource_name_prefix" {
-  description = "Prefix for AWS aliases and IAM role names."
+  description = "Environment-unique prefix for IAM role and AWS resource names."
   type        = string
   default     = "unfiled-production"
 
   validation {
     condition     = can(regex("^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$", var.resource_name_prefix))
     error_message = "resource_name_prefix must be a short lowercase AWS-safe name."
+  }
+}
+
+variable "kms_alias_namespace" {
+  description = "Environment-unique path segment under alias/ for the four stable KMS aliases. Preview must never reuse the Production namespace."
+  type        = string
+  default     = "unfiled"
+
+  validation {
+    condition     = can(regex("^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$", var.kms_alias_namespace))
+    error_message = "kms_alias_namespace must be a short lowercase AWS KMS alias-safe path segment."
   }
 }
 

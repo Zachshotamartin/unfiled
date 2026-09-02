@@ -41,7 +41,7 @@ extension APIClient {
               }) ?? true else {
             throw APIClientError.invalidRequest
         }
-        return try await post("/search", body: request)
+        return try await post("/search", body: request, requirePrivateNoStore: true)
     }
 
     public func listReviewItems(_ query: ReviewItemListQuery = .init()) async throws -> ListReviewItemsResponse {

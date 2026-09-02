@@ -1,4 +1,403 @@
 @layer components {
+  .account-data-controls {
+    align-items: flex-start;
+  }
+
+  .account-export-action {
+    width: fit-content;
+    margin-top: 1.25rem;
+  }
+
+  .account-delete-action,
+  .account-delete-confirm {
+    display: inline-flex;
+    min-height: 2.75rem;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border: 1px solid color-mix(in srgb, var(--color-danger) 55%, var(--color-border));
+    border-radius: var(--radius-button);
+    background: transparent;
+    padding: 0.75rem 1rem;
+    color: var(--color-danger);
+    font-weight: 650;
+    white-space: nowrap;
+  }
+
+  .account-delete-confirm {
+    width: fit-content;
+    background: var(--color-danger);
+    color: var(--color-canvas);
+  }
+
+  .account-delete-action:hover,
+  .account-delete-confirm:hover:not(:disabled) {
+    border-color: var(--color-danger);
+  }
+
+  .account-delete-action:active,
+  .account-delete-confirm:active:not(:disabled) {
+    transform: translateY(1px);
+  }
+
+  .account-delete-confirm:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  .account-deletion-confirmation {
+    display: grid;
+    width: min(100%, 35rem);
+    gap: 1.25rem;
+    border: 1px solid color-mix(in srgb, var(--color-danger) 45%, var(--color-border));
+    border-radius: var(--radius-container);
+    padding: 1.25rem;
+    background: var(--color-surface);
+  }
+
+  .account-deletion-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .account-deletion-heading h3,
+  .account-deleted-receipt h2 {
+    font-size: 1.15rem;
+    font-weight: 650;
+  }
+
+  .account-deletion-heading p,
+  .account-deleted-receipt p {
+    margin-top: 0.5rem;
+    color: var(--color-text-secondary);
+    font-size: 0.82rem;
+    line-height: 1.55;
+  }
+
+  .account-deletion-field {
+    display: grid;
+    gap: 0.5rem;
+  }
+
+  .account-deletion-field label {
+    color: var(--color-text-primary);
+    font-size: 0.8rem;
+    font-weight: 650;
+  }
+
+  .account-deletion-field input {
+    width: 100%;
+    min-height: 2.75rem;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-input);
+    background: var(--color-canvas);
+    padding: 0.65rem 0.8rem;
+    font-family: var(--font-geist-mono), monospace;
+    outline: none;
+  }
+
+  .account-deletion-field input:focus {
+    border-color: var(--color-danger);
+  }
+
+  .account-deletion-field p,
+  .account-deletion-error {
+    min-height: 1rem;
+    color: var(--color-text-disabled);
+    font-size: 0.72rem;
+  }
+
+  .account-deletion-error {
+    color: var(--color-danger);
+  }
+
+  .account-deleted-receipt {
+    display: grid;
+    justify-items: start;
+    gap: 0.75rem;
+    border-top: 1px solid var(--color-border);
+    padding: 2rem 0;
+  }
+
+  .log-editor-guidance {
+    max-width: 38rem;
+    margin-top: 2rem;
+    color: var(--color-text-secondary);
+    font-size: 0.9rem;
+    line-height: 1.65;
+  }
+
+  .log-surface {
+    width: min(100% - 2rem, 47rem);
+    margin: 0 auto 2.5rem;
+    border-top: 1px solid var(--color-border);
+  }
+
+  .log-surface > header {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1.5rem 0 1rem;
+  }
+
+  .log-surface h2 {
+    margin-top: 0.35rem;
+    font-size: 1.35rem;
+    font-weight: 610;
+    letter-spacing: -0.025em;
+  }
+
+  .log-surface > header > p,
+  .log-entry > time {
+    color: var(--color-text-disabled);
+    font-family: var(--font-geist-mono), monospace;
+    font-size: 0.68rem;
+  }
+
+  .log-entry {
+    border-top: 1px solid var(--color-border);
+    padding: 1.25rem 0 1.5rem;
+  }
+
+  .log-field-list {
+    display: grid;
+    gap: 1rem;
+    margin-top: 1rem;
+  }
+
+  .log-field {
+    display: grid;
+    gap: 0.45rem;
+  }
+
+  .log-field > label {
+    color: var(--color-text-secondary);
+    font-family: var(--font-geist-mono), monospace;
+    font-size: 0.72rem;
+    font-weight: 600;
+  }
+
+  .log-field-editor {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .log-field-editor > input {
+    width: 100%;
+    min-height: 2.75rem;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-input);
+    background: transparent;
+    padding: 0.65rem 0.8rem;
+    outline: none;
+  }
+
+  .log-field-editor > input:focus {
+    border-color: var(--color-accent);
+  }
+
+  .log-field-editor > input::placeholder {
+    color: var(--color-text-disabled);
+  }
+
+  .log-stepper {
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .log-stepper button,
+  .log-field-save {
+    display: inline-grid;
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+    place-items: center;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-button);
+    background: var(--color-surface);
+    color: var(--color-text-primary);
+  }
+
+  .log-field-save {
+    min-width: 4.5rem;
+    padding: 0 0.9rem;
+    color: var(--color-accent);
+    font-size: 0.8rem;
+    font-weight: 650;
+  }
+
+  .log-stepper button:hover,
+  .log-field-save:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+  }
+
+  .log-stepper button:disabled,
+  .log-field-save:disabled,
+  .log-field-editor > input:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  .log-field > small {
+    color: var(--color-text-disabled);
+    font-family: var(--font-geist-mono), monospace;
+    font-size: 0.65rem;
+  }
+
+  .log-empty {
+    border-top: 1px solid var(--color-border);
+    padding: 2rem 0;
+    color: var(--color-text-secondary);
+    font-size: 0.9rem;
+  }
+
+  @media (max-width: 40rem) {
+    .account-data-controls {
+      display: grid;
+      justify-content: stretch;
+    }
+
+    .account-delete-action,
+    .account-deletion-confirmation {
+      justify-self: stretch;
+      width: 100%;
+    }
+
+    .log-field-editor {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .log-field-save {
+      grid-column: 1 / -1;
+      justify-self: start;
+    }
+  }
+
+  .note-context-list {
+    margin-top: 1rem;
+    border-top: 1px solid var(--color-border);
+  }
+
+  .note-context-source {
+    border-bottom: 1px solid var(--color-border);
+    padding: 1rem 0;
+  }
+
+  .note-context-source > p {
+    max-height: 12rem;
+    overflow: auto;
+    color: var(--color-text-primary);
+    font-size: 0.82rem;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+
+  .note-context-source footer,
+  .note-context-backlink small {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.75rem;
+    margin-top: 0.7rem;
+    color: var(--color-text-disabled);
+    font-family: var(--font-geist-mono), monospace;
+    font-size: 0.65rem;
+  }
+
+  .note-context-source footer strong {
+    color: var(--color-warning);
+    font-weight: 600;
+  }
+
+  .note-context-backlink {
+    display: flex;
+    min-height: 3.75rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    border-bottom: 1px solid var(--color-border);
+    color: var(--color-text-primary);
+  }
+
+  .note-context-backlink > span {
+    min-width: 0;
+  }
+
+  .note-context-backlink strong {
+    display: block;
+    overflow: hidden;
+    font-size: 0.82rem;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .note-context-backlink small time::before {
+    content: "/";
+    margin-right: 0.75rem;
+  }
+
+  .note-context-backlink > svg {
+    flex: none;
+    color: var(--color-accent);
+  }
+
+  .note-context-empty,
+  .note-context-state {
+    margin-top: 1rem;
+    color: var(--color-text-secondary);
+    font-size: 0.8rem;
+    line-height: 1.55;
+  }
+
+  .note-context-state {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+
+  .note-context-state > svg {
+    flex: none;
+    margin-top: 0.15rem;
+    color: var(--color-warning);
+  }
+
+  .note-context-state strong {
+    color: var(--color-text-primary);
+  }
+
+  .note-context-state .quiet-button {
+    margin-top: 0.35rem;
+  }
+
+  .note-context-loading {
+    display: grid;
+    gap: 0.65rem;
+    margin-top: 1rem;
+  }
+
+  .note-context-loading span {
+    display: block;
+    height: 3.75rem;
+  }
+
+  .note-context-page-controls {
+    display: grid;
+    justify-items: start;
+    gap: 0.5rem;
+    padding-top: 1rem;
+  }
+
+  .note-context-page-controls p {
+    min-height: 1rem;
+    color: var(--color-danger);
+    font-size: 0.72rem;
+  }
+
   .create-relations {
     border-bottom: 1px solid var(--color-border);
     padding: 0 1rem;

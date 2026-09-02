@@ -176,6 +176,61 @@ describe("owner data handlers", () => {
     privateHeaders(response);
   });
 
+  it("fails closed in production until deletion-replay rate limiting has its own pepper", async () => {
+    const environment = process.env as Record<string, string | undefined>;
+    const previousNodeEnvironment = environment.NODE_ENV;
+    const previousPepper = environment.ACCOUNT_DELETION_REPLAY_RATE_LIMIT_PEPPER;
+    const getDeletionReceipt = vi.fn(() => Promise.resolve({ ...receipt, replayed: true }));
+    const handlers = createOwnerDataHandlers({
+      service: {
+        exportAccount: vi.fn(),
+        deleteAccount: vi.fn(),
+        getDeletionReceipt
+      }
+    });
+    const request = () =>
+      new Request("https://unfiled.test/api/v1/me/deletion-receipt", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-forwarded-for": "192.0.2.5"
+        },
+        body: JSON.stringify({ idempotencyKey: TOKEN })
+      });
+
+    try {
+      environment.NODE_ENV = "production";
+      delete environment.ACCOUNT_DELETION_REPLAY_RATE_LIMIT_PEPPER;
+      const missing = await handlers.replayDeletionReceipt(request());
+      expect(missing.status).toBe(503);
+      privateHeaders(missing);
+
+      environment.ACCOUNT_DELETION_REPLAY_RATE_LIMIT_PEPPER = "x".repeat(31);
+      const short = await handlers.replayDeletionReceipt(request());
+      expect(short.status).toBe(503);
+      privateHeaders(short);
+      expect(getDeletionReceipt).not.toHaveBeenCalled();
+
+      environment.ACCOUNT_DELETION_REPLAY_RATE_LIMIT_PEPPER = "x".repeat(32);
+      const configuredRequest = request();
+      const configured = await handlers.replayDeletionReceipt(configuredRequest);
+      expect(configured.status).toBe(200);
+      expect(getDeletionReceipt).toHaveBeenCalledWith(
+        TOKEN,
+        expect.stringMatching(/^[0-9a-f]{64}$/u),
+        configuredRequest.signal
+      );
+    } finally {
+      if (previousNodeEnvironment === undefined) delete environment.NODE_ENV;
+      else environment.NODE_ENV = previousNodeEnvironment;
+      if (previousPepper === undefined) {
+        delete environment.ACCOUNT_DELETION_REPLAY_RATE_LIMIT_PEPPER;
+      } else {
+        environment.ACCOUNT_DELETION_REPLAY_RATE_LIMIT_PEPPER = previousPepper;
+      }
+    }
+  });
+
   it("makes missing and expired receipt capabilities indistinguishable and keeps errors private", async () => {
     const missing = new HttpError(404, ApiErrorCode.NOT_FOUND, "That item was not found.");
     const handlers = createOwnerDataHandlers({

@@ -3,7 +3,8 @@ export {
   type AwsKmsEnvelopeCustodianOptions,
   type IndexWorkerEnvelopeCustodianOptions,
   type InteractiveEnvelopeCustodianOptions,
-  type OrganizationWorkerEnvelopeCustodianOptions
+  type OrganizationWorkerEnvelopeCustodianOptions,
+  type SearchWorkerEnvelopeCustodianOptions
 } from "./aws-kms-custodian.js";
 export {
   createAwsSdkKmsTransport,
@@ -29,6 +30,7 @@ export {
 export {
   createLocalEnvironmentKeyResolver,
   localEnvironmentKeyConfiguration,
+  type LocalEnvironmentKeyResolverForWorkload,
   type LocalEnvironmentKeyResolverOptions
 } from "./local-environment.js";
 export {
@@ -53,6 +55,8 @@ export {
   type AiAssistedRetiredRootKeySet,
   type AiAssistedRootKeySet,
   type CreateIntermediateKeyRequest,
+  type DecryptOnlyIntermediateKeyCustodian,
+  type DecryptOnlyOwnerBoundKeyResolver,
   type IntermediateKeyCustodian,
   type InteractiveKeyCustodian,
   type IndexWorkerRetiredRootKeySet,
@@ -75,6 +79,8 @@ export {
   type PurposeRootKeySet,
   type RetiredRootKeySet,
   type RootKeySet,
+  type SearchWorkerRetiredRootKeySet,
+  type SearchWorkerRootKeySet,
   type WorkloadRootKeySet
 } from "./types.js";
 export {

@@ -47,7 +47,8 @@ final class SearchAndNoteContextContractTests: XCTestCase {
             XCTAssertEqual(body["limit"] as? Int, 25)
             return apiResponse(
                 for: urlRequest,
-                json: #"{"items":[],"pageInfo":{"hasMore":false,"nextCursor":null}}"#
+                json: #"{"items":[],"pageInfo":{"hasMore":false,"nextCursor":null}}"#,
+                privateNoStore: true
             )
         }
         _ = try await makeStubbedAPIClient(tokenProvider: provider).searchNotes(request)
@@ -199,7 +200,8 @@ final class SearchAndNoteContextContractTests: XCTestCase {
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer old-token")
             return apiResponse(
                 for: request,
-                json: #"{"items":[],"pageInfo":{"hasMore":false,"nextCursor":null}}"#
+                json: #"{"items":[],"pageInfo":{"hasMore":false,"nextCursor":null}}"#,
+                privateNoStore: true
             )
         }
         _ = try await client.listNoteSources(
@@ -215,13 +217,31 @@ final class SearchAndNoteContextContractTests: XCTestCase {
             XCTAssertEqual(query?.first(where: { $0.name == "cursor" })?.value, "backlink-cursor")
             return apiResponse(
                 for: request,
-                json: #"{"items":[],"pageInfo":{"hasMore":false,"nextCursor":null}}"#
+                json: #"{"items":[],"pageInfo":{"hasMore":false,"nextCursor":null}}"#,
+                privateNoStore: true
             )
         }
         _ = try await client.listNoteBacklinks(
             note,
             query: .init(cursor: "backlink-cursor", limit: 19)
         )
+    }
+
+    func testNoteContextRejectsCacheablePlaintextResponses() async throws {
+        let provider = APITokenProviderStub()
+        let note = try NoteID(validating: "note_00000000000000000000000000")
+        APIURLProtocolStub.install { request in
+            apiResponse(
+                for: request,
+                json: #"{"items":[],"pageInfo":{"hasMore":false,"nextCursor":null}}"#
+            )
+        }
+
+        await XCTAssertSearchThrowsAsync(
+            try await makeStubbedAPIClient(tokenProvider: provider).listNoteSources(note)
+        ) { error in
+            XCTAssertEqual(error as? APIClientError, .malformedResponse(status: 200))
+        }
     }
 }
 

@@ -47,6 +47,7 @@ enum PresentationMapping {
             spacePath: spacePath(value.spaceId, spaces: spaces),
             currentRevision: value.currentRevision,
             checklistItems: checklist(value.structuredData),
+            logEntries: logEntries(value.structuredData),
             provenance: nil
         )
     }
@@ -61,6 +62,7 @@ enum PresentationMapping {
             spacePath: spacePath(value.spaceId, spaces: spaces),
             currentRevision: value.revision,
             checklistItems: checklist(value.structuredData),
+            logEntries: logEntries(value.structuredData),
             provenance: "Read-only revision snapshot"
         )
     }
@@ -267,6 +269,29 @@ enum PresentationMapping {
             }
         case .log, .plain:
             return []
+        }
+    }
+
+    private static func logEntries(_ structuredData: NoteStructuredData) -> [LogEntryPresentation] {
+        guard case let .log(entries) = structuredData else { return [] }
+        return entries.sorted {
+            if $0.occurredAt != $1.occurredAt { return $0.occurredAt > $1.occurredAt }
+            return $0.id.rawValue > $1.id.rawValue
+        }.map { entry in
+            let fields = entry.fields.keys.sorted().compactMap { key -> LogFieldPresentation? in
+                guard let value = entry.fields[key] else { return nil }
+                return LogFieldPresentation(
+                    id: key,
+                    path: [key],
+                    label: key.replacingOccurrences(of: "_", with: " ").capitalized,
+                    value: value
+                )
+            }
+            return LogEntryPresentation(
+                id: entry.id.rawValue,
+                occurredAt: entry.occurredAt,
+                fields: fields
+            )
         }
     }
 

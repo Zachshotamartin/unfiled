@@ -22,6 +22,7 @@ import type {
   NoteListFilters,
   NoteMutationResult,
   NoteRecord,
+  NoteSearchOptions,
   RevisionRecord,
   SearchResponse,
   SpaceMutationRecord,
@@ -50,6 +51,7 @@ import {
 } from "./in-memory-support";
 import { InMemoryTaxonomy } from "./in-memory-taxonomy";
 import type { ExistingNoteWrite, ManualNotesRepository, RepositoryContext } from "./repository";
+import { noteMatchesSearchOptions } from "./search-filters";
 
 export class InMemoryManualNotesRepository implements ManualNotesRepository {
   #sequence = 100;
@@ -763,21 +765,29 @@ export class InMemoryManualNotesRepository implements ManualNotesRepository {
   public async search(
     context: RepositoryContext,
     query: string,
-    archived: "exclude" | "include" | "only",
-    page?: Readonly<{ limit: number; offset: number }>
+    options: NoteSearchOptions
   ): Promise<SearchResponse> {
     const normalized = query.trim().toLowerCase();
-    const notes = await this.listNotes(context, { archived, limit: Number.MAX_SAFE_INTEGER });
+    const notes = await this.listNotes(context, {
+      archived: options.archived,
+      limit: Number.MAX_SAFE_INTEGER,
+      ...(options.spaceId === undefined ? {} : { spaceId: options.spaceId }),
+      ...(options.type === undefined ? {} : { type: options.type })
+    });
     const matches = notes.flatMap((note) => {
+      if (!noteMatchesSearchOptions(note, options)) return [];
       const haystack = `${note.title}\n${note.bodyMarkdown}`.toLowerCase();
       if (!haystack.includes(normalized)) return [];
       const index = Math.max(0, haystack.indexOf(normalized));
       const start = Math.max(0, index - 40);
-      return [{ note, snippet: note.bodyMarkdown.slice(start, start + 180) }];
+      const normalizedTitle = note.title.trim().toLowerCase();
+      const score =
+        normalizedTitle === normalized ? 1 : normalizedTitle.includes(normalized) ? 0.8 : 0.6;
+      return [{ note, score, snippet: note.bodyMarkdown.slice(start, start + 180) }];
     });
     return {
       query,
-      results: page === undefined ? matches : matches.slice(page.offset, page.offset + page.limit)
+      results: matches.slice(options.offset ?? 0, (options.offset ?? 0) + (options.limit ?? 50))
     };
   }
 }

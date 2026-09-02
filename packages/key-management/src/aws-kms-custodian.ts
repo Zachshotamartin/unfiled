@@ -12,6 +12,7 @@ import {
   type AiAssistedRetiredRootKeySet,
   type AiAssistedRootKeySet,
   type CreateIntermediateKeyRequest,
+  type DecryptOnlyIntermediateKeyCustodian,
   type IntermediateKeyCustodian,
   type IndexWorkerRetiredRootKeySet,
   type IndexWorkerRootKeySet,
@@ -23,6 +24,8 @@ import {
   type PurposeRootKeySet,
   type RetiredRootKeySet,
   type RootKeySet,
+  type SearchWorkerRetiredRootKeySet,
+  type SearchWorkerRootKeySet,
   type WorkloadRootKeySet
 } from "./types.js";
 import {
@@ -42,6 +45,7 @@ const MAX_KMS_CIPHERTEXT_BYTES = 8_192;
 export type AwsKmsEnvelopeCustodianOptions =
   | OrganizationWorkerEnvelopeCustodianOptions
   | IndexWorkerEnvelopeCustodianOptions
+  | SearchWorkerEnvelopeCustodianOptions
   | InteractiveEnvelopeCustodianOptions;
 
 export type OrganizationWorkerEnvelopeCustodianOptions = Readonly<{
@@ -56,6 +60,13 @@ export type IndexWorkerEnvelopeCustodianOptions = Readonly<{
   retiredRoots?: IndexWorkerRetiredRootKeySet;
   transport: AwsKmsTransport;
   workload: "index_worker";
+}>;
+
+export type SearchWorkerEnvelopeCustodianOptions = Readonly<{
+  activeRoots: SearchWorkerRootKeySet;
+  retiredRoots?: SearchWorkerRetiredRootKeySet;
+  transport: AwsKmsTransport;
+  workload: "search_worker";
 }>;
 
 export type InteractiveEnvelopeCustodianOptions = Readonly<{
@@ -156,11 +167,14 @@ export function createAwsKmsEnvelopeCustodian(
   options: OrganizationWorkerEnvelopeCustodianOptions | IndexWorkerEnvelopeCustodianOptions
 ): IntermediateKeyCustodian;
 export function createAwsKmsEnvelopeCustodian(
+  options: SearchWorkerEnvelopeCustodianOptions
+): DecryptOnlyIntermediateKeyCustodian;
+export function createAwsKmsEnvelopeCustodian(
   options: InteractiveEnvelopeCustodianOptions
 ): InteractiveKeyCustodian;
 export function createAwsKmsEnvelopeCustodian(
   options: AwsKmsEnvelopeCustodianOptions
-): IntermediateKeyCustodian | InteractiveKeyCustodian {
+): DecryptOnlyIntermediateKeyCustodian | IntermediateKeyCustodian | InteractiveKeyCustodian {
   assertWorkload(options.workload);
   const activeRoots = parseWorkloadRootKeySet(options.activeRoots, options.workload);
   const retiredRoots = parseRetiredRootKeySet(options.retiredRoots, activeRoots);
@@ -261,6 +275,11 @@ export function createAwsKmsEnvelopeCustodian(
       }
     }
   };
+  if (options.workload === "search_worker") {
+    return Object.freeze({
+      withUnwrappedIntermediateKey: runtimeCustodian.withUnwrappedIntermediateKey
+    });
+  }
   if (options.workload !== "interactive_api") {
     return Object.freeze(runtimeCustodian);
   }

@@ -1,11 +1,16 @@
 import {
+  ENCRYPTED_USER_SEARCH_REQUEST_VERSION,
   ListReviewItemsResponseSchema,
   MutationResultSchema,
   NoteDetailResponseSchema,
   NoteListResponseSchema,
   SearchNotesResponseSchema,
   SpaceMutationResultSchema,
-  TagMutationResultSchema
+  TagMutationResultSchema,
+  USER_HYBRID_SEARCH_RANKING_VERSION,
+  USER_SEMANTIC_SEARCH_RANKING_VERSION,
+  type EncryptedUserSearchMaterial,
+  type EncryptedUserSearchResult
 } from "@unfiled/contracts";
 import { describe, expect, it, vi } from "vitest";
 
@@ -36,6 +41,21 @@ function request(path: string, method = "GET", body?: Record<string, unknown>): 
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) })
   });
+}
+
+function semanticResult(
+  generationRevisionToken: string,
+  items: EncryptedUserSearchResult["items"] = []
+): EncryptedUserSearchResult {
+  return {
+    searchId: "00000000-0000-4000-8000-000000000007",
+    generationId: "igen_01ARZ3NDEKTSV4RRFFQ69G5FAA",
+    generationAttestationDigest: "a".repeat(64),
+    generationRevisionToken,
+    rankingVersion: USER_SEMANTIC_SEARCH_RANKING_VERSION,
+    items: [...items],
+    scannedNoteCount: items.length
+  };
 }
 
 describe("manual note route handlers", () => {
@@ -467,16 +487,282 @@ describe("manual note route handlers", () => {
     ]);
   });
 
-  it("binds opaque randomized cursors to the normalized private query and archive filter", async () => {
+  it("dispatches semantics only for explicitly admitted ai_assisted privacy", async () => {
     const repository = new InMemoryManualNotesRepository();
     const context = { accessToken: "test-access-token", userId: USER_ID };
-    const note = await repository.getNote(context, NOTE_ID);
+    const current = await repository.getNote(context, NOTE_ID);
+    const untrustedSemanticReference = {
+      noteId: current.id,
+      indexedRevision: current.currentRevision,
+      score: 0.9,
+      title: "UNTRUSTED SEMANTIC TITLE",
+      snippet: "UNTRUSTED SEMANTIC SNIPPET"
+    };
+    const semanticQuery = vi
+      .fn()
+      .mockResolvedValue(semanticResult("generation-7", [untrustedSemanticReference]));
+    const semanticSearch = vi.fn(() => ({ search: semanticQuery }));
+    const handlers = createManualNotesHandlers({
+      authenticate: () => authenticated(),
+      getPrivateSearchCursorKey: () => PRIVATE_SEARCH_CURSOR_KEY,
+      repository,
+      semanticSearch
+    });
+
+    const nonSemanticResponses = await Promise.all([
+      handlers.search(request("/api/v1/search", "POST", { query: "milk" })),
+      handlers.search(
+        request("/api/v1/search", "POST", {
+          query: "milk",
+          privacy: "private_manual"
+        })
+      ),
+      handlers.search(
+        request("/api/v1/search", "POST", {
+          query: "milk",
+          privacy: "mixed"
+        })
+      )
+    ]);
+
+    expect(nonSemanticResponses.map(({ status }) => status)).toEqual([200, 200, 400]);
+    expect(semanticSearch).not.toHaveBeenCalled();
+    expect(semanticQuery).not.toHaveBeenCalled();
+
+    const aiResponse = await handlers.search(
+      request("/api/v1/search", "POST", {
+        query: " MILK ",
+        archive: "exclude",
+        privacy: "ai_assisted",
+        type: "list",
+        spaceId: "spc_00000000000000000000000001",
+        updatedFrom: "2026-08-01T00:00:00.000Z",
+        updatedTo: "2026-09-01T00:00:00.000Z",
+        limit: 5
+      })
+    );
+    const aiBody = (await aiResponse.json()) as { items: { title: string }[] };
+
+    expect(aiResponse.status).toBe(200);
+    expect(aiBody.items).toEqual([expect.objectContaining({ title: "Shopping" })]);
+    expect(JSON.stringify(aiBody)).not.toContain("UNTRUSTED");
+    expect(semanticSearch).toHaveBeenCalledExactlyOnceWith(
+      { accessToken: "test-access-token", userId: USER_ID },
+      expect.any(AbortSignal)
+    );
+    expect(semanticQuery).toHaveBeenCalledExactlyOnceWith(
+      {
+        requestVersion: ENCRYPTED_USER_SEARCH_REQUEST_VERSION,
+        hybridRankingVersion: USER_HYBRID_SEARCH_RANKING_VERSION,
+        query: "milk",
+        filters: {
+          archive: "exclude",
+          privacy: "ai_assisted",
+          type: "list",
+          space: { id: "spc_00000000000000000000000001", mode: "exact" },
+          tagIds: [],
+          updatedFrom: "2026-08-01T00:00:00.000Z",
+          updatedTo: "2026-09-01T00:00:00.000Z"
+        },
+        pageLimit: 5,
+        maxResults: 8,
+        continuation: null
+      },
+      expect.any(AbortSignal)
+    );
+  });
+
+  it("returns a fresh lexical-only page when semantic search fails", async () => {
+    const repository = new InMemoryManualNotesRepository();
+    const context = { accessToken: "test-access-token", userId: USER_ID };
+    const initial = await repository.getNote(context, NOTE_ID);
+    const fresh = await repository.getNote(context, "note_00000000000000000000000003");
+    const search = vi
+      .spyOn(repository, "search")
+      .mockResolvedValueOnce({
+        query: "commit",
+        results: [{ note: initial, score: 0.8, snippet: "initial snapshot" }]
+      })
+      .mockResolvedValueOnce({
+        query: "commit",
+        results: [{ note: fresh, score: 0.9, snippet: "fresh snapshot" }]
+      });
+    const handlers = createManualNotesHandlers({
+      authenticate: () => authenticated(),
+      getPrivateSearchCursorKey: () => PRIVATE_SEARCH_CURSOR_KEY,
+      repository,
+      semanticSearch: () => ({
+        search: vi.fn().mockRejectedValue(new Error("semantic provider canary"))
+      })
+    });
+
+    const response = await handlers.search(
+      request("/api/v1/search", "POST", {
+        query: "commit",
+        privacy: "ai_assisted"
+      })
+    );
+    const serialized = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(serialized).toContain("fresh snapshot");
+    expect(serialized).not.toContain("initial snapshot");
+    expect(serialized).not.toContain("semantic provider canary");
+    expect(search).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps an ai-assisted fallback cursor on one lexical-only chain through its terminal page", async () => {
+    const repository = new InMemoryManualNotesRepository();
+    const context = { accessToken: "test-access-token", userId: USER_ID };
+    const firstNote = await repository.getNote(context, NOTE_ID);
+    const secondNote = await repository.getNote(context, "note_00000000000000000000000003");
+    const thirdNote = (
+      await repository.createNote(
+        context,
+        {
+          bodyMarkdown: "Third fallback body",
+          links: [],
+          privacy: "ai_assisted",
+          spaceId: null,
+          tagIds: [],
+          title: "Third fallback",
+          type: "generic"
+        },
+        "fallback-page-three"
+      )
+    ).note;
     const search = vi.spyOn(repository, "search").mockImplementation((_context, query) =>
       Promise.resolve({
         query,
         results: [
-          { note, snippet: "" },
-          { note, snippet: "" }
+          { note: firstNote, score: 0.9, snippet: "first" },
+          { note: secondNote, score: 0.8, snippet: "second" },
+          { note: thirdNote, score: 0.7, snippet: "third" }
+        ]
+      })
+    );
+    const semanticQuery = vi.fn().mockRejectedValue(new Error("semantic provider canary"));
+    const semanticSearch = vi.fn(() => ({ search: semanticQuery }));
+    const handlers = createManualNotesHandlers({
+      authenticate: () => authenticated(),
+      getPrivateSearchCursorKey: () => PRIVATE_SEARCH_CURSOR_KEY,
+      repository,
+      semanticSearch
+    });
+    const collected: string[] = [];
+    const pageInfo: { hasMore: boolean; nextCursor: string | null }[] = [];
+    let cursor: string | null = null;
+
+    for (let pageIndex = 0; pageIndex < 3; pageIndex += 1) {
+      const response = await handlers.search(
+        request("/api/v1/search", "POST", {
+          query: "fallback",
+          privacy: "ai_assisted",
+          limit: 1,
+          ...(cursor === null ? {} : { cursor })
+        })
+      );
+      const body = (await response.json()) as {
+        items: { noteId: string }[];
+        pageInfo: { hasMore: boolean; nextCursor: string | null };
+      };
+      expect(response.status).toBe(200);
+      collected.push(...body.items.map(({ noteId }) => noteId));
+      pageInfo.push(body.pageInfo);
+      cursor = body.pageInfo.nextCursor;
+    }
+
+    expect(collected).toEqual([firstNote.id, secondNote.id, thirdNote.id]);
+    expect(new Set(collected).size).toBe(3);
+    expect(pageInfo.map(({ hasMore }) => hasMore)).toEqual([true, true, false]);
+    expect(pageInfo.at(-1)?.nextCursor).toBeNull();
+    expect(semanticSearch).toHaveBeenCalledOnce();
+    expect(semanticQuery).toHaveBeenCalledOnce();
+    expect(search).toHaveBeenCalledTimes(4);
+  });
+
+  it("keeps lexical matches after result 100 reachable through the signed cursor", async () => {
+    const repository = new InMemoryManualNotesRepository();
+    const context = { accessToken: "test-access-token", userId: USER_ID };
+    const template = await repository.getNote(context, NOTE_ID);
+    const results = Array.from({ length: 102 }, (_, index) => {
+      const ordinal = index + 1;
+      const noteId: typeof template.id = `note_${String(ordinal).padStart(26, "0")}`;
+      return {
+        note: {
+          ...template,
+          id: noteId,
+          title: `Reachable result ${ordinal}`
+        },
+        score: 0.8,
+        snippet: `reachable ${ordinal}`
+      };
+    });
+    const search = vi.spyOn(repository, "search").mockImplementation((_context, query) =>
+      Promise.resolve({
+        query,
+        results
+      })
+    );
+    const handlers = createManualNotesHandlers({
+      authenticate: () => authenticated(),
+      getPrivateSearchCursorKey: () => PRIVATE_SEARCH_CURSOR_KEY,
+      repository
+    });
+
+    const first = await handlers.search(
+      request("/api/v1/search", "POST", {
+        query: "reachable",
+        privacy: "private_manual",
+        limit: 100
+      })
+    );
+    const firstBody = (await first.json()) as {
+      items: { noteId: string }[];
+      pageInfo: { hasMore: boolean; nextCursor: string | null };
+    };
+    if (firstBody.pageInfo.nextCursor === null) throw new Error("expected a search cursor");
+    const second = await handlers.search(
+      request("/api/v1/search", "POST", {
+        query: "reachable",
+        privacy: "private_manual",
+        limit: 100,
+        cursor: firstBody.pageInfo.nextCursor
+      })
+    );
+    const secondBody = (await second.json()) as {
+      items: { noteId: string }[];
+      pageInfo: { hasMore: boolean; nextCursor: string | null };
+    };
+
+    expect(first.status).toBe(200);
+    expect(firstBody.items).toHaveLength(100);
+    expect(firstBody.pageInfo.hasMore).toBe(true);
+    expect(second.status).toBe(200);
+    expect(secondBody.items.map(({ noteId }) => noteId)).toEqual(
+      results.slice(100).map(({ note }) => note.id)
+    );
+    expect(secondBody.pageInfo).toEqual({ hasMore: false, nextCursor: null });
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(search).toHaveBeenNthCalledWith(1, context, "reachable", {
+      archived: "exclude",
+      limit: 1_000,
+      offset: 0,
+      privacy: "private_manual"
+    });
+  });
+
+  it("binds opaque randomized cursors to the normalized private query and archive filter", async () => {
+    const repository = new InMemoryManualNotesRepository();
+    const context = { accessToken: "test-access-token", userId: USER_ID };
+    const note = await repository.getNote(context, NOTE_ID);
+    const secondNote = await repository.getNote(context, "note_00000000000000000000000003");
+    const search = vi.spyOn(repository, "search").mockImplementation((_context, query) =>
+      Promise.resolve({
+        query,
+        results: [
+          { note, score: 0.8, snippet: "" },
+          { note: secondNote, score: 0.8, snippet: "" }
         ]
       })
     );
@@ -488,8 +774,10 @@ describe("manual note route handlers", () => {
 
     const first = await handlers.search(
       request("/api/v1/search", "POST", {
-        query: " private alpha ",
+        query: " PRIVATE   ALPHA ",
         archive: "exclude",
+        privacy: "private_manual",
+        type: "generic",
         limit: 1
       })
     );
@@ -497,10 +785,13 @@ describe("manual note route handlers", () => {
       request("/api/v1/search", "POST", {
         query: "private alpha",
         archive: "exclude",
+        privacy: "private_manual",
+        type: "generic",
         limit: 1
       })
     );
     const firstBody = (await first.json()) as {
+      items: { noteId: string }[];
       pageInfo: { nextCursor: string | null };
     };
     const repeatedBody = (await repeated.json()) as {
@@ -513,14 +804,22 @@ describe("manual note route handlers", () => {
       request("/api/v1/search", "POST", {
         query: "private alpha",
         archive: "exclude",
+        privacy: "private_manual",
+        type: "generic",
         cursor,
         limit: 1
       })
     );
+    const continuationBody = (await continuation.json()) as {
+      items: { noteId: string }[];
+      pageInfo: { hasMore: boolean; nextCursor: string | null };
+    };
     const crossQuery = await handlers.search(
       request("/api/v1/search", "POST", {
         query: "private beta",
         archive: "exclude",
+        privacy: "private_manual",
+        type: "generic",
         cursor,
         limit: 1
       })
@@ -529,6 +828,34 @@ describe("manual note route handlers", () => {
       request("/api/v1/search", "POST", {
         query: "private alpha",
         archive: "include",
+        privacy: "private_manual",
+        type: "generic",
+        cursor,
+        limit: 1
+      })
+    );
+    const tamperedCursor = `${cursor.startsWith("A") ? "B" : "A"}${cursor.slice(1)}`;
+    const tampered = await handlers.search(
+      request("/api/v1/search", "POST", {
+        query: "private alpha",
+        archive: "exclude",
+        privacy: "private_manual",
+        type: "generic",
+        cursor: tamperedCursor,
+        limit: 1
+      })
+    );
+    const otherOwnerHandlers = createManualNotesHandlers({
+      authenticate: () => authenticated("00000000-0000-4000-8000-000000000002"),
+      getPrivateSearchCursorKey: () => PRIVATE_SEARCH_CURSOR_KEY,
+      repository
+    });
+    const crossOwner = await otherOwnerHandlers.search(
+      request("/api/v1/search", "POST", {
+        query: "private alpha",
+        archive: "exclude",
+        privacy: "private_manual",
+        type: "generic",
         cursor,
         limit: 1
       })
@@ -536,16 +863,290 @@ describe("manual note route handlers", () => {
 
     expect(first.status).toBe(200);
     expect(continuation.status).toBe(200);
-    expect(cursor).toMatch(/^[A-Za-z0-9_-]{71}$/u);
+    expect(firstBody.items.map(({ noteId }) => noteId)).toEqual([note.id]);
+    expect(continuationBody.items.map(({ noteId }) => noteId)).toEqual([secondNote.id]);
+    expect(continuationBody.pageInfo).toEqual({ hasMore: false, nextCursor: null });
+    expect(cursor).toMatch(/^[A-Za-z0-9_-]{1,512}$/u);
     expect(Buffer.from(cursor, "base64url").toString("utf8")).not.toContain("private alpha");
     expect(repeatedBody.pageInfo.nextCursor).not.toBe(cursor);
     expect(crossQuery.status).toBe(400);
     expect(crossArchive.status).toBe(400);
+    expect(tampered.status).toBe(400);
+    expect(crossOwner.status).toBe(400);
     expect(await crossQuery.text()).not.toContain("private beta");
     expect(await crossArchive.text()).not.toContain("private alpha");
     expect(search).toHaveBeenCalledTimes(3);
     expect(search.mock.calls[0]?.[1]).toBe("private alpha");
-    expect(search.mock.calls[2]?.[3]).toEqual({ limit: 2, offset: 1 });
+    expect(search.mock.calls[2]?.[2]).toEqual({
+      archived: "exclude",
+      limit: 1_000,
+      offset: 0,
+      privacy: "private_manual",
+      type: "generic"
+    });
+  });
+
+  it("binds every normalized search filter into the signed cursor", async () => {
+    const repository = new InMemoryManualNotesRepository();
+    const context = { accessToken: "test-access-token", userId: USER_ID };
+    const firstNote = await repository.getNote(context, NOTE_ID);
+    const secondNote = await repository.getNote(context, "note_00000000000000000000000003");
+    const search = vi.spyOn(repository, "search").mockImplementation((_context, query) =>
+      Promise.resolve({
+        query,
+        results: [
+          { note: firstNote, score: 0.8, snippet: "first" },
+          { note: secondNote, score: 0.7, snippet: "second" }
+        ]
+      })
+    );
+    const handlers = createManualNotesHandlers({
+      authenticate: () => authenticated(),
+      getPrivateSearchCursorKey: () => PRIVATE_SEARCH_CURSOR_KEY,
+      repository
+    });
+    const filters = {
+      query: "private alpha",
+      archive: "exclude",
+      privacy: "private_manual",
+      type: "generic",
+      spaceId: "spc_00000000000000000000000001",
+      tagIds: ["tag_00000000000000000000000002", "tag_00000000000000000000000001"],
+      updatedFrom: "2026-08-01T00:00:00.000Z",
+      updatedTo: "2026-09-01T00:00:00.000Z",
+      limit: 1
+    };
+    const first = await handlers.search(request("/api/v1/search", "POST", filters));
+    const firstBody = (await first.json()) as { pageInfo: { nextCursor: string | null } };
+    const cursor = firstBody.pageInfo.nextCursor;
+    if (cursor === null) throw new Error("expected a private search cursor");
+
+    const variants: Record<string, unknown>[] = [
+      { ...filters, archive: "include", cursor },
+      { ...filters, privacy: undefined, cursor },
+      { ...filters, type: "principle", cursor },
+      { ...filters, spaceId: null, cursor },
+      {
+        ...filters,
+        tagIds: ["tag_00000000000000000000000003"],
+        cursor
+      },
+      { ...filters, updatedFrom: "2026-08-02T00:00:00.000Z", cursor },
+      { ...filters, updatedTo: "2026-08-31T00:00:00.000Z", cursor },
+      { ...filters, limit: 2, cursor }
+    ];
+    const responses = [];
+    for (const variant of variants) {
+      responses.push(await handlers.search(request("/api/v1/search", "POST", variant)));
+    }
+
+    expect(first.status).toBe(200);
+    expect(responses.map(({ status }) => status)).toEqual(variants.map(() => 400));
+    expect(search).toHaveBeenCalledOnce();
+  });
+
+  it("verifies a semantic cursor before dispatch and returns a nonrepeating reordered page two", async () => {
+    const repository = new InMemoryManualNotesRepository();
+    const context = { accessToken: "test-access-token", userId: USER_ID };
+    const firstNote = await repository.getNote(context, NOTE_ID);
+    const secondNote = await repository.getNote(context, "note_00000000000000000000000003");
+    const search = vi
+      .spyOn(repository, "search")
+      .mockResolvedValueOnce({
+        query: "private alpha",
+        results: [
+          { note: secondNote, score: 0.7, snippet: "second" },
+          { note: firstNote, score: 0.8, snippet: "first" }
+        ]
+      })
+      .mockResolvedValueOnce({
+        query: "private alpha",
+        results: [
+          { note: firstNote, score: 0.8, snippet: "first" },
+          { note: secondNote, score: 0.7, snippet: "second" }
+        ]
+      });
+    const semanticQuery = vi
+      .fn<(material: EncryptedUserSearchMaterial) => Promise<EncryptedUserSearchResult>>()
+      .mockResolvedValue(
+        semanticResult("private-generation-token-7", [
+          {
+            noteId: firstNote.id,
+            indexedRevision: firstNote.currentRevision,
+            score: 0.9
+          },
+          {
+            noteId: secondNote.id,
+            indexedRevision: secondNote.currentRevision,
+            score: 0.85
+          }
+        ])
+      );
+    const semanticSearch = vi.fn(() => ({ search: semanticQuery }));
+    const handlers = createManualNotesHandlers({
+      authenticate: () => authenticated(),
+      getPrivateSearchCursorKey: () => PRIVATE_SEARCH_CURSOR_KEY,
+      repository,
+      semanticSearch
+    });
+    const body = {
+      query: "private alpha",
+      privacy: "ai_assisted",
+      limit: 1
+    };
+    const first = await handlers.search(request("/api/v1/search", "POST", body));
+    const firstBody = (await first.json()) as {
+      items: { noteId: string }[];
+      pageInfo: { nextCursor: string | null };
+    };
+    const cursor = firstBody.pageInfo.nextCursor;
+    if (cursor === null) throw new Error("expected a semantic search cursor");
+    const decodedCursor = Buffer.from(cursor, "base64url").toString("utf8");
+    const tamperedCursor = `${cursor.startsWith("A") ? "B" : "A"}${cursor.slice(1)}`;
+    const tampered = await handlers.search(
+      request("/api/v1/search", "POST", { ...body, cursor: tamperedCursor })
+    );
+    const second = await handlers.search(request("/api/v1/search", "POST", { ...body, cursor }));
+    const secondBody = (await second.json()) as {
+      items: { noteId: string }[];
+      pageInfo: { hasMore: boolean; nextCursor: string | null };
+    };
+
+    expect(first.status).toBe(200);
+    expect(tampered.status).toBe(400);
+    expect(second.status).toBe(200);
+    expect(firstBody.items.map(({ noteId }) => noteId)).toEqual([firstNote.id]);
+    expect(secondBody.items.map(({ noteId }) => noteId)).toEqual([secondNote.id]);
+    expect(secondBody.pageInfo).toEqual({ hasMore: false, nextCursor: null });
+    expect(decodedCursor).not.toContain("private alpha");
+    expect(decodedCursor).not.toContain("private-generation-token-7");
+    expect(decodedCursor).not.toContain("igen_01ARZ3NDEKTSV4RRFFQ69G5FAA");
+    expect(decodedCursor).not.toContain("a".repeat(64));
+    expect(semanticSearch).toHaveBeenCalledTimes(2);
+    expect(semanticQuery).toHaveBeenCalledTimes(2);
+    expect(semanticQuery.mock.calls[0]?.[0]).toMatchObject({
+      continuation: null,
+      maxResults: 8,
+      pageLimit: 1
+    });
+    const secondMaterial = semanticQuery.mock.calls[1]?.[0];
+    expect(secondMaterial).toMatchObject({ maxResults: 8, pageLimit: 1 });
+    expect(secondMaterial?.continuation?.boundary).toEqual({
+      indexedRevision: secondNote.currentRevision,
+      noteId: secondNote.id,
+      score: 0.85
+    });
+    expect(secondMaterial?.continuation?.generationBindingDigest).toMatch(/^[0-9a-f]{64}$/u);
+    expect(secondMaterial?.continuation?.resultDigest).toMatch(/^[0-9a-f]{64}$/u);
+    expect(search).toHaveBeenCalledTimes(2);
+  });
+
+  it("resets a valid cursor to a fresh lexical first page when its hybrid boundary is stale", async () => {
+    const repository = new InMemoryManualNotesRepository();
+    const context = { accessToken: "test-access-token", userId: USER_ID };
+    const firstNote = await repository.getNote(context, NOTE_ID);
+    const secondNote = await repository.getNote(context, "note_00000000000000000000000003");
+    const changedBoundary = { ...firstNote, currentRevision: 2 };
+    const search = vi
+      .spyOn(repository, "search")
+      .mockResolvedValueOnce({
+        query: "private alpha",
+        results: [
+          { note: firstNote, score: 0.8, snippet: "first" },
+          { note: secondNote, score: 0.7, snippet: "second" }
+        ]
+      })
+      .mockResolvedValueOnce({
+        query: "private alpha",
+        results: [
+          { note: changedBoundary, score: 0.8, snippet: "changed" },
+          { note: secondNote, score: 0.7, snippet: "second" }
+        ]
+      })
+      .mockResolvedValueOnce({
+        query: "private alpha",
+        results: [{ note: secondNote, score: 0.7, snippet: "fresh lexical" }]
+      });
+    const handlers = createManualNotesHandlers({
+      authenticate: () => authenticated(),
+      getPrivateSearchCursorKey: () => PRIVATE_SEARCH_CURSOR_KEY,
+      repository
+    });
+    const body = {
+      query: "private alpha",
+      privacy: "private_manual",
+      limit: 1
+    };
+    const first = await handlers.search(request("/api/v1/search", "POST", body));
+    const firstBody = (await first.json()) as { pageInfo: { nextCursor: string | null } };
+    const cursor = firstBody.pageInfo.nextCursor;
+    if (cursor === null) throw new Error("expected a private search cursor");
+
+    const stale = await handlers.search(request("/api/v1/search", "POST", { ...body, cursor }));
+    const staleBody = (await stale.json()) as { items: { noteId: string; snippet: string }[] };
+
+    expect(stale.status).toBe(200);
+    expect(staleBody.items).toEqual([
+      expect.objectContaining({ noteId: secondNote.id, snippet: "fresh lexical" })
+    ]);
+    expect(search).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects a semantic continuation after attestation rollover without exposing tokens", async () => {
+    const repository = new InMemoryManualNotesRepository();
+    const context = { accessToken: "test-access-token", userId: USER_ID };
+    const firstNote = await repository.getNote(context, NOTE_ID);
+    const secondNote = await repository.getNote(context, "note_00000000000000000000000003");
+    vi.spyOn(repository, "search").mockImplementation((_context, query) =>
+      Promise.resolve({
+        query,
+        results: [
+          { note: firstNote, score: 0.8, snippet: "first" },
+          { note: secondNote, score: 0.7, snippet: "second" }
+        ]
+      })
+    );
+    const semanticQuery = vi
+      .fn()
+      .mockResolvedValueOnce(semanticResult("private-generation-token-7"))
+      .mockResolvedValueOnce({
+        ...semanticResult("private-generation-token-7"),
+        generationAttestationDigest: "b".repeat(64)
+      });
+    const handlers = createManualNotesHandlers({
+      authenticate: () => authenticated(),
+      getPrivateSearchCursorKey: () => PRIVATE_SEARCH_CURSOR_KEY,
+      repository,
+      semanticSearch: () => ({ search: semanticQuery })
+    });
+    const first = await handlers.search(
+      request("/api/v1/search", "POST", {
+        query: "private alpha",
+        privacy: "ai_assisted",
+        limit: 1
+      })
+    );
+    const firstBody = (await first.json()) as { pageInfo: { nextCursor: string | null } };
+    const cursor = firstBody.pageInfo.nextCursor;
+    if (cursor === null) throw new Error("expected a semantic search cursor");
+
+    const stale = await handlers.search(
+      request("/api/v1/search", "POST", {
+        query: "private alpha",
+        privacy: "ai_assisted",
+        limit: 1,
+        cursor
+      })
+    );
+    const serialized = await stale.text();
+
+    expect(stale.status).toBe(200);
+    expect(JSON.parse(serialized)).toMatchObject({
+      items: [{ noteId: firstNote.id }]
+    });
+    expect(serialized).not.toContain("private-generation-token-7");
+    expect(serialized).not.toContain("b".repeat(64));
+    expect(semanticQuery).toHaveBeenCalledTimes(2);
   });
 
   it.each([

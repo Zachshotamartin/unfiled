@@ -5,13 +5,16 @@ import {
   type ReviewState,
   type UserOperation
 } from "@unfiled/contracts";
+import { normalizePrivateRagText } from "@unfiled/search";
 
 import type {
   NoteLinkRecord,
   NoteListFilters,
   NoteMutationResult,
   NoteRecord,
+  NoteSearchOptions,
   RevisionRecord,
+  SearchResult,
   SearchResponse,
   SpaceMutationRecord,
   SpaceRecord,
@@ -23,6 +26,7 @@ import type {
 } from "@/lib/product/types";
 import { ConfigurationError, HttpError } from "@/server/api/errors";
 import { InMemoryManualNotesRepository } from "@/server/product/in-memory-repository";
+import { noteMatchesSearchOptions } from "@/server/product/search-filters";
 
 import type {
   ExistingNoteWrite,
@@ -41,11 +45,46 @@ import {
   mapSpace,
   mapStoredMutationNote,
   mapTag,
-  nullableString,
   stringValue
 } from "./supabase-http-mappers";
 
 type SupabaseConfiguration = Readonly<{ anonKey: string; url: string }>;
+
+const LEGACY_SEARCH_SCAN_LIMIT = 1_000;
+const LEGACY_SEARCH_PAGE_LIMIT = 100;
+const LEGACY_SEARCH_SNIPPET_LIMIT = 500;
+
+function currentLexicalSearchResult(
+  note: NoteRecord,
+  normalizedQuery: string
+): SearchResult | null {
+  const normalizedTitle = normalizePrivateRagText(note.title);
+  const normalizedBody = normalizePrivateRagText(note.bodyMarkdown);
+  const normalizedDocument = `${normalizedTitle}\n${normalizedBody}`;
+  if (!normalizedDocument.includes(normalizedQuery)) return null;
+  const source = note.bodyMarkdown.trim().length > 0 ? note.bodyMarkdown : note.title;
+  const normalizedSource = normalizePrivateRagText(source);
+  const firstToken = /[\p{L}\p{N}]+/u.exec(normalizedQuery)?.[0] ?? normalizedQuery;
+  const match = normalizedSource.indexOf(firstToken);
+  const start = Math.max(0, match < 0 ? 0 : match - 120);
+  const prefix = start > 0 ? "…" : "";
+  const available = LEGACY_SEARCH_SNIPPET_LIMIT - prefix.length;
+  const selected = source.slice(start, start + available);
+  const suffix = start + selected.length < source.length ? "…" : "";
+  return Object.freeze({
+    note,
+    score:
+      normalizedTitle === normalizedQuery
+        ? 1
+        : normalizedTitle.includes(normalizedQuery)
+          ? 0.8
+          : 0.6,
+    snippet: `${prefix}${selected.slice(
+      0,
+      LEGACY_SEARCH_SNIPPET_LIMIT - prefix.length - suffix.length
+    )}${suffix}`
+  });
+}
 
 function configuration(): SupabaseConfiguration {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -661,41 +700,46 @@ export class SupabaseHttpManualNotesRepository implements ManualNotesRepository 
   public async search(
     context: RepositoryContext,
     query: string,
-    archived: "exclude" | "include" | "only",
-    page?: RepositoryPage
+    options: NoteSearchOptions
   ): Promise<SearchResponse> {
-    const value = await rpc(context, "search_notes", {
-      p_query: query,
-      p_archive_filter: archived,
-      p_limit: page?.limit ?? 50,
-      p_offset: page?.offset ?? 0
+    const offset = options.offset ?? 0;
+    const limit = options.limit ?? 50;
+    const normalizedQuery = normalizePrivateRagText(query);
+    const selected: SearchResult[] = [];
+    for (let scanOffset = 0; scanOffset < LEGACY_SEARCH_SCAN_LIMIT;) {
+      const value = await rpc(context, "search_notes", {
+        p_query: query,
+        p_archive_filter: options.archived,
+        p_limit: LEGACY_SEARCH_PAGE_LIMIT,
+        p_offset: scanOffset
+      });
+      const rows = Array.isArray(value) ? value : [];
+      const notes = await Promise.all(
+        rows.map((entry) =>
+          this.getNote(
+            context,
+            stringValue(asObject(entry), "noteId", "note_id") as EntityId<"note">
+          )
+        )
+      );
+      rows.forEach((entry, index) => {
+        const note = notes[index];
+        if (note !== undefined && noteMatchesSearchOptions(note, options)) {
+          const result = currentLexicalSearchResult(note, normalizedQuery);
+          if (result !== null) selected.push(result);
+        }
+      });
+      scanOffset += rows.length;
+      if (rows.length < LEGACY_SEARCH_PAGE_LIMIT) break;
+    }
+    selected.sort((left, right) => {
+      if (left.score !== right.score) return right.score - left.score;
+      const updated = right.note.updatedAt.localeCompare(left.note.updatedAt);
+      return updated === 0 ? left.note.id.localeCompare(right.note.id) : updated;
     });
-    const rows = Array.isArray(value) ? value : [];
-    const notes = await Promise.all(
-      rows.map((entry) =>
-        this.getNote(context, stringValue(asObject(entry), "noteId", "note_id") as EntityId<"note">)
-      )
-    );
     return {
       query,
-      results: rows.map((entry, index) => {
-        const row = asObject(entry);
-        const note = notes[index];
-        if (note === undefined) {
-          throw new HttpError(
-            503,
-            ApiErrorCode.PROVIDER_UNAVAILABLE,
-            "Search returned an invalid note."
-          );
-        }
-        return {
-          note: {
-            ...note,
-            spacePath: nullableString(row, "spacePath", "space_path")
-          },
-          snippet: typeof row.snippet === "string" ? row.snippet : ""
-        };
-      })
+      results: selected.slice(offset, offset + limit)
     };
   }
 }

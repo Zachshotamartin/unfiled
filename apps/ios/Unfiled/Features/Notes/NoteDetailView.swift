@@ -21,15 +21,22 @@ struct NoteDetailView: View {
     var generatedBlocksPaginationNotice: String?
     var submittingInteractionIDs: Set<String> = []
     var interactionErrors: [String: String] = [:]
+    let noteContext: NoteContextViewState
     let onEdit: @MainActor () -> Void
     let onShowRevisionHistory: @MainActor () -> Void
     let onOpenProvenance: @MainActor () -> Void
     let onToggleChecklistItem: @MainActor (String, Bool) async throws -> Void
     let onSetArchived: @MainActor (Bool) async throws -> Void
     let onDelete: @MainActor () async throws -> Void
+    let onOpenSourceCapture: @MainActor (String) -> Void
+    let onOpenBacklink: @MainActor (String) -> Void
+    let onUpdateLogField: @MainActor (String, [String], LogFieldValue) async throws -> Void
     var onRefreshGeneratedBlocks: @MainActor () async -> Void = {}
     var onLoadMoreGeneratedBlocks: @MainActor () async -> Void = {}
     var onResolveGeneratedBlock: @MainActor (String, GeneratedBlockResolution) -> Void = { _, _ in }
+    var onRefreshNoteContext: @MainActor () async -> Void = {}
+    var onLoadMoreSources: @MainActor () async -> Void = {}
+    var onLoadMoreBacklinks: @MainActor () async -> Void = {}
 
     private var progress: ChecklistProgress {
         ChecklistProgress(items: note.checklistItems, overrides: optimisticChecks)
@@ -69,6 +76,12 @@ struct NoteDetailView: View {
                     SectionRule()
                 }
 
+                if !note.logEntries.isEmpty {
+                    LogFieldsSection(entries: note.logEntries, onUpdate: onUpdateLogField)
+                        .id("note-log-\(note.id)-\(note.currentRevision)")
+                    SectionRule()
+                }
+
                 GeneratedBlocksSection(
                     blocks: generatedBlocks,
                     isLoading: isLoadingGeneratedBlocks,
@@ -91,6 +104,17 @@ struct NoteDetailView: View {
                     generatedBlocksPaginationNotice != nil {
                     SectionRule()
                 }
+
+                NoteContextSections(
+                    state: noteContext,
+                    onRefresh: onRefreshNoteContext,
+                    onLoadMoreSources: onLoadMoreSources,
+                    onLoadMoreBacklinks: onLoadMoreBacklinks,
+                    onOpenCapture: onOpenSourceCapture,
+                    onOpenNote: onOpenBacklink
+                )
+
+                SectionRule()
 
                 if let provenance = note.provenance, !provenance.isEmpty {
                     Button(action: onOpenProvenance) {

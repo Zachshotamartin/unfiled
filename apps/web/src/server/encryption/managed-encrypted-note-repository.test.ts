@@ -587,7 +587,7 @@ describe("managed encrypted note repository", () => {
     );
     await expect(repository.listTags(CONTEXT, { limit: 8, offset: 3 })).resolves.toBe(RESULT);
     await expect(
-      repository.search(CONTEXT, CANARY, "include", { limit: 7, offset: 4 })
+      repository.search(CONTEXT, CANARY, { archived: "include", limit: 7, offset: 4 })
     ).resolves.toBe(RESULT);
 
     expect(mocks.taxonomy.listReviewItems).toHaveBeenCalledWith("open", {
@@ -596,7 +596,8 @@ describe("managed encrypted note repository", () => {
     });
     expect(mocks.taxonomy.listSpaces).toHaveBeenCalledWith(true, { limit: 9, offset: 2 });
     expect(mocks.taxonomy.listTags).toHaveBeenCalledWith({ limit: 8, offset: 3 });
-    expect(mocks.lexical.search).toHaveBeenCalledWith(CANARY, "include", {
+    expect(mocks.lexical.search).toHaveBeenCalledWith(CANARY, {
+      archived: "include",
       limit: 7,
       offset: 4
     });
