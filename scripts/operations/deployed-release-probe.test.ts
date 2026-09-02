@@ -175,7 +175,7 @@ function healthyFixture(url: URL, selected: ReleaseProbeConfiguration): Response
     }
     if (url.pathname === "/robots.txt") {
       headers.set("cache-control", "public, max-age=0, must-revalidate");
-      headers.set("content-type", "text/plain");
+      headers.set("content-type", "text/plain; charset=utf-8");
       return { body: robots(selected.origins.web), headers, target };
     }
     if (url.pathname === "/sitemap.xml") {

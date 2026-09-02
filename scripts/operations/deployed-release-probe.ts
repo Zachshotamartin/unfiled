@@ -535,7 +535,7 @@ function specifications(configuration: ReleaseProbeConfiguration): readonly Prob
     {
       bodyExpectation: { kind: "exact", value: expectedRobots(configuration.origins.web) },
       cacheControl: "public, max-age=0, must-revalidate",
-      contentType: "text/plain",
+      contentType: "text/plain; charset=utf-8",
       maximumBodyBytes: 2_048,
       path: "/robots.txt",
       securityHeaders: webSecurityHeaders,
