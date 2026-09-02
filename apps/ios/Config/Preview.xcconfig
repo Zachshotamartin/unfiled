@@ -5,3 +5,4 @@ UNFILED_APP_GROUP_IDENTIFIER = group.com.zachshotamartin.unfiled.preview
 UNFILED_URL_SCHEME = unfiled-preview
 UNFILED_DISPLAY_NAME = Unfiled Preview
 UNFILED_API_BASE_URL = https:/$()/preview.unfiled.app/api/v1
+UNFILED_MANAGED_AI_FALLBACK_AVAILABLE = NO

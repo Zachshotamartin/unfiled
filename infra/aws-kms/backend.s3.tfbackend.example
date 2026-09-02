@@ -1,0 +1,8 @@
+# Copy this file to the ignored backend.s3.tfbackend and replace both
+# placeholders. Never put credentials or session tokens in this file.
+bucket              = "replace-with-globally-unique-state-bucket"
+key                 = "unfiled/aws-kms/production/terraform.tfstate"
+region              = "us-west-2"
+encrypt             = true
+use_lockfile        = true
+allowed_account_ids = ["123456789012"]

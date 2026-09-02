@@ -77,6 +77,7 @@ import {
   SearchNotesResponseSchema,
   ProviderKeyDeleteRequestSchema,
   ProviderKeyDeleteResponseSchema,
+  PublicByokProviderSchema,
   ProviderKeyPutRequestSchema,
   ProviderKeyPutResponseSchema,
   ProviderKeyResponseSchema,
@@ -132,6 +133,7 @@ import {
   type NoteSourcesQuery,
   type ProviderKeyDeleteRequest,
   type ProviderKeyPutRequest,
+  type PublicByokProvider,
   type ReviewItemListQuery,
   type ReviewResolveRequest,
   type RoutingRuleCreateRequest,
@@ -975,6 +977,7 @@ export function createApiClient(options: ApiClientOptions) {
         "organizationMode",
         "providerMode",
         "byokProvider",
+        "modelSelection",
         "byokFallbackToApp",
         "routingEffort",
         "expansionStyle",
@@ -988,9 +991,10 @@ export function createApiClient(options: ApiClientOptions) {
       return response;
     },
 
-    getProviderKeyMetadata() {
-      return request(
-        "/me/provider-key",
+    async getProviderKeyMetadata(provider: PublicByokProvider) {
+      const selectedProvider = PublicByokProviderSchema.parse(provider);
+      const response = await request(
+        `/me/provider-key?provider=${encodeURIComponent(selectedProvider)}`,
         {
           cache: "no-store",
           maximumResponseBytes: MAX_PROVIDER_KEY_RESPONSE_BYTES,
@@ -998,6 +1002,10 @@ export function createApiClient(options: ApiClientOptions) {
         },
         ProviderKeyResponseSchema
       );
+      if (response.providerKey !== null && response.providerKey.provider !== selectedProvider) {
+        throw new ApiClientMalformedResponseError(200);
+      }
+      return response;
     },
 
     async putProviderKey(input: ProviderKeyPutRequest) {
@@ -1023,6 +1031,9 @@ export function createApiClient(options: ApiClientOptions) {
       if (response.providerKey.lastFour !== body.apiKey.slice(-4)) {
         throw new ApiClientMalformedResponseError(200);
       }
+      if (response.providerKey.provider !== body.provider) {
+        throw new ApiClientMalformedResponseError(200);
+      }
       return response;
     },
 
@@ -1041,6 +1052,9 @@ export function createApiClient(options: ApiClientOptions) {
         ProviderKeyDeleteResponseSchema
       );
       if (response.deletedCredentialRevision !== body.expectedCredentialRevision) {
+        throw new ApiClientMalformedResponseError(200);
+      }
+      if (response.provider !== body.provider) {
         throw new ApiClientMalformedResponseError(200);
       }
       return response;

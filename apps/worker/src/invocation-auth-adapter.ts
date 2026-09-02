@@ -45,7 +45,7 @@ export function authorizeLocalWorkerInvocation(
   input: Readonly<{
     authorizationHeader: string | null;
     requestId: string;
-    runtime: "local" | "preview";
+    runtime: "local";
     secret: string;
   }>
 ): VerifiedWorkerInvocation {
@@ -171,7 +171,10 @@ export function createVercelTrustedSourcesInvocationAuth(
       if (!exactVerifiedClaims(result, options.trustedSource, Math.floor(Date.now() / 1_000))) {
         throw unauthorizedInvocation();
       }
-      return issueVerifiedInvocation({ requestId: proof.requestId, runtime: "production" });
+      return issueVerifiedInvocation({
+        requestId: proof.requestId,
+        runtime: options.trustedSource.environment
+      });
     }
   });
 }

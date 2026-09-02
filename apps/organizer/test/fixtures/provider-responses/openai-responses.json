@@ -1,0 +1,73 @@
+{
+  "contract": "openai.responses.v1",
+  "recordedAgainst": "official Responses API reference shape, 2026-09-02, synthetic content only",
+  "success": {
+    "id": "resp_synthetic",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-5.6-terra",
+    "output": [
+      { "id": "rs_synthetic", "type": "reasoning", "summary": [] },
+      {
+        "id": "msg_synthetic",
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"alternatives\":[],\"captureKind\":\"list_items\",\"decision\":\"append_to_note\",\"destination\":{\"candidateId\":\"candidate_00000000000000000000000000000001\",\"newNote\":null},\"generatedExpansion\":null,\"operations\":[{\"items\":[\"milk\",\"bread\"],\"section\":null,\"type\":\"append_list_items\"}],\"reasonCodes\":[\"explicit_shopping_intent\",\"type_match\"],\"schemaVersion\":1}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 412,
+      "input_tokens_details": { "cached_tokens": 0 },
+      "output_tokens": 96,
+      "total_tokens": 508
+    }
+  },
+  "refusal": {
+    "id": "resp_synthetic_refusal",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-5.6-luna",
+    "output": [
+      {
+        "id": "msg_synthetic_refusal",
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{ "type": "refusal", "refusal": "SYNTHETIC-REFUSAL-CANARY" }]
+      }
+    ]
+  },
+  "incomplete": {
+    "id": "resp_synthetic_incomplete",
+    "object": "response",
+    "status": "incomplete",
+    "incomplete_details": { "reason": "max_output_tokens" },
+    "model": "gpt-5.6-sol",
+    "output": []
+  },
+  "twoMessages": {
+    "id": "resp_synthetic_two",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-5.6-terra",
+    "output": [
+      {
+        "type": "message",
+        "role": "assistant",
+        "content": [{ "type": "output_text", "text": "{}" }]
+      },
+      {
+        "type": "message",
+        "role": "assistant",
+        "content": [{ "type": "output_text", "text": "{}" }]
+      }
+    ]
+  }
+}

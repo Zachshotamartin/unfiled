@@ -158,6 +158,96 @@
     text-wrap: pretty;
   }
 
+  .public-document {
+    min-width: 0;
+  }
+
+  .public-document > section {
+    scroll-margin-top: 7rem;
+    border-top: 1px solid var(--color-border);
+    padding: 2.75rem 0;
+  }
+
+  .public-document > section:first-child {
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .public-document h2 {
+    max-width: 42rem;
+    font-size: clamp(1.85rem, 4vw, 2.75rem);
+    font-weight: 620;
+    letter-spacing: -0.045em;
+    line-height: 1;
+  }
+
+  .public-document h3 {
+    margin-top: 2rem;
+    font-size: 1rem;
+    font-weight: 650;
+    line-height: 1.5;
+  }
+
+  .public-document p,
+  .public-document li {
+    max-width: 46rem;
+    color: var(--color-text-secondary);
+    font-size: 1rem;
+    line-height: 1.75;
+  }
+
+  .public-document h2 + p,
+  .public-document h2 + ul,
+  .public-document h2 + ol,
+  .public-document h3 + p,
+  .public-document h3 + ul,
+  .public-document h3 + ol,
+  .public-document p + p,
+  .public-document p + ul,
+  .public-document p + ol {
+    margin-top: 1rem;
+  }
+
+  .public-document ul,
+  .public-document ol {
+    display: grid;
+    max-width: 46rem;
+    gap: 0.65rem;
+    padding-left: 1.25rem;
+  }
+
+  .public-document ul {
+    list-style: square;
+  }
+
+  .public-document ol {
+    list-style: decimal;
+  }
+
+  .public-document a {
+    color: var(--color-text-primary);
+    text-decoration-line: underline;
+    text-decoration-color: var(--color-accent);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.25em;
+  }
+
+  .public-document strong {
+    color: var(--color-text-primary);
+    font-weight: 650;
+  }
+
+  .public-callout {
+    margin: 1.5rem 0;
+    border-left: 3px solid var(--color-accent);
+    background: var(--color-surface);
+    padding: 1rem 1.25rem;
+  }
+
+  .public-callout p {
+    color: var(--color-text-primary);
+  }
+
   .skeleton-block {
     background: var(--color-surface-raised);
   }
@@ -830,6 +920,11 @@
     gap: 1rem;
     border-bottom: 1px solid var(--color-border);
     padding: 1.25rem 0;
+  }
+
+  /* Narrow screens stack the settings label column above its controls. */
+  .settings-row {
+    flex-direction: column;
   }
 
   .space-row-child {

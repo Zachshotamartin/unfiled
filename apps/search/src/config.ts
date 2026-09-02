@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { LOCAL_HASH_EMBEDDING_DIMENSIONS, LOCAL_HASH_EMBEDDING_MODEL_ID } from "@unfiled/search";
+
 import { SearchConfigurationError } from "./errors.js";
 
 export const SEARCH_EMBEDDING_MODEL_ID = "text-embedding-3-small" as const;
@@ -13,9 +16,21 @@ const KMS_ARN =
 const IAM_ROLE_ARN = /^arn:(aws(?:-us-gov|-cn)?):iam::(\d{12}):role\/[A-Za-z0-9+=,.@_/-]+$/u;
 const VERCEL_PROJECT_ID = /^prj_[A-Za-z0-9]{6,100}$/u;
 const PROJECT_REF = /^[a-z0-9]{20}$/u;
+const VERCEL_ROOT_KEY_ID =
+  /^urn:unfiled:key-root:vercel-sensitive-env-v1:(preview|production):[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const KEY_CUSTODIAN_VARIABLE = "UNFILED_KEY_CUSTODIAN" as const;
+const VERCEL_SENSITIVE_KEY_RING_VARIABLE = "UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1" as const;
+const VERCEL_OBJECT_WRAP_ROOT_VARIABLE = "UNFILED_SEARCH_AI_OBJECT_WRAP_ROOT_KEY_ID" as const;
+const VERCEL_RETIRED_OBJECT_WRAP_ROOTS_VARIABLE =
+  "UNFILED_SEARCH_RETIRED_AI_OBJECT_WRAP_ROOT_KEY_IDS_JSON" as const;
 
 export type SearchRuntime = "local" | "preview" | "production";
 export type SearchEnvironment = Readonly<Record<string, string | undefined>>;
+export type SearchReleaseIdentity = Readonly<{
+  commit: string;
+  deployment: `sha256:${string}`;
+  environment: "preview" | "production";
+}>;
 export type SearchTrustedSource = Readonly<{
   audience: string;
   environment: "preview" | "production";
@@ -36,6 +51,13 @@ export type SearchKeyBoundary =
       retiredObjectWrapKeyArns: readonly string[];
       roleArn: string;
       vercelProjectId: string;
+    }>
+  | Readonly<{
+      activeObjectWrapRootKeyId: string;
+      deploymentEnvironment: "preview" | "production";
+      kind: "vercel-sensitive-env-v1";
+      retiredObjectWrapRootKeyIds: readonly string[];
+      vercelProjectId: string;
     }>;
 export type SearchPipeline =
   | Readonly<{ kind: "disabled" }>
@@ -48,8 +70,19 @@ export type SearchPipeline =
         statementTimeoutMs: number;
         url: string;
       }>;
+      embedding:
+        | Readonly<{
+            apiKey: string;
+            dimensions: typeof SEARCH_EMBEDDING_DIMENSIONS;
+            kind: "openai";
+            modelId: typeof SEARCH_EMBEDDING_MODEL_ID;
+          }>
+        | Readonly<{
+            dimensions: typeof LOCAL_HASH_EMBEDDING_DIMENSIONS;
+            kind: "local-hash-v1";
+            modelId: typeof LOCAL_HASH_EMBEDDING_MODEL_ID;
+          }>;
       kind: "enabled";
-      providerApiKey: string;
     }>;
 export type SearchInvocation =
   | Readonly<{ kind: "local-bearer"; secret: string }>
@@ -60,6 +93,7 @@ export type SearchConfig = Readonly<{
   maxRequestBytes: number;
   pipeline: SearchPipeline;
   port: number;
+  releaseIdentity: SearchReleaseIdentity | null;
   requestTimeoutMs: number;
   runtime: SearchRuntime;
 }>;
@@ -148,6 +182,38 @@ function assertNoAmbientCapabilities(environment: SearchEnvironment): void {
 }
 
 function localConfig(environment: SearchEnvironment): Omit<SearchConfig, "runtime"> {
+  const managedVariables = [
+    KEY_CUSTODIAN_VARIABLE,
+    VERCEL_SENSITIVE_KEY_RING_VARIABLE,
+    VERCEL_OBJECT_WRAP_ROOT_VARIABLE,
+    VERCEL_RETIRED_OBJECT_WRAP_ROOTS_VARIABLE,
+    "UNFILED_SEARCH_PROJECT_TEAM_SLUG",
+    "UNFILED_SEARCH_PROJECT_NAME",
+    "UNFILED_SEARCH_PROJECT_ID",
+    "UNFILED_SEARCH_EXPECTED_OIDC_SUBJECT",
+    "UNFILED_AWS_REGION",
+    "UNFILED_SEARCH_AWS_ROLE_ARN",
+    "UNFILED_SEARCH_AI_OBJECT_WRAP_KMS_KEY_ARN",
+    "UNFILED_SEARCH_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON",
+    "UNFILED_SEARCH_TRUSTED_SOURCE_TEAM_SLUG",
+    "UNFILED_SEARCH_TRUSTED_SOURCE_OWNER_ID",
+    "UNFILED_SEARCH_TRUSTED_SOURCE_WEB_PROJECT_ID",
+    "UNFILED_SEARCH_TRUSTED_SOURCE_WEB_PROJECT_NAME",
+    "UNFILED_SEARCH_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT",
+    "UNFILED_SEARCH_EMBEDDING_PROVIDER",
+    "UNFILED_SEARCH_OPENAI_API_KEY",
+    "UNFILED_SEARCH_DATABASE_PROJECT_REF",
+    "UNFILED_SEARCH_DATABASE_EXPECTED_HOST",
+    "UNFILED_SEARCH_DATABASE_URL",
+    "UNFILED_SEARCH_DATABASE_CA_PEM_BASE64"
+  ] as const;
+  if (
+    environment.VERCEL_DEPLOYMENT_ID !== undefined ||
+    environment.VERCEL_GIT_COMMIT_SHA !== undefined ||
+    managedVariables.some((name) => hasValue(environment, name))
+  ) {
+    return fail();
+  }
   const secret = value(environment, "UNFILED_SEARCH_INVOCATION_SECRET");
   if (secret.length < 32 || secret.length > 512 || hasUnsafeSecretCharacter(secret)) fail();
   return {
@@ -162,6 +228,7 @@ function localConfig(environment: SearchEnvironment): Omit<SearchConfig, "runtim
     ),
     pipeline: { kind: "disabled" },
     port: boundedInteger(environment, "PORT", DEFAULT_PORT, 1_024, 65_535),
+    releaseIdentity: null,
     requestTimeoutMs: boundedInteger(
       environment,
       "UNFILED_SEARCH_TIMEOUT_MS",
@@ -170,6 +237,27 @@ function localConfig(environment: SearchEnvironment): Omit<SearchConfig, "runtim
       29_000
     )
   };
+}
+
+function releaseIdentity(
+  environment: SearchEnvironment,
+  selectedRuntime: "preview" | "production"
+): SearchReleaseIdentity {
+  const deploymentId = environment.VERCEL_DEPLOYMENT_ID?.trim();
+  const commit = environment.VERCEL_GIT_COMMIT_SHA;
+  if (
+    deploymentId === undefined ||
+    !/^[A-Za-z0-9_-]{1,128}$/u.test(deploymentId) ||
+    commit === undefined ||
+    !/^[0-9a-f]{40}$/u.test(commit)
+  ) {
+    return fail();
+  }
+  return Object.freeze({
+    commit,
+    deployment: `sha256:${createHash("sha256").update(deploymentId, "utf8").digest("hex")}`,
+    environment: selectedRuntime
+  });
 }
 
 function pem(environment: SearchEnvironment): string {
@@ -229,7 +317,8 @@ function retiredRoots(
 
 function trustedSource(
   environment: SearchEnvironment,
-  selectedRuntime: "preview" | "production"
+  selectedRuntime: "preview" | "production",
+  searchProjectId: string
 ): SearchTrustedSource {
   const teamSlug = value(environment, "UNFILED_SEARCH_TRUSTED_SOURCE_TEAM_SLUG");
   const ownerId = value(environment, "UNFILED_SEARCH_TRUSTED_SOURCE_OWNER_ID");
@@ -240,6 +329,7 @@ function trustedSource(
     !/^[a-z0-9][a-z0-9-]{0,99}$/u.test(teamSlug) ||
     !/^[A-Za-z0-9_]{3,128}$/u.test(ownerId) ||
     !VERCEL_PROJECT_ID.test(projectId) ||
+    projectId === searchProjectId ||
     !/^[a-z0-9][a-z0-9-]{0,99}$/u.test(projectName) ||
     expectedSubject !== `owner:${teamSlug}:project:${projectName}:environment:${selectedRuntime}`
   ) {
@@ -257,47 +347,92 @@ function trustedSource(
   });
 }
 
-function cloudConfig(
+function exactSensitiveValue(environment: SearchEnvironment, name: string): string {
+  const raw = environment[name];
+  if (raw === undefined || raw.length === 0 || raw.trim() !== raw) return fail();
+  return raw;
+}
+
+function sensitiveRetiredRoots(
+  environment: SearchEnvironment,
+  activeRootKeyId: string,
+  selectedRuntime: "preview" | "production"
+): readonly string[] {
+  const raw = environment[VERCEL_RETIRED_OBJECT_WRAP_ROOTS_VARIABLE] ?? "[]";
+  if (raw.trim() !== raw || new TextEncoder().encode(raw).byteLength > 32_768) return fail();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return fail();
+  }
+  if (!Array.isArray(parsed) || parsed.length > 20 || JSON.stringify(parsed) !== raw) return fail();
+  const roots: string[] = [];
+  const seen = new Set<string>([activeRootKeyId]);
+  for (const entry of parsed) {
+    if (
+      typeof entry !== "string" ||
+      VERCEL_ROOT_KEY_ID.exec(entry)?.[1] !== selectedRuntime ||
+      seen.has(entry)
+    ) {
+      return fail();
+    }
+    seen.add(entry);
+    roots.push(entry);
+  }
+  return Object.freeze(roots);
+}
+
+function searchKeyBoundary(
   environment: SearchEnvironment,
   selectedRuntime: "preview" | "production"
-): Omit<SearchConfig, "runtime"> {
-  const projectTeamSlug = value(environment, "UNFILED_SEARCH_PROJECT_TEAM_SLUG");
-  const projectName = value(environment, "UNFILED_SEARCH_PROJECT_NAME");
-  const region = value(environment, "UNFILED_AWS_REGION");
-  const roleArn = value(environment, "UNFILED_SEARCH_AWS_ROLE_ARN");
-  const activeObjectWrapKeyArn = value(environment, "UNFILED_SEARCH_AI_OBJECT_WRAP_KMS_KEY_ARN");
-  const expectedOidcSubject = value(environment, "UNFILED_SEARCH_EXPECTED_OIDC_SUBJECT");
-  const vercelProjectId = value(environment, "UNFILED_SEARCH_PROJECT_ID");
-  const role = IAM_ROLE_ARN.exec(roleArn);
-  const kms = KMS_ARN.exec(activeObjectWrapKeyArn);
+): Exclude<SearchKeyBoundary, Readonly<{ kind: "local-disabled" }>> {
+  const mode = exactSensitiveValue(environment, KEY_CUSTODIAN_VARIABLE);
+  const vercelProjectId = exactSensitiveValue(environment, "UNFILED_SEARCH_PROJECT_ID");
   if (
-    role === null ||
-    kms === null ||
-    role[1] !== kms[1] ||
-    role[2] !== kms[3] ||
-    kms[2] !== region ||
     !VERCEL_PROJECT_ID.test(vercelProjectId) ||
-    environment.VERCEL_PROJECT_ID !== vercelProjectId ||
-    !/^[a-z0-9][a-z0-9-]{0,99}$/u.test(projectTeamSlug) ||
-    !/^[a-z0-9][a-z0-9-]{0,99}$/u.test(projectName) ||
-    expectedOidcSubject !==
-      `owner:${projectTeamSlug}:project:${projectName}:environment:${selectedRuntime}`
+    environment.VERCEL_PROJECT_ID !== vercelProjectId
   ) {
     return fail();
   }
-  const providerApiKey = value(environment, "UNFILED_SEARCH_OPENAI_API_KEY");
-  if (
-    providerApiKey.length < 20 ||
-    providerApiKey.length > 512 ||
-    hasUnsafeSecretCharacter(providerApiKey)
-  ) {
-    return fail();
-  }
-  const projectRef = value(environment, "UNFILED_SEARCH_DATABASE_PROJECT_REF");
-  if (!PROJECT_REF.test(projectRef)) return fail();
-  return {
-    invocation: { kind: "trusted-source", source: trustedSource(environment, selectedRuntime) },
-    keyBoundary: {
+  const awsOnly = [
+    "UNFILED_SEARCH_PROJECT_TEAM_SLUG",
+    "UNFILED_SEARCH_PROJECT_NAME",
+    "UNFILED_SEARCH_EXPECTED_OIDC_SUBJECT",
+    "UNFILED_AWS_REGION",
+    "UNFILED_SEARCH_AWS_ROLE_ARN",
+    "UNFILED_SEARCH_AI_OBJECT_WRAP_KMS_KEY_ARN",
+    "UNFILED_SEARCH_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON"
+  ] as const;
+  const sensitiveOnly = [
+    VERCEL_SENSITIVE_KEY_RING_VARIABLE,
+    VERCEL_OBJECT_WRAP_ROOT_VARIABLE,
+    VERCEL_RETIRED_OBJECT_WRAP_ROOTS_VARIABLE
+  ] as const;
+  if (mode === "aws-kms") {
+    if (sensitiveOnly.some((name) => hasValue(environment, name))) return fail();
+    const projectTeamSlug = value(environment, "UNFILED_SEARCH_PROJECT_TEAM_SLUG");
+    const projectName = value(environment, "UNFILED_SEARCH_PROJECT_NAME");
+    const region = value(environment, "UNFILED_AWS_REGION");
+    const roleArn = value(environment, "UNFILED_SEARCH_AWS_ROLE_ARN");
+    const activeObjectWrapKeyArn = value(environment, "UNFILED_SEARCH_AI_OBJECT_WRAP_KMS_KEY_ARN");
+    const expectedOidcSubject = value(environment, "UNFILED_SEARCH_EXPECTED_OIDC_SUBJECT");
+    const role = IAM_ROLE_ARN.exec(roleArn);
+    const kms = KMS_ARN.exec(activeObjectWrapKeyArn);
+    if (
+      role === null ||
+      kms === null ||
+      role[1] !== kms[1] ||
+      role[2] !== kms[3] ||
+      kms[2] !== region ||
+      !/^[a-z0-9][a-z0-9-]{0,99}$/u.test(projectTeamSlug) ||
+      !/^[a-z0-9][a-z0-9-]{0,99}$/u.test(projectName) ||
+      expectedOidcSubject !==
+        `owner:${projectTeamSlug}:project:${projectName}:environment:${selectedRuntime}`
+    ) {
+      return fail();
+    }
+    return Object.freeze({
       activeObjectWrapKeyArn,
       expectedOidcSubject,
       kind: "aws-oidc",
@@ -309,7 +444,73 @@ function cloudConfig(
       }),
       roleArn,
       vercelProjectId
+    });
+  }
+  if (mode === "vercel-sensitive-env-v1") {
+    if (awsOnly.some((name) => hasValue(environment, name))) return fail();
+    const activeObjectWrapRootKeyId = exactSensitiveValue(
+      environment,
+      VERCEL_OBJECT_WRAP_ROOT_VARIABLE
+    );
+    const ring = exactSensitiveValue(environment, VERCEL_SENSITIVE_KEY_RING_VARIABLE);
+    if (
+      VERCEL_ROOT_KEY_ID.exec(activeObjectWrapRootKeyId)?.[1] !== selectedRuntime ||
+      new TextEncoder().encode(ring).byteLength > 32_768
+    ) {
+      return fail();
+    }
+    return Object.freeze({
+      activeObjectWrapRootKeyId,
+      deploymentEnvironment: selectedRuntime,
+      kind: "vercel-sensitive-env-v1",
+      retiredObjectWrapRootKeyIds: sensitiveRetiredRoots(
+        environment,
+        activeObjectWrapRootKeyId,
+        selectedRuntime
+      ),
+      vercelProjectId
+    });
+  }
+  return fail();
+}
+
+function cloudConfig(
+  environment: SearchEnvironment,
+  selectedRuntime: "preview" | "production"
+): Omit<SearchConfig, "runtime"> {
+  const keyBoundary = searchKeyBoundary(environment, selectedRuntime);
+  const embeddingProvider = value(environment, "UNFILED_SEARCH_EMBEDDING_PROVIDER");
+  const embedding = (() => {
+    if (embeddingProvider === "openai") {
+      const apiKey = value(environment, "UNFILED_SEARCH_OPENAI_API_KEY");
+      if (apiKey.length < 20 || apiKey.length > 512 || hasUnsafeSecretCharacter(apiKey)) {
+        return fail();
+      }
+      return Object.freeze({
+        apiKey,
+        dimensions: SEARCH_EMBEDDING_DIMENSIONS,
+        kind: "openai" as const,
+        modelId: SEARCH_EMBEDDING_MODEL_ID
+      });
+    }
+    if (embeddingProvider === "local-hash-v1") {
+      if (hasValue(environment, "UNFILED_SEARCH_OPENAI_API_KEY")) return fail();
+      return Object.freeze({
+        dimensions: LOCAL_HASH_EMBEDDING_DIMENSIONS,
+        kind: "local-hash-v1" as const,
+        modelId: LOCAL_HASH_EMBEDDING_MODEL_ID
+      });
+    }
+    return fail();
+  })();
+  const projectRef = value(environment, "UNFILED_SEARCH_DATABASE_PROJECT_REF");
+  if (!PROJECT_REF.test(projectRef)) return fail();
+  return {
+    invocation: {
+      kind: "trusted-source",
+      source: trustedSource(environment, selectedRuntime, keyBoundary.vercelProjectId)
     },
+    keyBoundary,
     maxRequestBytes: boundedInteger(
       environment,
       "UNFILED_SEARCH_MAX_REQUEST_BYTES",
@@ -338,10 +539,11 @@ function cloudConfig(
         ),
         url: value(environment, "UNFILED_SEARCH_DATABASE_URL")
       },
-      kind: "enabled",
-      providerApiKey
+      embedding,
+      kind: "enabled"
     },
     port: boundedInteger(environment, "PORT", DEFAULT_PORT, 1_024, 65_535),
+    releaseIdentity: releaseIdentity(environment, selectedRuntime),
     requestTimeoutMs: boundedInteger(
       environment,
       "UNFILED_SEARCH_TIMEOUT_MS",

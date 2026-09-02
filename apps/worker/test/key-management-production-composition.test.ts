@@ -9,6 +9,7 @@ import type {
 
 import type { VercelTrustedSource, WorkerConfig } from "../src/config";
 import { createVercelTrustedSourcesInvocationAuth } from "../src/invocation-auth-adapter";
+import type { WorkerIntermediateKeyCustodian } from "../src/key-management-adapter";
 
 const keyMocks = vi.hoisted(() => ({
   assertReadiness: vi.fn(() => Promise.resolve()),
@@ -20,7 +21,9 @@ const keyMocks = vi.hoisted(() => ({
 vi.mock("@unfiled/key-management", () => ({
   assertIndexWorkerKmsReadiness: keyMocks.assertReadiness,
   createAwsKmsEnvelopeCustodian: keyMocks.createCustodian,
-  createVercelOidcKmsTransport: keyMocks.createTransport
+  createVercelOidcKmsTransport: keyMocks.createTransport,
+  parseManagedKeyRecordV1: (value: unknown) => value,
+  parseManagedKeyRecordV2: (value: unknown) => value
 }));
 vi.mock("@vercel/oidc", () => ({ verifyVercelOidcToken: keyMocks.verifyOidc }));
 
@@ -93,25 +96,25 @@ function recordingCustodian(calls: {
   });
 }
 
-async function productionInvocation() {
+async function trustedInvocation(source: VercelTrustedSource = trustedSource) {
   const now = Math.floor(Date.now() / 1_000);
   keyMocks.verifyOidc.mockResolvedValue({
     payload: {
-      aud: trustedSource.audience,
-      environment: "production",
+      aud: source.audience,
+      environment: source.environment,
       exp: now + 300,
       iat: now,
-      iss: trustedSource.issuer,
+      iss: source.issuer,
       nbf: now,
-      owner: trustedSource.teamSlug,
-      owner_id: trustedSource.ownerId,
-      project: trustedSource.projectName,
-      project_id: trustedSource.projectId,
-      sub: trustedSource.expectedSubject
+      owner: source.teamSlug,
+      owner_id: source.ownerId,
+      project: source.projectName,
+      project_id: source.projectId,
+      sub: source.expectedSubject
     },
     protectedHeader: { alg: "RS256" }
   });
-  return createVercelTrustedSourcesInvocationAuth({ trustedSource }).authorize(
+  return createVercelTrustedSourcesInvocationAuth({ trustedSource: source }).authorize(
     {
       authorizationHeader: null,
       protectionBypassHeader: null,
@@ -122,6 +125,8 @@ async function productionInvocation() {
   );
 }
 
+const productionInvocation = trustedInvocation;
+
 describe("production key-management composition", () => {
   beforeEach(() => {
     keyMocks.assertReadiness.mockReset().mockResolvedValue(undefined);
@@ -130,9 +135,66 @@ describe("production key-management composition", () => {
     keyMocks.verifyOidc.mockReset();
   });
 
+  it("opens the separately configured Preview KMS boundary without synthetic fallback", async () => {
+    const previewSource: VercelTrustedSource = {
+      ...trustedSource,
+      environment: "preview",
+      expectedSubject: "owner:team-example:project:unfiled-web:environment:preview"
+    };
+    const previewBoundary: WorkerConfig["keyBoundary"] = {
+      ...awsBoundary,
+      expectedOidcSubject: "owner:team-example:project:unfiled-worker:environment:preview",
+      roleArn: "arn:aws:iam::123456789012:role/unfiled-worker-preview"
+    };
+
+    await expect(
+      createWorkerKeyManagementAdapter().withAiAssistedAuthority(
+        previewBoundary,
+        {
+          invocation: await trustedInvocation(previewSource),
+          oidcToken: "preview.workload.signature",
+          requestId: "request-1",
+          runtime: "preview"
+        },
+        new AbortController().signal,
+        () => Promise.resolve("preview")
+      )
+    ).resolves.toBe("preview");
+
+    expect(keyMocks.createTransport).toHaveBeenCalledWith({
+      region: "us-west-2",
+      roleArn: "arn:aws:iam::123456789012:role/unfiled-worker-preview",
+      workload: "index_worker"
+    });
+  });
+
+  it("rejects a cross-environment KMS boundary before opening AWS", async () => {
+    const previewSource: VercelTrustedSource = {
+      ...trustedSource,
+      environment: "preview",
+      expectedSubject: "owner:team-example:project:unfiled-web:environment:preview"
+    };
+
+    await expect(
+      createWorkerKeyManagementAdapter().withAiAssistedAuthority(
+        awsBoundary,
+        {
+          invocation: await trustedInvocation(previewSource),
+          oidcToken: "preview.workload.signature",
+          requestId: "request-1",
+          runtime: "preview"
+        },
+        new AbortController().signal,
+        () => Promise.resolve("must-not-run")
+      )
+    ).rejects.toMatchObject({ code: "provider_unavailable", status: 503 });
+
+    expect(keyMocks.createTransport).not.toHaveBeenCalled();
+  });
+
   it("uses the worker role and proves the exact AI object-wrap root before issuing authority", async () => {
     let retainedAuthority: Parameters<typeof custodianForAiAssistedAuthority>[0] | undefined;
-    let retainedFacade: IntermediateKeyCustodian | undefined;
+    let retainedFacade: WorkerIntermediateKeyCustodian | undefined;
     const closeSawRevoked: boolean[] = [];
     const transport = {
       destroy: vi.fn(() => {
@@ -162,15 +224,14 @@ describe("production key-management composition", () => {
       signal,
       async (authority) => {
         retainedAuthority = authority;
-        retainedFacade = custodianForAiAssistedAuthority(authority);
-        expect(retainedFacade).not.toBe(custodian);
-        expect("rewrapIntermediateKey" in retainedFacade).toBe(false);
-        await retainedFacade.withGeneratedIntermediateKey(
-          keyRequest,
-          () => Promise.resolve("generated"),
-          { signal: callerSignal }
-        );
-        await retainedFacade.withUnwrappedIntermediateKey(Object.freeze({}), () =>
+        const facade = custodianForAiAssistedAuthority(authority);
+        retainedFacade = facade;
+        expect(facade).not.toBe(custodian);
+        expect("rewrapIntermediateKey" in facade).toBe(false);
+        await facade.withGeneratedIntermediateKey(keyRequest, () => Promise.resolve("generated"), {
+          signal: callerSignal
+        });
+        await facade.withUnwrappedIntermediateKey(Object.freeze({}), () =>
           Promise.resolve("unwrapped")
         );
         return "complete";

@@ -116,6 +116,7 @@ import {
   ProviderKeyMetadataSchema,
   ProviderKeyPutRequestSchema,
   ProviderKeyPutResponseSchema,
+  ProviderKeyQuerySchema,
   ProviderKeyResponseSchema,
   UserSettingsDtoSchema,
   UserSettingsResponseSchema,
@@ -347,6 +348,13 @@ const generatedBlockCursorQuery = {
   required: false,
   description: "The last block ID returned by the previous fixed 50-item note page.",
   schema: { type: "string", pattern: "^blk_[0-9A-HJKMNP-TV-Z]{26}$" }
+} as const;
+const providerKeyProviderQuery = {
+  name: "provider",
+  in: "query",
+  required: true,
+  description: "The provider whose isolated Vault-key metadata should be returned.",
+  schema: { type: "string", enum: ["openai", "anthropic"] }
 } as const;
 const limitQuery = {
   name: "limit",
@@ -1157,6 +1165,7 @@ export const openApiDocument = {
         operationId: "getProviderKeyMetadata",
         summary: "Read provider-key metadata without exposing key material",
         security: authenticated,
+        parameters: [providerKeyProviderQuery],
         responses: {
           "200": privateJsonResponse("Provider-key metadata", "ProviderKeyResponse"),
           ...privateProviderKeyReadErrors
@@ -1340,6 +1349,7 @@ export const openApiDocument = {
       UserSettingsUpdateRequest: openApiSchema(UserSettingsUpdateRequestSchema),
       UserSettingsUpdateResponse: openApiSchema(UserSettingsUpdateResponseSchema),
       ProviderKeyMetadata: openApiSchema(ProviderKeyMetadataSchema),
+      ProviderKeyQuery: openApiSchema(ProviderKeyQuerySchema),
       ProviderKeyResponse: openApiSchema(ProviderKeyResponseSchema),
       ProviderKeyPutRequest: openApiSchema(ProviderKeyPutRequestSchema),
       ProviderKeyPutResponse: openApiSchema(ProviderKeyPutResponseSchema),

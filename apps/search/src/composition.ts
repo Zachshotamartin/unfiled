@@ -1,9 +1,15 @@
 import type { SearchConfig } from "./config.js";
 import { createEncryptedUserSearchRepository } from "./database.js";
-import { createOpenAISearchEmbeddingProvider } from "./embedding-provider.js";
+import {
+  createLocalHashSearchEmbeddingProvider,
+  createOpenAISearchEmbeddingProvider
+} from "./embedding-provider.js";
 import { createSearchApp, type SearchApp } from "./http.js";
 import { createSearchInvocationAuth } from "./invocation-auth.js";
-import { createSearchKeyManagementAdapter } from "./key-management.js";
+import {
+  createSearchKeyManagementAdapter,
+  managedKeyRecordParserForSearchBoundary
+} from "./key-management.js";
 import { createPostgresSearchExecutor } from "./postgres.js";
 import { createEncryptedUserSearchQuery } from "./query.js";
 
@@ -29,11 +35,16 @@ export function createSearchComposition(config: SearchConfig): SearchComposition
     });
   }
   const postgres = createPostgresSearchExecutor(config.pipeline.database);
-  const repository = createEncryptedUserSearchRepository(postgres.executor);
+  const repository = createEncryptedUserSearchRepository(
+    postgres.executor,
+    managedKeyRecordParserForSearchBoundary(config.keyBoundary),
+    config.pipeline.embedding
+  );
   const query = createEncryptedUserSearchQuery({
-    embeddingProvider: createOpenAISearchEmbeddingProvider({
-      apiKey: config.pipeline.providerApiKey
-    }),
+    embeddingProvider:
+      config.pipeline.embedding.kind === "local-hash-v1"
+        ? createLocalHashSearchEmbeddingProvider()
+        : createOpenAISearchEmbeddingProvider({ apiKey: config.pipeline.embedding.apiKey }),
     repository
   });
   return Object.freeze({

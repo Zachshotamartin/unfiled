@@ -229,16 +229,19 @@ select ok(
     select pg_get_constraintdef(oid) ilike '%provider_mode = ''app_default''%'
       and pg_get_constraintdef(oid) ilike '%byok_provider IS NOT NULL%'
       and pg_get_constraintdef(oid) ilike '%NOT byok_fallback_to_app%'
+      and pg_get_constraintdef(oid) ilike '%byok_provider = ''openai''%'
+      and pg_get_constraintdef(oid) ilike '%byok_provider = ''anthropic''%'
+      and pg_get_constraintdef(oid) ilike '%model_selection = ''auto''%'
     from pg_constraint
     where conrelid = 'public.profiles'::regclass
       and conname = 'profiles_provider_mode_shape'
   ),
-  'profile provider mode has an exact app-default/BYOK shape'
+  'profile provider mode has an exact app-default/BYOK/model shape'
 );
 select ok(
   (
     select is_nullable = 'NO'
-      and column_default = '''organization-model-registry-v1''::text'
+      and column_default = '''organization-model-registry-v2''::text'
     from information_schema.columns
     where table_schema = 'public'
       and table_name = 'organization_job_ai_settings'
@@ -480,8 +483,13 @@ select ok(
         or snapshot.org_mode <> profile.org_mode
         or snapshot.selected_provider <> 'openai'
         or snapshot.byok_fallback_to_app
+        or snapshot.model_selection <> 'auto'
+        or snapshot.model_id is distinct from
+          private.resolve_organization_model_id(
+            'openai', 'auto', snapshot.routing_effort
+          )
         or snapshot.adapter_registry_version
-          <> 'organization-model-registry-v1'
+          <> 'organization-model-registry-v2'
       )
   ),
   'backfilled app-default jobs capture exact content-free profile settings'
@@ -670,7 +678,9 @@ select ok(
     select provider_mode = 'byok'
       and selected_provider = 'openai'
       and not byok_fallback_to_app
-      and adapter_registry_version = 'organization-model-registry-v1'
+      and model_selection = 'auto'
+      and model_id = 'gpt-5.6-luna'
+      and adapter_registry_version = 'organization-model-registry-v2'
     from public.organization_job_ai_settings
     where job_id = 'job_87000000000000000000000001'
   ),
@@ -697,8 +707,10 @@ select ok(
       and snapshot.provider_mode = 'byok'
       and snapshot.selected_provider = 'openai'
       and snapshot.byok_fallback_to_app
+      and snapshot.model_selection = 'auto'
+      and snapshot.model_id = 'gpt-5.6-terra'
       and snapshot.adapter_registry_version
-        = 'organization-model-registry-v1'
+        = 'organization-model-registry-v2'
     from public.organization_job_ai_settings as snapshot
     join public.profiles as profile on profile.id = snapshot.user_id
     where snapshot.job_id = 'job_87000000000000000000000002'
@@ -727,7 +739,8 @@ select ok(
     select provider_mode = 'byok'
       and selected_provider = 'openai'
       and byok_fallback_to_app
-      and adapter_registry_version = 'organization-model-registry-v1'
+      and model_id = 'gpt-5.6-terra'
+      and adapter_registry_version = 'organization-model-registry-v2'
     from public.organization_job_ai_settings
     where job_id = 'job_87000000000000000000000002'
   ),
@@ -747,7 +760,8 @@ select ok(
     select provider_mode = 'byok'
       and selected_provider = 'openai'
       and byok_fallback_to_app
-      and adapter_registry_version = 'organization-model-registry-v1'
+      and model_id = 'gpt-5.6-terra'
+      and adapter_registry_version = 'organization-model-registry-v2'
     from public.organization_job_ai_settings
     where job_id = 'job_87000000000000000000000003'
   ),

@@ -29,18 +29,25 @@ extension APIClient {
         )
     }
 
-    public func getProviderKeyMetadata() async throws -> ProviderKeyResponse {
-        try await get(
+    public func getProviderKeyMetadata(
+        provider: AIProvider
+    ) async throws -> ProviderKeyResponse {
+        let response: ProviderKeyResponse = try await get(
             "/me/provider-key",
+            query: [URLQueryItem(name: "provider", value: provider.rawValue)],
             maximumResponseBytes: AISettingsLimits.providerKeyResponseBytes,
             requirePrivateNoStore: true
         )
+        guard response.providerKey?.provider == provider || response.providerKey == nil else {
+            throw APIClientError.malformedResponse(status: 200)
+        }
+        return response
     }
 
     public func putProviderKey(
         _ request: ProviderKeyPutRequest
     ) async throws -> ProviderKeyPutResponse {
-        try await put(
+        let response: ProviderKeyPutResponse = try await put(
             "/me/provider-key",
             body: request,
             idempotencyKey: request.idempotencyKey,
@@ -49,12 +56,16 @@ extension APIClient {
             maximumResponseBytes: AISettingsLimits.providerKeyResponseBytes,
             requirePrivateNoStore: true
         )
+        guard response.providerKey.provider == request.provider else {
+            throw APIClientError.malformedResponse(status: 200)
+        }
+        return response
     }
 
     public func deleteProviderKey(
         _ request: ProviderKeyDeleteRequest
     ) async throws -> ProviderKeyDeleteResponse {
-        try await delete(
+        let response: ProviderKeyDeleteResponse = try await delete(
             "/me/provider-key",
             body: request,
             idempotencyKey: request.idempotencyKey,
@@ -62,5 +73,9 @@ extension APIClient {
             maximumResponseBytes: AISettingsLimits.providerKeyResponseBytes,
             requirePrivateNoStore: true
         )
+        guard response.provider == request.provider else {
+            throw APIClientError.malformedResponse(status: 200)
+        }
+        return response
     }
 }

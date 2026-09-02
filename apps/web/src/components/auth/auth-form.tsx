@@ -136,35 +136,37 @@ export function AuthForm() {
         </div>
       )}
 
-      <div aria-live="polite" className="min-h-12 pt-3 text-sm text-critical">
+      <div aria-live="polite" className="auth-feedback" id="auth-feedback">
         {error}
       </div>
 
-      <button
-        type="submit"
-        disabled={authSubmitDisabled(step, pending, resendAfter, code.length)}
-        className="button-primary w-full disabled:cursor-wait disabled:opacity-55"
-      >
-        {pending
-          ? "Working…"
-          : resendAfter > 0 && step === "email"
-            ? `Try again in ${resendAfter}s`
-            : step === "email"
-              ? "Send sign-in code"
-              : "Open Unfiled"}
-        {pending ? null : <ArrowRightIcon size={17} weight="bold" aria-hidden="true" />}
-      </button>
-
-      {step === "code" ? (
+      <div className="auth-actions">
         <button
-          type="button"
-          disabled={pending || resendAfter > 0}
-          onClick={() => void requestCode()}
-          className="mt-3 min-h-11 w-full text-sm text-muted-content hover:text-content disabled:opacity-50"
+          type="submit"
+          disabled={authSubmitDisabled(step, pending, resendAfter, code.length)}
+          className="button-primary w-full disabled:cursor-wait disabled:opacity-55"
         >
-          {resendAfter > 0 ? `Send another code in ${resendAfter}s` : "Send another code"}
+          {pending
+            ? "Working…"
+            : resendAfter > 0 && step === "email"
+              ? `Try again in ${resendAfter}s`
+              : step === "email"
+                ? "Send sign-in code"
+                : "Open Unfiled"}
+          {pending ? null : <ArrowRightIcon size={17} weight="bold" aria-hidden="true" />}
         </button>
-      ) : null}
+
+        {step === "code" ? (
+          <button
+            type="button"
+            disabled={pending || resendAfter > 0}
+            onClick={() => void requestCode()}
+            className="min-h-11 w-full text-sm text-muted-content hover:text-content disabled:opacity-50"
+          >
+            {resendAfter > 0 ? `Send another code in ${resendAfter}s` : "Send another code"}
+          </button>
+        ) : null}
+      </div>
     </form>
   );
 }

@@ -15,7 +15,7 @@ export type VerifiedVerifierInvocation = Readonly<{
 
 type InvocationMetadata = Readonly<{
   requestId: string;
-  runtime: "production";
+  runtime: "preview" | "production";
 }>;
 
 const verifiedInvocations = new WeakMap<object, InvocationMetadata>();
@@ -32,7 +32,7 @@ export function isVerifiedVerifierInvocation(
 ): value is VerifiedVerifierInvocation {
   if (value === null || typeof value !== "object") return false;
   const metadata = verifiedInvocations.get(value);
-  return metadata?.requestId === expected.requestId;
+  return metadata?.requestId === expected.requestId && metadata.runtime === expected.runtime;
 }
 
 export type ProductionInvocationProof = Readonly<{
@@ -139,7 +139,10 @@ export function createProductionInvocationAuth(
       if (!hasExactClaims(result, trustedSource, Math.floor(Date.now() / 1_000))) {
         throw unauthorized();
       }
-      return issueVerifiedInvocation({ requestId: proof.requestId, runtime: "production" });
+      return issueVerifiedInvocation({
+        requestId: proof.requestId,
+        runtime: trustedSource.environment
+      });
     }
   });
 }

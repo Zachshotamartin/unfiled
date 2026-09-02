@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   createApp: vi.fn(),
   createAuth: vi.fn(),
   createKms: vi.fn(),
+  keyParser: vi.fn(() => (value: unknown) => value),
   createPostgres: vi.fn(),
   createRepository: vi.fn(),
   createVerifier: vi.fn()
@@ -18,7 +19,10 @@ vi.mock("../src/http", () => ({ createVerifierApp: mocks.createApp }));
 vi.mock("../src/invocation-auth", () => ({
   createProductionInvocationAuth: mocks.createAuth
 }));
-vi.mock("../src/kms", () => ({ createVerifierKmsAdapter: mocks.createKms }));
+vi.mock("../src/kms", () => ({
+  createVerifierKmsAdapter: mocks.createKms,
+  managedKeyRecordParserForVerifierConfig: mocks.keyParser
+}));
 vi.mock("../src/postgres", () => ({
   createPostgresVerifierExecutor: mocks.createPostgres
 }));
@@ -41,6 +45,7 @@ const kms = Object.freeze({ withKeySession: vi.fn() });
 const disabled: VerifierConfig = {
   maxRequestBytes: 1_024,
   port: 8_789,
+  releaseIdentity: null,
   requestTimeoutMs: 50_000,
   runtime: "local",
   verification: { kind: "disabled" }
@@ -48,6 +53,11 @@ const disabled: VerifierConfig = {
 
 const enabled: VerifierConfig = {
   ...disabled,
+  releaseIdentity: {
+    commit: "c".repeat(40),
+    deployment: `sha256:${"d".repeat(64)}`,
+    environment: "production"
+  },
   runtime: "production",
   verification: {
     database: {
@@ -74,6 +84,7 @@ const enabled: VerifierConfig = {
       activeObjectWrapRootArn:
         "arn:aws:kms:us-west-2:123456789012:key/11111111-2222-4333-8444-555555555555",
       expectedOidcSubject: "owner:team-example:project:unfiled-verifier:environment:production",
+      kind: "aws-oidc",
       maxKeyRecords: 4,
       oidcAudience: "sts.amazonaws.com",
       region: "us-west-2",
@@ -110,7 +121,7 @@ describe("verifier production composition", () => {
     const composition = createVerifierComposition(enabled);
     if (enabled.verification.kind !== "enabled") throw new Error("expected enabled fixture");
     expect(mocks.createPostgres).toHaveBeenCalledWith(enabled.verification.database);
-    expect(mocks.createRepository).toHaveBeenCalledWith(postgresExecutor);
+    expect(mocks.createRepository).toHaveBeenCalledWith(postgresExecutor, expect.any(Function));
     expect(mocks.createVerifier).toHaveBeenCalledWith({
       decryptConcurrency: 8,
       repository

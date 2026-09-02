@@ -1,4 +1,8 @@
-import { parseManagedKeyRecord, type ManagedKeyRecordV1 } from "@unfiled/key-management";
+import {
+  parseManagedKeyRecordV1,
+  type ManagedKeyRecord,
+  type ManagedKeyRecordParser
+} from "@unfiled/key-management";
 
 const EXPECTED_DATABASE_ROLE = "unfiled_index_worker";
 const SOURCE_ENVELOPE_BYTE_BUDGET = 8_388_608;
@@ -104,8 +108,8 @@ export type ClaimedNoteIndexJob = Readonly<{
   leaseExpiresAt: string;
   sourceNoteCipher: EncryptedObjectCipher;
   sourceEnvelopeBytes: number;
-  sourceKey: ManagedKeyRecordV1;
-  targetKey: ManagedKeyRecordV1;
+  sourceKey: ManagedKeyRecord;
+  targetKey: ManagedKeyRecord;
   embeddingModelId: string;
   embeddingDimensions: number;
   generationRevisionToken: number;
@@ -204,7 +208,7 @@ export type ListActiveNoteRagIndexResult = Readonly<{
   generation: ActiveRagGeneration | null;
   coverage: ActiveRagCoverage;
   items: readonly ActiveRagIndexItem[];
-  keys: readonly ManagedKeyRecordV1[];
+  keys: readonly ManagedKeyRecord[];
   page: Readonly<{
     limit: number;
     ciphertextByteBudget: number;
@@ -502,42 +506,21 @@ function encryptedCipher(
   });
 }
 
-function normalizeManagedKey(value: unknown): ManagedKeyRecordV1 {
-  const keys = [
-    "schemaVersion",
-    "ownerId",
-    "keyClass",
-    "purpose",
-    "keyId",
-    "keyVersion",
-    "status",
-    "encryptedKeyMaterial",
-    "rootKeyArn",
-    "createdAt",
-    "activatedAt",
-    "retiredAt",
-    "revokedAt",
-    "wrapOperations",
-    "wrapOperationLimit",
-    "rotation"
-  ] as const;
-  const row = exactRecord(value, keys);
-  const rotation = exactRecord(row.rotation, [
-    "predecessorKeyId",
-    "previousRootKeyArn",
-    "rootRewrapCount",
-    "lastRootRewrappedAt"
-  ]);
+function normalizeManagedKey(
+  value: unknown,
+  parseRecord: ManagedKeyRecordParser
+): ManagedKeyRecord {
+  if (!isRecord(value) || !isRecord(value.rotation)) rejectContract();
   try {
-    return parseManagedKeyRecord({
-      ...row,
-      createdAt: timestamp(row.createdAt),
-      activatedAt: nullableTimestamp(row.activatedAt),
-      retiredAt: nullableTimestamp(row.retiredAt),
-      revokedAt: nullableTimestamp(row.revokedAt),
+    return parseRecord({
+      ...value,
+      activatedAt: nullableTimestamp(value.activatedAt),
+      createdAt: timestamp(value.createdAt),
+      retiredAt: nullableTimestamp(value.retiredAt),
+      revokedAt: nullableTimestamp(value.revokedAt),
       rotation: {
-        ...rotation,
-        lastRootRewrappedAt: nullableTimestamp(rotation.lastRootRewrappedAt)
+        ...value.rotation,
+        lastRootRewrappedAt: nullableTimestamp(value.rotation.lastRootRewrappedAt)
       }
     });
   } catch {
@@ -587,7 +570,7 @@ function sameKeyReference(
   );
 }
 
-function claimedJob(value: unknown): ClaimedNoteIndexJob {
+function claimedJob(value: unknown, parseRecord: ManagedKeyRecordParser): ClaimedNoteIndexJob {
   const row = exactRecord(value, [
     "jobId",
     "userId",
@@ -621,8 +604,8 @@ function claimedJob(value: unknown): ClaimedNoteIndexJob {
     recordVersion: targetRevision,
     kind: "note_content"
   });
-  const sourceKey = normalizeManagedKey(row.sourceKey);
-  const targetKey = normalizeManagedKey(row.targetKey);
+  const sourceKey = normalizeManagedKey(row.sourceKey, parseRecord);
+  const targetKey = normalizeManagedKey(row.targetKey, parseRecord);
   const targetReservation = reservation(row.reservation);
   if (
     !oneOf(row.noteType, ["generic", "list", "log", "principle", "project"] as const) ||
@@ -674,7 +657,10 @@ function resultValue(result: IndexDatabaseQueryResult): unknown {
   return row.result;
 }
 
-function parseClaimResult(value: unknown): ClaimNoteIndexJobsResult {
+function parseClaimResult(
+  value: unknown,
+  parseRecord: ManagedKeyRecordParser
+): ClaimNoteIndexJobsResult {
   const row = exactRecord(value, ["jobs", "sourceEnvelopeBytes", "sourceEnvelopeByteBudget"]);
   if (
     !Array.isArray(row.jobs) ||
@@ -683,7 +669,7 @@ function parseClaimResult(value: unknown): ClaimNoteIndexJobsResult {
   ) {
     rejectContract();
   }
-  const jobs = row.jobs.map(claimedJob);
+  const jobs = row.jobs.map((job) => claimedJob(job, parseRecord));
   const sourceEnvelopeBytes = integer(row.sourceEnvelopeBytes, 0, SOURCE_ENVELOPE_BYTE_BUDGET);
   if (jobs.reduce((sum, job) => sum + job.sourceEnvelopeBytes, 0) !== sourceEnvelopeBytes) {
     rejectContract();
@@ -903,7 +889,8 @@ function parseActiveItem(value: unknown, ownerId: string): ActiveRagIndexItem {
 
 function parseListResult(
   value: unknown,
-  input: ListActiveNoteRagIndexInput
+  input: ListActiveNoteRagIndexInput,
+  parseRecord: ManagedKeyRecordParser
 ): ListActiveNoteRagIndexResult {
   const row = exactRecord(value, ["ownerId", "generation", "coverage", "items", "keys", "page"]);
   if (
@@ -917,7 +904,7 @@ function parseListResult(
   const generation = row.generation === null ? null : parseGeneration(row.generation);
   const coverage = parseCoverage(row.coverage);
   const items = row.items.map((item) => parseActiveItem(item, input.ownerId));
-  const keys = row.keys.map(normalizeManagedKey);
+  const keys = row.keys.map((key) => normalizeManagedKey(key, parseRecord));
   const pageRow = exactRecord(row.page, [
     "limit",
     "ciphertextByteBudget",
@@ -1095,7 +1082,8 @@ async function query(
 }
 
 export function createNoteIndexRepository(
-  executor: IndexDatabaseQueryExecutor
+  executor: IndexDatabaseQueryExecutor,
+  parseRecord: ManagedKeyRecordParser = parseManagedKeyRecordV1
 ): NoteIndexRepository {
   async function preflight(signal: AbortSignal): Promise<void> {
     const result = await query(executor, IDENTITY_SQL, [], signal);
@@ -1132,7 +1120,8 @@ export function createNoteIndexRepository(
           RPC_SQL.claim_note_index_jobs,
           [input.workerId, input.limit, input.leaseSeconds],
           input.signal
-        )
+        ),
+        parseRecord
       );
       if (result.jobs.length > input.limit) rejectContract();
       return result;
@@ -1203,7 +1192,8 @@ export function createNoteIndexRepository(
           [input.ownerId, cursor, input.limit, input.ciphertextByteBudget],
           input.signal
         ),
-        input
+        input,
+        parseRecord
       );
     }
   });

@@ -24,6 +24,8 @@ const ACTIVE_ROOT = "arn:aws:kms:us-west-2:123456789012:key/11111111-2222-4333-8
 const RETIRED_ROOT = "arn:aws:kms:us-west-2:123456789012:key/66666666-7777-4888-9999-aaaaaaaaaaaa";
 const PROJECT_REF = "abcdefghijklmnopqrst";
 const HOST = "aws-0-us-west-2.pooler.supabase.com";
+const SENSITIVE_ROOT =
+  "urn:unfiled:key-root:vercel-sensitive-env-v1:production:11111111-2222-4333-8444-555555555555";
 
 function certificate(): string {
   return `-----BEGIN CERTIFICATE-----\n${"A".repeat(80)}\n-----END CERTIFICATE-----\n`;
@@ -31,8 +33,12 @@ function certificate(): string {
 
 function productionEnvironment(): Record<string, string> {
   return {
+    UNFILED_KEY_CUSTODIAN: "aws-kms",
     UNFILED_VERIFIER_ENV: "production",
+    VERCEL: "1",
+    VERCEL_DEPLOYMENT_ID: "dpl_verifierproduction123",
     VERCEL_ENV: "production",
+    VERCEL_GIT_COMMIT_SHA: "c".repeat(40),
     VERCEL_PROJECT_ID: "prj_verifier123",
     UNFILED_AWS_REGION: "us-west-2",
     UNFILED_AWS_ROLE_ARN: "arn:aws:iam::123456789012:role/unfiled-verifier-production",
@@ -54,24 +60,35 @@ function productionEnvironment(): Record<string, string> {
   };
 }
 
+function previewEnvironment(): Record<string, string> {
+  return {
+    ...productionEnvironment(),
+    UNFILED_VERIFIER_ENV: "preview",
+    UNFILED_AWS_ROLE_ARN: "arn:aws:iam::123456789012:role/unfiled-verifier-preview",
+    UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN:
+      "arn:aws:kms:us-west-2:123456789012:key/22222222-3333-4444-8555-666666666666",
+    UNFILED_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON: JSON.stringify([
+      "arn:aws:kms:us-west-2:123456789012:key/77777777-8888-4999-8aaa-bbbbbbbbbbbb"
+    ]),
+    UNFILED_VERIFIER_EXPECTED_OIDC_SUBJECT:
+      "owner:team-example:project:unfiled-verifier:environment:preview",
+    UNFILED_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT:
+      "owner:team-example:project:unfiled-web:environment:preview",
+    VERCEL_DEPLOYMENT_ID: "dpl_verifierpreview123",
+    VERCEL_ENV: "preview"
+  };
+}
+
 describe("verifier configuration", () => {
-  it("keeps local and preview execution disabled without accepting production capabilities", () => {
+  it("keeps only local execution disabled without accepting cloud capabilities", () => {
     expect(loadVerifierConfig({ UNFILED_VERIFIER_ENV: "local" })).toMatchObject({
       maxRequestBytes: 1_024,
       port: 8_789,
+      releaseIdentity: null,
       requestTimeoutMs: 49_000,
       runtime: "local",
       verification: { kind: "disabled" }
     });
-    expect(
-      loadVerifierConfig({
-        UNFILED_VERIFIER_ENV: "preview",
-        VERCEL_ENV: "preview",
-        PORT: "9000",
-        UNFILED_VERIFIER_MAX_REQUEST_BYTES: "2048",
-        UNFILED_VERIFIER_TIMEOUT_MS: "49000"
-      })
-    ).toMatchObject({ port: 9_000, runtime: "preview", requestTimeoutMs: 49_000 });
     expect(VERIFIER_CAPABILITIES).toEqual({
       acceptsUserSessions: false,
       decryptKeyClasses: ["ai_assisted"],
@@ -82,9 +99,33 @@ describe("verifier configuration", () => {
     });
   });
 
+  it("loads Preview through its exact managed database, caller, and KMS boundary", () => {
+    const config = loadVerifierConfig(previewEnvironment());
+    expect(config).toMatchObject({
+      runtime: "preview",
+      releaseIdentity: { environment: "preview" },
+      verification: {
+        kind: "enabled",
+        invocation: {
+          environment: "preview",
+          expectedSubject: "owner:team-example:project:unfiled-web:environment:preview"
+        },
+        kms: {
+          expectedOidcSubject: "owner:team-example:project:unfiled-verifier:environment:preview",
+          roleArn: "arn:aws:iam::123456789012:role/unfiled-verifier-preview"
+        }
+      }
+    });
+  });
+
   it("loads the exact production database, caller, and decrypt-only KMS boundary", () => {
     const config = loadVerifierConfig(productionEnvironment());
     expect(config.runtime).toBe("production");
+    expect(config.releaseIdentity).toEqual({
+      commit: "c".repeat(40),
+      deployment: "sha256:0755a0999c296cb44007caf77f542d1262b5ba86b3b1ab42d3bd46909ac3ede1",
+      environment: "production"
+    });
     expect(config.verification).toMatchObject({
       kind: "enabled",
       decryptConcurrency: 8,
@@ -122,6 +163,30 @@ describe("verifier configuration", () => {
     expect(RAG_VERIFICATION_PAGE_LIMIT).toBe(50);
   });
 
+  it("loads decrypt-only Vercel sensitive-environment custody without AWS identity", () => {
+    const environment: Record<string, string | undefined> = productionEnvironment();
+    environment.UNFILED_KEY_CUSTODIAN = "vercel-sensitive-env-v1";
+    environment.UNFILED_AWS_REGION = undefined;
+    environment.UNFILED_AWS_ROLE_ARN = undefined;
+    environment.UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN = undefined;
+    environment.UNFILED_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON = undefined;
+    environment.UNFILED_VERIFIER_EXPECTED_OIDC_SUBJECT = undefined;
+    environment.UNFILED_VERIFIER_AI_OBJECT_WRAP_ROOT_KEY_ID = SENSITIVE_ROOT;
+    environment.UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1 = '{"version":1}';
+
+    expect(loadVerifierConfig(environment)).toMatchObject({
+      verification: {
+        kind: "enabled",
+        kms: {
+          activeObjectWrapRootKeyId: SENSITIVE_ROOT,
+          deploymentEnvironment: "production",
+          kind: "vercel-sensitive-env-v1",
+          retiredObjectWrapRootKeyIds: []
+        }
+      }
+    });
+  });
+
   it.each([
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
@@ -149,20 +214,46 @@ describe("verifier configuration", () => {
     expect(() => loadVerifierConfig({ ...productionEnvironment(), [name]: "1" })).toThrow(name);
   });
 
-  it("rejects production material in a non-production runtime", () => {
+  it("rejects an incomplete Preview cloud boundary instead of falling back", () => {
     expect(() =>
       loadVerifierConfig({
-        UNFILED_VERIFIER_ENV: "preview",
-        VERCEL_ENV: "preview",
-        UNFILED_VERIFIER_DATABASE_URL: "not-allowed"
+        ...previewEnvironment(),
+        UNFILED_VERIFIER_DATABASE_URL: undefined
       })
     ).toThrow("UNFILED_VERIFIER_DATABASE_URL");
+  });
+
+  it("rejects missing Vercel identity and cross-environment Preview subjects", () => {
+    expect(() => loadVerifierConfig({ ...previewEnvironment(), VERCEL: undefined })).toThrow(
+      "VERCEL_ENV"
+    );
+    expect(() =>
+      loadVerifierConfig({ ...previewEnvironment(), VERCEL_DEPLOYMENT_ID: undefined })
+    ).toThrow("VERCEL_DEPLOYMENT_ID");
+    expect(() =>
+      loadVerifierConfig({ ...previewEnvironment(), VERCEL_GIT_COMMIT_SHA: "C".repeat(40) })
+    ).toThrow("VERCEL_GIT_COMMIT_SHA");
+    expect(() =>
+      loadVerifierConfig({ ...previewEnvironment(), VERCEL_DEPLOYMENT_ID: "unsafe/value" })
+    ).toThrow("VERCEL_DEPLOYMENT_ID");
+    expect(() =>
+      loadVerifierConfig({
+        ...previewEnvironment(),
+        UNFILED_VERIFIER_EXPECTED_OIDC_SUBJECT:
+          "owner:team-example:project:unfiled-verifier:environment:production"
+      })
+    ).toThrow("UNFILED_VERIFIER_EXPECTED_OIDC_SUBJECT");
   });
 
   it.each([
     [{}, "UNFILED_VERIFIER_ENV"],
     [{ UNFILED_VERIFIER_ENV: "invalid" }, "UNFILED_VERIFIER_ENV"],
     [{ UNFILED_VERIFIER_ENV: "production", VERCEL_ENV: "preview" }, "UNFILED_VERIFIER_ENV"],
+    [{ UNFILED_VERIFIER_ENV: "local", VERCEL: "1" }, "VERCEL_ENV"],
+    [
+      { UNFILED_VERIFIER_ENV: "local", VERCEL_DEPLOYMENT_ID: "dpl_localmustnotexist" },
+      "VERCEL_DEPLOYMENT_ID"
+    ],
     [{ UNFILED_VERIFIER_ENV: "local", VERCEL_ENV: "production" }, "VERCEL_ENV"],
     [
       { UNFILED_VERIFIER_ENV: "local", UNFILED_VERIFIER_TIMEOUT_MS: "999" },
@@ -286,5 +377,87 @@ describe("verifier configuration", () => {
     const aboveServerCeiling = productionEnvironment();
     aboveServerCeiling.UNFILED_VERIFIER_TIMEOUT_MS = "49001";
     expect(() => loadVerifierConfig(aboveServerCeiling)).toThrow("UNFILED_VERIFIER_TIMEOUT_MS");
+    expect(() => verifierCapacityProcessingBudgetMs(0)).toThrow(
+      "UNFILED_VERIFIER_DECRYPT_CONCURRENCY"
+    );
+  });
+
+  it("rejects a Trusted Source subject whose team or project disagrees with its parts", () => {
+    const teamMismatch = productionEnvironment();
+    teamMismatch.UNFILED_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT =
+      "owner:other-team:project:unfiled-web:environment:production";
+    expect(() => loadVerifierConfig(teamMismatch)).toThrow("UNFILED_TRUSTED_SOURCE_TEAM_SLUG");
+
+    const projectMismatch = productionEnvironment();
+    projectMismatch.UNFILED_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT =
+      "owner:team-example:project:other-web:environment:production";
+    expect(() => loadVerifierConfig(projectMismatch)).toThrow(
+      "UNFILED_TRUSTED_SOURCE_WEB_PROJECT_NAME"
+    );
+  });
+
+  it("rejects ambiguous, malformed, or cross-environment Vercel sensitive-environment custody", () => {
+    const previewRoot =
+      "urn:unfiled:key-root:vercel-sensitive-env-v1:preview:22222222-2222-4222-8222-222222222222";
+    const retiredRoot =
+      "urn:unfiled:key-root:vercel-sensitive-env-v1:production:33333333-3333-4333-8333-333333333333";
+    const retiredVariable = "UNFILED_VERIFIER_RETIRED_AI_OBJECT_WRAP_ROOT_KEY_IDS_JSON";
+    type Environment = Record<string, string | undefined>;
+    const sensitive = (overrides: Environment = {}): Environment => ({
+      ...productionEnvironment(),
+      UNFILED_KEY_CUSTODIAN: "vercel-sensitive-env-v1",
+      UNFILED_AWS_REGION: undefined,
+      UNFILED_AWS_ROLE_ARN: undefined,
+      UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN: undefined,
+      UNFILED_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON: undefined,
+      UNFILED_VERIFIER_EXPECTED_OIDC_SUBJECT: undefined,
+      UNFILED_VERIFIER_AI_OBJECT_WRAP_ROOT_KEY_ID: SENSITIVE_ROOT,
+      UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1: '{"version":1}',
+      ...overrides
+    });
+
+    expect(
+      loadVerifierConfig(sensitive({ [retiredVariable]: JSON.stringify([retiredRoot]) }))
+    ).toMatchObject({
+      verification: { kms: { retiredObjectWrapRootKeyIds: [retiredRoot] } }
+    });
+
+    const rejected: readonly (readonly [string, Environment])[] = [
+      ["UNFILED_KEY_CUSTODIAN", { UNFILED_KEY_CUSTODIAN: "local" }],
+      ["UNFILED_KEY_CUSTODIAN", { UNFILED_KEY_CUSTODIAN: " vercel-sensitive-env-v1" }],
+      ["UNFILED_AWS_REGION", { UNFILED_AWS_REGION: "us-west-2" }],
+      ["UNFILED_VERIFIER_PROJECT_ID", { VERCEL_PROJECT_ID: "prj_other" }],
+      ["UNFILED_VERIFIER_PROJECT_ID", { UNFILED_VERIFIER_PROJECT_ID: "prj_verifier123 " }],
+      [
+        "UNFILED_VERIFIER_AI_OBJECT_WRAP_ROOT_KEY_ID",
+        { UNFILED_VERIFIER_AI_OBJECT_WRAP_ROOT_KEY_ID: previewRoot }
+      ],
+      [
+        "UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1",
+        { UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1: "x".repeat(32_769) }
+      ],
+      [
+        "UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1",
+        { UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1: undefined }
+      ],
+      [retiredVariable, { [retiredVariable]: " []" }],
+      [retiredVariable, { [retiredVariable]: "[" }],
+      [retiredVariable, { [retiredVariable]: "{}" }],
+      [retiredVariable, { [retiredVariable]: "[ ]" }],
+      [retiredVariable, { [retiredVariable]: "[1]" }],
+      [retiredVariable, { [retiredVariable]: JSON.stringify([SENSITIVE_ROOT]) }],
+      [retiredVariable, { [retiredVariable]: JSON.stringify([previewRoot]) }],
+      [retiredVariable, { [retiredVariable]: JSON.stringify([retiredRoot, retiredRoot]) }]
+    ];
+    for (const [name, overrides] of rejected) {
+      expect(() => loadVerifierConfig(sensitive(overrides))).toThrow(name);
+    }
+
+    expect(() =>
+      loadVerifierConfig({
+        ...productionEnvironment(),
+        UNFILED_VERIFIER_AI_OBJECT_WRAP_ROOT_KEY_ID: SENSITIVE_ROOT
+      })
+    ).toThrow("UNFILED_VERIFIER_AI_OBJECT_WRAP_ROOT_KEY_ID");
   });
 });

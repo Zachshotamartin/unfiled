@@ -208,10 +208,91 @@ describe("production AI settings repository", () => {
       )
     });
 
-    await expect(repository.getProviderKey(context)).rejects.toMatchObject({
+    await expect(repository.getProviderKey(context, "anthropic")).rejects.toMatchObject({
       code: "provider_unavailable",
       status: 503
     });
     expect(cancelled).toHaveBeenCalledOnce();
+  });
+
+  it("validates an Anthropic key with the Anthropic validator before the provider-addressed RPC", async () => {
+    const validate = vi.fn<ProviderKeyValidator["validate"]>().mockResolvedValue(undefined);
+    const anthropicKey = {
+      provider: "anthropic",
+      lastFour: "wxyz",
+      status: "active",
+      credentialRevision: 1,
+      validatedAt: NOW,
+      updatedAt: NOW
+    };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ message: "not_found" }, { status: 404 }))
+      .mockResolvedValueOnce(Response.json({ providerKey: anthropicKey, replayed: false }))
+      .mockResolvedValueOnce(Response.json({ providerKey: anthropicKey }))
+      .mockResolvedValueOnce(Response.json({ providerKey: null }));
+    const repository = createProductionAiSettingsRepository({
+      environment,
+      fetch: fetcher,
+      providerKeyValidator: { validate }
+    });
+    const apiKey = "sk-ant-test-example-not-a-real-key-wxyz";
+
+    const stored = await repository.putProviderKey(context, {
+      idempotencyKey: "provider-put-anthropic-01",
+      provider: "anthropic",
+      expectedCredentialRevision: null,
+      apiKey
+    });
+    const anthropic = await repository.getProviderKey(context, "anthropic");
+    const openai = await repository.getProviderKey(context, "openai");
+
+    expect(validate).toHaveBeenCalledOnce();
+    expect(validate.mock.calls[0]?.slice(0, 2)).toEqual(["anthropic", apiKey]);
+    expect(stored).toEqual({ providerKey: anthropicKey, replayed: false });
+    expect(anthropic).toEqual({ providerKey: anthropicKey });
+    expect(openai).toEqual({ providerKey: null });
+    const bodies = fetcher.mock.calls.map(([, init]) => {
+      const body = init?.body;
+      if (typeof body !== "string") throw new TypeError("Expected an RPC JSON body");
+      return JSON.parse(body) as unknown;
+    });
+    expect(bodies[1]).toEqual({
+      p_user_id: USER_ID,
+      p_provider: "anthropic",
+      p_api_key: apiKey,
+      p_expected_credential_revision: null,
+      p_idempotency_key: "provider-put-anthropic-01",
+      p_replay_only: false
+    });
+    expect(bodies[2]).toEqual({ p_user_id: USER_ID, p_provider: "anthropic" });
+    expect(bodies[3]).toEqual({ p_user_id: USER_ID, p_provider: "openai" });
+    expect(fetcher.mock.calls.map(([url]) => requestUrl(url))).toEqual([
+      "https://project.supabase.co/rest/v1/rpc/put_user_provider_key",
+      "https://project.supabase.co/rest/v1/rpc/put_user_provider_key",
+      "https://project.supabase.co/rest/v1/rpc/get_user_provider_key_status",
+      "https://project.supabase.co/rest/v1/rpc/get_user_provider_key_status"
+    ]);
+  });
+
+  it("fails closed when the database answers a provider-addressed read with the other provider", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        providerKey: {
+          provider: "openai",
+          lastFour: "1234",
+          status: "active",
+          credentialRevision: 1,
+          validatedAt: NOW,
+          updatedAt: NOW
+        }
+      })
+    );
+    const repository = createProductionAiSettingsRepository({ environment, fetch: fetcher });
+
+    await expect(repository.getProviderKey(context, "anthropic")).rejects.toMatchObject({
+      code: "provider_unavailable",
+      status: 503
+    });
   });
 });

@@ -252,9 +252,12 @@ export function createEnvironmentIndexWorkerClient(
 ): IndexWorkerClient {
   const origin = environment.UNFILED_INDEX_WORKER_ORIGIN?.trim();
   const sourceProjectId = environment.VERCEL_PROJECT_ID?.trim();
+  const runtime = environment.VERCEL_ENV?.trim();
+  const targetRuntime = environment.UNFILED_WORKER_ENV?.trim();
   if (
     environment.VERCEL !== "1" ||
-    environment.VERCEL_ENV !== "production" ||
+    (runtime !== "preview" && runtime !== "production") ||
+    targetRuntime !== runtime ||
     origin === undefined ||
     sourceProjectId === undefined ||
     !/^prj_[A-Za-z0-9]{6,100}$/u.test(sourceProjectId)

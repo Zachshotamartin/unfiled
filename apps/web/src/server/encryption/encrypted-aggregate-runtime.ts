@@ -7,7 +7,7 @@ import {
   type EncryptedAggregateService,
   type ObjectWrapReservation
 } from "@unfiled/encrypted-aggregate";
-import { createManagedKeyResolver } from "@unfiled/key-management";
+import { createManagedKeyResolver, parseManagedKeyRecordV2 } from "@unfiled/key-management";
 
 import { ensureOwnerContentKeys, managedKeyBootstrapRpcFunctions } from "./managed-key-bootstrap";
 import {
@@ -15,6 +15,7 @@ import {
   createObjectWrapReservationPort,
   managedKeyRpcFunctions
 } from "./managed-key-rpc-store";
+import type { ManagedKeyRecordSchemaVersion } from "./managed-key-record";
 import { ServiceRpcError, ServiceRpcErrorCode, type ServiceRpcClient } from "./service-rpc-client";
 import type { InteractiveWebKeyRuntime } from "./web-key-runtime";
 
@@ -38,9 +39,10 @@ export type WithOwnerEncryptedAggregateRuntimeOptions = Readonly<{
 function aggregateRuntime(
   ownerId: string,
   keyResolver: Parameters<typeof createEncryptedAggregateService>[0]["keyResolver"],
-  client: ServiceRpcClient
+  client: ServiceRpcClient,
+  schemaVersion: ManagedKeyRecordSchemaVersion = 1
 ): OwnerEncryptedAggregateRuntime {
-  const store = createManagedKeyRpcStore(client);
+  const store = createManagedKeyRpcStore(client, { schemaVersion });
   const createPreparedService = (
     reservations: readonly ObjectWrapReservation[]
   ): PreparedOwnerEncryptedAggregateService => {
@@ -126,17 +128,34 @@ export async function withOwnerEncryptedAggregateRuntime<Result>(
     return use(aggregateRuntime(ownerId, runtime.keyResolver, client));
   }
 
+  if (runtime.kind === "aws-oidc") {
+    return runtime.withInteractiveCustodian(options.signal, async (custodian) => {
+      const store = createManagedKeyRpcStore(client);
+      await ensureOwnerContentKeys(client, custodian, store, ownerId, {
+        signal: options.signal
+      });
+      const keyResolver = createManagedKeyResolver({
+        custodian,
+        store,
+        workload: "interactive_api"
+      });
+      return use(aggregateRuntime(ownerId, keyResolver, client));
+    });
+  }
+
   return runtime.withInteractiveCustodian(options.signal, async (custodian) => {
-    const store = createManagedKeyRpcStore(client);
+    const store = createManagedKeyRpcStore(client, { schemaVersion: 2 });
     await ensureOwnerContentKeys(client, custodian, store, ownerId, {
+      schemaVersion: 2,
       signal: options.signal
     });
     const keyResolver = createManagedKeyResolver({
       custodian,
+      parseRecord: parseManagedKeyRecordV2,
       store,
       workload: "interactive_api"
     });
-    return use(aggregateRuntime(ownerId, keyResolver, client));
+    return use(aggregateRuntime(ownerId, keyResolver, client, 2));
   });
 }
 

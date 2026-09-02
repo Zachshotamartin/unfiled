@@ -75,7 +75,7 @@ import {
   type ReviewPayload,
   type ReviewPayloadV2
 } from "@unfiled/encrypted-aggregate";
-import type { KeyClass, ManagedKeyRecordV1 } from "@unfiled/key-management";
+import type { KeyClass, ManagedKeyRecord } from "@unfiled/key-management";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 
@@ -370,7 +370,7 @@ function interactionKeyClass(
   return "ai_assisted";
 }
 
-function requestMacReference(key: ManagedKeyRecordV1): Readonly<{
+function requestMacReference(key: ManagedKeyRecord): Readonly<{
   ownerId: string;
   keyId: string;
   keyClass: KeyClass;
@@ -1467,7 +1467,7 @@ export class EncryptedOwnerInteractionCoordinator {
       requestCodec: PayloadCodec<unknown>;
       response: ResponsePayload;
       responseCodec: PayloadCodec<ResponsePayload>;
-      requestMacKey: ManagedKeyRecordV1;
+      requestMacKey: ManagedKeyRecord;
       reservations: readonly OwnerInteractionPreparedReservation[];
       selectedOutcome?: InteractionOutcome;
       source: OwnerInteractionPreparedSource;
@@ -1790,7 +1790,7 @@ export class EncryptedOwnerInteractionCoordinator {
       logicalRequest: LogicalApiRequest<unknown>;
       requestCodec: PayloadCodec<unknown>;
       responseCodec: PayloadCodec<ResponsePayload>;
-      requestMacKey: ManagedKeyRecordV1;
+      requestMacKey: ManagedKeyRecord;
       encryptedResponse: EncryptedAggregateRecord<"idempotency_response">;
       encryptedResponseVerificationMac: KeyedMacRecord;
       selectedOutcome?: InteractionOutcome;

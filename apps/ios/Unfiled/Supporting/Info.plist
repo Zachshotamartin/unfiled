@@ -63,6 +63,8 @@
   <string>$(UNFILED_API_BASE_URL)</string>
   <key>UnfiledAppGroupIdentifier</key>
   <string>$(UNFILED_APP_GROUP_IDENTIFIER)</string>
+  <key>UnfiledManagedAIFallbackAvailable</key>
+  <string>$(UNFILED_MANAGED_AI_FALLBACK_AVAILABLE)</string>
   <key>UnfiledURLScheme</key>
   <string>$(UNFILED_URL_SCHEME)</string>
 </dict>

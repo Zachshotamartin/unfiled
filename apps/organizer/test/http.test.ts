@@ -47,6 +47,26 @@ describe("organizer HTTP app", () => {
     expect(head.status).toBe(200);
     expect(await head.text()).toBe("");
   });
+  it("emits only the managed release consistency identity on success and error", async () => {
+    const releaseIdentity = {
+      commit: "b".repeat(40),
+      deployment: `sha256:${"c".repeat(64)}` as const,
+      environment: "preview" as const
+    };
+    const managedConfig = { ...config(), releaseIdentity, runtime: "preview" as const };
+    const app = createOrganizerApp({ config: managedConfig });
+
+    for (const incoming of [
+      new Request("https://organizer.example/health"),
+      new Request("https://organizer.example/missing")
+    ]) {
+      const response = await app(incoming);
+      expect(response.headers.get("x-unfiled-deployment")).toBe(releaseIdentity.deployment);
+      expect(response.headers.get("x-unfiled-commit")).toBe(releaseIdentity.commit);
+      expect(response.headers.get("x-unfiled-environment")).toBe("preview");
+      expect(JSON.stringify([...response.headers])).not.toContain("dpl_");
+    }
+  });
   it("authorizes a local content-free drain and defaults empty body to schedule", async () => {
     const port = drain();
     const app = createOrganizerApp({

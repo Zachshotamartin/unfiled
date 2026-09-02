@@ -135,7 +135,10 @@ select ok(
     where conrelid = 'public.profiles'::regclass
       and conname = 'profiles_provider_mode_shape'
       and convalidated
-      and lower(pg_get_constraintdef(oid)) like '%byok_provider%openai%'
+      and lower(pg_get_constraintdef(oid)) like '%byok_provider is not null%'
+      and lower(pg_get_constraintdef(oid)) like '%byok_provider = ''openai''%'
+      and lower(pg_get_constraintdef(oid))
+        like '%byok_provider = ''anthropic''%'
   ) and exists (
     select 1 from pg_constraint
     where conrelid = 'public.user_provider_keys'::regclass
@@ -149,6 +152,7 @@ select ok(
       and conname = 'user_provider_keys_e4_provider_supported'
       and convalidated
       and lower(pg_get_constraintdef(oid)) like '%provider%openai%'
+      and lower(pg_get_constraintdef(oid)) like '%anthropic%'
   ) and exists (
     select 1 from pg_constraint
     where conrelid = 'public.user_provider_keys'::regclass
@@ -398,32 +402,97 @@ select throws_ok(
 select throws_ok(
   $$select public.update_owner_ai_settings(
     '11111111-1111-4111-8111-111111111111', 3,
-    'e4-settings-anthropic',
-    '{"providerMode":"byok","byokProvider":"anthropic"}'::jsonb
+    'e4-settings-cross-provider',
+    '{"providerMode":"byok","byokProvider":"anthropic","modelSelection":"gpt-5.6-terra"}'::jsonb
   )$$,
   '22023', 'validation_failed',
-  'an unimplemented provider cannot be selected through settings'
+  'a cross-provider model preference cannot be selected through settings'
+);
+select throws_ok(
+  $$select public.update_owner_ai_settings(
+    '11111111-1111-4111-8111-111111111111', 3,
+    'e4-settings-unknown-provider',
+    '{"providerMode":"byok","byokProvider":"gemini"}'::jsonb
+  )$$,
+  '22023', 'validation_failed',
+  'a provider outside the catalog cannot be selected through settings'
 );
 reset role;
 select is(
   pg_temp.caught_error($sql$
     update public.profiles
-    set provider_mode = 'byok', byok_provider = 'anthropic'
+    set provider_mode = 'byok', byok_provider = 'anthropic',
+      model_selection = 'gpt-5.6-terra'
     where id = '11111111-1111-4111-8111-111111111111'
   $sql$) ->> 'sqlstate',
   '23514',
-  'the catalog also rejects unsupported legacy-style BYOK consent'
+  'the catalog also rejects cross-provider legacy-style BYOK consent'
+);
+select is(
+  pg_temp.caught_error($sql$
+    update public.profiles
+    set provider_mode = 'byok', byok_provider = null
+    where id = '11111111-1111-4111-8111-111111111111'
+  $sql$) ->> 'sqlstate',
+  '23514',
+  'the catalog rejects BYOK consent without exactly one provider'
 );
 set local role service_role;
 select throws_ok(
   $$select public.put_user_provider_key(
-    '11111111-1111-4111-8111-111111111111', 'anthropic',
-    'sk-e4-unsupported-provider-0000000000', null,
-    'e4-unsupported-provider', false
+    '11111111-1111-4111-8111-111111111111', 'gemini',
+    'sk-e4-unknown-provider-00000000000000', null,
+    'e4-unknown-provider', false
   )$$,
   '22023', 'validation_failed',
-  'an unimplemented provider cannot reach Vault through the key capability'
+  'a provider outside the catalog cannot reach Vault through the key capability'
 );
+-- Anthropic custody works through the same exact capabilities with its own
+-- revision counter. The key is removed again so the OpenAI-only flow below
+-- keeps addressing one live row for this owner.
+insert into e4_values(key, value) values (
+  'anthropic-put', public.put_user_provider_key(
+    '11111111-1111-4111-8111-111111111111', 'anthropic',
+    'sk-ant-e4-independent-000000000000001', null,
+    'e4-anthropic-put', false
+  )
+);
+insert into e4_values(key, value) values (
+  'anthropic-status', public.get_user_provider_key_status(
+    '11111111-1111-4111-8111-111111111111', 'anthropic'
+  )
+);
+insert into e4_values(key, value) values (
+  'anthropic-delete', public.delete_user_provider_key(
+    '11111111-1111-4111-8111-111111111111', 'anthropic', 1,
+    'e4-anthropic-delete'
+  )
+);
+reset role;
+select ok(
+  (select value #>> '{providerKey,provider}' = 'anthropic'
+    and value #>> '{providerKey,credentialRevision}' = '1'
+    and value #>> '{providerKey,lastFour}' = '0001'
+    and value ->> 'replayed' = 'false'
+    from e4_values where key = 'anthropic-put')
+  and (select value #>> '{providerKey,provider}' = 'anthropic'
+    and value #>> '{providerKey,credentialRevision}' = '1'
+    from e4_values where key = 'anthropic-status')
+  and (select value ->> 'provider' = 'anthropic'
+    and value ->> 'deleted' = 'true'
+    and value ->> 'deletedCredentialRevision' = '1'
+    from e4_values where key = 'anthropic-delete')
+  and (select current_revision = 1
+    from private.provider_key_revision_counters
+    where user_id = '11111111-1111-4111-8111-111111111111'
+      and provider = 'anthropic')
+  and not exists (
+    select 1 from public.user_provider_keys
+    where user_id = '11111111-1111-4111-8111-111111111111'
+  ),
+  'Anthropic key put/status/delete work with an independent revision counter'
+);
+set local role service_role;
 select throws_ok(
   $$select public.update_owner_ai_settings(
     '11111111-1111-4111-8111-111111111111', 2,
@@ -511,19 +580,27 @@ select ok(
     where id = '11111111-1111-4111-8111-111111111111'),
   'an accepted no-op settings patch advances exactly once and replays safely'
 );
-select is(
-  pg_temp.caught_error($sql$
-    insert into public.user_provider_keys(
-      id, user_id, provider, vault_secret_id, key_last4, validated_at
-    ) values (
-      'key_92000000000000000000000097',
-      '11111111-1111-4111-8111-111111111111', 'anthropic',
-      '92000000-0000-4000-8000-000000000097', 'A123', now()
-    )
-  $sql$) ->> 'sqlstate',
-  '23514',
-  'unsupported provider metadata cannot become invisible to E4 owner APIs'
+select set_eq(
+  $$select enumlabel::text
+    from pg_enum
+    where enumtypid = 'public.ai_provider'::regtype$$,
+  $$values ('openai'), ('anthropic')$$,
+  'the provider catalog is exactly the two implemented providers'
 );
+set local role service_role;
+select ok(
+  not exists (
+    select 1
+    from pg_enum
+    where enumtypid = 'public.ai_provider'::regtype
+      and pg_temp.caught_error(format(
+        'select public.get_user_provider_key_status(%L, %L)',
+        '11111111-1111-4111-8111-111111111111', enumlabel
+      )) is not null
+  ),
+  'every provider label in the catalog is addressable by the E4 owner APIs'
+);
+reset role;
 select is(
   pg_temp.caught_error($sql$
     insert into public.user_provider_keys(
@@ -751,6 +828,12 @@ select ok(
   (select value #>> '{jobs,0,routingEffort}' = 'thorough'
     and value #>> '{jobs,0,expansionStyle}' = 'brief'
     and value #>> '{jobs,0,controls,expansionDisabled}' = 'false'
+    and value #>> '{jobs,0,selectedProvider}' = 'openai'
+    and value #>> '{jobs,0,modelSelection}' = 'auto'
+    and value #>> '{jobs,0,modelId}' = 'gpt-5.6-sol'
+    and value #>> '{jobs,0,adapterRegistryVersion}'
+      = 'organization-model-registry-v2'
+    and value #>> '{jobs,0,settingsRevision}' = '3'
     from e4_values where key = 'claim-one')
   and (select value ->> 'source' = 'byok'
     and value ->> 'provider' = 'openai'
@@ -759,6 +842,11 @@ select ok(
       'sk-e4-canary-ALPHA-0000000000001234'
     and value ->> 'routingEffort' = 'thorough'
     and value ->> 'expansionStyle' = 'brief'
+    and value ->> 'modelSelection' = 'auto'
+    and value ->> 'modelId' = 'gpt-5.6-sol'
+    and value ->> 'adapterRegistryVersion'
+      = 'organization-model-registry-v2'
+    and value ->> 'settingsRevision' = '3'
     from e4_values where key = 'route-one'),
   'claim and resolver repeat the same immutable settings and resolve one live key'
 );
@@ -1192,8 +1280,13 @@ select ok(
     and value #>> '{jobs,0,controls,expansionDisabled}' = 'true'
     from e4_values where key = 'off-claim')
   and (select value ->> 'source' = 'app_default'
+    and value ->> 'provider' = 'openai'
     and value ->> 'expansionStyle' = 'off'
+    and value ->> 'modelSelection' = 'auto'
+    and value ->> 'modelId' = 'gpt-5.6-luna'
+    and value ->> 'settingsRevision' = '6'
     and jsonb_typeof(value -> 'credential') = 'null'
+    and jsonb_typeof(value -> 'credentialRevision') = 'null'
     from e4_values where key = 'off-route'),
   'global expansion off overrides capture opt-in and app-default returns no key'
 );

@@ -10,9 +10,13 @@ const mocks = vi.hoisted(() => ({
   custodianForAuthority: vi.fn()
 }));
 
-vi.mock("../src/key-management-adapter", () => ({
-  custodianForAiAssistedAuthority: mocks.custodianForAuthority
-}));
+vi.mock("../src/key-management-adapter", async () => {
+  const { parseManagedKeyRecordV1 } = await import("@unfiled/key-management");
+  return {
+    custodianForAiAssistedAuthority: mocks.custodianForAuthority,
+    managedKeyRecordParserForAiAssistedAuthority: () => parseManagedKeyRecordV1
+  };
+});
 
 import { createManagedIndexCryptoFactory, type IndexCryptoJob } from "../src/index-crypto";
 

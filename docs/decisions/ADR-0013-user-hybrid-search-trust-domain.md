@@ -1,6 +1,7 @@
 # ADR-0013: User hybrid-search trust domain
 
-- Status: accepted; implementation and credential-free local gate complete; independent audit clear; PR and deployment evidence pending
+- Status: accepted; implementation and credential-free local gate complete; independent audit clear; merged as PR #18 at `e09f9554e2fee8acd454363a5a411cb9bf8e5c6d`; deployment evidence recorded in `FINAL_REPORT.md`
+- Amended 2026-09-02: §5 and the implementation record below name an AWS IAM/KMS role and a fixed provider embedding. Under [ADR-0016](./ADR-0016-free-beta-vercel-sensitive-key-custody-and-local-hash-retrieval.md) the free-beta search project receives the AI object-wrap root only from the Vercel Sensitive root ring (decrypt-only by construction of the subset), computes the query vector with `unfiled-local-hash-v1` in process, and needs no provider key. Vercel Hobby cannot provide dashboard Trusted Sources; the checked-in app-level OIDC verifier enforces the exact web caller. The AI-assisted scope is therefore lexical-strength retrieval, not semantic search. The one-use ticket, five-RPC login, and lexical-only degradation are unchanged. The `infra/aws-kms` role remains deferred paid hardening.
 - Date: 2026-09-01
 - Depends on: ADR-0006 application-encrypted library, ADR-0007 dedicated database capabilities, ADR-0009 private RAG runtime, and ADR-0011 owner-authorized interaction custody
 - Decision drivers: keep private-manual content and private-intent queries away from embedding providers; prevent user-facing search from inheriting organizer or index-worker authority; bind every semantic request to one authenticated owner, one exact request, and one active index generation; preserve lexical search as a fail-closed path.
@@ -100,7 +101,7 @@ The search service returns no source capture, backlink, link target, title, body
 - `infra/aws-kms` implements the fifth exact Vercel OIDC/IAM role with decrypt-only active/registered-retired AI-assisted object-wrap access and explicit exclusion of generation, encryption, rewrap, grants, administration, staged, content-MAC, and private-manual roots.
 - The owner-authorized application, outside search, implements source/backlink inspection through migration `20260901000007` and pgTAP `094`, structured-log editing, streaming human-readable export, atomic account deletion, and the corresponding web/native states.
 - Credential-free unit, contract, database, HTTP, concurrency, capacity, configuration/policy, and unsigned native gates are green; exact results are recorded in `BUILD_PLAN.md` and `OPERATIONS_TEST_PLAN.md`. The independent final audit is clear. Required PR checks, merge, and post-merge verification are not yet recorded.
-- No Vercel project is provisioned or deployed. Provider account/model approval, hosted TLS identity, Trusted Sources/OIDC exchange, real KMS allow/deny and CloudTrail evidence, deployed query/content canaries, Apple signing/archive, and physical-device evidence remain pending in `HUMAN_SETUP.md`. Milestone G has not started.
+- At the time of acceptance no Vercel project was provisioned. Amended 2026-09-02: the five Vercel projects now exist; deployment identity, database-login, root-ring, query/content canary, Apple signing/archive, and physical-device evidence is recorded in `FINAL_REPORT.md` per `HUMAN_SETUP.md`. Milestone F merged as PR #18 and Milestone G is in progress.
 
 Before semantic search is exposed, automated and deployed evidence must prove:
 

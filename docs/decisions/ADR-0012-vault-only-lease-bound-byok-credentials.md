@@ -3,6 +3,7 @@
 - Status: accepted
 - Date: 2026-09-01
 - Amended: 2026-09-01 to record Supabase's extension-owned `service_role` Vault ACL boundary and the exact transient replay comparison
+- Amended 2026-09-02: [ADR-0015](./ADR-0015-user-selectable-provider-model-effort.md) is implemented. The Anthropic (Claude) adapter and the `organization-model-registry-v2` registry now exist on web, iOS, database, and organizer; OpenAI and Claude keys are stored independently in Vault and addressed per provider; each job snapshots provider, model preference, resolved model ID, and effort. The §5 gating is satisfied by the ADR-0015 registry: only registry-v2 models are selectable and cross-provider choices are rejected. The dedicated application OpenAI key (`UNFILED_ORGANIZER_OPENAI_API_KEY`) is now optional and funds only OpenAI app-default routing and explicitly snapshotted fallback; the free beta sets none, so app-default jobs fail closed to Inbox. There is no app-funded Claude credential. §4 and §6 are unchanged.
 - Supersedes: ADR-0002 decision 3's app-layer ciphertext fallback; narrows ADR-0002 provider availability and credential resolution
 - Depends on: ADR-0009 organizer identity and ADR-0011 owner-authorized interaction custody
 - Decision drivers: keep spend-capable user credentials out of application tables and content-key machinery; preserve immediate revocation; bind disclosure to one live organizer lease; prevent settings changes from mutating queued work; expose only provider configurations that have passed their adapter and evaluation gates.

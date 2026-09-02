@@ -6,6 +6,7 @@ import {
   UserSettingsUpdateResponseSchema,
   type ProviderKeyDeleteRequest,
   type ProviderKeyPutRequest,
+  type PublicByokProvider,
   type UserSettingsUpdateRequest
 } from "@unfiled/contracts";
 
@@ -46,6 +47,7 @@ function validateProviderKeyPutResponse(
   request: ProviderKeyPutRequest
 ) {
   if (
+    response.providerKey.provider !== request.provider ||
     (request.expectedCredentialRevision !== null &&
       response.providerKey.credentialRevision !== request.expectedCredentialRevision + 1) ||
     response.providerKey.lastFour !== request.apiKey.slice(-4)
@@ -92,6 +94,7 @@ export function createOwnerAiSettingsRpcAdapter(client: ServiceRpcClient) {
         "organizationMode",
         "providerMode",
         "byokProvider",
+        "modelSelection",
         "byokFallbackToApp",
         "routingEffort",
         "expansionStyle",
@@ -105,14 +108,18 @@ export function createOwnerAiSettingsRpcAdapter(client: ServiceRpcClient) {
       return response;
     },
 
-    async getProviderKey(userId: string) {
-      return strictRpcResponse(
+    async getProviderKey(userId: string, provider: PublicByokProvider) {
+      const response = strictRpcResponse(
         ProviderKeyResponseSchema,
         await client.rpc("get_user_provider_key_status", {
           p_user_id: userId,
-          p_provider: "openai"
+          p_provider: provider
         })
       );
+      if (response.providerKey !== null && response.providerKey.provider !== provider) {
+        return invalidRpcResponse();
+      }
+      return response;
     },
 
     async putProviderKey(userId: string, request: ProviderKeyPutRequest) {
@@ -163,7 +170,10 @@ export function createOwnerAiSettingsRpcAdapter(client: ServiceRpcClient) {
           p_idempotency_key: request.idempotencyKey
         })
       );
-      if (response.deletedCredentialRevision !== request.expectedCredentialRevision) {
+      if (
+        response.provider !== request.provider ||
+        response.deletedCredentialRevision !== request.expectedCredentialRevision
+      ) {
         return invalidRpcResponse();
       }
       return response;

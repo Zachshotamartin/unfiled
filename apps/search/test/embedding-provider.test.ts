@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  LOCAL_HASH_EMBEDDING_DIMENSIONS,
+  MAX_LOCAL_HASH_EMBEDDING_INPUT_BYTES
+} from "@unfiled/search";
 
 import { SEARCH_EMBEDDING_DIMENSIONS, SEARCH_EMBEDDING_MODEL_ID } from "../src/config.js";
 import {
+  createLocalHashSearchEmbeddingProvider,
   createOpenAISearchEmbeddingProvider,
   type SearchEmbeddingProvider
 } from "../src/embedding-provider.js";
@@ -76,6 +81,34 @@ function allZero(values: Uint8Array | readonly unknown[]): boolean {
 }
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("provider-free local hash search embedding provider", () => {
+  it("embeds deterministically without network access", async () => {
+    const service = createLocalHashSearchEmbeddingProvider();
+
+    const first = await service.embed(input({ text: "oats milk apples" }));
+    const second = await service.embed(input({ text: "oats milk apples" }));
+
+    expect(first).toHaveLength(LOCAL_HASH_EMBEDDING_DIMENSIONS);
+    expect(Array.from(first)).toEqual(Array.from(second));
+  });
+
+  it("rejects cancellation, blank text, and oversized text", async () => {
+    const service = createLocalHashSearchEmbeddingProvider();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(service.embed(input({ signal: controller.signal }))).rejects.toMatchObject({
+      code: "provider_unavailable"
+    });
+    await expect(service.embed(input({ text: "  " }))).rejects.toMatchObject({
+      code: "validation_failed"
+    });
+    await expect(
+      service.embed(input({ text: "x".repeat(MAX_LOCAL_HASH_EMBEDDING_INPUT_BYTES + 1) }))
+    ).rejects.toMatchObject({ code: "validation_failed" });
+  });
+});
 
 describe("dedicated OpenAI search embedding provider", () => {
   it("uses only the fixed model and dimensions and scrubs response bytes", async () => {

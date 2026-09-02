@@ -37,9 +37,9 @@
     border: 1px solid var(--color-border);
     border-radius: var(--radius-button);
     padding: 0.4rem 0.55rem;
-    color: var(--color-text-disabled);
+    color: var(--color-text-secondary);
     font-family: var(--font-geist-mono), monospace;
-    font-size: 0.62rem;
+    font-size: 0.66rem;
     letter-spacing: 0.06em;
     text-transform: uppercase;
   }
@@ -77,11 +77,17 @@
     letter-spacing: -0.02em;
   }
 
+  .ai-settings-group[data-level="secondary"] {
+    border-top-style: dashed;
+    margin-left: 0;
+    padding-left: 0;
+  }
+
   .ai-settings-help {
     max-width: 42rem;
     margin-top: 0.45rem;
     color: var(--color-text-secondary);
-    font-size: 0.78rem;
+    font-size: 0.8rem;
     line-height: 1.55;
   }
 
@@ -103,8 +109,7 @@
     background: transparent;
     transition:
       border-color 160ms var(--motion-standard),
-      background-color 160ms var(--motion-standard),
-      transform 160ms var(--motion-standard);
+      background-color 160ms var(--motion-standard);
   }
 
   .ai-choice:hover {
@@ -119,6 +124,12 @@
   .ai-choice[data-disabled="true"] {
     cursor: not-allowed;
     opacity: 0.48;
+  }
+
+  .ai-choice:has(input:focus-visible),
+  .ai-settings-checkbox:has(input:focus-visible) {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 3px;
   }
 
   .ai-choice input {
@@ -137,6 +148,10 @@
 
   .ai-choice strong,
   .ai-settings-checkbox strong {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem;
     font-size: 0.86rem;
     font-weight: 640;
     line-height: 1.25;
@@ -145,21 +160,35 @@
   .ai-choice small,
   .ai-settings-checkbox small {
     color: var(--color-text-secondary);
-    font-size: 0.73rem;
+    font-size: 0.75rem;
     line-height: 1.5;
+  }
+
+  .ai-choice-tag {
+    border: 1px solid color-mix(in srgb, var(--color-warning) 55%, transparent);
+    border-radius: var(--radius-button);
+    padding: 0.12rem 0.4rem;
+    color: #e7bb82;
+    font-family: var(--font-geist-mono), monospace;
+    font-size: 0.6rem;
+    font-style: normal;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
   }
 
   .ai-settings-inline-note {
     margin-top: 0.65rem;
-    color: var(--color-text-disabled);
+    color: var(--color-text-secondary);
     font-family: var(--font-geist-mono), monospace;
-    font-size: 0.65rem;
-    line-height: 1.5;
+    font-size: 0.68rem;
+    line-height: 1.55;
   }
 
   .ai-settings-checkbox {
     display: flex;
     max-width: 45rem;
+    min-height: 2.75rem;
     align-items: flex-start;
     gap: 0.75rem;
     border-left: 2px solid var(--color-accent);
@@ -192,7 +221,7 @@
     margin-top: 1rem;
     padding: 0.9rem 1rem;
     color: #e7bb82;
-    font-size: 0.78rem;
+    font-size: 0.8rem;
     line-height: 1.5;
   }
 
@@ -224,9 +253,9 @@
   }
 
   .ai-settings-actions > p {
-    color: var(--color-text-disabled);
+    color: var(--color-text-secondary);
     font-family: var(--font-geist-mono), monospace;
-    font-size: 0.66rem;
+    font-size: 0.68rem;
   }
 
   .ai-settings-actions button:disabled,
@@ -246,10 +275,67 @@
     gap: 0.75rem;
   }
 
+  .provider-key-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem;
+    max-width: 38rem;
+    border-top: 1px solid var(--color-border);
+    margin-top: 1.75rem;
+    padding-top: 1.25rem;
+  }
+
+  .provider-key-tabs button {
+    display: grid;
+    min-height: 4.25rem;
+    align-content: center;
+    gap: 0.3rem;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-button);
+    padding: 0.75rem 0.9rem;
+    background: transparent;
+    color: var(--color-text-secondary);
+    text-align: left;
+    transition:
+      border-color 160ms var(--motion-standard),
+      background-color 160ms var(--motion-standard),
+      color 160ms var(--motion-standard);
+  }
+
+  .provider-key-tabs button:hover:not(:disabled) {
+    border-color: rgb(242 239 232 / 30%);
+    color: var(--color-text-primary);
+  }
+
+  .provider-key-tabs button[data-selected="true"] {
+    border-color: color-mix(in srgb, var(--color-accent) 70%, transparent);
+    background: color-mix(in srgb, var(--color-accent) 7%, transparent);
+    color: var(--color-text-primary);
+  }
+
+  .provider-key-tabs button:disabled {
+    cursor: not-allowed;
+    opacity: 0.48;
+  }
+
+  .provider-key-tabs span {
+    font-size: 0.86rem;
+    font-weight: 640;
+  }
+
+  .provider-key-tabs small {
+    color: var(--color-text-secondary);
+    font-family: var(--font-geist-mono), monospace;
+    font-size: 0.66rem;
+  }
+
+  .provider-key-panel {
+    margin-top: 1rem;
+  }
+
   .provider-key-status {
     border-top: 1px solid var(--color-border);
     border-bottom: 1px solid var(--color-border);
-    margin-top: 1.75rem;
     padding: 1.15rem 0;
   }
 
@@ -261,14 +347,15 @@
 
   .provider-key-state-line svg {
     flex: none;
-    color: var(--color-text-disabled);
+    color: var(--color-text-secondary);
   }
 
   .provider-key-status[data-status="active"] .provider-key-state-line svg {
     color: var(--color-accent);
   }
 
-  .provider-key-status[data-status="invalid"] .provider-key-state-line svg {
+  .provider-key-status[data-status="invalid"] .provider-key-state-line svg,
+  .provider-key-status[data-status="revoked"] .provider-key-state-line svg {
     color: var(--color-warning);
   }
 
@@ -280,7 +367,7 @@
   .provider-key-status > p {
     margin-top: 0.45rem;
     color: var(--color-text-secondary);
-    font-size: 0.78rem;
+    font-size: 0.8rem;
   }
 
   .provider-key-status dl {
@@ -296,16 +383,16 @@
   }
 
   .provider-key-status dt {
-    color: var(--color-text-disabled);
+    color: var(--color-text-secondary);
     font-family: var(--font-geist-mono), monospace;
-    font-size: 0.6rem;
+    font-size: 0.64rem;
     letter-spacing: 0.06em;
     text-transform: uppercase;
   }
 
   .provider-key-status dd {
-    color: var(--color-text-secondary);
-    font-size: 0.75rem;
+    color: var(--color-text-primary);
+    font-size: 0.78rem;
   }
 
   .provider-key-form {
@@ -314,13 +401,14 @@
     margin-top: 1.5rem;
   }
 
-  .provider-key-form > div:first-child {
+  .provider-key-field {
     max-width: 38rem;
   }
 
   .provider-key-actions {
     justify-content: flex-start;
     border-top: 1px solid var(--color-border);
+    margin-top: 0.4rem;
     padding-top: 1.15rem;
   }
 
@@ -338,7 +426,7 @@
     border: 0;
     background: transparent;
     color: var(--color-text-secondary);
-    font-size: 0.78rem;
+    font-size: 0.8rem;
   }
 
   .provider-key-remove:hover {
@@ -355,8 +443,24 @@
   .provider-key-delete-confirm > p {
     max-width: 40rem;
     color: var(--color-text-secondary);
-    font-size: 0.78rem;
+    font-size: 0.8rem;
     line-height: 1.55;
+  }
+
+  .auth-actions {
+    display: grid;
+    gap: 0.75rem;
+    border-top: 1px solid var(--color-border);
+    margin-top: 0.5rem;
+    padding-top: 1.25rem;
+  }
+
+  .auth-feedback {
+    min-height: 3rem;
+    padding-top: 0.75rem;
+    color: var(--color-danger);
+    font-size: 0.875rem;
+    line-height: 1.5;
   }
 }
 
@@ -370,8 +474,18 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .ai-choice-grid-four {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .ai-regional-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 56rem) {
+  .ai-choice-grid-four {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
@@ -403,5 +517,20 @@
   .provider-key-actions,
   .provider-key-delete-confirm > div {
     justify-content: stretch;
+  }
+
+  .provider-key-tabs {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-choice {
+    min-height: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-choice,
+  .provider-key-tabs button {
+    transition: none;
   }
 }

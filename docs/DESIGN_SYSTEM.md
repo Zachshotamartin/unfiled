@@ -58,7 +58,7 @@ Each component ships with all applicable states: default, hover (web), focus-vis
 - **Review item card**: capture text, up to 3 destination chips + `New note`, resolve/dismiss.
 - **Generated block**: tinted background, `AI` badge, accept/reject when proposed, provenance link. E3 renders the separately encrypted proposal outside editable user-authored note content; acceptance preserves its generated provenance and rejection hides it without changing the note revision.
 - **Rule row** (settings): condition, destination, source badge, last-fired, enable toggle.
-- **BYOK key panel** (settings): E4-only provider select, paste field (masked), validate state, last-four display, status pill, delete. Show only server-discovered provider/tiers whose adapter/eval gate passed; Anthropic is currently hidden.
+- **BYOK key panel** (settings): Provider (OpenAI or Claude) → Model (Automatic or one exact `organization-model-registry-v2` model) → Effort (Efficient/Balanced/Thorough) hierarchy; one masked paste field, validate state, last-four display, status pill, and delete per provider key. Show only the registry-v2 catalog; switching provider resets an incompatible model to Automatic without deleting either key; higher-cost exact models are identified before save; managed fallback is hidden unless the deployment declares it (ADR-0015).
 - **Banners**: offline, provider outage, invalid key, budget exhausted.
 - Primitives: buttons (primary/secondary/ghost/destructive), inputs, chips, tabs, sheet/dialog, toast, skeletons (must match real layout), empty states.
 

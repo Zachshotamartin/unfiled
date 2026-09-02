@@ -1,4 +1,8 @@
-import type { ManagedKeyRecordV1, ManagedKeyStore } from "@unfiled/key-management";
+import type {
+  ManagedKeyRecordV1,
+  ManagedKeyRecordV2,
+  ManagedKeyStore
+} from "@unfiled/key-management";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ServiceRpcClient } from "./service-rpc-client";
@@ -32,6 +36,44 @@ function record(overrides: Partial<ManagedKeyRecordV1> = {}): ManagedKeyRecordV1
     rotation: {
       predecessorKeyId: null,
       previousRootKeyArn: null,
+      rootRewrapCount: 0,
+      lastRootRewrappedAt: null
+    },
+    ...overrides
+  };
+}
+
+function v2Record(overrides: Partial<ManagedKeyRecordV2> = {}): ManagedKeyRecordV2 {
+  const encryptedKeyMaterial = Buffer.from([
+    0x55,
+    0x46,
+    0x45,
+    0x4b,
+    0x01,
+    ...new Uint8Array(60).fill(7)
+  ]).toString("base64url");
+  return {
+    schemaVersion: 2,
+    custodyProvider: "vercel_sensitive_environment_v1",
+    ownerId: OWNER_ID,
+    keyClass: "ai_assisted",
+    purpose: "object_wrap",
+    keyId: "key_ai_wrap_v2",
+    keyVersion: 1,
+    status: "active",
+    encryptedKeyMaterial,
+    rootKeyId:
+      "urn:unfiled:key-root:vercel-sensitive-env-v1:production:11111111-2222-4222-8222-222222222222",
+    wrapAlgorithm: "AES-256-GCM",
+    createdAt: "2026-09-02T12:00:00.000Z",
+    activatedAt: "2026-09-02T12:01:00.000Z",
+    retiredAt: null,
+    revokedAt: null,
+    wrapOperations: 0,
+    wrapOperationLimit: 16_777_216,
+    rotation: {
+      predecessorKeyId: null,
+      previousRootKeyId: null,
       rootRewrapCount: 0,
       lastRootRewrappedAt: null
     },
@@ -88,6 +130,42 @@ describe("managed key RPC store", () => {
     await expect(
       store.findActive({ ownerId: OWNER_ID, keyClass: "private_manual", purpose: "content_mac" })
     ).resolves.toBeNull();
+  });
+
+  it("accepts exact V2 projections only when the store is explicitly V2", async () => {
+    const value = v2Record();
+    const rpc = vi.fn<ServiceRpcClient["rpc"]>((name) =>
+      Promise.resolve(
+        name === "get_active_user_content_key"
+          ? { found: true, nextVersion: 2, record: value }
+          : value
+      )
+    );
+    const store = createManagedKeyRpcStore(client(rpc), { schemaVersion: 2 });
+
+    await expect(
+      store.findActive({ ownerId: OWNER_ID, keyClass: "ai_assisted", purpose: "object_wrap" })
+    ).resolves.toEqual(value);
+    await expect(
+      store.findById({
+        ownerId: OWNER_ID,
+        keyClass: "ai_assisted",
+        purpose: "object_wrap",
+        keyId: value.keyId
+      })
+    ).resolves.toEqual(value);
+
+    const v1Store = createManagedKeyRpcStore(
+      client(vi.fn<ServiceRpcClient["rpc"]>().mockResolvedValue(value))
+    );
+    await expect(
+      v1Store.findById({
+        ownerId: OWNER_ID,
+        keyClass: "ai_assisted",
+        purpose: "object_wrap",
+        keyId: value.keyId
+      })
+    ).rejects.toBeInstanceOf(ServiceRpcError);
   });
 
   it.each([

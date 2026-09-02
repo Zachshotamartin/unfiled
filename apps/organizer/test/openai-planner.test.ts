@@ -151,9 +151,9 @@ describe("OpenAI Responses organizer planner", () => {
     expect(request).toMatchObject({
       background: false,
       max_output_tokens: 12_288,
-      model: "gpt-5.4-mini-2026-03-17",
+      model: "gpt-5.6-terra",
       parallel_tool_calls: false,
-      reasoning: { effort: "none" },
+      reasoning: { effort: "medium" },
       store: false,
       stream: false,
       tool_choice: "none",
@@ -232,7 +232,8 @@ describe("OpenAI Responses organizer planner", () => {
     expect(JSON.parse(request.input[0]?.content[0]?.text ?? "") as unknown).toMatchObject({
       capture: { inferredKind: "list_items" }
     });
-    expect(request).toMatchObject({ model: OPENAI_ROUTING_PROFILE.model });
+    expect(request).toMatchObject({ model: "gpt-5.6-terra" });
+    expect(OPENAI_ROUTING_PROFILE.models).toEqual(["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"]);
   });
 
   it.each([
@@ -245,7 +246,8 @@ describe("OpenAI Responses organizer planner", () => {
     [422, "validation_failed", false, 1],
     [429, "rate_limited", true, 2],
     [500, "provider_unavailable", true, 2],
-    [503, "provider_unavailable", true, 2]
+    [503, "provider_unavailable", true, 2],
+    [529, "provider_unavailable", true, 2]
   ] as const)(
     "maps status %i without retaining its body",
     async (status, safeCode, retryable, calls) => {
@@ -291,11 +293,15 @@ describe("OpenAI Responses organizer planner", () => {
     const firstKey = "sk-first-abcdefghijklmnopqrstuvwxyz0123456789";
     const replacementKey = "sk-replacement-abcdefghijklmnopqrstuvwxyz0123456789";
     const route = (credential: string, credentialRevision: number) => ({
+      adapterRegistryVersion: "organization-model-registry-v2" as const,
       credential,
       credentialRevision,
       expansionStyle: "brief" as const,
+      modelId: "gpt-5.6-sol" as const,
+      modelSelection: "auto" as const,
       provider: "openai" as const,
       routingEffort: "thorough" as const,
+      settingsRevision: 2,
       source: "byok" as const
     });
     const resolve = vi
@@ -303,7 +309,7 @@ describe("OpenAI Responses organizer planner", () => {
       .mockResolvedValueOnce(route(firstKey, 1))
       .mockResolvedValueOnce(route(replacementKey, 2));
     const providerCredential = createOrganizerProviderCredentialAccess({
-      appDefaultApiKey: API_KEY,
+      appDefaultApiKeys: { openai: API_KEY },
       resolve
     });
     let calls = 0;
@@ -330,12 +336,140 @@ describe("OpenAI Responses organizer planner", () => {
     if (typeof serializedRequest !== "string") throw new Error("Expected serialized request.");
     const request = JSON.parse(serializedRequest) as {
       max_output_tokens: number;
+      model: string;
       reasoning: { effort: string };
     };
     expect(request).toMatchObject({
       max_output_tokens: 16_384,
+      model: "gpt-5.6-sol",
+      reasoning: { effort: "high" }
+    });
+  });
+
+  it("sends the immutable exact model choice and provider-native effort from the credential", async () => {
+    const fetchImplementation = successfulFetchImplementation();
+    const providerCredential = createOrganizerProviderCredentialAccess({
+      appDefaultApiKeys: {},
+      resolve: vi.fn().mockResolvedValue({
+        adapterRegistryVersion: "organization-model-registry-v2",
+        credential: "sk-byok-abcdefghijklmnopqrstuvwxyz0123456789",
+        credentialRevision: 4,
+        expansionStyle: "brief",
+        modelId: "gpt-5.6-luna",
+        modelSelection: "gpt-5.6-luna",
+        provider: "openai",
+        routingEffort: "economical",
+        settingsRevision: 7,
+        source: "byok"
+      })
+    });
+    await expect(
+      createOpenAIOrganizerPlanner({ fetchImplementation }).plan(
+        plannerInput({ providerCredential, routingEffort: "economical" })
+      )
+    ).resolves.toEqual(plan);
+    const body = fetchImplementation.mock.calls[0]?.[1]?.body;
+    if (typeof body !== "string") throw new Error("Expected serialized request.");
+    expect(JSON.parse(body)).toMatchObject({
+      max_output_tokens: 8_192,
+      model: "gpt-5.6-luna",
       reasoning: { effort: "low" }
     });
+  });
+
+  it("never sends a Claude credential to OpenAI", async () => {
+    const fetchImplementation = successfulFetchImplementation();
+    const claudeKey = "sk-ant-byok-abcdefghijklmnopqrstuvwxyz0123456789";
+    const providerCredential = createOrganizerProviderCredentialAccess({
+      appDefaultApiKeys: { openai: API_KEY },
+      resolve: vi.fn().mockResolvedValue({
+        adapterRegistryVersion: "organization-model-registry-v2",
+        credential: claudeKey,
+        credentialRevision: 1,
+        expansionStyle: "brief",
+        modelId: "claude-sonnet-5",
+        modelSelection: "auto",
+        provider: "anthropic",
+        routingEffort: "standard",
+        settingsRevision: 1,
+        source: "byok"
+      })
+    });
+    let caught: unknown;
+    try {
+      await createOpenAIOrganizerPlanner({ fetchImplementation }).plan(
+        plannerInput({ providerCredential })
+      );
+    } catch (error: unknown) {
+      caught = error;
+    }
+    expect(caught).toMatchObject({ retryable: false, safeCode: "provider_unavailable" });
+    expect(String(caught)).not.toContain(claudeKey);
+    expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the snapshotted effort disagrees with the live credential", async () => {
+    const fetchImplementation = successfulFetchImplementation();
+    const providerCredential = createOrganizerProviderCredentialAccess({
+      appDefaultApiKeys: {},
+      resolve: vi.fn().mockResolvedValue({
+        adapterRegistryVersion: "organization-model-registry-v2",
+        credential: "sk-byok-abcdefghijklmnopqrstuvwxyz0123456789",
+        credentialRevision: 1,
+        expansionStyle: "brief",
+        modelId: "gpt-5.6-sol",
+        modelSelection: "auto",
+        provider: "openai",
+        routingEffort: "thorough",
+        settingsRevision: 1,
+        source: "byok"
+      })
+    });
+    await expect(
+      createOpenAIOrganizerPlanner({ fetchImplementation }).plan(
+        plannerInput({ providerCredential, routingEffort: "standard" })
+      )
+    ).rejects.toMatchObject({ retryable: false, safeCode: "provider_unavailable" });
+    expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
+  it("resolves Automatic per effort in explicit-key evaluation mode and honors an exact model", async () => {
+    for (const [routingEffort, expectedModel, expectedEffort, expectedTokens] of [
+      ["economical", "gpt-5.6-luna", "low", 8_192],
+      ["standard", "gpt-5.6-terra", "medium", 12_288],
+      ["thorough", "gpt-5.6-sol", "high", 16_384]
+    ] as const) {
+      const fetchImplementation = successfulFetchImplementation();
+      await createOpenAIOrganizerPlanner({ apiKey: API_KEY, fetchImplementation }).plan(
+        plannerInput({ routingEffort })
+      );
+      const body = fetchImplementation.mock.calls[0]?.[1]?.body;
+      if (typeof body !== "string") throw new Error("Expected serialized request.");
+      expect(JSON.parse(body)).toMatchObject({
+        max_output_tokens: expectedTokens,
+        model: expectedModel,
+        reasoning: { effort: expectedEffort }
+      });
+    }
+    const fetchImplementation = successfulFetchImplementation();
+    await createOpenAIOrganizerPlanner({
+      apiKey: API_KEY,
+      fetchImplementation,
+      modelId: "gpt-5.6-luna"
+    }).plan(plannerInput({ routingEffort: "thorough" }));
+    const body = fetchImplementation.mock.calls[0]?.[1]?.body;
+    if (typeof body !== "string") throw new Error("Expected serialized request.");
+    expect(JSON.parse(body)).toMatchObject({
+      model: "gpt-5.6-luna",
+      reasoning: { effort: "high" }
+    });
+    await expect(
+      createOpenAIOrganizerPlanner({
+        apiKey: API_KEY,
+        fetchImplementation,
+        modelId: "claude-sonnet-5"
+      }).plan(plannerInput())
+    ).rejects.toMatchObject({ retryable: false, safeCode: "validation_failed" });
   });
 
   it("enforces off/brief/detailed expansion preferences at the provider boundary", async () => {

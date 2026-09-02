@@ -15,7 +15,9 @@ const mocks = vi.hoisted(() => ({
   createApp: vi.fn(),
   createAuth: vi.fn(),
   createKeyManagement: vi.fn(),
+  keyParser: vi.fn(() => (value: unknown) => value),
   createPostgres: vi.fn(),
+  createLocalProvider: vi.fn(),
   createProvider: vi.fn(),
   createQuery: vi.fn(),
   createRepository: vi.fn()
@@ -25,12 +27,14 @@ vi.mock("../src/database.js", () => ({
   createEncryptedUserSearchRepository: mocks.createRepository
 }));
 vi.mock("../src/embedding-provider.js", () => ({
+  createLocalHashSearchEmbeddingProvider: mocks.createLocalProvider,
   createOpenAISearchEmbeddingProvider: mocks.createProvider
 }));
 vi.mock("../src/http.js", () => ({ createSearchApp: mocks.createApp }));
 vi.mock("../src/invocation-auth.js", () => ({ createSearchInvocationAuth: mocks.createAuth }));
 vi.mock("../src/key-management.js", () => ({
-  createSearchKeyManagementAdapter: mocks.createKeyManagement
+  createSearchKeyManagementAdapter: mocks.createKeyManagement,
+  managedKeyRecordParserForSearchBoundary: mocks.keyParser
 }));
 vi.mock("../src/postgres.js", () => ({ createPostgresSearchExecutor: mocks.createPostgres }));
 vi.mock("../src/query.js", () => ({ createEncryptedUserSearchQuery: mocks.createQuery }));
@@ -90,6 +94,11 @@ function baseConfig(): Omit<SearchConfig, "invocation" | "pipeline"> {
     }),
     maxRequestBytes: 16_384,
     port: 8_791,
+    releaseIdentity: {
+      commit: "d".repeat(40),
+      deployment: `sha256:${"e".repeat(64)}`,
+      environment: "production"
+    },
     requestTimeoutMs: 25_000,
     runtime: "production"
   };
@@ -116,8 +125,13 @@ function enabledConfig(): SearchConfig {
         statementTimeoutMs: 2_000,
         url: "postgresql://dedicated"
       }),
-      kind: "enabled" as const,
-      providerApiKey: "sk-dedicated-search-provider-key"
+      embedding: Object.freeze({
+        apiKey: "sk-dedicated-search-provider-key",
+        dimensions: 1_536 as const,
+        kind: "openai" as const,
+        modelId: "text-embedding-3-small" as const
+      }),
+      kind: "enabled" as const
     })
   });
 }
@@ -128,6 +142,7 @@ beforeEach(() => {
   mocks.createAuth.mockReturnValue(auth);
   mocks.createKeyManagement.mockReturnValue(keyManagement);
   mocks.createPostgres.mockReturnValue(postgres);
+  mocks.createLocalProvider.mockReturnValue(provider);
   mocks.createProvider.mockReturnValue(provider);
   mocks.createRepository.mockReturnValue(repository);
   mocks.createQuery.mockReturnValue(query);
@@ -160,9 +175,13 @@ describe("search service composition", () => {
     if (config.pipeline.kind !== "enabled") throw new Error("expected enabled fixture");
 
     expect(mocks.createPostgres).toHaveBeenCalledWith(config.pipeline.database);
-    expect(mocks.createRepository).toHaveBeenCalledWith(postgres.executor);
+    expect(mocks.createRepository).toHaveBeenCalledWith(
+      postgres.executor,
+      expect.any(Function),
+      config.pipeline.embedding
+    );
     expect(mocks.createProvider).toHaveBeenCalledWith({
-      apiKey: config.pipeline.providerApiKey
+      apiKey: config.pipeline.embedding.kind === "openai" ? config.pipeline.embedding.apiKey : ""
     });
     expect(mocks.createQuery).toHaveBeenCalledWith({ embeddingProvider: provider, repository });
     expect(mocks.createApp).toHaveBeenCalledWith({
@@ -175,6 +194,33 @@ describe("search service composition", () => {
     expect(mocks.closePostgres).toHaveBeenCalledOnce();
   });
 
+  it("wires the local hash provider without an OpenAI credential", () => {
+    const base = enabledConfig();
+    if (base.pipeline.kind !== "enabled") throw new Error("expected enabled fixture");
+    const config: SearchConfig = Object.freeze({
+      ...base,
+      pipeline: Object.freeze({
+        ...base.pipeline,
+        embedding: Object.freeze({
+          dimensions: 512,
+          kind: "local-hash-v1" as const,
+          modelId: "unfiled-local-hash-v1" as const
+        })
+      })
+    });
+
+    createSearchComposition(config);
+    if (config.pipeline.kind !== "enabled") throw new Error("expected enabled fixture");
+
+    expect(mocks.createLocalProvider).toHaveBeenCalledOnce();
+    expect(mocks.createProvider).not.toHaveBeenCalled();
+    expect(mocks.createRepository).toHaveBeenCalledWith(
+      postgres.executor,
+      expect.any(Function),
+      config.pipeline.embedding
+    );
+  });
+
   it("does not create trusted-source auth for local bearer composition", () => {
     const config: SearchConfig = Object.freeze({
       invocation: Object.freeze({
@@ -185,6 +231,7 @@ describe("search service composition", () => {
       maxRequestBytes: 16_384,
       pipeline: Object.freeze({ kind: "disabled" as const }),
       port: 8_791,
+      releaseIdentity: null,
       requestTimeoutMs: 25_000,
       runtime: "local" as const
     });

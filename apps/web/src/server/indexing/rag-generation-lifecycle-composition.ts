@@ -44,7 +44,7 @@ function targetFromEnvironment(
   if (
     environment.NODE_ENV !== "production" ||
     environment.VERCEL !== "1" ||
-    environment.VERCEL_ENV !== "production" ||
+    (environment.VERCEL_ENV !== "preview" && environment.VERCEL_ENV !== "production") ||
     (environment.UNFILED_OPENAI_EMBEDDING_API_KEY?.trim().length ?? 0) > 0
   ) {
     throw new ConfigurationError();

@@ -10,7 +10,9 @@ const integrationMocks = vi.hoisted(() => ({
 vi.mock("@unfiled/key-management", () => ({
   assertIndexWorkerKmsReadiness: integrationMocks.assertReadiness,
   createAwsKmsEnvelopeCustodian: integrationMocks.createCustodian,
-  createVercelOidcKmsTransport: integrationMocks.createTransport
+  createVercelOidcKmsTransport: integrationMocks.createTransport,
+  parseManagedKeyRecordV1: (value: unknown) => value,
+  parseManagedKeyRecordV2: (value: unknown) => value
 }));
 vi.mock("@vercel/oidc", () => ({ verifyVercelOidcToken: integrationMocks.verifyOidc }));
 
@@ -46,6 +48,7 @@ function config(overrides: Partial<WorkerConfig> = {}): WorkerConfig {
     keyBoundary: { kind: "local-synthetic", keyClass: "ai_assisted" },
     maxRequestBytes: 1_024,
     port: 8_788,
+    releaseIdentity: null,
     requestTimeoutMs: 25_000,
     runtime: "local",
     ...overrides
@@ -162,6 +165,29 @@ describe("isolated worker HTTP app", () => {
       service: "unfiled-worker",
       status: 200
     });
+  });
+
+  it("emits only the managed release consistency identity on success and error", async () => {
+    const releaseIdentity = {
+      commit: "a".repeat(40),
+      deployment: `sha256:${"b".repeat(64)}` as const,
+      environment: "preview" as const
+    };
+    const app = createWorkerApp({
+      config: config({ releaseIdentity, runtime: "preview" }),
+      logger: logger([])
+    });
+
+    for (const request of [
+      new Request("https://worker.test/health"),
+      new Request("https://worker.test/missing")
+    ]) {
+      const response = await app(request);
+      expect(response.headers.get("x-unfiled-deployment")).toBe(releaseIdentity.deployment);
+      expect(response.headers.get("x-unfiled-commit")).toBe(releaseIdentity.commit);
+      expect(response.headers.get("x-unfiled-environment")).toBe("preview");
+      expect(JSON.stringify([...response.headers])).not.toContain("dpl_");
+    }
   });
 
   it("supports HEAD health without returning a body", async () => {

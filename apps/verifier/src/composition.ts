@@ -2,7 +2,7 @@ import type { VerifierConfig } from "./config.js";
 import { createGenerationVerificationRepository } from "./database.js";
 import { createVerifierApp, type VerifierApp } from "./http.js";
 import { createProductionInvocationAuth } from "./invocation-auth.js";
-import { createVerifierKmsAdapter } from "./kms.js";
+import { createVerifierKmsAdapter, managedKeyRecordParserForVerifierConfig } from "./kms.js";
 import { createPostgresVerifierExecutor } from "./postgres.js";
 import { createGenerationVerifier } from "./verifier.js";
 
@@ -21,7 +21,10 @@ export function createVerifierComposition(config: VerifierConfig): VerifierCompo
     });
   }
   const postgres = createPostgresVerifierExecutor(config.verification.database);
-  const repository = createGenerationVerificationRepository(postgres.executor);
+  const repository = createGenerationVerificationRepository(
+    postgres.executor,
+    managedKeyRecordParserForVerifierConfig(config.verification.kms)
+  );
   const verifier = createGenerationVerifier({
     decryptConcurrency: config.verification.decryptConcurrency,
     repository

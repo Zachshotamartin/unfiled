@@ -1,5 +1,6 @@
 export * from "./byte-bounded-lru.js";
 export * from "./float32-embedding.js";
+export * from "./local-hash-embedding.js";
 export * from "./private-rag-errors.js";
 export * from "./private-rag-payload.js";
 export * from "./private-rag-retriever.js";

@@ -1,6 +1,6 @@
 # Human Setup
 
-This file contains only steps that require a human account, physical device, paid service, security decision, or visual usability judgment. The implementation and automated tests do not depend on completing these steps.
+This file contains only steps that require a human account, physical device, paid service, security decision, or visual usability judgment. The implementation and automated tests do not depend on completing these steps. Live evidence for each step is recorded in `FINAL_REPORT.md`; this file never claims that a step has been performed unless it is listed under "Completed during bootstrap".
 
 ## Completed during bootstrap
 
@@ -9,21 +9,90 @@ This file contains only steps that require a human account, physical device, pai
 - Product, GitHub repository, and local project root renamed to `unfiled`.
 - `main` branch protection enabled with strict `CI`, admin enforcement, and force-push/deletion
   protection.
+- Milestone F merged into `main` as PR #18 at `e09f9554e2fee8acd454363a5a411cb9bf8e5c6d` on
+  2026-09-02; the post-merge `push` workflow run `33612621827` succeeded for that commit.
+- GitHub private vulnerability reporting enabled and API-verified active on 2026-09-02.
+- Five Vercel projects created in team `zach-2267`: `unfiled-web`, `unfiled-organizer`,
+  `unfiled-worker`, `unfiled-verifier`, and `unfiled-search`. Each is linked to the GitHub repository
+  with `main` as the production branch, region `sfo1`, Node 22, automatic system environment
+  variables enabled, and the OIDC team issuer enabled (subject form
+  `owner:zach-2267:project:<project-name>:environment:production`). Project IDs, deployment IDs, and
+  alias evidence are recorded in `FINAL_REPORT.md`.
+- One free remote Supabase project, `Unfiled Preview` (`us-west-2`), selected as the Production
+  database for the private beta. Local Supabase remains Development.
+
+## Free private-beta topology
+
+Read this before any section below. The beta is intentionally **$0**:
+
+- **Key custodian:** `UNFILED_KEY_CUSTODIAN=vercel-sensitive-env-v1` in every project. Four
+  independent AES-256 root families (AI object-wrap, AI content-MAC, private-manual object-wrap,
+  private-manual content-MAC) live only in Vercel Sensitive Environment Variables bound to the exact
+  Vercel project ID and the `production` environment. Web receives all four; the organizer receives
+  AI object-wrap + AI content-MAC; worker, verifier, and search receive AI object-wrap only. See
+  [ADR-0016](./docs/decisions/ADR-0016-free-beta-vercel-sensitive-key-custody-and-local-hash-retrieval.md).
+- **AWS KMS / Terraform / CloudTrail / OIDC-to-AWS are deferred paid hardening.** They are preserved
+  in `infra/aws-kms` and the `aws-kms` custodian branches, and are **not required or applied** for the
+  free beta. Their steps are collected at the end of this file under "Deferred paid hardening".
+- **Provider keys are bring-your-own only.** A user saves an OpenAI key, a Claude (Anthropic) key,
+  or both in Supabase Vault through the product UI and chooses Provider, Model, and Effort
+  ([ADR-0015](./docs/decisions/ADR-0015-user-selectable-provider-model-effort.md)). No operator
+  provider key is configured: `UNFILED_ORGANIZER_OPENAI_API_KEY` is optional and unset, so
+  app-default jobs fail closed and non-retryably to Inbox and the UI asks the user to add a key.
+  There is no app-funded Claude credential; every Anthropic environment variable is rejected by the
+  organizer.
+- **Retrieval is provider-free.** Worker, search, organizer, and the web generation lifecycle use
+  `local-hash-v1` (`unfiled-local-hash-v1`, 512 dimensions), a deterministic feature-hash vector
+  computed in process. It needs no provider key and sends no note or query text anywhere. It is not an
+  AI semantic embedding and ranks weaker than one; do not present the AI-assisted search scope as
+  semantic search.
+- **One database, one deployed environment.** The single Supabase project is Production. Vercel
+  Preview deployments are intentionally **not built**: an Ignored Build Step skips every
+  non-production build so no second custodian ever targets the shared database. Every variable below
+  is set in the **Production** scope only.
+- **Vercel Hobby limits.** Hobby cannot provide paid deployment protection (Trusted Sources, password,
+  or IP protection) or PITR. Workload endpoints enforce the checked-in app-level Vercel OIDC verifier
+  instead; the `UNFILED_TRUSTED_SOURCE_*` variables name the exact web caller that verifier accepts.
+- **Storage promise.** Application encryption at rest with scoped server-side decryption. Not
+  end-to-end encryption, not zero knowledge, not hardware-backed custody.
 
 ## Remaining release gates at a glance
 
-The Milestone D organizer, cipher, encrypted RAG path, and OpenAI adapters; the Milestone E1–E4 encrypted correction/Review/batch-Undo, routing-rule, generated-block, duplicate-suggestion, AI-settings, and Vault-only OpenAI BYOK slices; and the Milestone F hybrid-search, note-context, structured-log, export, and account-deletion slices are implemented in code. E2's credential-free aggregate/HTTP/PR-CI gate is green. E3's credential-free local aggregate and built-local B–E3 HTTP gates plus PR #16's required CI lanes are green; its deployed canary remains pending. E4's credential-free local aggregate and built-local B–E4 HTTP gates are green, its independent final audit is clear, and PR #17's required CI lanes are green. F's credential-free local aggregate is green and its independent final audit is clear; no F PR has been opened, so no green-PR, merge, or deployment claim exists. Milestone G has not started. The following steps still require a human-controlled account, credential, environment, or device and remain release-blocking:
+Each gate is one human-owned action with its evidence recorded in `FINAL_REPORT.md`:
 
-1. Create the dedicated OpenAI Production project/service account, restrict its model/key authority, set rate/spend controls, decide and document its data-retention posture, and place the key only in the organizer Production secret store.
-2. Keep `pnpm eval:routing` as the deterministic mock safety gate and run `pnpm eval:routing:pipeline` for the deterministic production-component seam. Its report names the real components exercised and the database/runtime guarantees it excludes. The optional credentialed runner is checked in as `pnpm eval:routing:live`; it requires only `UNFILED_ROUTING_EVAL_OPENAI_API_KEY`, runs exactly three samples per eligible synthetic case, and emits safe content-free telemetry. No credentialed live run or stochastic provider report exists yet.
-3. Provision and prove the exact Vercel Trusted Sources, AWS OIDC/KMS roles, CloudTrail trail, and TLS-only PostgreSQL logins. None of the five required Vercel projects is provisioned or deployed yet. The organizer login exposes exactly eleven RPCs; the separately gated Milestone F `unfiled_search_worker` login must expose exactly five ticket-bound RPCs and no inherited existing-workload authority.
-4. Run the staged synthetic organizer canaries and outage/race/replay cases, verify ciphertext-only durable state, and record the disable/rollback decision points before admitting a small cohort.
-5. Complete the restore drill, apply the one-way C.5d production contract from a real database-owner session, verify the post-contract canary, and track every pre-contract backup until expiry.
-6. Complete Apple signing, signed archive inspection, SQLCipher/Keychain/App Group checks, and the Lock Screen widget matrix on a physical iPhone.
-7. Before enabling E1–E4 in Production, run the deployed owner-interaction, private-rule, generated-block, duplicate-suggestion, retention, and Vault-only BYOK account/canary gates below. The local E4 implementation is not permission to enable production BYOK. Anthropic remains unavailable until its adapter and provider-specific evaluation/release gates pass.
-8. Before enabling Milestone F semantic search, deploy and prove ADR-0013's checked-in fifth-project service, one-use capability tickets, exact search database/OIDC/KMS identity, fixed provider/model, explicit-AI-assisted privacy dispatch, lexical-only degradation, and query/content canary gates. Checked-in implementation and credential-free tests are not deployment evidence.
-
-The production storage promise is application encryption at rest with scoped server-side decryption. It is not end-to-end encryption or zero-knowledge storage.
+1. **Vercel Deployment Protection (REQUIRED, all five projects).** In each project open Settings →
+   Deployment Protection → Vercel Authentication and set it to protect **Preview deployments only**.
+   It currently protects all deployments, which blocks the public web app and the app-level OIDC
+   calls between projects. Record the setting per project.
+2. **Remote migrations.** From a trusted shell linked to the beta project, apply
+   `20260902000000_managed_key_v2_environment_custody.sql` and
+   `20260902000001_dual_provider_model_selection.sql` with `pnpm supabase db push --linked` and record
+   the migration head. Both pass a clean local reset and the full pgTAP suite; their remote
+   application is evidence only when recorded.
+3. **Root ring.** Generate the four root families, set the Production custody variables per project
+   as described under "Free-beta key custody", redeploy all five projects, and record root key IDs
+   and statuses only (never material).
+4. **Dedicated database logins.** Provision `unfiled_index_worker`, `unfiled_rag_verifier`,
+   `unfiled_organizer_worker`, and `unfiled_search_worker` as TLS-only logins on the shared project and
+   set each project's database variables; record the `session_user` and allowlist probes.
+5. **Provider keys through the UI.** On a synthetic account, save one low-value OpenAI key and one
+   low-value Anthropic key through the product Settings form, confirm status/last-four/revision, and
+   run one synthetic capture per provider. Never paste a key anywhere except that masked form.
+6. **Live routing evaluation.** Run `pnpm eval:routing:live` and `pnpm eval:routing:live:anthropic`
+   with dedicated evaluation keys and commit the dated content-free reports. No credentialed live run
+   exists yet.
+7. **PITR and contraction remain deferred.** Record in `FINAL_REPORT.md` that the free plan has no
+   PITR, that the irreversible encrypted-storage contraction stays un-applied (`expand_compatible`),
+   and that all live writes remain encrypted and fail closed. Do not apply the contraction.
+8. **Apple signing.** Complete signing, signed-archive inspection, TestFlight distribution, and the
+   physical-iPhone matrix.
+9. **Name, legal, and mailbox clearance.** Complete `docs/NAME_CLEARANCE.md`, legal review of the
+   public routes, and proof of a monitored security/support mailbox.
+10. **Monitoring and restore.** Configure the content-free dashboards and alerts in
+    `docs/operations/MONITORING_AND_ALERTING.md` and run one timed restore drill within the free
+    plan's actual backup capability.
+11. **Demo.** Provision the synthetic demo account through supported paths and record the fresh-user
+    iPhone-to-web demonstration.
 
 ## Local prerequisites
 
@@ -46,75 +115,138 @@ Complete these human validation items before treating Milestone 0 as approved:
 4. Perform optical correction of the working SVG mark and create the final wordmark after trademark clearance.
 5. Complete trademark, App Store, package-name, social-handle, and domain clearance for Unfiled.
 
-## Supabase cloud
+## Supabase cloud — private-beta topology
 
-1. Create separate preview and production projects at Supabase.
-2. Enable Vault and confirm the project plan supports the required backup and point-in-time recovery targets.
-3. Store each project URL, anonymous key, and service-role key only in the matching interactive web/API Vercel environment. Do **not** put the Supabase database password in any web or workload runtime; keep it in the approved operator secret manager for migrations and recovery only. The isolated `apps/worker`, `apps/verifier`, `apps/organizer`, and `apps/search` projects must never receive a global Supabase service-role/secret key; their narrowly scoped database credentials are provisioned separately below.
-4. Link preview from a trusted shell: `pnpm supabase link --project-ref <preview-project-ref>`.
-5. Review migrations, then apply: `pnpm supabase db push --linked`.
-6. Never link a developer preview deployment to production data.
+1. The one approved free remote project `Unfiled Preview` (`us-west-2`) is the **Production**
+   database for the private beta. Only the Vercel Production scope targets it; Preview deployments are
+   not built. Local Supabase remains the Development database. Workload-specific least-privilege
+   PostgreSQL identities are provisioned below in this shared database.
+2. Enable Vault and record the free plan's actual backup/restore behavior. Paid point-in-time
+   recovery and a separate remote project are deferred hardening items. Do not claim PITR or
+   environment-isolated recovery, and do not execute the irreversible encrypted-storage contraction
+   while its required restore/PITR gate is unavailable.
+3. Enter the project URL, anonymous key, and service-role key as explicit Production values in only
+   the `unfiled-web` project. Do **not** put the Supabase database password in any web or workload
+   runtime; keep it in the approved operator secret manager for migrations and recovery only. The
+   isolated `unfiled-worker`, `unfiled-verifier`, `unfiled-organizer`, and `unfiled-search` projects
+   must never receive a global Supabase service-role or secret key.
+4. Link the beta project from a trusted shell: `pnpm supabase link --project-ref <beta-project-ref>`.
+5. Review migrations through `20260902000001_dual_provider_model_selection.sql`, then apply with
+   `pnpm supabase db push --linked` (add `--include-roles` for the reviewed CLI release when
+   `supabase/roles.sql` must be applied). Record the resulting migration head and timestamp in
+   `FINAL_REPORT.md`; a green local reset is not remote evidence.
+6. Because every deployed caller reaches the same beta records, keep access controlled, use
+   synthetic accounts for deployment verification, and do not share the URL as a disposable public
+   sandbox. Moving to two remote projects requires a reviewed data/migration and secret cutover.
+7. Enable database SSL enforcement and download the official Supabase Root 2021 CA. Every workload
+   connects through the shared Supavisor transaction pooler at
+   `aws-0-us-west-2.pooler.supabase.com:6543` with the transport username `<role>.<project-ref>`,
+   `sslmode=verify-full`, and that CA base64-encoded into the workload's `*_DATABASE_CA_PEM_BASE64`
+   variable. PostgreSQL must still report `session_user` and `current_user` as the unsuffixed role.
 
-## Vercel
+## Vercel — five projects, Production scope only
 
-No Vercel project has been created for this repository. The release topology requires five projects: interactive `apps/web`; the three C.5/D workloads `apps/worker`, `apps/verifier`, and `apps/organizer`; and the separately gated Milestone F `apps/search` trust domain. The procedures below are future account steps, not deployment evidence. Create search only from the checked-in `apps/search` root and manifest; never clone another workload's configuration or use a generic repository root.
+The five projects exist (see "Completed during bootstrap"). Expected production aliases are
+`https://unfiled-web.vercel.app`, `https://unfiled-organizer.vercel.app`,
+`https://unfiled-worker.vercel.app`, `https://unfiled-verifier.vercel.app`, and
+`https://unfiled-search.vercel.app`. A resolving alias is not proof of the exact project, deployment,
+or commit; record the authenticated dashboard/API mapping in `FINAL_REPORT.md`.
 
-1. Import `Zachshotamartin/unfiled` into Vercel and set the root directory to `apps/web`.
-2. In the `apps/web` project, set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and only the provider application keys owned by web in the appropriate environment scopes. Do not copy the service-role key into the separate worker, verifier, organizer, or search project, and do not place an organizer or search provider key in web.
-3. Generate a separate OTP rate-limit pepper for each deployed environment with
-   `openssl rand -hex 32`. Add it with `vercel env add AUTH_RATE_LIMIT_PEPPER preview` and
-   `vercel env add AUTH_RATE_LIMIT_PEPPER production`; never reuse a provider, Supabase, or cron
-   secret. Production OTP requests intentionally fail closed when either this pepper or the service
-   role key is absent. Generate another independent value with `openssl rand -hex 32` for deletion-
-   receipt replay throttling in each environment, then add it with
-   `vercel env add ACCOUNT_DELETION_REPLAY_RATE_LIMIT_PEPPER preview` and
-   `vercel env add ACCOUNT_DELETION_REPLAY_RATE_LIMIT_PEPPER production`. Never reuse the auth
-   pepper, cursor key, content key, provider key, Supabase secret, or cron secret. Production-mode
-   unauthenticated deletion-receipt replay fails closed when this distinct value is absent or shorter
-   than 32 characters. Separately generate a private-search cursor key for each environment with
-   `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`, then add it with
-   `vercel env add UNFILED_PRIVATE_SEARCH_CURSOR_HMAC_KEY preview` and
-   `vercel env add UNFILED_PRIVATE_SEARCH_CURSOR_HMAC_KEY production`. Never prefix it with
-   `NEXT_PUBLIC_` or reuse any content, auth, provider, or cron key. Private search fails closed
-   when this exact 32-byte base64url key is absent or malformed.
-4. Set `NEXT_PUBLIC_SITE_URL` to the canonical origin for each scope, including `https://` and excluding a trailing slash. Use the stable preview alias for Preview and the cleared custom domain for Production; local development falls back to `http://localhost:3000`.
-5. Generate a dedicated cron secret with `openssl rand -base64 48`, then run
-   `vercel env add CRON_SECRET production` and paste that value. Do not reuse a Supabase or provider
-   key. Set `NOTE_RETENTION_EXECUTION_ENABLED=false` in Production before the first deployment.
-6. Keep preview and production values separate.
-7. Deploy with `apps/web/vercel.json`. It schedules
-   `/api/internal/retention/notes` daily at 03:17 UTC, but the route remains a dry run while the
-   execution gate is false or absent. Confirm the first Vercel Cron response has `dryRun: true`,
-   `executionEnabled: false`, `purgedCount: 0`, and a plausible `eligibleCount`.
-8. Independently inspect the protected dry run before activation. In a trusted shell, set a
-   temporary `UNFILED_RETENTION_CRON_SECRET` variable to the value from step 5, then run:
+Automatic System Environment Variables are enabled in all five projects. Managed startup requires
+Vercel's exact `VERCEL=1`, `VERCEL_ENV`, `VERCEL_DEPLOYMENT_ID`, `VERCEL_GIT_COMMIT_SHA`, and
+`VERCEL_PROJECT_ID`; never set or copy them manually. Each `/health` response must be `no-store` and
+expose `x-unfiled-deployment=sha256:<lowercase-hex>`, `x-unfiled-commit=<exact-lowercase-full-SHA>`,
+and `x-unfiled-environment=production`. The release probe exact-matches these three non-secret
+values across all five services.
+
+### Required dashboard action: Deployment Protection
+
+For **each** of the five projects: Settings → Deployment Protection → Vercel Authentication → set to
+protect **Preview deployments only**. The projects currently protect all deployments, which returns
+Vercel's authentication page instead of the public web app and blocks the app-level OIDC calls from
+web to the four isolated services. This is a release gate; record the resulting setting for each
+project in `FINAL_REPORT.md`. Vercel Hobby cannot add Trusted Sources, password, or IP protection;
+the isolated services rely on the checked-in OIDC verifier described below.
+
+### Ignored Build Step
+
+Preview deployments are intentionally not built. Each project's Ignored Build Step skips every build
+whose `VERCEL_ENV` is not `production`. Confirm no Preview deployment exists for any project and
+record that in `FINAL_REPORT.md`. Do not set any variable in the Preview or Development scope.
+
+### `unfiled-web` Production variables
+
+Set these in the Production scope (values omitted; see `apps/web/.env.example` for shapes):
+
+```dotenv
+NEXT_PUBLIC_SUPABASE_URL
+NEXT_PUBLIC_SUPABASE_ANON_KEY
+NEXT_PUBLIC_SITE_URL
+SUPABASE_SERVICE_ROLE_KEY
+AUTH_RATE_LIMIT_PEPPER
+ACCOUNT_DELETION_REPLAY_RATE_LIMIT_PEPPER
+UNFILED_PRIVATE_SEARCH_CURSOR_HMAC_KEY
+CRON_SECRET
+NOTE_RETENTION_EXECUTION_ENABLED=false
+UNFILED_KEY_CUSTODIAN=vercel-sensitive-env-v1
+UNFILED_WEB_ROOT_KEY_REGISTRY_V2_JSON
+UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1
+UNFILED_ORGANIZER_ENV=production
+UNFILED_ORGANIZER_ORIGIN=https://unfiled-organizer.vercel.app
+UNFILED_WORKER_ENV=production
+UNFILED_INDEX_WORKER_ORIGIN=https://unfiled-worker.vercel.app
+UNFILED_VERIFIER_ENV=production
+UNFILED_RAG_VERIFIER_ORIGIN=https://unfiled-verifier.vercel.app
+UNFILED_SEARCH_ENV=production
+UNFILED_SEARCH_ORIGIN=https://unfiled-search.vercel.app
+UNFILED_EMBEDDING_MODEL_ID=unfiled-local-hash-v1
+UNFILED_EMBEDDING_DIMENSIONS=512
+```
+
+Rules:
+
+1. Generate `AUTH_RATE_LIMIT_PEPPER` and `ACCOUNT_DELETION_REPLAY_RATE_LIMIT_PEPPER` separately with
+   `openssl rand -hex 32`, `UNFILED_PRIVATE_SEARCH_CURSOR_HMAC_KEY` with
+   `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`, and `CRON_SECRET` with
+   `openssl rand -base64 48`. Add each interactively with `vercel env add <NAME> production`; never
+   reuse one value for another purpose and never prefix a secret with `NEXT_PUBLIC_`.
+2. `NEXT_PUBLIC_SITE_URL` is the canonical origin including `https://` and excluding a trailing slash
+   (`https://unfiled-web.vercel.app` until a cleared custom domain exists). It is read by
+   `apps/web/src/app/layout.tsx` and is not listed in `apps/web/.env.example`.
+3. Leave `UNFILED_MANAGED_AI_FALLBACK_AVAILABLE` **unset**. When it is unset, the settings UI hides
+   managed fallback, does not offer "Unfiled managed" mode as a new choice, and always sends
+   `byokFallbackToApp: false`. Set it to exactly `1` or `true` only in a future deployment that funds
+   `UNFILED_ORGANIZER_OPENAI_API_KEY`.
+4. Do not set `UNFILED_CONTENT_KEK_ID`, `UNFILED_CONTENT_KEK`, `UNFILED_CONTENT_FINGERPRINT_KEY`,
+   `UNFILED_CONTENT_RETIRED_KEKS`, `UNFILED_LOCAL_KEY_RING_V1`, `UNFILED_WEB_ROOT_KEY_REGISTRY_JSON`,
+   `UNFILED_AWS_REGION`, `UNFILED_AWS_ROLE_ARN`, or `UNFILED_WEB_DATA_ADAPTER` in Vercel; the
+   `vercel-sensitive-env-v1` runtime rejects all of them.
+5. `apps/web/vercel.json` schedules `/api/internal/captures/drain` at 03:07 UTC,
+   `/api/internal/retention/notes` at 03:17 UTC, `/api/internal/indexing/maintenance` at 02:22 UTC, and
+   `/api/internal/indexing/drain` at 03:27 UTC. Hobby schedules are daily and may run at any point
+   within the selected hour. Retention remains a dry run while `NOTE_RETENTION_EXECUTION_ENABLED` is
+   `false`; confirm the first cron response has `dryRun: true`, `executionEnabled: false`,
+   `purgedCount: 0`, and a plausible `eligibleCount`, then inspect it independently:
 
    ```bash
    curl --fail-with-body \
      -H "Authorization: Bearer $UNFILED_RETENTION_CRON_SECRET" \
-     "https://YOUR_PRODUCTION_DOMAIN/api/internal/retention/notes?dryRun=true"
+     "https://unfiled-web.vercel.app/api/internal/retention/notes?dryRun=true"
    ```
 
-   Never paste the secret into shell history or issue trackers. Verify the response still reports
-   zero purges and compare `eligibleCount` with the number of notes deleted at least 30 days ago.
+   Set the temporary `UNFILED_RETENTION_CRON_SECRET` variable from the secret manager; never paste
+   the value into shell history or a ticket. Only after reviewing that dry run and approving permanent
+   deletion under the published 30-day policy, set `NOTE_RETENTION_EXECUTION_ENABLED=true` and
+   redeploy. Alert on any cron failure or `batchLimitReached: true`; set the gate back to `false`
+   while investigating.
 
-9. Only after reviewing that dry run and approving permanent deletion under the published 30-day
-   policy, explicitly change `NOTE_RETENTION_EXECUTION_ENABLED` to `true` in Vercel Production and
-   redeploy. The `dryRun=true` URL remains non-destructive after activation. Alert on any cron
-   failure or `batchLimitReached: true`; disable execution by setting the gate back to `false` while
-   investigating.
-10. Run the recorded smoke checks against the preview URL before promoting.
-11. Add a custom domain only after name clearance.
+6. Add a custom domain only after name clearance.
 
 ### Capture encryption and durable workflow
 
-1. Generate independent local or Preview-only content and private-search cursor keys in a trusted terminal. Run the command three times and place each result directly into a password manager; do not paste any value into an issue, chat, commit, or shell argument:
-
-   ```bash
-   openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
-   ```
-
-2. For local development, add these server-only values to `apps/web/.env.local`:
+1. For **local development only**, generate three independent values with
+   `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`, place each directly into a password manager,
+   and add these server-only values to `apps/web/.env.local`:
 
    ```dotenv
    UNFILED_CONTENT_KEK_ID=local-content-kek-v1
@@ -124,962 +256,588 @@ No Vercel project has been created for this repository. The release topology req
    CRON_SECRET=<at-least-32-random-characters>
    ```
 
-   The fingerprint key must remain stable through ordinary wrapping-key rotations. Never reuse it as the KEK. `UNFILED_CONTENT_RETIRED_KEKS` is only for a bounded, audited rewrap window and must not become an indefinite archive of old keys.
+   Never put those legacy/local key variables in Vercel. Production uses the Vercel Sensitive root
+   ring below and never falls back to local custody.
 
-3. Add independent Preview values interactively with `vercel env add UNFILED_CONTENT_KEK_ID preview`, `vercel env add UNFILED_CONTENT_KEK preview`, `vercel env add UNFILED_CONTENT_FINGERPRINT_KEY preview`, `vercel env add UNFILED_PRIVATE_SEARCH_CURSOR_HMAC_KEY preview`, and `vercel env add CRON_SECRET preview`. Interactive entry keeps values out of shell history. The environment-backed resolver is restricted to local and isolated Preview data.
-4. Do not launch Production capture storage with a root KEK in Vercel environment variables. C.5a now checks in the AWS KMS resolver, least-privilege identities, Terraform policies, and rotation contract, and C.5b–d implement the complete encrypted note path. Production remains blocked until the account-bound evidence below passes and the explicit C.5d production contract is applied through its separate runbook.
-5. Migration `20260830000012_durable_capture_workflow.sql` deliberately aborts with `legacy_capture_encryption_backfill_required` if an older environment contains capture text. For disposable Preview data, recreate the project. For data that must be retained, stop writes and use the audited backfill/verification tool delivered with the production key adapter; never edit the migration to discard or relabel plaintext.
-6. The checked-in Vercel Hobby schedule calls `/api/internal/captures/drain` daily at 03:07 UTC. In Production, Preview, and development, `after()` and this recovery route make one content-free Trusted Sources call to the isolated organizer; they never run the organizer inside `apps/web` and never chain the organizer's 49-second budget to the index worker's 55-second budget. The encrypted organizer and index queues plus their separate authenticated recovery crons are authoritative. Deterministic organization exists only as an explicitly injected test fixture. On Vercel Pro or Enterprise, change only that capture schedule in `apps/web/vercel.json` to `* * * * *`, deploy, and confirm authenticated one-minute invocations. Hobby deployments reject schedules more frequent than daily.
-7. After deploying Preview, create one synthetic canary capture and inspect it only through the owner-authorized encrypted projection. Before the global contract, any temporary rollback column must contain only its fixed non-content sentinel; after the contract, prove that column no longer exists. In both states the canary must have an authenticated version-1 ciphertext envelope and keyed verification metadata and must have zero hits in rows, indexes, logs, traces, analytics, or URLs. Public API responses may return plaintext only after owner authorization and must never return an envelope, MAC/fingerprint, reservation, or key identifier.
+2. Migration `20260830000012_durable_capture_workflow.sql` deliberately aborts with
+   `legacy_capture_encryption_backfill_required` if an older environment contains capture text. For
+   disposable data, recreate the project. For data that must be retained, stop writes and use the
+   audited backfill/verification tool; never edit the migration to discard or relabel plaintext.
+3. `after()` and the daily `/api/internal/captures/drain` recovery route make one content-free
+   OIDC-authenticated call to the isolated organizer; they never run the organizer inside `apps/web`
+   and never chain the organizer's 49-second budget to the index worker's budget. The encrypted
+   organizer and index queues plus their separate recovery crons are authoritative. Deterministic
+   organization exists only as an explicitly injected test fixture.
+4. After the first Production deployment, create one synthetic canary capture and inspect it only
+   through the owner-authorized encrypted projection. The canary must have an authenticated version-1
+   ciphertext envelope and keyed verification metadata and must have zero hits in rows, indexes,
+   logs, traces, analytics, or URLs. Public API responses may return plaintext only after owner
+   authorization and must never return an envelope, MAC/fingerprint, reservation, or key identifier.
 
-### Production managed KMS and five workload trust domains — account evidence pending
+## Free-beta key custody — Vercel Sensitive environment root ring
 
-The checked-in module at `infra/aws-kms` defines exact environment identities for web, index worker, verifier, organizer, and owner search plus four independently controlled KMS roots. The search role is decrypt-only over active or registered-retired AI-assisted object-wrap roots and does not widen the other four identities. Applying this module creates billable, account-bound cloud resources; checked-in policy and Terraform tests do **not** authorize real note or query traffic or prove any deployed identity.
+The custodian is `vercel-sensitive-env-v1` ([ADR-0016](./docs/decisions/ADR-0016-free-beta-vercel-sensitive-key-custody-and-local-hash-retrieval.md)).
+Root key IDs have the form `urn:unfiled:key-root:vercel-sensitive-env-v1:production:<uuid>`; the
+runtime matches `VERCEL_PROJECT_ID` and `VERCEL_ENV=production` against every document and fails
+closed on any mismatch.
 
-1. Record fifteen exact values: AWS region; two distinct, independently controlled non-runtime KMS administrator or recovery principal ARNs;
-   Vercel team slug and `team_...` owner ID; and the distinct project **name** plus `prj_...` ID
-   for web, worker, verifier, organizer, and search. Project names—not IDs—appear in OIDC subjects.
-2. Create or select these five Vercel projects from this repository. Set their Root Directories to
-   `apps/web`, `apps/worker`, `apps/verifier`, `apps/organizer`, and `apps/search`. In all five projects, enable **Team Issuer** under
-   Settings → Security → Secure Backend Access (OIDC). Configure **Trusted Sources** separately on
-   the worker, verifier, organizer, and search projects: authorize only web Production → that project's Production
-   deployment. Do not authorize Preview, isolated-workload cross-calls, another project, or a team/project
-   wildcard.
-3. From `infra/aws-kms`, copy `terraform.tfvars.example` to the ignored `terraform.tfvars`, replace every placeholder, and authenticate Terraform with an administrator identity. If the team's Vercel issuer already exists in that AWS account, use the import command in `infra/aws-kms/README.md` instead of creating a duplicate.
-4. Run `terraform init`, `terraform fmt -check -recursive`, `terraform validate`, `terraform test`, `terraform plan -out unfiled-kms.tfplan`, and finally `terraform apply unfiled-kms.tfplan`. Confirm the plan creates five exact-subject runtime roles and these four aliases:
-   - `alias/unfiled/ai-assisted/object-wrap`
-   - `alias/unfiled/ai-assisted/content-mac`
-   - `alias/unfiled/private-manual/object-wrap`
-   - `alias/unfiled/private-manual/content-mac`
-5. Copy only Terraform's non-secret outputs into Vercel Production settings. All five projects
-   receive their workload-specific region and role values. Web, worker, verifier, and organizer use
-   `UNFILED_AWS_REGION` plus their matching `UNFILED_AWS_ROLE_ARN`; search uses only the exact
-   values from `search_cloud_environment` as described in its separate F gate. Web receives
-   both active AI root ARNs. The worker and verifier receive only
-   `UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN`: never give either isolated workload the AI content-MAC
-   ARN or a broad AI registry. The organizer receives the active AI object-wrap and content-MAC
-   ARNs plus only its exact retired-root outputs; it never receives a private-manual ARN or the full
-   web registry. Only web receives the
-   two active `UNFILED_PRIVATE_*_KMS_KEY_ARN` values and the complete web registry. In the worker set
-   all of:
+### 1. Generate the four root families
 
-   ```dotenv
-   UNFILED_WORKER_ENV=production
-   UNFILED_WORKER_PROJECT_ID=<worker-prj-id>
-   UNFILED_WORKER_EXPECTED_OIDC_SUBJECT=<terraform-worker_oidc_subject>
-   UNFILED_TRUSTED_SOURCE_TEAM_SLUG=<exact-team-slug>
-   UNFILED_TRUSTED_SOURCE_OWNER_ID=<team-id>
-   UNFILED_TRUSTED_SOURCE_WEB_PROJECT_ID=<web-prj-id>
-   UNFILED_TRUSTED_SOURCE_WEB_PROJECT_NAME=<exact-web-project-name>
-   UNFILED_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT=<terraform-web_oidc_subject>
-   ```
+1. On a trusted machine, generate four independent 32-byte base64url values with
+   `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='` and four lowercase UUIDs with
+   `uuidgen | tr 'A-Z' 'a-z'`. Write each value directly into a protected local file or the password
+   manager; never pass material as a shell argument, paste it into a ticket, or commit it.
+2. Assign one UUID to each family: `ai_assisted/object_wrap`, `ai_assisted/content_mac`,
+   `private_manual/object_wrap`, `private_manual/content_mac`.
+3. Build the two web documents as compact canonical JSON produced by `JSON.stringify` with no
+   whitespace or duplicate properties (shapes in `apps/web/.env.example`):
+   - `UNFILED_WEB_ROOT_KEY_REGISTRY_V2_JSON`: `version: 2`,
+     `custodyProvider: "vercel_sensitive_environment_v1"`, the exact web `projectId`,
+     `deploymentEnvironment: "production"`, and four `roots` entries (`generation: 1`, `keyClass`,
+     `purpose`, `rootKeyId`, `status: "active"`). It contains **no key material**.
+   - `UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1`: `version: 1`, the same `projectId` and
+     `deploymentEnvironment`, and `roots` entries of `{rootKeyId, keyMaterial}`.
+4. Build one ring per isolated project containing **only that workload's subset** and that project's
+   own `projectId`:
+   - organizer: AI object-wrap + AI content-MAC;
+   - worker, verifier, search: AI object-wrap only.
+     No private-manual root may appear in any isolated project's ring.
+5. Use a throwaway local script that reads the material files and writes the JSON documents to
+   protected files; have it print only root IDs. Delete the working directory afterwards.
 
-   Set `UNFILED_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON` only to the literal result of
-   `terraform output -raw worker_retired_ai_object_wrap_roots_json` (initially `[]`); never hand-convert
-   the broader registry. In the verifier set all of:
+### 2. Set the Production custody variables
 
-   ```dotenv
-   UNFILED_VERIFIER_ENV=production
-   UNFILED_VERIFIER_PROJECT_ID=<verifier-prj-id>
-   UNFILED_VERIFIER_EXPECTED_OIDC_SUBJECT=<terraform-verifier_oidc_subject>
-   UNFILED_TRUSTED_SOURCE_TEAM_SLUG=<exact-team-slug>
-   UNFILED_TRUSTED_SOURCE_OWNER_ID=<team-id>
-   UNFILED_TRUSTED_SOURCE_WEB_PROJECT_ID=<web-prj-id>
-   UNFILED_TRUSTED_SOURCE_WEB_PROJECT_NAME=<exact-web-project-name>
-   UNFILED_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT=<terraform-web_oidc_subject>
-   UNFILED_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON=<terraform-verifier-retired-output>
-   ```
+Add every variable below as a **Sensitive** environment variable in the Production scope with
+`vercel env add <NAME> production --sensitive` (or the dashboard's Sensitive toggle) so the value is
+never readable again from the dashboard or CLI.
 
-   Set the last value only to the literal result of
-   `terraform output -raw verifier_retired_ai_object_wrap_roots_json` (initially `[]`). Vercel
-   injects `VERCEL_ENV` and `VERCEL_PROJECT_ID`; do not override them. In the organizer set all of:
+`unfiled-web`:
 
-   ```dotenv
-   UNFILED_ORGANIZER_ENV=production
-   UNFILED_ORGANIZER_PROJECT_ID=<organizer-prj-id>
-   UNFILED_ORGANIZER_EXPECTED_OIDC_SUBJECT=<terraform-organizer_oidc_subject>
-   UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN=<active-ai-object-wrap-full-key-arn>
-   UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN=<active-ai-content-mac-full-key-arn>
-   UNFILED_ORGANIZER_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON=<terraform-organizer-object-wrap-retired-output>
-   UNFILED_ORGANIZER_RETIRED_AI_CONTENT_MAC_ROOTS_JSON=<terraform-organizer-content-mac-retired-output>
-   UNFILED_TRUSTED_SOURCE_TEAM_SLUG=<exact-team-slug>
-   UNFILED_TRUSTED_SOURCE_OWNER_ID=<team-id>
-   UNFILED_TRUSTED_SOURCE_WEB_PROJECT_ID=<web-prj-id>
-   UNFILED_TRUSTED_SOURCE_WEB_PROJECT_NAME=<exact-web-project-name>
-   UNFILED_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT=<terraform-web_oidc_subject>
-   UNFILED_ORGANIZER_TIMEOUT_MS=49000
-   ```
+```dotenv
+UNFILED_KEY_CUSTODIAN=vercel-sensitive-env-v1
+UNFILED_WEB_ROOT_KEY_REGISTRY_V2_JSON
+UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1
+```
 
-   Copy the two organizer retired values only from
-   `terraform output -raw organizer_retired_ai_object_wrap_roots_json` and
-   `terraform output -raw organizer_retired_ai_content_mac_roots_json`. Never hand-convert the
-   broader registry. Never configure AWS access
-   keys, a root KEK, a private KMS identifier, a user/browser session secret, `CRON_SECRET`, the
-   local drain bearer, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_SECRET_KEY`, or another global
-   Supabase service/secret variant in any isolated project. The worker and verifier must also reject
-   every AI content-MAC identifier and every provider key. The organizer rejects generic/ambient
-   provider variables and user BYOK, but Milestone D accepts exactly one
-   `UNFILED_ORGANIZER_OPENAI_API_KEY` from the dedicated project configured below. Never place that
-   key in web, worker, verifier, Preview, local development, CI, Terraform, source control, logs, or
-   an issue/chat transcript.
+`unfiled-organizer`:
 
-6. Deploy the worker, verifier, and organizer first, but do not make an OIDC-bearing call to any one yet. The
-   runtime cannot cryptographically derive a Vercel project ID from a `*.vercel.app` alias, so each
-   exact origin is a sensitive bearer-token egress trust boundary. In Vercel's authenticated
-   dashboard or REST API, select each project by its recorded `prj_...` ID and prove that the
-   intended exact Production alias is attached to that project and its current Production
-   deployment. Cross-check each alias through the authenticated alias/deployment view, and record
-   only the team ID, project ID, exact alias, Production deployment ID, and commit—not an access
-   token or OIDC token. Public DNS, TLS, or an unauthenticated HTTP response does not prove the
-   Vercel project mapping. Alias drift, project transfer, or alias reassignment invalidates this
-   evidence and requires the corresponding caller to be disabled until the proof is repeated.
+```dotenv
+UNFILED_KEY_CUSTODIAN=vercel-sensitive-env-v1
+UNFILED_ORGANIZER_PROJECT_ID=<organizer prj_ id>
+UNFILED_ORGANIZER_AI_OBJECT_WRAP_ROOT_KEY_ID
+UNFILED_ORGANIZER_AI_CONTENT_MAC_ROOT_KEY_ID
+UNFILED_ORGANIZER_RETIRED_AI_OBJECT_WRAP_ROOT_KEY_IDS_JSON=[]
+UNFILED_ORGANIZER_RETIRED_AI_CONTENT_MAC_ROOT_KEY_IDS_JSON=[]
+UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1
+```
 
-   Only after all three proofs, set these target values in the web Production project and deploy web:
+`unfiled-worker`:
 
-   ```dotenv
-   UNFILED_INDEX_WORKER_ORIGIN=https://<proved-worker-production-alias>.vercel.app
-   UNFILED_RAG_VERIFIER_ORIGIN=https://<proved-verifier-production-alias>.vercel.app
-   UNFILED_ORGANIZER_ORIGIN=https://<proved-organizer-production-alias>.vercel.app
-   ```
+```dotenv
+UNFILED_KEY_CUSTODIAN=vercel-sensitive-env-v1
+UNFILED_WORKER_PROJECT_ID=<worker prj_ id>
+UNFILED_WORKER_AI_OBJECT_WRAP_ROOT_KEY_ID
+UNFILED_WORKER_RETIRED_AI_OBJECT_WRAP_ROOT_KEY_IDS_JSON=[]
+UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1
+```
 
-   Do not configure `UNFILED_INDEX_WORKER_PROJECT_ID`: an unverified project-ID string beside an
-   alias does not bind them. The web client obtains its short-lived OIDC token at invocation time;
-   do not add a shared caller secret, worker bearer, bypass secret, user token, or worker workload
-   token to the web project.
+`unfiled-verifier`:
 
-   Do not invoke any protected workload yet. Production composition intentionally fails closed
-   until the worker has its dedicated database/provider configuration, the verifier has its
-   dedicated database configuration, and the organizer has its dedicated database plus OpenAI
-   project configuration. Alias proof establishes only the OIDC-token egress target; it is not
-   runtime, database, provider, or KMS readiness evidence. Complete the provider and three
-   dedicated-login sections below before making a real protected call.
+```dotenv
+UNFILED_KEY_CUSTODIAN=vercel-sensitive-env-v1
+UNFILED_VERIFIER_PROJECT_ID=<verifier prj_ id>
+UNFILED_VERIFIER_AI_OBJECT_WRAP_ROOT_KEY_ID
+UNFILED_VERIFIER_RETIRED_AI_OBJECT_WRAP_ROOT_KEY_IDS_JSON=[]
+UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1
+```
 
-7. Configure a CloudTrail trail that retains read and write **management events** and does not
-   exclude KMS events. KMS cryptographic operations are management events, not CloudTrail data
-   events. Encryption-context values are logged, so they must remain the four non-secret
-   owner/class/purpose/key-record identifiers and must never contain note text or email addresses.
-   Add alerting for access denials, unusual KMS volume, key disable/deletion scheduling, and worker,
-   verifier, or organizer attempts against private-manual roots.
-8. After the complete worker, verifier, and organizer readiness/custody proofs below, follow
-   `infra/aws-kms/README.md` for the staged → active/retired two-apply rotation. A 21st
-   runtime-decryptable retired generation is intentionally blocked until a separately reviewed
-   archived-root lifecycle exists. Complete and record KMS outage, intermediate/root rewrap,
-   restored-backup, and pre-cutover-backup-expiry drills before advancing any owner to
-   `encrypted_only` or `contracted`. For each root rewrap, the interactive/admin service first
-   verifies the KMS `ReEncrypt` result names the intended active full key ARN, then calls the
-   service-only `rewrap_user_content_key` RPC with the expected old ARN and current rewrap count.
-   Record that one call updates ciphertext, new/previous ARN, count, and server timestamp together;
-   an exact retry reports replay; a changed ciphertext or stale ARN/count fails; and the dedicated
-   worker role cannot execute the RPC. Do not update those columns directly.
+`unfiled-search`:
 
-### Dedicated production worker database login — provision with C.5c, not before
+```dotenv
+UNFILED_KEY_CUSTODIAN=vercel-sensitive-env-v1
+UNFILED_SEARCH_PROJECT_ID=<search prj_ id>
+UNFILED_SEARCH_AI_OBJECT_WRAP_ROOT_KEY_ID
+UNFILED_SEARCH_RETIRED_AI_OBJECT_WRAP_ROOT_KEY_IDS_JSON=[]
+UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1
+```
 
-`supabase/roles.sql` and migration `20260830000015_encrypted_library_expansion.sql` create the exact
-PostgreSQL role `unfiled_index_worker`, but deliberately leave it `NOLOGIN`, `NOINHERIT`,
-`NOBYPASSRLS`, and without a password. It has no relation or sequence privileges, no access to the
-`private` schema, no workload-usable role membership, and no executable public functions except the six RAG capabilities listed in
-[ADR-0007](./docs/decisions/ADR-0007-dedicated-worker-database-capability-and-root-rewrap.md).
-The C.5c adapter is implemented and remains disabled unless its complete dedicated configuration is
-present. Complete these steps only after its pull request is merged and before enabling production
-index jobs:
+Each `*_PROJECT_ID` must equal that project's injected `VERCEL_PROJECT_ID`. Do not set any
+`UNFILED_AWS_*`, `*_KMS_KEY_ARN`, `*_EXPECTED_OIDC_SUBJECT`, `*_RETIRED_*_ROOTS_JSON` (AWS ARN
+lists), `AWS_*` credential, private-manual, legacy, or `NEXT_PUBLIC_*` key variable alongside this
+mode; every runtime rejects them.
 
-1. In the Supabase dashboard, enable database SSL enforcement and download/record the current CA
-   chain and the serverless **transaction pooler** connection information for the production
-   project. The C.5c driver must disable prepared statements if its PostgreSQL library requires that
-   for transaction pooling. It must perform certificate and hostname verification equivalent to
-   `sslmode=verify-full`; `sslmode=disable`, `rejectUnauthorized: false`, and encryption without
-   certificate/hostname verification are release blockers.
-2. Apply `supabase/roles.sql` with the migrations (`supabase db push --include-roles` for the
-   reviewed CLI release). The role guards accept either zero membership rows or PostgreSQL 17's
-   single automatic platform-management edge: granted role `unfiled_index_worker`, member
-   `postgres`, grantor `supabase_admin`, `ADMIN=true`, `INHERIT=false`, `SET=false`. Reject any other
-   inbound or outbound row. If Supabase support or another actual bootstrap-superuser path is
-   available, remove that automatic edge and record the resulting zero-row proof; ordinary project
-   `postgres` cannot remove a grant recorded by `supabase_admin`. Do not weaken the exact-shape guard
-   or treat the edge as a workload login—`postgres` already owns and can replace the migrations and
-   security-definer functions.
+### 3. Activate and verify
 
-   Then open `psql` from a trusted administrator session over that verified TLS connection. Enable
-   login and set a generated password without placing it in SQL text, shell history, a ticket, or
-   this file:
+1. After the V2 migration is applied and the variables are set, redeploy all five projects. The
+   first authenticated owner operation atomically generates, registers with
+   `register_user_content_key_v2`, proves, and activates four owner-bound intermediate keys.
+2. Prove from configuration only (not by printing values) that each isolated project holds exactly
+   its subset: organizer two roots, worker/verifier/search one root, and no project except web holds
+   a private-manual root. Record root IDs, generation numbers, and statuses in `FINAL_REPORT.md`.
+3. Run the synthetic canary from "Capture encryption and durable workflow" step 4 and one
+   AI-assisted synthetic index/verify cycle after the database logins below are live.
+
+### 4. Rotate a root family
+
+Rotation is new root generation plus redeploy; there is no external KMS call.
+
+1. Generate a new 32-byte value and UUID for the affected family.
+2. In the web registry, add the new root as `active` with `generation` incremented and set the
+   previous root to `retired`. Add the new material to every ring that carries that family and keep
+   the previous material in those rings while it is retired.
+3. Add the previous root ID to each affected workload's `*_RETIRED_*_ROOT_KEY_IDS_JSON` list and set
+   the workload's active `*_ROOT_KEY_ID` to the new ID.
+4. Redeploy every project that receives that family; a mixed deployment set fails closed.
+5. Rewrap owner intermediate keys through the service-only `rewrap_user_content_key` RPC from the
+   interactive/admin service; record that one call updates ciphertext, new/previous root, count, and
+   timestamp together and that an exact retry reports replay.
+6. Remove the retired root from rings and lists only after every reference reaches zero and a
+   restore check passes. Never remove a generation still referenced by data.
+
+## Dedicated database logins on the shared beta project
+
+`supabase/roles.sql` and the migrations create `unfiled_index_worker` (six RPCs),
+`unfiled_rag_verifier` (two RPCs), `unfiled_organizer_worker` (eleven RPCs), and
+`unfiled_search_worker` (five RPCs) as `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` roles with no relation,
+sequence, or private-schema privilege. A migration replay returns a role to `NOLOGIN`; provisioning
+is an explicit human step, never a migration secret.
+
+Common procedure for each role:
+
+1. Inspect `pg_auth_members`: zero membership rows is preferred; otherwise the only permitted row is
+   the automatic `supabase_admin`-granted ADMIN-only edge to `postgres` with `INHERIT=false` and
+   `SET=false`. Reject any other row and do not weaken the migration guard.
+2. From a trusted administrator `psql` session over verified TLS, enable login and set a generated
+   password only at the interactive prompt:
 
    ```psql
-   ALTER ROLE unfiled_index_worker LOGIN;
-   \password unfiled_index_worker
+   ALTER ROLE <role> LOGIN;
+   \password <role>
    ```
 
-   Let `\password` prompt interactively, save the generated value directly to the production
-   password manager/Vercel secret flow, and close the administrator session. Never grant
-   `service_role`, `authenticator`, another parent role, `INHERIT`, `BYPASSRLS`, `SUPERUSER`,
+   Never grant `service_role`, `authenticator`, a parent role, `INHERIT`, `BYPASSRLS`, `SUPERUSER`,
    `CREATEDB`, `CREATEROLE`, or `REPLICATION`.
 
-3. Build the server-only URI from Supabase's displayed transaction-pooler template. For the shared
-   Supavisor pooler, retain its required transport username shape
-   `unfiled_index_worker.<project-ref>`; the suffix selects the Supabase tenant and does not change
-   the PostgreSQL role reported after connection. Use the prompted custom-role password. Do not
-   improvise the hostname, 20-character project ref, port, or CA. Add only that URI to the worker
-   Production project as `UNFILED_WORKER_DATABASE_URL`, set the same canonical hostname as
-   `UNFILED_WORKER_DATABASE_EXPECTED_HOST`, set the exact suffix separately as
-   `UNFILED_WORKER_DATABASE_PROJECT_REF`, and base64-encode the downloaded canonical PEM chain into
-   `UNFILED_WORKER_DATABASE_CA_PEM_BASE64`. The URI must contain `sslmode=verify-full`. A direct or
-   dedicated-pooler `db.<project-ref>.supabase.co` URI uses the unsuffixed custom role; the worker
-   derives and enforces the correct transport username for either endpoint class. These values
-   must not use a client-exposed prefix and must not be copied to the web project, Preview, logs, CI,
-   Terraform, or source control. Do not add
-   `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_SECRET_KEY`, any framework-prefixed equivalent, or an
-   RLS-bypassing database URL to the worker.
-4. Create a server-only OpenAI project key restricted to the embedding workload and add it only to
-   the worker Production project as `UNFILED_OPENAI_EMBEDDING_API_KEY`. Set the reviewed generation's
-   exact model and dimensions as `UNFILED_EMBEDDING_MODEL_ID` and
-   `UNFILED_EMBEDDING_DIMENSIONS` in both worker and web Production; the initial planned pair is
-   `text-embedding-3-small` and `1536`. The worker rejects a job whose generation differs, and the
-   web lifecycle controller uses the same pair to create shadow generations. Do not place the
-   provider key in web, verifier, iOS, Preview, logs, source control, or a user preference. Confirm
-   provider data controls and retention for the production project before allowing AI-assisted
-   notes; private-manual notes remain categorically ineligible and must produce zero provider calls.
-5. From the deployed C.5c adapter's database session, record a content-free readiness result proving
-   `session_user = 'unfiled_index_worker'`. `SET ROLE unfiled_index_worker` is not acceptable:
-   security-definer RPCs check the original connection identity. Confirm again that the role is not
-   superuser, cannot bypass RLS, cannot inherit, and has no membership except the exact inert
-   platform-management edge above. A connection for which the pooler reports another `session_user`
-   fails closed and blocks rollout.
-6. Run the deployed privilege probe. It must prove zero direct SELECT/INSERT/UPDATE/DELETE or sequence
-   access across `public` and `private`, no `private` schema use, no public create, and EXECUTE on
-   exactly: `claim_note_index_jobs`, `heartbeat_note_index_job`, `commit_note_rag_index`,
-   `fail_note_index_job`, `recover_stale_note_index_jobs`, and `list_active_note_rag_index`. Direct
-   note/key/RAG-table reads, key registration/activation/rewrap, generation creation/activation, and
-   every other function must return permission denied. Record identifiers, SQLSTATE/outcome, and
-   timestamps only—never rows, ciphertext, credentials, tokens, or note content.
-7. From web Production, invoke the proved worker Production alias with one synthetic AI-assisted
-   encrypted index job. Prove that Vercel preserves `x-vercel-trusted-oidc-idp-token` for the
-   handler and exposes the workload token through the request context used by
-   `@vercel/oidc-aws-credentials-provider`. The real short-lived worker identity must exchange
-   through STS and complete GenerateDataKey plus Decrypt only on the active AI object-wrap root;
-   the job must also complete through the exact database role and restricted embedding provider.
-   Never print or return either raw token. Header presence, local JWT parsing, constructing a KMS
-   client, or an HTTP health response without successful cryptographic calls is not evidence.
-8. Execute `runKeyCustodyProbe` with the deployed worker identity and the AI content-MAC plus both
-   private root ARNs supplied only to the controlled probe runner—not to worker environment
-   configuration. The recorded report must have both denial-evidence fields equal to
-   `"direct_kms"`, object-wrap generation/decryption success, denial on GenerateDataKey and Decrypt
-   for AI content-MAC and both private purposes, wrong-context rejection, content-free events, and
-   matching CloudTrail evidence.
-9. Exercise lease loss, worker timeout, database/provider/KMS outage, pooler reconnect, response-loss
-   replay, and credential revocation.
-   Jobs must remain queued or recover through the bounded RPCs; no code may fall back to a global
-   Supabase credential, direct table access, plaintext job payload, or private-manual key. Enable the
-   drain only after these checks and the Vercel/AWS evidence above are green.
-10. Inspect configuration only: confirm the web post-commit wake-up and
-    `/api/internal/indexing/drain` recovery target the protected worker Production origin, and confirm
-    `/api/internal/indexing/maintenance` is scheduled at 02:22 UTC with recovery at 03:27 UTC and
-    contains only the proved worker/verifier origins. Do not claim or invoke the complete maintenance
-    path until verifier step 6 below is green. [Vercel Hobby
-    schedules](https://vercel.com/docs/cron-jobs/usage-and-pricing) are daily but may run at any point
-    within the selected hour, so the separate hours preserve maintenance-before-recovery ordering;
-    the minute values become exact only on Pro or Enterprise. A wake-up may be lost or rejected
-    without losing work because the encrypted database queue is authoritative.
-11. Rotate this credential independently of Supabase service keys. Drain/pause the worker, use the
-    same trusted `psql` `\password unfiled_index_worker` prompt, update the Vercel Production secret,
-    redeploy/recycle pooled connections, prove the old credential is rejected and the new session has
-    the same exact allowlist, then resume. A database rebuild or replay of the role-creating migration
-    returns it to `NOLOGIN`; repeat the explicit provisioning/probe instead of weakening the migration.
+3. Build the URI from the pooler template: username `<role>.<project-ref>`, host
+   `aws-0-us-west-2.pooler.supabase.com`, port `6543`, database `postgres`, `sslmode=verify-full`.
+   Add it and its companions to that workload's Production scope only. Never copy a URI, password,
+   CA, or project ref into web, another workload, CI, source control, logs, or tickets, and never
+   substitute a Supabase API key or an RLS-bypassing URL.
+4. From the deployed adapter's session, record a content-free readiness result proving
+   `session_user = current_user = '<role>'`. `SET ROLE` is not evidence.
+5. Run the deployed privilege probe: EXECUTE on exactly the role's allowlist and permission denied
+   for every other function, every relation, the `private` schema, public create, and the other
+   workloads' RPCs. Record function names, SQLSTATEs, deployment ID, and timestamps only.
+6. Rotate each credential independently: pause the workload, use the same `\password` prompt, update
+   only the owning project's secret, redeploy, prove the old credential is rejected and the new
+   session keeps the exact allowlist, then resume.
 
-### Dedicated generation-verifier database login — provision separately
+### Index worker (`unfiled-worker`)
 
-`supabase/roles.sql`, migration `20260830000017_private_rag_runtime.sql`, and migration
-`20260830000019_rag_generation_control_plane.sql` create and narrow `unfiled_rag_verifier` as
-`NOLOGIN`, `NOINHERIT`, and `NOBYPASSRLS`. It has no table, sequence, or private-schema access and
-can execute exactly two public RPCs: one bounded read of an exact building generation and one
-canonical attestation write. The separately deployed `apps/verifier` process must strictly decrypt
-every projected index document before it submits the database-recomputed manifest digest.
-Activation independently revalidates that evidence. The stored attestation is a database capability
-decision, not a signature or MAC over plaintext.
+```dotenv
+UNFILED_WORKER_ENV=production
+UNFILED_WORKER_DATABASE_URL
+UNFILED_WORKER_DATABASE_EXPECTED_HOST=aws-0-us-west-2.pooler.supabase.com
+UNFILED_WORKER_DATABASE_PROJECT_REF=<20-character project ref>
+UNFILED_WORKER_DATABASE_CA_PEM_BASE64
+UNFILED_WORKER_DATABASE_CONNECT_TIMEOUT_MS=3000
+UNFILED_WORKER_DATABASE_STATEMENT_TIMEOUT_MS=500
+UNFILED_WORKER_EMBEDDING_PROVIDER=local-hash-v1
+UNFILED_TRUSTED_SOURCE_TEAM_SLUG=zach-2267
+UNFILED_TRUSTED_SOURCE_OWNER_ID=<team_ id>
+UNFILED_TRUSTED_SOURCE_WEB_PROJECT_ID=<web prj_ id>
+UNFILED_TRUSTED_SOURCE_WEB_PROJECT_NAME=unfiled-web
+UNFILED_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT=owner:zach-2267:project:unfiled-web:environment:production
+```
 
-1. Apply the same membership-shape gate as the index worker: zero rows after a real superuser
-   cleanup is preferred; otherwise the only permitted row is the automatic `supabase_admin`-granted
-   ADMIN-only edge to `postgres` for `unfiled_rag_verifier`, with both `INHERIT` and `SET` false.
-2. From the trusted verified-TLS administrator session, provision the role itself as the exact
-   login; do not grant it to a controller parent role:
+Optional bounded controls: `UNFILED_WORKER_MAX_REQUEST_BYTES`, `UNFILED_WORKER_TIMEOUT_MS`,
+`UNFILED_INDEX_CLAIM_LIMIT`, `UNFILED_INDEX_CONCURRENCY`, `UNFILED_INDEX_LEASE_SECONDS`,
+`UNFILED_INDEX_RECOVERY_LIMIT`, `UNFILED_EMBEDDING_MAX_INPUT_BYTES`, `UNFILED_EMBEDDING_TIMEOUT_MS`.
+`local-hash-v1` fixes the generation to `unfiled-local-hash-v1`/512 and rejects
+`UNFILED_OPENAI_EMBEDDING_API_KEY`, `UNFILED_EMBEDDING_MODEL_ID`, and `UNFILED_EMBEDDING_DIMENSIONS`,
+so no provider key exists in the worker. Do not set `UNFILED_WORKER_DRAIN_SECRET` or `CRON_SECRET` in
+Production.
 
-   ```psql
-   ALTER ROLE unfiled_rag_verifier LOGIN;
-   \password unfiled_rag_verifier
-   ```
+Allowlist: `claim_note_index_jobs`, `heartbeat_note_index_job`, `commit_note_rag_index`,
+`fail_note_index_job`, `recover_stale_note_index_jobs`, `list_active_note_rag_index`.
 
-3. Store its separately generated pooler credential only in the `apps/verifier` Production secret
-   scope. For the shared Supavisor transaction pooler, use the required transport username
-   `unfiled_rag_verifier.<project-ref>`; a direct/dedicated endpoint uses the unsuffixed role. Set:
+Deployed checks: from web, invoke the worker with one synthetic AI-assisted index job; prove the
+app-level verifier accepted only the exact `unfiled-web` Production subject and rejected direct
+public, cookie, `Authorization`, and wrong-project requests; prove the job completed through the
+exact role with an in-process local-hash embedding and no outbound provider request. Exercise lease
+loss, timeout, database outage, pooler reconnect, response-loss replay, and credential revocation:
+jobs must remain queued or recover through the bounded RPCs without any global credential, direct
+table, plaintext payload, or private-manual key. Confirm `/api/internal/indexing/maintenance` (02:22
+UTC) and `/api/internal/indexing/drain` (03:27 UTC) target only the proved worker/verifier origins.
 
-   ```dotenv
-   UNFILED_VERIFIER_DATABASE_URL=<postgresql-uri-with-sslmode-verify-full>
-   UNFILED_VERIFIER_DATABASE_EXPECTED_HOST=<exact-canonical-host>
-   UNFILED_VERIFIER_DATABASE_PROJECT_REF=<exact-20-character-project-ref>
-   UNFILED_VERIFIER_DATABASE_CA_PEM_BASE64=<downloaded-canonical-PEM-as-base64>
-   ```
+### Verifier (`unfiled-verifier`)
 
-   The credential must not be shared with the index worker, organizer, web project, Preview, CI,
-   `service_role`, or any Supabase API key. Require both `session_user` and `current_user` to equal
-   `unfiled_rag_verifier` over hostname- and certificate-verified TLS. `SET ROLE` is not evidence.
+```dotenv
+UNFILED_VERIFIER_ENV=production
+UNFILED_VERIFIER_DATABASE_URL
+UNFILED_VERIFIER_DATABASE_EXPECTED_HOST=aws-0-us-west-2.pooler.supabase.com
+UNFILED_VERIFIER_DATABASE_PROJECT_REF=<20-character project ref>
+UNFILED_VERIFIER_DATABASE_CA_PEM_BASE64
+UNFILED_TRUSTED_SOURCE_TEAM_SLUG=zach-2267
+UNFILED_TRUSTED_SOURCE_OWNER_ID=<team_ id>
+UNFILED_TRUSTED_SOURCE_WEB_PROJECT_ID=<web prj_ id>
+UNFILED_TRUSTED_SOURCE_WEB_PROJECT_NAME=unfiled-web
+UNFILED_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT=owner:zach-2267:project:unfiled-web:environment:production
+```
 
-4. Prove the login can execute only
-   `list_building_note_rag_index(uuid,text,bigint,jsonb,integer,integer)` and
-   `verify_rag_index_generation(uuid,text,bigint,jsonb)`. It must not read or mutate any relation,
-   use the `private` schema, seed/fail/activate a generation, claim worker work, or call another
-   public function. Prove service-role and `SET ROLE` sessions cannot use either verifier RPC; a
-   bogus extra attestation field and arbitrary digest are rejected; and activation rejects mutated
-   or stale canonical evidence. Record only identifiers, SQLSTATEs, role/grant metadata, and
-   timestamps—never ciphertext, note content, or credentials.
-5. Only after steps 1–4 and the worker readiness proof above are complete, invoke the proved verifier
-   Production alias from web Production with one synthetic complete
-   shadow generation. Verify Trusted Sources rejects Preview, direct public callers, cookies,
-   `Authorization`, protection-bypass headers, and a mismatched web project. Confirm the verifier
-   response contains only generation ID, canonical decimal revision token, verified count, and
-   `verified: true`; logs must contain only request/deployment metadata and aggregate counts. Tamper
-   independently with ciphertext, envelope context, key reference, model/dimensions, count, cursor,
-   and revision token; every case must fail closed and must not create activation evidence.
-6. Prove that Vercel preserves `x-vercel-trusted-oidc-idp-token` for the verifier handler and exposes
-   the workload token through the request context used by
-   `@vercel/oidc-aws-credentials-provider`. The real short-lived verifier identity must exchange
-   through STS and complete Decrypt only on the active AI object-wrap root. Then run the verifier
-   denial probe: it may Describe and Decrypt only active/retired AI object-wrap roots;
-   GenerateDataKey, ReEncrypt, staged-root Decrypt, every AI content-MAC operation, every
-   private-root operation, and wrong-context Decrypt must be denied. Match allowed and denied calls
-   to CloudTrail without recording tokens, ciphertext, encryption-context owner IDs, or plaintext.
-   A successful HTTP health check, JWT parse, or client construction is not custody evidence. Record
-   worker and verifier identities as separate evidence sets.
-7. Now run one complete authenticated indexing-maintenance invocation followed by recovery. Confirm
-   it calls only the proved worker and verifier Production origins and reports content-free aggregate
-   lifecycle counters. Record only aggregate job counts and deployment/request IDs, never owner/note
-   IDs, ciphertext, or content.
-8. Rotate and revoke this database credential independently. A rebuild returns the role to
-   `NOLOGIN`; repeat the provisioning, exact-session proof, privilege probe, and end-to-end canary
-   before the verifier controller resumes.
+Optional: `UNFILED_VERIFIER_MAX_REQUEST_BYTES`, `UNFILED_VERIFIER_TIMEOUT_MS`,
+`UNFILED_VERIFIER_DECRYPT_CONCURRENCY`, `UNFILED_VERIFIER_DATABASE_CONNECT_TIMEOUT_MS`,
+`UNFILED_VERIFIER_DATABASE_STATEMENT_TIMEOUT_MS`, `UNFILED_VERIFIER_KMS_TIMEOUT_MS`.
 
-Until those steps and C.5 pass, Unfiled may be shown as a portfolio work in progress but must not claim that the complete note library is encrypted or that private-manual mode is end-to-end encrypted.
+Allowlist: `list_building_note_rag_index(uuid,text,bigint,jsonb,integer,integer)` and
+`verify_rag_index_generation(uuid,text,bigint,jsonb)`. Prove `service_role` and `SET ROLE` sessions
+cannot use either; a bogus extra attestation field and arbitrary digest are rejected; activation
+rejects mutated or stale evidence.
 
-### Dedicated OpenAI organizer project and live routing gate — provision before organization canary
+Deployed checks: after the worker proof, invoke the verifier from web with one synthetic complete
+shadow generation. The response must contain only generation ID, canonical revision token, verified
+count, and `verified: true`; logs must contain only request/deployment metadata and aggregate counts.
+Tamper independently with ciphertext, envelope context, key reference, model/dimensions, count,
+cursor, and revision token; every case must fail closed without creating activation evidence. Then
+run one complete authenticated indexing-maintenance invocation followed by recovery.
 
-Milestone D implements the organizer's production OpenAI embedding and Responses adapters, but no
-provider key or live stochastic report is checked into the repository. `pnpm eval:routing` is a
-175-case deterministic mock safety evaluation; it makes no network request and cannot authorize
-live note traffic. Complete every step below with synthetic data before running the organizer
-canary.
+### Organizer (`unfiled-organizer`)
 
-1. In the OpenAI organization, create a dedicated Production project named for the Unfiled
-   organizer. Do not reuse a personal key, web project, index-worker embedding project, Preview
-   project, or another application's project. Record only the project ID, service-account ID,
-   retention setting, model-permission policy, rate/spend policy, and approver in release evidence.
-2. Create one project service account for the Production organizer and one API key for that service
-   account. Restrict the key/project to the Responses and Embeddings access required by this
-   workload, and restrict project model permissions to the code-pinned routing snapshot
-   `gpt-5.4-mini-2026-03-17` plus the exact embedding model used by the active encrypted RAG
-   generation. Deny unrelated models and hosted tools where the account controls support it. The
-   application independently sends `tools: []` and `tool_choice: "none"`; project permissions are a
-   second boundary, not a substitute for that request contract.
-3. Copy the new key once into the `apps/organizer` Vercel **Production** secret scope as
-   `UNFILED_ORGANIZER_OPENAI_API_KEY`. Never reveal it in a CLI argument, shell history, source,
-   `.env.example`, build output, Terraform state, report, screenshot, ticket, or chat. Do not set it
-   in Preview or local development: the checked production configuration rejects a provider key in
-   those runtimes. Do not set `OPENAI_API_KEY`, `UNFILED_OPENAI_API_KEY`, model/base-URL overrides,
-   an Anthropic variable, or user BYOK in any organizer environment.
-4. Configure project rate limits, a spend alert, and a hard spend limit appropriate to the canary
-   cohort. The organizer itself pins a 20-second provider deadline, at most one narrow retry, bounded
-   request/response sizes, and at most two concurrent claimed jobs by default; project controls must
-   still bound a credential leak or application loop. Record the configured limits without the key.
-5. Decide and record the project's data-retention posture before traffic. The organizer sets
-   `store: false` on a foreground Responses request, which disables Responses application-state
-   storage. The capture-query Embeddings request has no `store` parameter. Neither fact is a Zero
-   Data Retention guarantee: OpenAI documents default abuse-monitoring logs that may contain
-   customer content and may be retained for up to 30 days. If the release requires Modified Abuse
-   Monitoring or Zero Data Retention, obtain OpenAI approval and select that control for this exact
-   project before the canary; do not infer it from request code. Record the project setting and date,
-   not dashboard tokens or request content.
-6. From a clean checkout of the release commit, run `pnpm eval:routing` and
-   `pnpm eval:routing:pipeline`. Retain their JSON outputs as separate deterministic reports. The
-   first is the 175-case mock policy/safety corpus; the second exercises the production-component
-   retrieval, plan parsing/authorization, source preservation, policy, materialization, and
-   application path with a deterministic model adapter and explicitly reports
-   `liveProviderEvidence=false`. Require both gates to pass. Neither report contains live model
-   samples, provider latency, token usage, or cost, and neither authorizes provider traffic.
-7. The optional credentialed runner is checked in as `pnpm eval:routing:live`. Supply the dedicated
-   evaluation key only through `UNFILED_ROUTING_EVAL_OPENAI_API_KEY`; the runner deliberately has no
-   fallback to `OPENAI_API_KEY` or an application runtime secret. Set
-   `UNFILED_ROUTING_EVAL_REPORT_PATH` to a new `.json` path under `docs/eval-reports/` when recording
-   evidence. It exercises the strict `createOpenAIOrganizerPlanner` adapter over frozen synthetic
-   production-pipeline cases, runs exactly three independent samples per eligible case, and never
-   persists prompts/responses or prints capture/candidate text. Its safe report contains case IDs,
-   decisions/bands/error codes, completion status, latency, token counts, estimated cost, pinned
-   versions and hashes, and worst-of-three results. Commit a dated, reviewed content-free report and
-   require every eligible case to pass all three samples plus the release thresholds. A mock-only
-   report, one sample per case, an unpinned model, or a report containing content fails the gate.
-   The runner exists, but no credentialed live execution or report has been completed yet.
-8. Redeploy the organizer after adding the Vercel secret. Before placing a job in the queue, prove
-   `/health` is content-free, configuration accepts only the dedicated variable, and controlled
-   invalid/revoked-key requests fail as `provider_key_invalid`/unavailable without a note write,
-   plaintext log, or fallback planner. Reissue the key after this probe if its value was exposed to
-   any human-readable diagnostic surface.
-9. Rotate the provider key independently. Create a second key on the same service account, update
-   only the organizer Production secret, redeploy, run the empty-queue and one synthetic Review
-   probe, then revoke the old key and prove it can no longer call the API. Record key IDs and
-   timestamps only. Repeat the model permission, retention, rate/spend, live-eval, and canary gates
-   after a project transfer, service-account change, model/prompt/schema change, or data-control
-   change.
+```dotenv
+UNFILED_ORGANIZER_ENV=production
+UNFILED_ORGANIZER_DATABASE_URL
+UNFILED_ORGANIZER_DATABASE_EXPECTED_HOST=aws-0-us-west-2.pooler.supabase.com
+UNFILED_ORGANIZER_DATABASE_PROJECT_REF=<20-character project ref>
+UNFILED_ORGANIZER_DATABASE_CA_PEM_BASE64
+UNFILED_ORGANIZER_DATABASE_CONNECT_TIMEOUT_MS=3000
+UNFILED_ORGANIZER_DATABASE_STATEMENT_TIMEOUT_MS=1500
+UNFILED_ORGANIZER_EMBEDDING_PROVIDER=local-hash-v1
+UNFILED_ORGANIZER_MAX_REQUEST_BYTES=1024
+UNFILED_ORGANIZER_TIMEOUT_MS=49000
+UNFILED_TRUSTED_SOURCE_TEAM_SLUG=zach-2267
+UNFILED_TRUSTED_SOURCE_OWNER_ID=<team_ id>
+UNFILED_TRUSTED_SOURCE_WEB_PROJECT_ID=<web prj_ id>
+UNFILED_TRUSTED_SOURCE_WEB_PROJECT_NAME=unfiled-web
+UNFILED_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT=owner:zach-2267:project:unfiled-web:environment:production
+```
 
-Official references: [project service-account keys](https://developers.openai.com/api/reference/typescript/resources/admin/subresources/organization/subresources/projects/subresources/service_accounts/subresources/api_keys/methods/create), [project controls](https://developers.openai.com/api/reference/typescript/resources/admin/subresources/organization/subresources/projects), [Responses `store`](https://developers.openai.com/api/reference/cli/resources/responses/methods/create), and [API data controls](https://developers.openai.com/api/docs/guides/your-data).
+Optional: `UNFILED_ORGANIZER_CLAIM_LIMIT`, `UNFILED_ORGANIZER_CONCURRENCY`,
+`UNFILED_ORGANIZER_LEASE_SECONDS`, `UNFILED_ORGANIZER_RECOVERY_LIMIT`. Do **not** set
+`UNFILED_ORGANIZER_OPENAI_API_KEY` in the free beta (see "Provider keys" below), and never set
+`OPENAI_API_KEY`, `UNFILED_OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `UNFILED_ANTHROPIC_API_KEY`,
+`UNFILED_ORGANIZER_ANTHROPIC_API_KEY`, `UNFILED_ORGANIZATION_MODEL_API_KEY`, a model/base-URL
+override, `UNFILED_ORGANIZER_DRAIN_SECRET`, or `CRON_SECRET`; startup rejects them.
 
-### Dedicated encrypted-organizer database login — provision separately
+Allowlist (eleven): `claim_encrypted_organizer_jobs(text,integer,integer)`,
+`heartbeat_encrypted_organizer_job(text,text,integer,jsonb)`,
+`list_encrypted_organizer_candidates(text,text,integer)`,
+`list_encrypted_organizer_rag_page(text,text,jsonb,integer,integer)`,
+`select_encrypted_organizer_candidates(text,text,jsonb)`,
+`prepare_encrypted_organizer_create(text,text,text,text)`,
+`prepare_encrypted_organizer_append(text,text,text,bigint,text)`,
+`commit_encrypted_organizer_job(text,text,jsonb)`, `fail_encrypted_organizer_job(text,text,text,boolean)`,
+`recover_stale_encrypted_organizer_jobs(integer)`, and
+`get_lease_bound_organizer_provider_credential`. Also prove `anon`, `authenticated`, `service_role`,
+`unfiled_index_worker`, `unfiled_rag_verifier`, and `unfiled_search_worker` cannot execute any of them.
 
-Migration `20260830000020_encrypted_organizer_runtime.sql`, as narrowed and extended by
-`20260901000000_milestone_d_organizer_retrieval.sql` and
-`20260901000005_vault_byok_and_ai_settings.sql`, creates the exact PostgreSQL role
-`unfiled_organizer_worker` as `NOLOGIN`, `NOINHERIT`, and `NOBYPASSRLS`. It has no table, sequence,
-private-schema, public-create, inherited-role, service-role, index-worker, verifier, or key-admin
-capability. It can execute exactly eleven job/lease-scoped public RPCs: the ten Milestone D/E3
-capabilities plus E4's sole lease-bound provider-credential resolver. None accepts an owner UUID;
-ownership is derived from the currently leased organization job. The matching `apps/organizer`
-deployment is a fourth trust domain with a 49-second maximum request deadline and AI-assisted
-object-wrap/content-MAC custody only. Milestone D composes the production cipher, encrypted RAG
-retrieval, OpenAI planner, and atomic create-or-append/Review path; the real-provider evaluation and
-account canary above still gate actual personal-note traffic.
+Deployed checks: invoke the organizer from web with an empty synthetic queue and require the
+content-free `{"claimed":0,"completed":0,"failed":0,"retryScheduled":0}` response with
+`Cache-Control: no-store`; direct public, wrong-project, expired-token, cookie, `Authorization`, and
+protection-bypass requests must fail. With no user key and no operator key, a synthetic AI-assisted
+capture must fail closed and non-retryably to Inbox with the "add a key" prompt and make no provider
+request. Then, after the provider-key gate below, submit synthetic create, append,
+explicit-destination, ambiguous Review, revision-race/replan, response-loss replay,
+incomplete/stale-RAG, privacy-flip, and provider/database outage canaries for **each** provider. Each
+successful terminal transaction must atomically publish encrypted note state, revision/mutation,
+decision, receipt/Review, terminal lease state, and one content-free index job. Require zero plaintext
+marker outside the explicitly authorized response/provider request path, and confirm the job snapshot
+carries provider, model preference, resolved model ID, effort, expansion, settings revision, and
+registry version but no key, Vault ID, or header.
 
-1. Apply `supabase/roles.sql` and every migration through
-   `20260901000005_vault_byok_and_ai_settings.sql` before provisioning the current login. Inspect
-   `pg_auth_members`: zero membership rows touching `unfiled_organizer_worker` is preferred after a
-   real bootstrap-superuser cleanup. If the managed Supabase bootstrap grant cannot be removed, the
-   only permitted row is granted role `unfiled_organizer_worker`, member `postgres`, grantor
-   `supabase_admin`, `ADMIN=true`, `INHERIT=false`, and `SET=false`. Reject every other inbound or
-   outbound membership and do not weaken the checked migration guard.
-2. In the Supabase dashboard, enable database SSL enforcement and download the canonical CA chain
-   plus the exact serverless transaction-pooler connection template. From a trusted administrator
-   `psql` session that already uses hostname- and certificate-verified TLS, provision the role itself
-   as the login and enter its independently generated password only at the interactive prompt:
+Record and rehearse the disable path: stop the web capture schedule and manual drain callers, remove
+the organizer's OIDC caller acceptance, and confirm no new lease is claimed while captures and jobs
+remain encrypted and queued.
 
-   ```psql
-   ALTER ROLE unfiled_organizer_worker LOGIN;
-   \password unfiled_organizer_worker
-   ```
+### Search (`unfiled-search`)
 
-   Never grant `service_role`, `authenticator`, a controller parent role, `INHERIT`, `BYPASSRLS`,
-   `SUPERUSER`, `CREATEDB`, `CREATEROLE`, or `REPLICATION`. A migration replay intentionally returns
-   the role to `NOLOGIN`; repeat this explicit procedure rather than changing the migration.
+```dotenv
+UNFILED_SEARCH_ENV=production
+UNFILED_SEARCH_DATABASE_URL
+UNFILED_SEARCH_DATABASE_EXPECTED_HOST=aws-0-us-west-2.pooler.supabase.com
+UNFILED_SEARCH_DATABASE_PROJECT_REF=<20-character project ref>
+UNFILED_SEARCH_DATABASE_CA_PEM_BASE64
+UNFILED_SEARCH_EMBEDDING_PROVIDER=local-hash-v1
+UNFILED_SEARCH_TRUSTED_SOURCE_TEAM_SLUG=zach-2267
+UNFILED_SEARCH_TRUSTED_SOURCE_OWNER_ID=<team_ id>
+UNFILED_SEARCH_TRUSTED_SOURCE_WEB_PROJECT_ID=<web prj_ id>
+UNFILED_SEARCH_TRUSTED_SOURCE_WEB_PROJECT_NAME=unfiled-web
+UNFILED_SEARCH_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT=owner:zach-2267:project:unfiled-web:environment:production
+```
 
-3. Build the Production URI from the dashboard template. The shared Supavisor pooler transport
-   username is `unfiled_organizer_worker.<project-ref>`; a direct or dedicated endpoint uses the
-   unsuffixed role. Use `sslmode=verify-full`, the exact displayed host/port/database, the exact
-   20-character project ref, and the downloaded CA. Store only these values in the organizer
-   Production project:
+Optional: `UNFILED_SEARCH_MAX_REQUEST_BYTES`, `UNFILED_SEARCH_TIMEOUT_MS`,
+`UNFILED_SEARCH_DATABASE_CONNECT_TIMEOUT_MS`, `UNFILED_SEARCH_DATABASE_STATEMENT_TIMEOUT_MS`.
+`local-hash-v1` rejects `UNFILED_SEARCH_OPENAI_API_KEY`. Do not set `UNFILED_SEARCH_INVOCATION_SECRET`
+(local only), `UNFILED_SEARCH_PROJECT_TEAM_SLUG`, `UNFILED_SEARCH_PROJECT_NAME`,
+`UNFILED_SEARCH_EXPECTED_OIDC_SUBJECT`, `UNFILED_AWS_REGION`, `UNFILED_SEARCH_AWS_ROLE_ARN`,
+`UNFILED_SEARCH_AI_OBJECT_WRAP_KMS_KEY_ARN`, or `UNFILED_SEARCH_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON`
+(AWS-only).
 
-   ```dotenv
-   UNFILED_ORGANIZER_DATABASE_URL=<exact-postgresql-uri-with-sslmode-verify-full>
-   UNFILED_ORGANIZER_DATABASE_EXPECTED_HOST=<exact-canonical-host>
-   UNFILED_ORGANIZER_DATABASE_PROJECT_REF=<exact-20-character-project-ref>
-   UNFILED_ORGANIZER_DATABASE_CA_PEM_BASE64=<canonical-PEM-chain-as-base64>
-   UNFILED_ORGANIZER_DATABASE_CONNECT_TIMEOUT_MS=3000
-   UNFILED_ORGANIZER_DATABASE_STATEMENT_TIMEOUT_MS=1500
-   ```
+Allowlist (five): `claim_encrypted_user_search(uuid,text,text)`,
+`list_encrypted_user_search_rag_page(uuid,text,text,jsonb,jsonb,integer,integer)`,
+`verify_encrypted_user_search_snapshot(uuid,text,text,jsonb,jsonb)`,
+`complete_encrypted_user_search(uuid,text,text)`, and
+`fail_encrypted_user_search(uuid,text,text,public.safe_error_code)`. Separately prove only
+`service_role` can execute `begin_encrypted_user_search(uuid,text,jsonb,text)`.
 
-   The runtime pins the pooler username shape separately, enables channel binding, requires TLS
-   1.2 or newer, verifies the certificate and hostname, and checks the database identity when a
-   connection enters the pool. Do not copy this URI, password, CA value, or project ref into web,
-   worker, verifier, Preview, CI, Terraform, logs, tickets, or source control. Never substitute a
-   Supabase HTTP API key or an RLS-bypassing database URL.
+Deployed checks: from a synthetic owner, submit an explicitly `ai_assisted` request and confirm web
+mints a 30-second one-use ticket with a random claim secret and sends only ticket ID, secret, and the
+exact normalized request (no owner ID, token, generation, key, provider, or model). Exercise two
+concurrent claims, response-loss replay, wrong secret, wrong digest, changed/reordered filters, expiry,
+terminal replay, and wrong caller; exactly one claim may win. Send the same query under
+omitted/default, `mixed`, `private_manual`, and `ai_assisted` filters: only the exact AI-assisted
+request may reach search, it computes the local-hash vector in process, and it may return only
+AI-assisted references. Missing, failed, stale, incomplete, or changing state must return
+semantic-unavailable and trigger a fresh lexical-only search. Rehearse disable by removing web's
+`UNFILED_SEARCH_ORIGIN` while leaving lexical search available. Record capacity/latency evidence and
+state in every user-facing surface that this scope is lexical-strength local-hash retrieval, not
+semantic search.
 
-4. Configure the bounded organizer runtime from `apps/organizer/.env.example`:
+## Provider keys, dual-provider BYOK, and live routing gates
 
-   ```dotenv
-   UNFILED_ORGANIZER_MAX_REQUEST_BYTES=1024
-   UNFILED_ORGANIZER_TIMEOUT_MS=49000
-   UNFILED_ORGANIZER_CLAIM_LIMIT=2
-   UNFILED_ORGANIZER_CONCURRENCY=2
-   UNFILED_ORGANIZER_LEASE_SECONDS=120
-   UNFILED_ORGANIZER_RECOVERY_LIMIT=100
-   UNFILED_ORGANIZER_OPENAI_API_KEY=<dedicated-project-service-account-key>
-   ```
+The organizer is BYOK-first across OpenAI and Claude (Anthropic). The OpenAI adapter uses the
+Responses API with strict Structured Outputs, `model` from the job snapshot, and `reasoning.effort`
+low/medium/high. The Claude adapter uses `POST https://api.anthropic.com/v1/messages` with
+`x-api-key`, `anthropic-version: 2023-06-01`, `output_config.effort`, and one forced strict tool
+(`tool_choice: {type:"tool"}`, parallel tool use disabled) whose input schema is derived from the
+OpenAI schema; it accepts exactly one matching `tool_use` block and defers text-only, zero/multiple/
+wrong tool calls, `max_tokens`, refusals, and non-object inputs to Review. The credential's provider
+selects the adapter, so a Claude key never reaches OpenAI and vice versa, and neither reaches
+retrieval.
 
-   Production must not contain `UNFILED_ORGANIZER_DRAIN_SECRET` or `CRON_SECRET`; exact web
-   Trusted Sources identity is the only drain authorization. It must also reject static AWS access
-   keys, private-manual KMS identifiers, a global Supabase key/URL, a browser/user secret, and
-   `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `UNFILED_OPENAI_API_KEY`,
-   `UNFILED_ANTHROPIC_API_KEY`, `UNFILED_ORGANIZATION_MODEL_API_KEY`, or a model/base-URL override.
-   The exact dedicated organizer variable is required only in Production and must match the OpenAI
-   project/live-evaluation gate above.
+Registry `organization-model-registry-v2`: OpenAI `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol`;
+Anthropic `claude-sonnet-5`, `claude-opus-5`. Automatic maps Efficient/Balanced/Thorough (wire
+`economical|standard|thorough`) to Luna/Terra/Sol and Sonnet/Sonnet/Opus. Cross-provider model choices
+are rejected; switching provider resets an incompatible model to Automatic and deletes no key.
 
-5. Open a connection through the deployed organizer adapter and record a content-free readiness
-   result proving both `session_user` and `current_user` equal exactly
-   `unfiled_organizer_worker`. `SET ROLE`, an unsuffixed/suffixed-name mismatch after pooler
-   authentication, encryption without hostname verification, or a session that reports `postgres`,
-   `service_role`, or `authenticator` fails the gate. Record only host class, deployment ID, exact
-   role names, TLS mode, timestamp, and pass/fail—never the URI, certificate bytes, password, token,
-   ciphertext, or query result content.
-6. Run the deployed privilege probe and prove EXECUTE on exactly these signatures:
+1. **Deterministic gates first.** From a clean checkout of the release commit run `pnpm eval:routing`
+   and `pnpm eval:routing:pipeline` and retain both JSON reports. Neither makes a network request or
+   authorizes provider traffic.
+2. **Live evaluation (both providers).** Create one low-value, separately budgeted evaluation key per
+   provider in a dedicated project/organization with spend limits. Run:
+   - `pnpm eval:routing:live` with `UNFILED_ROUTING_EVAL_OPENAI_API_KEY` (optional
+     `UNFILED_ROUTING_EVAL_OPENAI_MODEL`, default `gpt-5.6-terra`);
+   - `pnpm eval:routing:live:anthropic` with `UNFILED_ROUTING_EVAL_ANTHROPIC_API_KEY` (optional
+     `UNFILED_ROUTING_EVAL_ANTHROPIC_MODEL`, default `claude-sonnet-5`).
 
-   - `claim_encrypted_organizer_jobs(text,integer,integer)`
-   - `heartbeat_encrypted_organizer_job(text,text,integer,jsonb)`
-   - `list_encrypted_organizer_candidates(text,text,integer)`
-   - `list_encrypted_organizer_rag_page(text,text,jsonb,integer,integer)`
-   - `select_encrypted_organizer_candidates(text,text,jsonb)`
-   - `prepare_encrypted_organizer_create(text,text,text,text)`
-   - `prepare_encrypted_organizer_append(text,text,text,bigint,text)`
-   - `commit_encrypted_organizer_job(text,text,jsonb)`
-   - `fail_encrypted_organizer_job(text,text,text,boolean)`
-   - `recover_stale_encrypted_organizer_jobs(integer)`
+   Set `UNFILED_ROUTING_EVAL_REPORT_PATH` to a new `.json` path under `docs/eval-reports/`. Each
+   runner executes exactly three samples per eligible synthetic case and emits only content-free
+   telemetry with pinned list prices (OpenAI luna $0.20/$1.20, terra $2/$12, sol $4/$20 per MTok;
+   Claude sonnet-5 $2/$10, opus-5 $5/$25 per MTok, cache reads 10% of input). Commit the dated
+   reviewed reports and require every eligible case to pass all three samples. **No credentialed live
+   run has been executed yet.** Revoke the evaluation keys afterwards.
 
-   Prove zero direct SELECT/INSERT/UPDATE/DELETE or sequence privilege on `public` and `private`, no
-   `private` schema use, no public-schema create, and no EXECUTE on any other public or private
-   function. Explicitly prove denial for root/key registration, activation, revocation, rewrap,
-   plaintext/legacy note functions, service-only aggregate/backfill/rollout functions, all six index
-   RPCs, both verifier RPCs, and arbitrary direct relation access. Also prove `anon`,
-   `authenticated`, `service_role`, `unfiled_index_worker`, and `unfiled_rag_verifier` cannot execute
-   any organizer RPC. Record function names, privilege booleans or SQLSTATEs, deployment ID, and
-   timestamps only.
+3. **Provider-key entry through the UI.** In the Production Supabase project confirm Vault is enabled.
+   Run the PostgreSQL privilege probe and the deployed REST exposure probe: browser/native, `anon`,
+   `authenticated`, worker, verifier, organizer, and search must have no provider-key table, Vault
+   table/view/function, or arbitrary secret access; `service_role` requests with `Accept-Profile:
+vault` and `Content-Profile: vault` must be rejected. Then, on a synthetic account, enter one
+   low-value OpenAI key and one low-value Anthropic key only into the masked authenticated settings
+   form. Web validates OpenAI against `https://api.openai.com/v1/models/gpt-5.6-terra` and Anthropic
+   against `https://api.anthropic.com/v1/models?limit=1` (`x-api-key`,
+   `anthropic-version: 2023-06-01`); a deliberately invalid key must store nothing. A valid write
+   returns only provider, status, last-four, validation time, and credential revision. Provider-key
+   GET requires exactly one `provider` query parameter, and web treats a provider-mismatched database
+   response as an integrity failure. Repeat the exact PUT after an ambiguous response and prove the
+   transient replay comparison; replace a key and prove the superseded Vault secret is destroyed
+   atomically; delete a key and prove deletion of one provider leaves the other intact.
+4. **Settings hierarchy.** Prove provider → model → effort validation on web and iOS: app-default
+   mode is unavailable as a new choice (no managed fallback in the free beta), BYOK requires exactly
+   one provider, OpenAI accepts only Automatic or an OpenAI registry-v2 model, Anthropic only
+   Automatic or a Claude registry-v2 model, and unknown/cross-provider models, unsupported effort,
+   extra keys, and stale revisions fail closed. iOS implements the same catalog through a
+   build-configuration flag whose name is recorded in `FINAL_REPORT.md`.
+5. **Job snapshot and lease binding.** Queue one synthetic BYOK job per provider and inspect
+   application tables through an administrative schema-only query: the immutable snapshot may
+   contain provider, model preference, resolved model ID, effort, expansion, settings revision, and
+   registry version but no key, Vault secret ID, header, ciphertext, or key record. A wrong owner,
+   caller-selected provider/Vault ID, missing/expired/stolen lease, private capture, deleted capture,
+   or invalid credential must not resolve a secret. Hold a queued job before resolution, delete its
+   key, release the job: it must make no provider call and land in Inbox with `provider_key_invalid`.
+6. **Canary.** Seed a unique canary key per provider and run settings put/status/delete, one leased
+   provider call, invalid-key handling, export, and account deletion. Search Vercel, Supabase,
+   provider diagnostics, error sinks, traces, jobs, HTTP responses, exports, content envelopes, and
+   backup-visible tables for the canary; require zero hits. Confirm live Vault destruction and
+   document separately when infrastructure backups containing the old secret age out.
+7. **Retention posture.** OpenAI Responses requests set `store: false`; that is not a Zero Data
+   Retention guarantee, and default abuse-monitoring logs may retain content for up to 30 days.
+   Anthropic Messages requests are subject to Anthropic's API data-retention terms. Because keys are
+   the user's own, the product copy and `/privacy` route must state that AI-assisted content is sent
+   to the provider the user selected under that provider's terms.
+8. **Optional operator OpenAI key (not in the free beta).** A future funded deployment may set
+   `UNFILED_ORGANIZER_OPENAI_API_KEY` from a dedicated OpenAI project restricted to the registry-v2
+   models and `UNFILED_MANAGED_AI_FALLBACK_AVAILABLE=1` in web. It funds only OpenAI app-default
+   routing and explicitly snapshotted fallback; there is no app-funded Claude credential. Do not set
+   either variable in the free beta.
 
-7. Test the data boundary with synthetic ciphertext and content-free reports. A claim must return no
-   more than the configured limit; fallback candidate projection must return at most eight
-   AI-assisted candidates within its fixed byte budget. RAG pagination must expose only the active,
-   complete, owner-bound encrypted generation under the live lease and fixed page/byte limits.
-   Exact selection must accept only a unique top-eight list tied to the same generation snapshot,
-   indexed revisions, privacy state, and currently open notes. Private/deleted/stale/cross-owner
-   rows must return no projection, and a request cannot supply or switch an owner. Lose or replace
-   the lease, flip privacy, delete the capture/note, change consent controls, mutate/activate a RAG
-   generation, and advance an append revision at each disclosure/publication race point. Every race
-   must fail closed, degrade out of RAG auto-apply, replan at most once, or produce Review; it must
-   never disclose private content, publish against stale authority, or loop.
-8. From web Production, invoke the exact proved organizer Production alias with an empty synthetic
-   queue. Prove Vercel preserves `x-vercel-trusted-oidc-idp-token`; the organizer verifies the exact
-   issuer, audience, subject, team slug/ID, web project name/ID, and Production environment; and the
-   response is content-free `{"claimed":0,"completed":0,"failed":0,"retryScheduled":0}` with
-   `Cache-Control: no-store`. Direct public, Preview, wrong-project, expired-token, cookie,
-   `Authorization`, and protection-bypass requests must fail. The organizer must abort by 49 seconds;
-   web's 54-second default leaves cleanup margin. A health response or locally decoded JWT is not
-   trusted-caller evidence.
-9. With the real organizer workload token, prove STS assumes only the exact organizer role. The
-   allowed canary may GenerateDataKey/Decrypt on the active AI-assisted object-wrap and content-MAC
-   roots and Decrypt only the exact retired roots supplied through the two organizer retired-root
-   outputs. Controlled direct probes must deny every private-manual generation, staged-root
-   generation/decryption, retired-root generation, wrong-context use, `ReEncrypt`, grant creation,
-   key administration, and another workload's authority. Match allowed and denied calls to
-   content-free CloudTrail management events. Never record tokens, plaintext, ciphertext, email,
-   owner IDs, or encryption-context values.
-10. Only after the dedicated OpenAI project and live stochastic gate above pass, submit synthetic
-    create, append, explicit-destination, ambiguous Review, revision-race/replan, response-loss
-    replay, incomplete/stale-RAG, privacy-flip, and provider/KMS/database outage canaries. Use unique
-    non-sensitive markers and never include a real note. Each successful terminal transaction must
-    atomically publish encrypted note state, revision/mutation, decision, receipt/Review, terminal
-    lease state, and one content-free index job. Decrypt only through the owner-authorized API to
-    compare expected content. Inspect rows, indexes, queues, idempotency state, Realtime, logs,
-    traces, analytics, error sinks, and OpenAI request-history surfaces allowed by the selected data
-    controls; require zero plaintext marker outside the explicitly authorized response/provider
-    request path. Then invoke the independent index recovery path and prove that job completes. The
-    organizer response must never synchronously chain the index worker's long-running drain.
-11. Exercise connection loss, statement timeout, 49-second request cancellation, stale lease
-    recovery, credential revocation, and Vercel alias drift. Jobs must remain encrypted and queued,
-    retry within bounded attempts, enter Review/dead-letter deterministically, or recover through
-    the exact RPC. There must be no fallback to `apps/web`, a Local/Preview deterministic planner,
-    direct tables, a broad Supabase credential, static AWS credentials, plaintext persistence, or
-    private-manual custody.
-12. Rotate this credential independently of the web, worker, verifier, and Supabase service keys.
-    Pause organizer invocations, use the trusted verified-TLS `\password unfiled_organizer_worker`
-    prompt, update only the organizer Production secret, redeploy/recycle its pool, prove the old
-    credential is rejected and the new session preserves the exact eleven-RPC ACL, run the empty-queue
-    readiness and denial probes again, then resume. Re-prove alias ownership, OIDC, database session,
-    and KMS denials after a project transfer, alias change, role/policy change, CA rotation, database
-    restore, or migration replay.
-13. Record and rehearse the organizer disable/rollback path before enabling any non-synthetic job.
-    Stop the web capture schedule and any manual drain caller, revoke web → organizer Trusted Sources
-    authorization, and confirm no new lease is claimed. Revoke the OpenAI key if provider compromise
-    is suspected; otherwise remove it from the organizer secret scope only after the deployment is
-    stopped so it cannot appear in a failed build. Existing captures and jobs must remain encrypted
-    and queued. Before the C.5d contract commits, the Milestone D migration is additive, so a
-    previously verified encrypted, planner-disabled organizer deployment may be promoted after
-    confirming it is compatible with the current schema; it must fail closed rather than reinterpret
-    a queued command. After the C.5d contract commits, there is no schema downgrade: correct forward,
-    or execute the separately approved restore of the recorded pre-contract backup, its authorized
-    keys, and its matching application deployment. Never hand-recreate plaintext columns or weaken
-    grants. Treat any wrong auto-append, source-preservation failure, private/cross-tenant disclosure,
-    plaintext canary hit, unexpected KMS authority, or unaudited provider retention as an immediate
-    disable trigger. Record timestamps, deployment IDs, queue/lease counts, decision, and approver
-    without content or credentials.
+Official references: [OpenAI project service-account keys](https://developers.openai.com/api/reference/typescript/resources/admin/subresources/organization/subresources/projects/subresources/service_accounts/subresources/api_keys/methods/create), [OpenAI API data controls](https://developers.openai.com/api/docs/guides/your-data), [Claude effort controls](https://platform.claude.com/docs/en/build-with-claude/effort), and [Claude model IDs](https://platform.claude.com/docs/en/about-claude/models/model-ids-and-versions).
 
-Until the dedicated OpenAI project, live stochastic report, explicit production C.5d contraction,
-account canaries, rotation/restore evidence, and backup-expiry gates pass, the organizer is an
-implemented fail-closed routing system—not a production routing claim or proof that the complete
-note library is encrypted.
+## Milestone E owner-interaction gates
 
-### Dedicated user hybrid-search trust domain — implementation present; account evidence pending
+The accepted contracts are [ADR-0011](./docs/decisions/ADR-0011-encrypted-owner-interactions-and-personal-rules.md),
+[ADR-0012](./docs/decisions/ADR-0012-vault-only-lease-bound-byok-credentials.md), and
+[ADR-0015](./docs/decisions/ADR-0015-user-selectable-provider-model-effort.md). Migrations
+`20260901000001` through `20260901000005` implement the interaction foundation, corrections, routing
+rules, generated blocks/duplicate suggestions, and Vault-only settings; `20260902000001` adds
+dual-provider model selection. Their credential-free evidence is recorded in `docs/BUILD_PLAN.md` and
+`docs/OPERATIONS_TEST_PLAN.md`. Before non-synthetic use:
 
-[ADR-0013](docs/decisions/ADR-0013-user-hybrid-search-trust-domain.md) accepts the fifth trust-domain
-design. The current branch supplies `apps/search`, the capability migration and exact login, the
-search IAM/KMS policy, web coordination, client surfaces, and credential-free tests. It does not
-supply a real provider key, cloud account, Vercel project, deployed identity, CloudTrail record, or
-canary evidence. Production user search remains lexical-only until the F required-PR gate
-and every applicable account step below are green. Do not create a generic Vercel project or copy an
-existing workload configuration.
+1. Verify the remote database applied the E0–E4 migrations and the two `20260902` migrations in
+   order and that no parallel change reused a timestamp or renamed a public RPC.
+2. With two synthetic owners, run correction, Review resolution, and batch-undo races. Record
+   content-free evidence that commits lock note IDs in ascending order, validate every
+   note/revision/reservation/MAC before writing, and publish nothing when the exact inverse is unsafe.
+3. Create an explicit routing rule and a repeated-correction proposal. Prove the condition/alias is
+   private-manual ciphertext everywhere durable and absent from organizer/provider requests, jobs,
+   Realtime, logs, and telemetry; the organizer receives only rule ID, revision, destination
+   kind/ID, priority, and match result.
+4. Return a unique synthetic generated expansion from each provider. Prove it is a separately
+   encrypted `proposed` block with an encrypted pending-expansion Review, stable across response-loss
+   replay, and that accept/reject never modifies the note body, structured data, or revision. Prove
+   duplicate suggestions are non-destructive (`Keep both` and `Dismiss` only).
+5. Exercise the encrypted-retention capability in dry-run and execute modes for rejected blocks.
 
-1. Using the reviewed `apps/search` service, capability migration, and exact infrastructure policy,
-   record the fifth Vercel Production project name and `prj_...` ID, its exact stable
-   Production origin, the Vercel team slug and `team_...` owner ID, exact web caller project
-   name/ID, AWS region, exact search OIDC subject and role ARN, Supabase project ref and canonical
-   TLS host, provider project/service-account ID, pinned embedding model/dimensions/version, and
-   deployment ID. Record no owner, ticket, claim secret, query, note content, ciphertext, key,
-   database password, token, or certificate bytes.
-2. Create the fifth Vercel project with Root Directory `apps/search`. Enable Team Issuer and allow
-   only the exact web Production project to call the exact search Production deployment through
-   Trusted Sources. Deny Preview, public/browser traffic, cookies, `Authorization`, user JWTs,
-   protection-bypass credentials, worker/verifier/organizer calls, project/team wildcards, and alias
-   drift. Web stores only the proved `UNFILED_SEARCH_ORIGIN`; search must independently verify
-   issuer, audience, subject, team slug/ID, web project name/ID, search project ID, and Production
-   environment on every request.
-3. Create one separately budgeted provider project/service account and key for search. Approve and
-   record its retention/data-control posture, rate/spend limits, allowed origin, and fixed embedding
-   model/dimensions/version. Enter the key only as `UNFILED_SEARCH_OPENAI_API_KEY` in the search
-   Production secret scope. Never copy the organizer, index-worker, web, personal, Preview, or BYOK
-   key. The runtime and deployment policy must reject `OPENAI_API_KEY`, generic provider variables,
-   Anthropic keys, base-URL/endpoint/model/dimension overrides, and any request- or ticket-selected
-   provider configuration.
-4. Apply the reviewed AWS policy with its fifth exact Vercel OIDC subject and independently named
-   search IAM role. Supply search only `UNFILED_AWS_REGION`, its exact role ARN, the active
-   AI-assisted object-wrap root, and a machine-generated exact registry of registered retired
-   AI-assisted object-wrap roots. With the real deployed identity, prove `kms:Decrypt` succeeds only
-   for those roots and the existing exact index-envelope context. Controlled probes must deny
-   `GenerateDataKey*`, `Encrypt`, `ReEncrypt*`, grants, aliases, administration, staged/unregistered
-   roots, both AI content-MAC roots, and every active/retired/staged private-manual root. Correlate
-   only content-free allow/deny evidence in CloudTrail.
-5. Provision the dedicated role `unfiled_search_worker` as a TLS-only `LOGIN`, `NOINHERIT`,
-   `NOBYPASSRLS` role with no inbound/outbound runtime membership. Store its independently generated
-   verified-TLS URI, expected host/project ref, canonical CA, and bounded connection/statement
-   timeouts only in search Production. Never give search a Supabase anon/service-role/secret key,
-   `authenticator`, database-owner password, another workload URI, PostgREST access, or broad/RLS-
-   bypassing credential. Prove `session_user = current_user = 'unfiled_search_worker'`; `SET ROLE`
-   evidence is invalid.
-6. Run the deployed privilege probe. Search must have EXECUTE on exactly these five names and no
-   other public/private function:
+## Global encrypted-storage contract — deferred one-way operation
 
-   - `claim_encrypted_user_search(uuid,text,text)`
-   - `list_encrypted_user_search_rag_page(uuid,text,text,jsonb,jsonb,integer,integer)`
-   - `verify_encrypted_user_search_snapshot(uuid,text,text,jsonb,jsonb)`
-   - `complete_encrypted_user_search(uuid,text,text)`
-   - `fail_encrypted_user_search(uuid,text,text,public.safe_error_code)`
+Migration `20260830000027_encrypted_storage_contract.sql` installs the readiness, state, receipt, and
+operator apply functions without removing the rollback schema. Applying the contract is separate and
+irreversible. **It remains blocked for the free beta**: step 2 below requires a pre-cutover PITR point
+restored to an isolated project, which the free plan cannot provide. The database stays
+`expand_compatible`; all live writes remain encrypted and fail closed; the retained rollback columns
+must contain only their fixed non-content sentinel. Record this state explicitly in `FINAL_REPORT.md`
+and do not describe the beta library as contracted.
 
-   Prove zero direct table/sequence, `private`-schema, public-create, Vault/auth/extension,
-   owner-search/export/deletion, note/capture write, reservation/key/rewrap, index claim/repair/
-   publication, generation seed/drain/verify/activate, organizer lease/commit, settings/provider-key,
-   retention, and arbitrary SQL authority. Explicitly deny all six index-worker, two verifier,
-   eleven organizer, and owner-authorized web capabilities. Also prove `anon`, `authenticated`,
-   `service_role`, web, worker, verifier, and organizer cannot execute these five search-worker
-   functions. Separately prove only `service_role` can execute
-   `begin_encrypted_user_search(uuid,text,jsonb,text)` and that search cannot execute it.
+When the paid gate is funded:
 
-7. From an authenticated synthetic owner, submit an explicitly `ai_assisted` request through web.
-   Confirm web generates a random 32-byte claim secret and calls service-role-only
-   `begin_encrypted_user_search(uuid,text,jsonb,text)` with the verified server-derived owner, while
-   the database stores only that bound ticket, versioned digest of normalized query and
-   every filter/sort/limit/cursor field, exact normalized filter projection, active complete
-   generation identity/attestation, SHA-256 claim-secret hash, fixed 30-second expiry, and content-
-   free state. The web-to-search body must contain only ticket ID, raw claim secret, and the exact
-   normalized request—never an owner ID, user token, caller-selected generation, key, provider, or
-   model.
-8. Exercise two concurrent claims, response-loss replay, wrong secret, wrong digest, changed/omitted/
-   reordered filters, expiry at the boundary, terminal replay, wrong caller, and a second client-page
-   request. Exactly one claim may win; it must burn the claim-secret hash and return a fresh raw lease
-   token whose hash alone is stored. Page, verify, complete, and fail calls use that lease token plus
-   the same request digest, never the burned claim secret. Neither 30-second bound can be extended;
-   terminal state cannot reopen. Each client page uses a new one-use ticket. Its authenticated cursor
-   must bind query, every filter, privacy, sort, limit, ranking version, active generation/
-   attestation, and deterministic score/tie-break position.
-9. Prove the service derives owner/generation/privacy/filters only from the claimed ticket, embeds
-   only with the fixed provider, pages only bound active/current AI-assisted encrypted index rows,
-   decrypts/ranks in bounded request memory, revalidates selected IDs/revisions/privacy/archive/
-   generation/filters/cursor, and then completes or fails. Flip generation state/attestation, note
-   revision, privacy, archive, deletion, filter membership, ticket state, and cursor position at each
-   disclosure/result boundary. Missing, failed, draining, stale, incomplete, oversized, or changing
-   state must return semantic-unavailable and trigger a fresh owner-authorized lexical-only search;
-   no partial semantic result may be merged.
-10. Send the same canary query under omitted/default, `mixed`, `private_manual`, and exact
-    `ai_assisted` privacy filters. Only the exact AI-assisted request may reach search/provider, and
-    it may return only AI-assisted references. Require zero private-manual content or private-intent
-    query hits in search/provider traffic, tickets, Vercel logs, database parameters/logs, Sentry,
-    traces, analytics, KMS/CloudTrail context, errors, health output, or caches. Search must have no
-    cross-request plaintext/embedding cache and must release query, decrypted-document, embedding,
-    rank, claim-secret, and result buffers on success, failure, timeout, and cancellation.
-11. Prove search returns only bounded note IDs, indexed revisions, component scores, ranking version,
-    and an authenticated next cursor. Web must owner-authorize and hydrate current note DTOs and
-    reject stale references. Source-capture inspection, note links, backlinks, titles/bodies,
-    generated blocks, Reviews, receipts, revisions, and exports must remain in owner-authorized web/
-    native APIs and outside the five search RPCs and service response.
-12. Record capacity/relevance/latency evidence, provider/KMS/database/Vercel outage behavior,
-    database/provider credential rotation, active/retired root rotation, alias/project transfer,
-    CA/database restore, and deletion reconciliation for ticket metadata. Rehearse disable by removing
-    web → search Trusted Sources authorization and the search provider key while leaving lexical search
-    available. Any private query disclosure, cross-owner/generation row, reusable ticket, plaintext
-    cache/log hit, unexpected KMS/RPC authority, or endpoint/model override is an immediate disable
-    condition.
+1. Prove every manual CRUD, taxonomy, history/undo, capture, search, export, deletion, and retention
+   operation succeeds through its encrypted adapter with the contract state `expand_compatible`.
+2. Pause signups, writes, drains, maintenance, and retention. Record deployment IDs and the migration
+   checksum. Create the pre-cutover backup/PITR point, restore it to an isolated scratch project with
+   separately restored authorized roots, and complete the parity drill.
+3. Bring every owner to `encrypted_only` through the official rollout APIs.
+4. In a verified database-owner session (`session_user = current_user`), inspect
+   `private.encrypted_storage_contract_readiness()` and require `ready=true`, `applied=false`,
+   `uncoveredOwnerCount=0`, zero open work, and a 64-character `readinessDigest`.
+5. In one transaction, recompute the digest and call
+   `private.apply_encrypted_storage_contract('CONTRACT UNFILED ENCRYPTED STORAGE V1', :'readiness_digest')`;
+   inspect catalog/ACL postconditions before committing; roll back on any mismatch.
+6. Resume a small canary cohort, search every sink for synthetic canaries, and track every
+   pre-contract backup through expiry. Until no retained copy contains the old contract, copy may say
+   only that the live store is application-encrypted.
 
-### Milestone E owner-interaction and Vault-only BYOK gates
+## Hosted release evidence — single Production deployment, synthetic accounts
 
-The accepted contracts are [ADR-0011](docs/decisions/ADR-0011-encrypted-owner-interactions-and-personal-rules.md)
-and [ADR-0012](docs/decisions/ADR-0012-vault-only-lease-bound-byok-credentials.md). Shared E0
-migration `20260901000001_milestone_e0_interaction_contracts.sql` now installs revisioned settings,
-Vault-only metadata constraints, immutable content-free job snapshots, and the common interaction
-lifecycle without adding E1–E4 public RPCs. E1 migration
-`20260901000002_encrypted_decision_corrections.sql` now implements its six exact capabilities and
-the owner-authorized web/native interactions. E2 migration
-`20260901000003_encrypted_routing_rules_and_personalization.sql` implements its exact five
-service-only capabilities, encrypted explicit/learned rule lifecycle, and content-free organizer
-snapshot. E3 migration `20260901000004_encrypted_generated_blocks_and_duplicate_suggestions.sql`
-implements separately encrypted generated blocks, non-destructive duplicate suggestions, and the sole
-new public generated-block resolver without expanding the organizer's ten-RPC allowlist. E4 migration
-`20260901000005_vault_byok_and_ai_settings.sql` implements exact owner settings/provider-key RPCs,
-Vault-only OpenAI-key storage, and the sole eleventh organizer capability. The E2 credential-free aggregate/HTTP/PR-CI gate is green;
-E3's credential-free local aggregate and built-local B–E3 HTTP gates plus PR #16's required CI lanes
-are green, while its deployed canary remains pending. The credential-free E1 gate is green: the full built-local HTTP B–E1
-suite passed; web passed 78 files / 651 tests; organizer, worker, and verifier passed 18 / 281,
-18 / 159, and 11 / 168 respectively; a clean database reset plus strict private/public schema lint
-passed with zero warnings, followed by 36 pgTAP files / 1,671 assertions and the database
-concurrency gate; and Xcode built the Swift app plus `QuickCaptureWidget` and passed 135/135 tests.
-The workspace format/lint/typecheck/coverage gate passed 26/26 tasks, the build passed 16/16 tasks,
-all three built-server smokes passed, deterministic routing passed 175/175 cases, the production
-component seam passed 15/15 cases, verifier capacity passed 1/1, and the 1,000-note organizer
-retrieval gate recorded cold p95 407.03 ms and warm p95 18.07 ms. Dependency audit reported no
-known vulnerabilities; boundaries and OpenAPI were green. The current E3 local gate passed 38
-pgTAP files / 1,836 assertions, focused `091` at 67/67, zero database lint findings, database
-concurrency, and the built-local B–E3 HTTP suite; its E3 slice executed 36 requests and scanned 17
-unique plaintext canaries without disclosure. Web passed 92 files / 787 tests; organizer 18 / 302;
-API client 4 / 36; encrypted aggregate 8 / 144; contracts 7 / 55; AI routing 11 / 79; and Swift
-165/165. Workspace quality passed 26/26 and build passed 16/16; all three built-server smokes,
-boundaries, and OpenAPI were green. Routing passed 175/175, the production-component seam passed 15/15 with
-`liveProviderEvidence=false`, verifier capacity passed 1/1, retrieval recorded cold p95 381.58 ms
-and warm p95 11.98 ms, the dependency audit found no known vulnerabilities, and the independent final security/hygiene audit was clear. None of this
-replaces the human-controlled deployment/account checks below. E3 closes Milestone D's
-generated-expansion discard gap in code.
+There is no Preview deployment. Run these checks against `https://unfiled-web.vercel.app` with
+synthetic accounts only, after the Deployment Protection change above.
 
-The E4 credential-free local gate is also green: a clean reset passed 39 pgTAP files / 1,901
-assertions, focused `092` passed 65/65, combined `087` + `092` passed 148/148, database lint returned
-zero findings, and the two local Vault REST profile probes each failed closed with `406 PGRST106`.
-The built-local B–E4 HTTP suite passed exact replay/CAS, validator-count, secret-free snapshot,
-live-lease, delete/recreate ABA, and canary checks. Web passed 97 files / 827 tests; organizer 19 / 314;
-API client 4 / 38; contracts 7 / 55; encrypted aggregate 8 / 144; AI routing 11 / 79; and Swift
-181/181. Workspace lint/typecheck/coverage passed 26/26, build passed 16/16, all three built-server
-smokes and focused configuration 35/35 passed, and boundaries/OpenAPI were green. Routing passed
-175/175, the production-component seam passed 15/15 with `liveProviderEvidence=false`, verifier
-capacity passed 1/1, retrieval recorded cold p95 392.80 ms and warm p95 12.98 ms, and the dependency
-audit found no known vulnerabilities, E4's independent final audit is clear, and PR #17's required CI lanes are green.
-Production BYOK remains disabled until the account-controlled Vault/provider/canary/backup steps
-below pass; the local gate does not prove deployment, provider-account behavior, Apple hardware, or
-E2EE.
-
-1. From the current E4 release candidate, verify the database applied the shared E0, E1, E2, E3,
-   and E4 migrations in exactly this order:
-   feature migrations in order:
-   `20260901000001_milestone_e0_interaction_contracts.sql`,
-   `20260901000002_encrypted_decision_corrections.sql`,
-   `20260901000003_encrypted_routing_rules_and_personalization.sql`,
-   `20260901000004_encrypted_generated_blocks_and_duplicate_suggestions.sql`, and
-   `20260901000005_vault_byok_and_ai_settings.sql`. Confirm no parallel change reused an assigned
-   timestamp or renamed the public RPCs listed in the ADRs. On an upgrade with legacy organizer
-   receipts, confirm E1 repaired only `capture_receipts.created_at` to authoritative
-   `captures.client_created_at`, retained the exact ciphertext/revision/verification evidence, and
-   left no mismatch; any unattested candidate must abort the migration rather than be rewritten.
-2. Before testing personal data, use two synthetic owners to run correction, Review resolution, and
-   batch undo races. Record content-free evidence that commits lock note IDs in ascending order,
-   validate every note/revision/reservation/MAC before writing, create two mutations plus exactly one
-   feedback event for a successful two-note correction, and publish no note change when the original
-   exact inverse is unsafe. Verify correction fallback retains decision/capture lineage and only
-   offers route/create/keep-inbox/dismiss; batch-conflict Review has no decision lineage and offers
-   only keep-inbox/dismiss. Prove the server rejects non-canonical batch members and every
-   Undo-generated mutation as a new anchor, while receipt/history ciphertext remains owner-bound.
-   Exercise lost responses and stale revisions; replay must be exact.
-3. Create an explicit routing rule and a repeated-correction proposal. Inspect authorized decrypted
-   results only through web, then prove the condition/alias is private-manual ciphertext everywhere
-   durable and absent from organizer/provider requests, jobs, Realtime, logs, and telemetry. The
-   organizer may receive only rule ID, exact revision, destination kind/ID, priority, and match
-   result. Prove observing rules stay hidden, offers stay disabled, decline suppresses them, and only
-   explicit acceptance enables a learned rule; this applies to aliases too. Exercise the exact five
-   service-only RPC denials, two-correction observation race, same-key acknowledgement recovery,
-   1,000-retained/256-active/8-MiB limits, 50-item/8-MiB pages, malformed/repeated cursors, and
-   authoritative replay/stale refresh. Confirm TypeScript and Swift agree on NFKC, locale-independent
-   lowercase, Unicode `White_Space`, U+0085, U+FEFF, punctuation-only rejection, and both 500-UTF-16
-   bounds. Route list/log daily notes and generic/principle/project prose; closed, private, archived,
-   deleted, stale, incompatible, ambiguous, and over-2,000-character targets must enter Review.
-4. Return a unique synthetic generated expansion from the provider fixture. Prove it is a separately
-   encrypted `proposed` generated block with an encrypted pending-expansion Review, remains stable
-   across response-loss replay, and accept/reject never modifies the note body, structured data, or
-   revision. Verify the web and native note views render pending and accepted blocks outside editable
-   user text, hide rejected blocks, preserve AI provenance, and use the exact same idempotent request
-   after an ambiguous response. Seed enough blocks to cross several pages and prove owner-and-note
-   isolation, ascending block-ID keyset order, exact 50-item pages from the 51-row lookahead, and that
-   rejected rows are removed before pagination. Confirm Review hydrates its proposal through the exact
-   block read and that public list/detail responses cannot carry a rejected block. Seed a duplicate
-   suggestion with two or three current revision-bound note choices and an encrypted explanation;
-   prove `Keep both` and `Dismiss` are non-destructive and that no organizer/model action merges,
-   deletes, archives, rewrites, or redirects a note. Exercise the
-   existing encrypted-retention capability in dry-run and execute modes: an eligible rejected block
-   remains before seven days, is hard-deleted at or after seven days, and a replayed retention run
-   cannot consume a second block batch.
-5. In the Production Supabase project, confirm Vault is enabled and included in the approved backup,
-   restore, audit, and retention posture. E4 permanently constrains the legacy
-   `user_provider_keys.key_ciphertext` fallback and aborts rather than silently migrating unsupported
-   legacy credential state. If Vault or these controls are unavailable, leave
-   BYOK disabled; do not create an app-layer provider-key KEK or store credential ciphertext in an
-   ordinary table/content envelope.
-6. Run both a PostgreSQL privilege probe and a deployed Supabase REST exposure probe. Browser/native,
-   `anon`, `authenticated`, index worker, verifier, and organizer must have no direct provider-key
-   table, Vault table/view/function, or arbitrary secret access. `service_role` must have no direct
-   provider-key or private E4 evidence-table access. Supabase's Vault extension may retain grants to
-   its built-in `service_role` from `supabase_admin` that a project migration cannot revoke; do not
-   claim otherwise. Keep `vault` absent from the hosted API exposed schemas and extra search path,
-   keep every database password out of the web runtime, and prove service-key requests with both
-   `Accept-Profile: vault` and `Content-Profile: vault` are rejected. If an owner-authorized Supabase
-   operation or support procedure can revoke the latent grants, execute it and record the catalog
-   denial. The owner-authorized web boundary may call only
-   `get_owner_ai_settings`, `update_owner_ai_settings`, `get_user_provider_key_status`,
-   `put_user_provider_key`, and `delete_user_provider_key`. The organizer gains only
-   `get_lease_bound_organizer_provider_credential`; its complete E4 public allowlist must be exactly
-   eleven rather than ten.
-7. Create a low-value, separately budgeted synthetic-provider key. Enter it only into the masked
-   authenticated settings form; do not paste it into a CLI argument, shell history, screenshot,
-   ticket, chat, fixture, or report. A deliberately invalid key must fail the minimal provider check
-   and create no Vault secret or metadata row. A valid write must return only provider, status,
-   last-four, validation time, and credential revision; replace it and prove the superseded Vault
-   secret is destroyed atomically. Repeat the exact PUT after an ambiguous response. Its first
-   database replay probe must compare the submitted key transiently with the live Vault secret and
-   receipt-bound revision, without a durable secret-derived fingerprint; exact replay returns the
-   original safe response without another provider validation, while secret/revision drift fails
-   closed and only a genuine replay miss invokes external provider validation and storage.
-8. Queue a synthetic BYOK job and inspect application tables through an administrative schema-only
-   query. Its immutable snapshot may contain provider mode/provider, effort, expansion style,
-   explicit fallback, registry version, and settings revision, but no provider key, Vault secret ID,
-   authorization header, ciphertext, content-key/wrap record, or environment-secret name. A wrong
-   owner, caller-selected provider/Vault ID, missing/expired/stolen lease, private capture, deleted
-   capture, or invalid credential must not resolve a secret.
-9. Hold a queued job before credential resolution, delete its key through the product, then release
-   the job. It must make no BYOK provider call. Repeat replacement and runtime 401/403 cases: only the
-   resolved owner/provider credential revision becomes `invalid`. With fallback off, the capture
-   enters Inbox with `provider_key_invalid`; with fallback explicitly on in that job's immutable
-   snapshot, allow at most the designed single app-key transition. Record no key or content.
-10. Seed a unique canary key and run settings put/status/delete, one leased provider call, invalid-key
-    handling, export, and account deletion. Search Vercel, Supabase/database, provider diagnostics,
-    Sentry, traces, jobs, HTTP responses, exports, content envelopes, and backup-visible application
-    tables for the canary; require zero hits. Confirm live Vault destruction and document separately
-    when Vault/infrastructure backups containing the old secret age out—live deletion is not proof of
-    immediate backup erasure.
-11. Keep Anthropic and every unevaluated provider/tier absent from API discovery and both clients.
-    Enable one only after its production adapter, strict schema/cancellation behavior, provider data-
-    control review, complete routing corpus, live stochastic evaluation, custody canary, and budget/
-    rate gates pass for the exact pinned version. A database enum or settings mockup is not evidence.
-12. User-facing semantic search remains blocked in Production after the green local F gate.
-    The required-PR portion of F and the complete fifth-project gate above remain pending.
-    Search may decrypt only active/registered-retired AI-assisted index object-wrap
-    envelopes through its own exact identity; it must not reuse organizer/index-worker credentials,
-    OIDC roles, provider keys, content-MAC/private roots, service-role access, or plaintext caches.
-
-### Global encrypted-storage contract — C.5d one-way production operation
-
-Migration `20260830000027_encrypted_storage_contract.sql` is safe to deploy before contraction: it
-installs the readiness, state, receipt, and operator apply functions without removing the rollback
-schema. Applying the contract is intentionally separate and irreversible in place. Do not run it
-from `service_role`, an application process, a migration bot using delegated `SET ROLE`, or the
-Supabase HTTP API. Use a verified database-owner session where `session_user = current_user`, keep
-`ON_ERROR_STOP` enabled, and retain the complete content-free transcript in the release evidence.
-
-1. Deploy the C.5d web/API code and migrations through 27 to Preview, then Production, while the
-   contract state remains `expand_compatible`. Prove every currently used manual CRUD, taxonomy,
-   history/undo, capture, authenticated body-only search, export, deletion, and retention operation
-   succeeds through its encrypted adapter. A rollout lookup, RPC, KMS, or projection failure must
-   fail closed; it must never invoke a legacy repository. Keep AI organization disabled until the
-   dedicated OpenAI project, separate live stochastic report, exact eleven-RPC organizer proof, and
-   synthetic canary gate above pass.
-2. Pause signups, interactive writes, organizer drains, index maintenance, and retention. Record the
-   exact web/organizer/worker/verifier deployment IDs and migration checksum. Create the required
-   pre-cutover backup/PITR point, restore it to an isolated scratch project, attach only separately
-   restored authorized KMS access, and complete the ciphertext authentication/content-parity drill.
-   Record the backup identifier, restore result, retention expiry, and approver without content,
-   owner IDs, ciphertext, credentials, or key context. A backup that has not passed this drill blocks
-   contraction.
-3. Through the official rollout APIs, bring every owner to `encrypted_only`: four active key slots,
-   exact encrypted/verified object parity, completed backfill, completed version-1 plaintext scrub,
-   matching scrub attestation, safe RAG coverage, and no unfinished note/taxonomy claims, retention
-   run, organizer preparation, or wrap reservation. Never update rollout counters or scrub evidence
-   directly.
-4. In the verified database-owner session, inspect the exact readiness snapshot:
-
-   ```sql
-   select session_user, current_user;
-   select jsonb_pretty(private.encrypted_storage_contract_readiness());
-   ```
-
-   Require `ready=true`, `applied=false`, `uncoveredOwnerCount=0`, every open-work count equal to
-   zero, the expected owner/object counts, and a 64-character `readinessDigest`. Investigate any
-   mismatch. Do not copy a digest from another environment or an earlier snapshot.
-
-5. Start an explicit transaction, recompute the digest inside it, and apply the exact confirmation:
-
-   ```sql
-   begin;
-   select private.encrypted_storage_contract_readiness() ->> 'readinessDigest'
-     as readiness_digest \gset
-   select private.apply_encrypted_storage_contract(
-     'CONTRACT UNFILED ENCRYPTED STORAGE V1', :'readiness_digest'
-   );
-   ```
-
-   Require `state="contracted"`, `replayed=false`, the same digest/counts, and one `appliedAt`.
-   Before committing, inspect only content-free catalog/ACL evidence: legacy plaintext columns,
-   `note_chunks`, plaintext FTS/trigram indexes, legacy functions, and legacy triggers are absent;
-   the retained encrypted trigger set is exact; and PostgreSQL `PUBLIC`, `anon`, `authenticated`, `service_role`,
-   `unfiled_index_worker`, `unfiled_rag_verifier`, and `unfiled_organizer_worker` have no direct
-   content-table privileges. Any dependency, stale digest, owner-set change, postcondition failure,
-   or unexpected output requires `rollback;` and investigation.
-
-6. Commit only after the in-transaction catalog checks pass. A committed contract has no schema
-   downgrade. A concurrent caller fails with `contract_application_in_progress`; do not loop
-   blindly—obtain a fresh state/readiness snapshot after the first transaction finishes. An exact
-   replay with the recorded digest must return `replayed=true`; a different digest or a tampered
-   receipt must fail closed.
-7. Resume only a small canary cohort. Prove a fresh signup starts in `contracted`, four-key
-   registration/activation remains live, and owner-authorized encrypted note/capture create,
-   list/detail, manual edit/history/undo, private lexical search, export, retention dry run, and
-   account deletion work without any plaintext schema or direct table access. Confirm search uses
-   `POST /api/v1/search`, contains no query in URLs, and sends `Cache-Control: no-store`. Search the
-   database, backups created after contraction, application/provider logs, traces, analytics,
-   Realtime payloads, and error sinks for unique synthetic canaries; require zero plaintext hits.
-   Run the real provider only with the synthetic organization canaries from organizer step 10 and
-   only after its dedicated provider/live-evaluation gate passes.
-8. Re-enable traffic gradually and watch KMS denials, encrypted-read failures, queue age, search
-   errors, retention errors, and receipt latency. If a post-commit defect cannot be corrected
-   forward, recovery is a separately approved restore of the recorded pre-cutover backup plus its
-   authorized keys and the matching pre-contract application deployment—never hand-recreate dropped
-   columns or weaken the contract constraint. Treat that restore as a security incident because it
-   reintroduces the plaintext exposure window.
-9. Track every pre-contract backup through deletion/expiry and repeat the restore-denial check after
-   expiry. Until no retained copy contains the old plaintext contract, product and portfolio copy
-   may say only that the production live store is application-encrypted; it must not claim historical
-   cryptographic erasure or E2EE.
-
-### Preview release evidence
-
-These checks are intentionally human-owned until preview project credentials and a stable Vercel preview alias exist. The credential-free CI still runs the built-app/local-Supabase HTTP E2E; it does not claim browser, cloud-log, or performance coverage.
-
-1. On the stable synthetic-data preview, request an OTP and verify that the returned 60-second resend cooldown is shown, survives a validation error, and reaches zero without enabling early resend.
-2. Verify sign-in, refresh after a full browser restart, sign-out, and direct navigation to an authenticated route after sign-out.
-3. On a physical iPhone build, sign in and relaunch the app to verify the session survives in Keychain. Sign out once online and once with airplane mode enabled. Both attempts must immediately return the app to signed-out state; the offline attempt must also show the explicit remote-revocation warning. Re-enable networking, sign in again, and sign out online to complete global provider revocation.
-4. Create and edit all five note types. Exercise checklist toggles, log fields, project prose/checklists, spaces, tag rename/association, note links, archive/delete/restore, revision restore, search, and Review empty/non-empty states.
-5. Open one note in two tabs, save the first, then verify the second receives `stale_revision` and preserves its local draft instead of silently overwriting.
-6. Undo a newly created note and verify it becomes soft-deleted with a new revision; undo that undo and verify the note returns with another revision and identical content.
-7. Record browser screenshots at 390 px, 768 px, 1280 px, and 1536 px widths; include keyboard-only focus traversal, 200% zoom, reduced motion, and a screen-reader smoke.
+1. Request an OTP and verify the 60-second resend cooldown is shown, survives a validation error,
+   and reaches zero without enabling early resend.
+2. Verify sign-in, refresh after a full browser restart, sign-out, and direct navigation to an
+   authenticated route after sign-out.
+3. On a physical iPhone build, sign in and relaunch to verify the session survives in Keychain. Sign
+   out once online and once in airplane mode; both must return to signed-out immediately, and the
+   offline attempt must show the remote-revocation warning.
+4. Create and edit all five note types; exercise checklists, log fields, spaces, tags, links,
+   archive/delete/restore, revision restore, search (lexical and explicit AI-assisted), and Review
+   states.
+5. Open one note in two tabs, save the first, and verify the second receives `stale_revision`.
+6. Undo a newly created note and undo that undo; verify revisions and identical content.
+7. Save an OpenAI key and a Claude key on the synthetic account, switch provider and model, and
+   confirm the incompatible model resets to Automatic without deleting either key.
+8. Record browser screenshots at 390 px, 768 px, 1280 px, and 1536 px; include keyboard-only focus
+   traversal, 200% zoom, reduced motion, and a screen-reader smoke.
+9. Verify `/privacy`, `/terms`, `/security`, `/support`, `/account-deletion`, and
+   `/.well-known/security.txt` resolve from the exact deployment and state the BYOK, local-hash, and
+   non-E2EE limitations.
 
 ### Cloud canary-log audit
 
-1. Generate a unique synthetic marker that is not a real credential, put it only in a private test note, and record its hash separately.
-2. Exercise the preview flows that may emit application, Vercel function, Supabase API/database, and error-monitoring logs.
-3. Search every configured log sink for both the marker and common authorization/refresh-token prefixes. The marker, note content, bearer token, refresh token, and provider key material must have zero hits.
-4. Record the query window, sinks inspected, result, reviewer, and preview deployment identifier. Any hit blocks promotion and starts the incident-response path.
+1. Generate a unique synthetic marker, put it only in a synthetic account's private note, and record
+   its hash separately.
+2. Exercise the flows that may emit application, Vercel function, Supabase API/database, and
+   error-monitoring logs, including one AI-assisted capture per provider with a canary key.
+3. Search every configured sink for the marker, common bearer/refresh-token prefixes, and both
+   providers' key prefixes. Require zero hits.
+4. Record the query window, sinks inspected, result, reviewer, and deployment identifier. Any hit
+   blocks promotion and starts the incident-response path.
 
-### Preview performance smoke
+### Performance smoke
 
-1. Use a production-mode preview with synthetic data and a cold browser profile. Record at least three runs each at desktop and mobile viewport sizes.
-2. Capture LCP, INP, CLS, route-transition timing, and the manual note create/update/search API p95. Keep cold-start samples visible rather than discarding them.
-3. Run a 10 rps sustained `/api/v1/captures` smoke that asserts zero lost or duplicated captures and records p95 durable-acceptance latency. Use only synthetic content and verify the service-only Supabase capture RPCs are not callable with the test user's token.
-4. Attach traces or HAR files to the release evidence without authorization headers, cookies, note bodies, or provider keys.
+1. Use the Production deployment with synthetic data and a cold browser profile. Record at least
+   three runs each at desktop and mobile viewport sizes.
+2. Capture LCP, INP, CLS, route-transition timing, and the manual note create/update/search API p95.
+3. Run a 10 rps sustained `/api/v1/captures` smoke that asserts zero lost or duplicated captures and
+   records p95 durable-acceptance latency, using only synthetic content.
+4. Attach traces or HAR files to the release evidence without authorization headers, cookies, note
+   bodies, or provider keys.
+
+## Deferred paid hardening (not required for the free beta)
+
+None of the following is applied, required, or claimed for the free private beta. Each is preserved
+in the repository so a funded deployment can adopt it without changing envelope formats, key
+classes, or RPC allowlists.
+
+### AWS KMS, Terraform, OIDC-to-AWS, and CloudTrail
+
+`infra/aws-kms` defines exact environment identities for web, worker, verifier, organizer, and
+search plus four independently controlled KMS roots. Selecting `UNFILED_KEY_CUSTODIAN=aws-kms`
+replaces the Vercel Sensitive ring with `UNFILED_AWS_REGION`, per-workload role ARNs
+(`UNFILED_AWS_ROLE_ARN` or `UNFILED_SEARCH_AWS_ROLE_ARN`), full key ARNs
+(`UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN`, `UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN`,
+`UNFILED_SEARCH_AI_OBJECT_WRAP_KMS_KEY_ARN`), retired-ARN lists
+(`UNFILED_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON`, `UNFILED_ORGANIZER_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON`,
+`UNFILED_ORGANIZER_RETIRED_AI_CONTENT_MAC_ROOTS_JSON`,
+`UNFILED_SEARCH_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON`), the web `UNFILED_WEB_ROOT_KEY_REGISTRY_JSON`,
+and exact `*_EXPECTED_OIDC_SUBJECT` values. If funded:
+
+1. Record AWS account and region, two distinct non-runtime administrator/recovery principal ARNs,
+   and the Vercel team slug/ID and project names/IDs. Project names, not IDs, appear in OIDC subjects.
+2. Instantiate `infra/aws-kms` with locked Terraform state for
+   `deployment_environment = "production"`. Run `terraform init`,
+   `terraform fmt -check -recursive`, `terraform validate`, `terraform test`,
+   `terraform plan -out production-unfiled-kms.tfplan`, and apply only the reviewed plan. Confirm five subjects ending in `production` and four aliases
+   (`alias/unfiled/ai-assisted/object-wrap`, `alias/unfiled/ai-assisted/content-mac`,
+   `alias/unfiled/private-manual/object-wrap`, `alias/unfiled/private-manual/content-mac`).
+3. Copy only each stack's non-secret outputs into the matching project; never give worker,
+   verifier, or search the content-MAC ARN or a private-manual ARN.
+4. Prove with each real workload identity that STS assumes only the exact role and that
+   GenerateDataKey/Decrypt succeed only on the permitted roots; run `runKeyCustodyProbe` and match
+   allowed and denied calls to CloudTrail management events (KMS operations are management events).
+5. Configure a CloudTrail trail retaining read and write management events that does not exclude
+   KMS events, and alert on access denials, unusual volume, key disable/deletion scheduling, and
+   private-root attempts by isolated workloads.
+6. Follow `infra/aws-kms/README.md` for the staged → active/retired two-apply rotation and complete
+   KMS outage, rewrap, restored-backup, and backup-expiry drills before advancing any owner.
+
+### Paid Supabase hardening
+
+Separate remote Preview/Production projects, PITR, an isolated restore project, and the
+encrypted-storage contraction gate above. Until funded, do not claim PITR, isolated recovery, or a
+contracted library.
+
+### Vercel Pro deployment protection
+
+Trusted Sources, password protection, IP allowlists, and one-minute cron schedules. Until funded,
+the app-level OIDC verifier is the only caller control for the isolated services, and the daily
+Hobby schedules apply.
+
+### Provider (semantic) embeddings
+
+`UNFILED_WORKER_EMBEDDING_PROVIDER=openai`, `UNFILED_SEARCH_EMBEDDING_PROVIDER=openai`, and
+`UNFILED_ORGANIZER_EMBEDDING_PROVIDER=openai` with a dedicated `UNFILED_OPENAI_EMBEDDING_API_KEY` /
+`UNFILED_SEARCH_OPENAI_API_KEY`, `UNFILED_EMBEDDING_MODEL_ID=text-embedding-3-small`, and
+`UNFILED_EMBEDDING_DIMENSIONS=1536` require a new index generation, a provider data-control review,
+and a funded application key. They send AI-assisted note projection text to OpenAI and are not
+enabled in the free beta.
 
 ## Apple signing, archive, and physical-device evidence
 
@@ -1103,7 +861,7 @@ The canonical phone implementation is `apps/ios`: a SwiftUI application plus a W
 
    The script selects an available iPhone Simulator. To pin one, set `UNFILED_IOS_TEST_DESTINATION` to an iOS 17-or-newer destination and record it with the evidence. A generated-project diff after clean generation must be reviewed like any other source change.
 
-5. After the identifiers, App Groups, and stable HTTPS preview deployment exist, create a signed Preview build for a physical iPhone. Supplying a team ID and allowing Xcode to update provisioning is an explicit trusted-machine action. Do not use the Development build for online device evidence: its loopback origin points back to the phone.
+5. After the identifiers, App Groups, and the Production web deployment exist, create a signed Preview-scheme build for a physical iPhone pointed at the reachable HTTPS `/api/v1` origin. Supplying a team ID and allowing Xcode to update provisioning is an explicit trusted-machine action. Do not use the Development build for online device evidence: its loopback origin points back to the phone.
 
    ```bash
    xcodebuild \
@@ -1131,7 +889,7 @@ The canonical phone implementation is `apps/ios`: a SwiftUI application plus a W
      archive
    ```
 
-   Confirm the archive embeds and signs exactly one `QuickCaptureWidget.appex`; the containing app and extension must have the expected Production application identifiers and the same Production App Group entitlement. An unsigned simulator artifact cannot satisfy this gate.
+   Confirm the archive embeds and signs exactly one `QuickCaptureWidget.appex`; the containing app and extension must have the expected Production application identifiers and the same Production App Group entitlement. Confirm the managed-fallback build flag is off in the Release configuration. An unsigned simulator artifact cannot satisfy this gate.
 
 8. On a physical iPhone, complete this durable-capture matrix with a synthetic non-sensitive canary:
    - submit in airplane mode, force-quit immediately after `Saved`, relaunch while still offline, then reconnect and verify one server capture and one receipt;
@@ -1141,9 +899,10 @@ The canonical phone implementation is `apps/ios`: a SwiftUI application plus a W
    - inspect the App Group container and widget snapshot. They may contain the schema version, pending count, and transient random intent nonce only—never capture text, note text, tokens, destinations, or receipts;
    - queue a retry, background and lock the phone, and verify the foreground retry lifecycle stops; after unlocking and making the app active, verify it resumes and syncs exactly once;
    - while locked, verify the session/database Keychain items and completely protected database file are unavailable to the app; after unlocking, verify the same database opens without replacement or data loss;
-   - delete a synced capture, relaunch offline and online, and verify no local ghost row or plaintext artifact reappears.
-9. Verify the local database is actually using SQLCipher through GRDB. Record `PRAGMA cipher_version`, the app build identifier, device/iOS version, and pass/fail evidence without recording the canary text or database key. Confirm the database is unreadable without its device Keychain key. Uninstall intentionally deletes the application container, SQLCipher database, drafts, and unsynced outbox; Keychain survival is an OS behavior and is not a recovery mechanism. After reinstall and sign-in, synced server content may rehydrate into a new local database, but an unsynced capture is not recoverable. Verify that exact model and that no stale/phantom outbox row returns. A missing cipher version, readable database without the Keychain key, duplicate capture, or Lock Screen content exposure blocks release.
-10. Create the App Store Connect record and complete the privacy manifest review, privacy and encryption/export-compliance disclosures, screenshots, support URL, deletion URL, TestFlight checks, and release notes before submission. No Android store work is in scope for this milestone.
+   - delete a synced capture, relaunch offline and online, and verify no local ghost row or plaintext artifact reappears;
+   - save an OpenAI key and a Claude key in Settings, switch provider/model/effort, and verify the pasted key is never persisted in preferences, SQLCipher, analytics, or crash reports.
+9. Verify the local database is actually using SQLCipher through GRDB. Record `PRAGMA cipher_version`, the app build identifier, device/iOS version, and pass/fail evidence without recording the canary text or database key. Confirm the database is unreadable without its device Keychain key. Uninstall intentionally deletes the application container, SQLCipher database, drafts, and unsynced outbox; Keychain survival is an OS behavior and is not a recovery mechanism. After reinstall and sign-in, synced server content may rehydrate into a new local database, but an unsynced capture is not recoverable. A missing cipher version, readable database without the Keychain key, duplicate capture, or Lock Screen content exposure blocks release.
+10. Create the App Store Connect record and complete the privacy manifest review, privacy and encryption/export-compliance disclosures, screenshots, support URL, deletion URL, TestFlight checks, and release notes before submission. The App Store privacy answers must disclose that AI-assisted content is sent to the user's chosen provider with the user's own key. No Android store work is in scope for this milestone.
 
 ## GitHub protection
 

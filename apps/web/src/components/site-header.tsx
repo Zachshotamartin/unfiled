@@ -6,8 +6,8 @@ import { BrandLogo } from "@/components/brand-logo";
 const waitlistHref = "mailto:hello@unfiled.app?subject=Unfiled%20waitlist";
 
 const navigation = [
-  { href: "#product", label: "Product" },
-  { href: "#principles", label: "Principles" }
+  { href: "/#product", label: "Product" },
+  { href: "/#principles", label: "Principles" }
 ] as const;
 
 export function SiteHeader() {

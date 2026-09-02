@@ -58,6 +58,8 @@ describe("CaptureActivity", () => {
     );
 
     expect(html).toContain("Encrypted captures remain queued or safe in Inbox");
+    expect(html).toContain("OpenAI or Claude key");
+    expect(html).toContain('href="/app/settings"');
     expect(html).toContain("Encrypted capture saved on this device.");
     expect(html).not.toContain("private local words");
   });

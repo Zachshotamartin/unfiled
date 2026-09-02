@@ -80,6 +80,18 @@ require_text_count() {
   fi
 }
 
+require_text_absent() {
+  local file="$1"
+  local forbidden="$2"
+  local label="$3"
+
+  if grep -Fq -- "${forbidden}" "${file}"; then
+    printf 'Generated project inspection failed (%s): forbidden value found in %s\n' \
+      "${label}" "${file}" >&2
+    exit 1
+  fi
+}
+
 generate_project() {
   require_command xcodegen
   require_xcodegen_version
@@ -119,6 +131,15 @@ inspect_project() {
     'single embedded widget product'
   require_text "${project_file}" 'IPHONEOS_DEPLOYMENT_TARGET = 17.0;' \
     'iOS 17 deployment floor'
+  require_text_count \
+    "${project_file}" \
+    'TARGETED_DEVICE_FAMILY = 1;' \
+    '12' \
+    'all project and target configurations are iPhone-only'
+  require_text_absent \
+    "${project_file}" \
+    'TARGETED_DEVICE_FAMILY = "1,2";' \
+    'no target configuration silently re-enables iPad'
   require_text "${project_file}" \
     "PRODUCT_BUNDLE_IDENTIFIER = \"\$(UNFILED_APP_BUNDLE_IDENTIFIER).quickcapture\";" \
     'derived widget bundle identifier'

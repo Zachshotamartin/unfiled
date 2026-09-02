@@ -1,9 +1,16 @@
 import {
   createAwsKmsEnvelopeCustodian,
+  createVercelSensitiveEnvironmentEnvelopeCustodian,
+  createVercelSensitiveEnvironmentKmsTransport,
   createVercelOidcKmsTransport,
   type DecryptOnlyIntermediateKeyCustodian,
   type KeyCustodyOperationOptions,
-  type ManagedKeyRecordV1
+  type ManagedKeyRecord,
+  type ManagedKeyRecordParser,
+  type ManagedKeyRecordV1,
+  type ManagedKeyRecordV2,
+  parseManagedKeyRecordV1,
+  parseManagedKeyRecordV2
 } from "@unfiled/key-management";
 
 import type { SearchConfig, SearchKeyBoundary, SearchRuntime } from "./config.js";
@@ -19,10 +26,16 @@ declare const searchKeyAuthorityBrand: unique symbol;
 export type SearchKeyAuthority = Readonly<{ [searchKeyAuthorityBrand]: true }>;
 
 type AuthorityMetadata = Readonly<{
-  custodian: DecryptOnlyIntermediateKeyCustodian;
+  custodian: SearchDecryptOnlyCustodian;
+  parseRecord: SearchManagedKeyRecordParser;
   requestId: string;
   runtime: Exclude<SearchRuntime, "local">;
 }>;
+
+export type SearchManagedKeyRecord = ManagedKeyRecordV1 | ManagedKeyRecordV2;
+export type SearchManagedKeyRecordParser = ManagedKeyRecordParser<SearchManagedKeyRecord>;
+export type SearchDecryptOnlyCustodian =
+  DecryptOnlyIntermediateKeyCustodian<SearchManagedKeyRecord>;
 
 const authorities = new WeakMap<object, AuthorityMetadata>();
 
@@ -52,10 +65,26 @@ export function isSearchKeyAuthority(
 /** Available only while the adapter's authority callback is active. */
 export function custodianForSearchAuthority(
   authority: SearchKeyAuthority
-): DecryptOnlyIntermediateKeyCustodian {
+): SearchDecryptOnlyCustodian {
   const metadata = authorities.get(authority);
   if (metadata === undefined) unavailable();
   return metadata.custodian;
+}
+
+export function managedKeyRecordParserForSearchAuthority(
+  authority: SearchKeyAuthority
+): SearchManagedKeyRecordParser {
+  const metadata = authorities.get(authority);
+  if (metadata === undefined) unavailable();
+  return metadata.parseRecord;
+}
+
+export function managedKeyRecordParserForSearchBoundary(
+  boundary: SearchConfig["keyBoundary"]
+): SearchManagedKeyRecordParser {
+  return boundary.kind === "vercel-sensitive-env-v1"
+    ? parseManagedKeyRecordV2
+    : parseManagedKeyRecordV1;
 }
 
 export function isAwsSearchBoundary(
@@ -105,8 +134,23 @@ export type SearchKeyManagementAdapter = Readonly<{
 
 type SearchKeySession = Readonly<{
   close(): void;
-  custodian: DecryptOnlyIntermediateKeyCustodian;
+  custodian: SearchDecryptOnlyCustodian;
+  parseRecord: SearchManagedKeyRecordParser;
 }>;
+
+function widenCustodian<Record extends ManagedKeyRecord>(
+  custodian: DecryptOnlyIntermediateKeyCustodian<Record>
+): SearchDecryptOnlyCustodian {
+  return Object.freeze({
+    withUnwrappedIntermediateKey(record, use, options) {
+      return custodian.withUnwrappedIntermediateKey(
+        record,
+        (bytes, parsed) => use(bytes, parsed),
+        options
+      );
+    }
+  });
+}
 
 async function openTransport(
   boundary: Extract<SearchKeyBoundary, Readonly<{ kind: "aws-oidc" }>>,
@@ -174,7 +218,47 @@ async function openAwsSession(
       close(): void {
         transport?.destroy();
       },
-      custodian
+      custodian: widenCustodian(custodian),
+      parseRecord: parseManagedKeyRecordV1
+    });
+  } catch {
+    transport?.destroy();
+    unavailable();
+  }
+}
+
+async function openSensitiveSession(
+  boundary: Extract<SearchKeyBoundary, Readonly<{ kind: "vercel-sensitive-env-v1" }>>,
+  signal: AbortSignal
+): Promise<SearchKeySession> {
+  let transport:
+    Awaited<ReturnType<typeof createVercelSensitiveEnvironmentKmsTransport>> | undefined;
+  try {
+    assertActive(signal);
+    transport = await createVercelSensitiveEnvironmentKmsTransport({
+      expectedRootKeyIds: [
+        boundary.activeObjectWrapRootKeyId,
+        ...boundary.retiredObjectWrapRootKeyIds
+      ]
+    });
+    assertActive(signal);
+    const custodian = createVercelSensitiveEnvironmentEnvelopeCustodian({
+      activeRoots: {
+        ai_assisted: { object_wrap: boundary.activeObjectWrapRootKeyId }
+      },
+      deploymentEnvironment: boundary.deploymentEnvironment,
+      retiredRoots: {
+        ai_assisted: { object_wrap: boundary.retiredObjectWrapRootKeyIds }
+      },
+      transport,
+      workload: "search_worker"
+    });
+    return Object.freeze({
+      close(): void {
+        transport?.destroy();
+      },
+      custodian: widenCustodian(custodian),
+      parseRecord: parseManagedKeyRecordV2
     });
   } catch {
     transport?.destroy();
@@ -184,9 +268,9 @@ async function openAwsSession(
 
 function revocableCustodian(
   authority: SearchKeyAuthority,
-  underlying: DecryptOnlyIntermediateKeyCustodian,
+  underlying: SearchDecryptOnlyCustodian,
   requestSignal: AbortSignal
-): Readonly<{ custodian: DecryptOnlyIntermediateKeyCustodian; revoke(): void }> {
+): Readonly<{ custodian: SearchDecryptOnlyCustodian; revoke(): void }> {
   let open = true;
   const revocation = new AbortController();
   const leaseSignal = AbortSignal.any([requestSignal, revocation.signal]);
@@ -196,10 +280,10 @@ function revocableCustodian(
     if (!open || leaseSignal.aborted || metadata?.custodian !== facade) unavailable();
   };
 
-  const facade: DecryptOnlyIntermediateKeyCustodian = Object.freeze({
+  const facade: SearchDecryptOnlyCustodian = Object.freeze({
     async withUnwrappedIntermediateKey<Result>(
       record: unknown,
-      use: (keyBytes: Uint8Array, parsedRecord: ManagedKeyRecordV1) => Promise<Result>,
+      use: (keyBytes: Uint8Array, parsedRecord: SearchManagedKeyRecord) => Promise<Result>,
       options?: KeyCustodyOperationOptions
     ): Promise<Result> {
       assertOpen();
@@ -259,19 +343,37 @@ export function createSearchKeyManagementAdapter(): SearchKeyManagementAdapter {
         }) ||
         signal.aborted ||
         boundary.kind === "local-disabled" ||
-        proof.runtime === "local" ||
-        !boundary.expectedOidcSubject.endsWith(`:environment:${proof.runtime}`) ||
-        proof.oidcToken === undefined ||
-        proof.oidcToken.length === 0 ||
-        proof.oidcToken.length > MAX_OIDC_TOKEN_LENGTH ||
-        !JWT_PATTERN.test(proof.oidcToken)
+        proof.runtime === "local"
       ) {
         unavailable();
       }
 
-      const session = await openAwsSession(boundary, signal);
+      const session =
+        boundary.kind === "aws-oidc"
+          ? (() => {
+              if (
+                !boundary.expectedOidcSubject.endsWith(`:environment:${proof.runtime}`) ||
+                proof.oidcToken === undefined ||
+                proof.oidcToken.length === 0 ||
+                proof.oidcToken.length > MAX_OIDC_TOKEN_LENGTH ||
+                !JWT_PATTERN.test(proof.oidcToken)
+              ) {
+                unavailable();
+              }
+              return openAwsSession(boundary, signal);
+            })()
+          : (() => {
+              if (
+                proof.oidcToken !== undefined ||
+                boundary.deploymentEnvironment !== proof.runtime
+              ) {
+                unavailable();
+              }
+              return openSensitiveSession(boundary, signal);
+            })();
+      const openedSession = await session;
       const runtime = proof.runtime;
-      const initialCustodian = session.custodian;
+      const initialCustodian = openedSession.custodian;
       let authority: SearchKeyAuthority | undefined;
       let lease: ReturnType<typeof revocableCustodian> | undefined;
       let closed = false;
@@ -280,19 +382,21 @@ export function createSearchKeyManagementAdapter(): SearchKeyManagementAdapter {
         closed = true;
         lease?.revoke();
         if (authority !== undefined) authorities.delete(authority);
-        session.close();
+        openedSession.close();
       };
       signal.addEventListener("abort", close, { once: true });
       try {
         assertActive(signal);
         authority = issue({
           custodian: initialCustodian,
+          parseRecord: openedSession.parseRecord,
           requestId: proof.requestId,
           runtime
         });
         lease = revocableCustodian(authority, initialCustodian, signal);
         authorities.set(authority, {
           custodian: lease.custodian,
+          parseRecord: openedSession.parseRecord,
           requestId: proof.requestId,
           runtime
         });

@@ -14,6 +14,8 @@ import {
   type KeySelector,
   type KeyWorkload,
   type ManagedContentMacKey,
+  type ManagedKeyRecord,
+  type ManagedKeyRecordParser,
   type ManagedKeyRecordV1,
   type ManagedKeyStore,
   type ManagedObjectWrappingKey,
@@ -32,7 +34,7 @@ import {
 
 const INTERMEDIATE_KEY_BYTES = 32;
 
-function reference(record: ManagedKeyRecordV1): KeyReference {
+function reference(record: ManagedKeyRecord): KeyReference {
   return Object.freeze({
     ownerId: record.ownerId,
     keyClass: record.keyClass,
@@ -53,16 +55,24 @@ function selectorWithPurpose(
   return parseKeySelector({ ...selector, purpose });
 }
 
-function parseStoreRecordForSelector(value: unknown, expected: KeySelector): ManagedKeyRecordV1 {
-  const record = parseManagedKeyRecord(value);
+function parseStoreRecordForSelector<KeyRecord extends ManagedKeyRecord>(
+  value: unknown,
+  expected: KeySelector,
+  parseRecord: ManagedKeyRecordParser<KeyRecord>
+): KeyRecord {
+  const record = parseRecord(value);
   if (!sameSelector(record, expected) || !isDecryptableStatus(record.status)) {
     keyManagementFailure(KeyManagementErrorCode.KEY_INVALID, "Stored key record is invalid");
   }
   return record;
 }
 
-function parseActiveStoreRecord(value: unknown, expected: KeyBinding): ManagedKeyRecordV1 {
-  const record = parseManagedKeyRecord(value);
+function parseActiveStoreRecord<KeyRecord extends ManagedKeyRecord>(
+  value: unknown,
+  expected: KeyBinding,
+  parseRecord: ManagedKeyRecordParser<KeyRecord>
+): KeyRecord {
+  const record = parseRecord(value);
   if (!sameBinding(record, expected) || record.status !== "active") {
     keyManagementFailure(KeyManagementErrorCode.KEY_INVALID, "Stored key record is invalid");
   }
@@ -102,24 +112,32 @@ function runtimeCrypto(provided?: Crypto): Crypto {
   return implementation as Crypto;
 }
 
-export type ManagedKeyResolverOptions = Readonly<{
-  crypto?: Crypto;
-  custodian: IntermediateKeyCustodian;
-  store: ManagedKeyStore;
-  workload: KeyWorkload;
-}>;
+export type ManagedKeyResolverOptions<KeyRecord extends ManagedKeyRecord = ManagedKeyRecordV1> =
+  Readonly<{
+    crypto?: Crypto;
+    custodian: IntermediateKeyCustodian<KeyRecord>;
+    parseRecord?: ManagedKeyRecordParser<KeyRecord>;
+    store: ManagedKeyStore;
+    workload: KeyWorkload;
+  }>;
 
+export function createManagedKeyResolver(options: ManagedKeyResolverOptions): OwnerBoundKeyResolver;
+export function createManagedKeyResolver<KeyRecord extends ManagedKeyRecord>(
+  options: ManagedKeyResolverOptions<KeyRecord> &
+    Readonly<{ parseRecord: ManagedKeyRecordParser<KeyRecord> }>
+): OwnerBoundKeyResolver;
 export function createManagedKeyResolver(
-  options: ManagedKeyResolverOptions
+  options: ManagedKeyResolverOptions<ManagedKeyRecord>
 ): OwnerBoundKeyResolver {
   assertWorkload(options.workload);
   const cryptoImplementation = runtimeCrypto(options.crypto);
+  const parseRecord = (options.parseRecord ?? parseManagedKeyRecord) as ManagedKeyRecordParser;
 
   async function resolveObject(selector: KeySelector): Promise<ManagedObjectWrappingKey | null> {
     assertWorkloadCanAccess(options.workload, selector.keyClass, selector.purpose);
     const stored = await options.store.findById(selector);
     if (stored === null) return null;
-    const record = parseStoreRecordForSelector(stored, selector);
+    const record = parseStoreRecordForSelector(stored, selector, parseRecord);
     return options.custodian.withUnwrappedIntermediateKey(record, async (bytes) => {
       const key = await importKeyEncryptionKey(record.keyId, bytes, cryptoImplementation);
       return Object.freeze({ reference: reference(record), key });
@@ -130,20 +148,20 @@ export function createManagedKeyResolver(
     assertWorkloadCanAccess(options.workload, selector.keyClass, selector.purpose);
     const stored = await options.store.findById(selector);
     if (stored === null) return null;
-    const record = parseStoreRecordForSelector(stored, selector);
+    const record = parseStoreRecordForSelector(stored, selector, parseRecord);
     return options.custodian.withUnwrappedIntermediateKey(record, async (bytes) => {
       const key = await importContentMacKey(bytes, cryptoImplementation);
       return Object.freeze({ reference: reference(record), key });
     });
   }
 
-  async function activeRecord(binding: KeyBinding): Promise<ManagedKeyRecordV1> {
+  async function activeRecord(binding: KeyBinding): Promise<ManagedKeyRecord> {
     assertWorkloadCanAccess(options.workload, binding.keyClass, binding.purpose);
     const stored = await options.store.findActive(binding);
     if (stored === null) {
       keyManagementFailure(KeyManagementErrorCode.KEY_NOT_FOUND, "Active key is unavailable");
     }
-    return parseActiveStoreRecord(stored, binding);
+    return parseActiveStoreRecord(stored, binding, parseRecord);
   }
 
   return Object.freeze({

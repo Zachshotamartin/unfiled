@@ -4,6 +4,7 @@
 - Date: 2026-08-30
 - Narrows: ADR-0006 managed-custody and private-retrieval boundaries
 - Decision drivers: keep Supabase's global RLS-bypassing credential out of the organizer/indexer; expose only the database operations that worker needs; make KMS-root rewrap atomic, replay-safe, and unavailable to that worker.
+- Amended 2026-09-02: decision 2 describes root rewrap in terms of AWS KMS `ReEncrypt` and full key ARNs. Under [ADR-0016](./ADR-0016-free-beta-vercel-sensitive-key-custody-and-local-hash-retrieval.md) the free-beta custodian is the Vercel Sensitive root ring; the interactive/admin service rewraps the per-user intermediate key in process under the new root and commits through the same locked `rewrap_user_content_key` compare-and-swap with root key IDs in place of ARNs. The worker's six-RPC allowlist, its exclusion from rewrap, and the exact-login requirement are unchanged.
 
 ## Context
 

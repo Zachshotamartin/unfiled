@@ -133,6 +133,11 @@ function searchConfig(): SearchConfig {
     maxRequestBytes: 16_384,
     pipeline: Object.freeze({ kind: "disabled" as const }),
     port: 8_791,
+    releaseIdentity: Object.freeze({
+      commit: "d".repeat(40),
+      deployment: `sha256:${"e".repeat(64)}` as const,
+      environment: "production" as const
+    }),
     requestTimeoutMs: 10_000,
     runtime: "production" as const
   });

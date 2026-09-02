@@ -44,8 +44,10 @@ Every KMS key has `lifecycle.prevent_destroy = true`, a 30-day deletion window, 
 2. Assume one of the listed administrator principals for the first apply. That session also needs identity permissions to create the IAM/OIDC/KMS resources in this root. Confirm it with `aws sts get-caller-identity`.
 3. In the five Vercel projects—web, index worker, verifier, organizer, and owner search—enable **Team Issuer** under Settings → Security → OIDC. Do not create another search project for Preview; the same search project emits distinct exact `production` and `preview` subjects.
 4. Copy `terraform.tfvars.example` to the ignored environment-specific tfvars file. Replace the account, region, exact Vercel team slug, all five exact project names, administrator ARNs, and tags. Persist the entire generation registry in reviewed configuration; do not rely on memory of its default.
-5. Configure a distinct encrypted, access-controlled remote Terraform backend with locking for each environment before apply. Backend configuration is account-specific and intentionally is not checked in here.
-6. Do not create static AWS access keys for any Vercel runtime role. Vercel OIDC is the only runtime AWS authentication path.
+5. Bootstrap a distinct S3 state bucket for this environment outside this Terraform root. The bucket must be in the backend's selected region, have versioning and default encryption enabled, use Bucket-owner-enforced object ownership, block all four forms of public access, and deny non-TLS requests. Do not give any Unfiled runtime role access to it. Limit the applying and recovery administrators to `s3:ListBucket` on the exact state prefix; `s3:GetObject` and `s3:PutObject` on the exact state object; and `s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject` on only the adjacent `.tflock` object. Terraform never needs `s3:DeleteObject` on the state object.
+6. Copy `backend.s3.tfbackend.example` to the ignored `backend.s3.tfbackend`. Replace the globally unique bucket name and twelve-digit account ID. Keep `encrypt = true` and `use_lockfile = true`; do not add credentials, tokens, or a profile to the file. Use a different immutable `key` and a different bucket for every environment. The backend bucket must already exist because this root intentionally cannot create the storage that protects its own state.
+7. Initialize with `terraform init -reconfigure -backend-config=backend.s3.tfbackend`. Never run an apply after `terraform init -backend=false`; that mode exists only for credential-free validation and tests. If local state ever exists, stop and review it before using `terraform init -migrate-state`; never discard or overwrite it.
+8. Do not create static AWS access keys for any Vercel runtime role. Vercel OIDC is the only runtime AWS authentication path.
 
 ### Production and Preview isolation
 
@@ -80,17 +82,22 @@ If AWS reports that a new key policy would not allow a future `PutKeyPolicy`, st
 Use Terraform 1.13.3, matching CI, and the committed AWS-provider lock file:
 
 ```sh
-terraform init
+aws sso login --profile unfiled-admin
+export AWS_PROFILE=unfiled-kms-admin
+aws sts get-caller-identity --profile "$AWS_PROFILE"
+terraform init -reconfigure -backend-config=backend.s3.tfbackend
 terraform fmt -check -recursive
 terraform validate
 terraform test
-terraform plan -out unfiled-kms.tfplan
-terraform show unfiled-kms.tfplan
+terraform plan -input=false -lock-timeout=5m -var-file=terraform.tfvars -out=unfiled-kms.tfplan
+terraform show -no-color unfiled-kms.tfplan
 terraform apply unfiled-kms.tfplan
 terraform output
 ```
 
-Reject any initial plan that contains anything other than the expected OIDC provider, five runtime roles and policies, four v1 KMS keys, and four stable aliases. On every later plan, reject any KMS-key destroy or replacement.
+Here `unfiled-admin` is the Identity Center source profile and `unfiled-kms-admin` is a chained profile that assumes one stable role listed in `key_administrator_arns`. Before planning, confirm the caller is in the expected AWS account and is one of those administrator principals; the S3 backend and AWS provider use that same short-lived role session. Keep the saved plan and state output restricted because both contain infrastructure security metadata.
+
+Reject any initial plan that contains anything other than 20 managed resource instances: one Vercel OIDC provider, five runtime roles, six inline role policies (two web policies and one for each other role), four v1 KMS keys, and four stable aliases. On every later plan, reject any KMS-key destroy or replacement.
 
 ## Application configuration
 
@@ -124,11 +131,18 @@ The rotation-aware outputs are:
 The verifier deployment consumes exactly `verifier_role_arn`, `verifier_oidc_subject`,
 `ai_assisted_object_wrap_kms_key_arn`, and
 `verifier_retired_ai_object_wrap_roots_json`. Its `/health` endpoint is liveness-only;
-production KMS, database-role, and caller-identity readiness must be proved by the protected
+managed-environment KMS, database-role, and caller-identity readiness must be proved by the protected
 verification and denial procedures below. `verifier_root_key_registry` is review inventory, not a
 verifier environment value.
 
 Set `UNFILED_AWS_ROLE_ARN` from `web_role_arn`, `worker_role_arn`, `verifier_role_arn`, or `organizer_role_arn` only in its matching Vercel project and matching environment scope. Set `UNFILED_AWS_REGION` in all five. The index worker and verifier each receive `ai_assisted_object_wrap_kms_key_arn` as `UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN` plus only their matching retired-roots JSON output. Owner search instead receives the exact search-prefixed values in `search_cloud_environment`, including `UNFILED_SEARCH_AWS_ROLE_ARN`, `UNFILED_SEARCH_AI_OBJECT_WRAP_KMS_KEY_ARN`, `UNFILED_SEARCH_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON`, and `UNFILED_SEARCH_EXPECTED_OIDC_SUBJECT`. This matches the search runtime's separate fail-closed parser and prevents generic role/key reuse. Add its Vercel project ID and application/database secrets through their separately documented settings; Terraform does not output them. Owner search must not receive another environment's value, another workload's role or registry, a provider key, a database credential, or another runtime secret. The organizer receives the two active AI-assisted root ARNs and only its two exact retired-root JSON outputs; never give it the web registry or either private ARN. Keep all registry outputs as reviewed rotation inventories rather than broad runtime configuration.
+
+Set each workload's `UNFILED_*_ENV` marker to the same exact `preview` or `production` value as
+Vercel's injected `VERCEL_ENV`. Worker, verifier, and organizer validate that their workload and
+trusted web-caller subjects end in that same environment. Preview therefore requires its complete
+OIDC/KMS/database/provider boundary; it cannot use the local bearer or synthetic-key paths. The web
+caller also requires matching target markers before it sends an OIDC token to an organizer, worker,
+verifier, or search origin.
 
 `search_oidc_subject` is the only subject trusted by the current stack and `search_oidc_audience` is its fixed audience. `search_production_oidc_subject` and `search_preview_oidc_subject` expose the two exact claims for plan-time evidence: only the one equal to `search_oidc_subject` may appear in the role trust. The other environment's subject must be absent. A Preview deployment uses the same owner-search Vercel project, but its separate stack emits a different `search_role_arn`, key outputs, and runtime contract. Never copy those values between Vercel environment scopes.
 
@@ -150,8 +164,8 @@ Rotate one class/purpose pair at a time unless an incident requires otherwise. T
 3. Run the full validation suite and save a plan. The plan may create v2 and update describe/deny policy lists, but it must not change the existing alias, demote v1, replace a key, or destroy anything.
 4. Apply the saved plan.
 5. Export and deploy the updated registries. Web may receive the complete registry. The index worker and verifier receive only their object-wrap-only registries; the organizer receives only AI-assisted object-wrap/content-MAC entries. Owner search receives no staged entry at all.
-6. With production OIDC sessions, prove that web can `DescribeKey` on v2, worker and verifier can describe an AI object-wrap v2 only, organizer can describe both AI-purpose v2 roots only, and owner search cannot describe or otherwise use the staged root. Prove `GenerateDataKey`, `Decrypt`, and both rewrap directions are denied on every staged root. Prove index/verifier/search have no AI content-MAC/private identifier, organizer has no private identifier, and controlled direct forbidden-key probes return `AccessDenied`.
-7. Confirm in CloudTrail that the exact production subjects were used and that the stable alias and all new writes still resolve to v1.
+6. With OIDC sessions from the stack's exact environment, prove that web can `DescribeKey` on v2, worker and verifier can describe an AI object-wrap v2 only, organizer can describe both AI-purpose v2 roots only, and owner search cannot describe or otherwise use the staged root. Prove `GenerateDataKey`, `Decrypt`, and both rewrap directions are denied on every staged root. Prove index/verifier/search have no AI content-MAC/private identifier, organizer has no private identifier, and controlled direct forbidden-key probes return `AccessDenied`.
+7. Confirm in CloudTrail that only the exact selected-environment subjects were used, that the opposite environment's subjects were denied, and that the stable alias and all new writes still resolve to v1.
 
 Do not write or rewrap any application record under a staged root. A staged root is intentionally unusable beyond readiness description.
 

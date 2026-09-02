@@ -1,3 +1,9 @@
+import {
+  createLocalHashEmbedding,
+  LOCAL_HASH_EMBEDDING_DIMENSIONS,
+  MAX_LOCAL_HASH_EMBEDDING_INPUT_BYTES
+} from "@unfiled/search";
+
 import { SEARCH_EMBEDDING_DIMENSIONS, SEARCH_EMBEDDING_MODEL_ID } from "./config.js";
 import { SearchServiceError } from "./errors.js";
 
@@ -21,6 +27,46 @@ export type OpenAISearchEmbeddingProviderOptions = Readonly<{
   apiKey: string;
   fetchImplementation?: typeof fetch;
 }>;
+
+function localHashEmbedding(text: string): Float32Array {
+  let embedding: Float32Array;
+  try {
+    embedding = createLocalHashEmbedding(text);
+  } catch {
+    throw providerError("validation_failed", false);
+  }
+  if (embedding.length !== LOCAL_HASH_EMBEDDING_DIMENSIONS) {
+    embedding.fill(0);
+    throw providerError("provider_unavailable", false);
+  }
+  return embedding;
+}
+
+/**
+ * Provider-free query embedding for the zero-cost beta. It is a deterministic
+ * lexical feature hash, not a semantic embedding, and never contacts a provider.
+ */
+export function createLocalHashSearchEmbeddingProvider(): SearchEmbeddingProvider {
+  return Object.freeze({
+    embed(input): Promise<Float32Array> {
+      try {
+        assertActive(input.signal);
+        if (
+          typeof input.text !== "string" ||
+          input.text.trim().length === 0 ||
+          new TextEncoder().encode(input.text).byteLength > MAX_LOCAL_HASH_EMBEDDING_INPUT_BYTES
+        ) {
+          throw providerError("validation_failed", false);
+        }
+        return Promise.resolve(localHashEmbedding(input.text));
+      } catch (error: unknown) {
+        return Promise.reject(
+          error instanceof SearchServiceError ? error : providerError("validation_failed", false)
+        );
+      }
+    }
+  });
+}
 
 function providerError(
   code: "provider_unavailable" | "rate_limited" | "validation_failed",

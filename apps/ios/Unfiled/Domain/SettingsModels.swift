@@ -13,9 +13,91 @@ public enum ExpansionStyle: String, Codable, CaseIterable, Sendable {
 }
 
 public enum AIProvider: String, Codable, CaseIterable, Sendable {
-    // Only adapters that have passed the public provider/evaluation gate belong here.
-    // Anthropic deliberately remains absent until its adapter and live gate land.
-    case openai
+    case openai, anthropic
+
+    var displayName: String {
+        switch self {
+        case .openai: "OpenAI"
+        case .anthropic: "Claude"
+        }
+    }
+}
+
+public enum AIModelSelection: String, Codable, CaseIterable, Sendable {
+    case automatic = "auto"
+    case gpt56Luna = "gpt-5.6-luna"
+    case gpt56Terra = "gpt-5.6-terra"
+    case gpt56Sol = "gpt-5.6-sol"
+    case claudeSonnet5 = "claude-sonnet-5"
+    case claudeOpus5 = "claude-opus-5"
+
+    func isCompatible(with provider: AIProvider) -> Bool {
+        switch (self, provider) {
+        case (.automatic, _),
+             (.gpt56Luna, .openai),
+             (.gpt56Terra, .openai),
+             (.gpt56Sol, .openai),
+             (.claudeSonnet5, .anthropic),
+             (.claudeOpus5, .anthropic):
+            true
+        default:
+            false
+        }
+    }
+}
+
+/// Native mirror of `AI_MODEL_CATALOG` (`organization-model-registry-v2`) in
+/// `packages/contracts/src/settings.ts`. Adding or retiring a model changes both sides together.
+enum AIModelRegistry {
+    static let version = "organization-model-registry-v2"
+
+    static func selections(for provider: AIProvider) -> [AIModelSelection] {
+        switch provider {
+        case .openai: [.automatic, .gpt56Luna, .gpt56Terra, .gpt56Sol]
+        case .anthropic: [.automatic, .claudeSonnet5, .claudeOpus5]
+        }
+    }
+
+    static func automaticModel(for provider: AIProvider, effort: RoutingEffort) -> AIModelSelection {
+        switch (provider, effort) {
+        case (.openai, .economical): .gpt56Luna
+        case (.openai, .standard): .gpt56Terra
+        case (.openai, .thorough): .gpt56Sol
+        case (.anthropic, .economical), (.anthropic, .standard): .claudeSonnet5
+        case (.anthropic, .thorough): .claudeOpus5
+        }
+    }
+
+    static func label(for model: AIModelSelection) -> String {
+        switch model {
+        case .automatic: "Automatic"
+        case .gpt56Luna: "GPT-5.6 Luna"
+        case .gpt56Terra: "GPT-5.6 Terra"
+        case .gpt56Sol: "GPT-5.6 Sol"
+        case .claudeSonnet5: "Claude Sonnet 5"
+        case .claudeOpus5: "Claude Opus 5"
+        }
+    }
+
+    static func detail(for model: AIModelSelection) -> String {
+        switch model {
+        case .automatic: "Matches the model to the selected effort."
+        case .gpt56Luna: "Fastest GPT-5.6 choice for familiar filing and lower cost."
+        case .gpt56Terra: "Balanced GPT-5.6 quality, latency, and cost."
+        case .gpt56Sol: "Most capable GPT-5.6 choice with higher latency and cost."
+        case .claudeSonnet5: "Balanced Claude quality, latency, and cost."
+        case .claudeOpus5: "Most capable Claude choice with higher latency and cost."
+        }
+    }
+
+    /// Exact choices whose per-capture cost exceeds the automatic mapping for lower efforts.
+    /// The UI names them before save so a user-funded key is never surprised.
+    static func isHigherCost(_ model: AIModelSelection) -> Bool {
+        switch model {
+        case .gpt56Sol, .claudeOpus5: true
+        case .automatic, .gpt56Luna, .gpt56Terra, .claudeSonnet5: false
+        }
+    }
 }
 
 public enum ProviderMode: String, Codable, CaseIterable, Sendable {
@@ -32,6 +114,7 @@ public struct UserSettings: Codable, Equatable, Sendable {
     public let organizationMode: OrganizationMode
     public let providerMode: ProviderMode
     @RequiredNullable public var byokProvider: AIProvider?
+    public let modelSelection: AIModelSelection
     public let byokFallbackToApp: Bool
     public let routingEffort: RoutingEffort
     public let expansionStyle: ExpansionStyle
@@ -40,8 +123,8 @@ public struct UserSettings: Codable, Equatable, Sendable {
     public let updatedAt: Date
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case settingsRevision, organizationMode, providerMode, byokProvider, byokFallbackToApp
-        case routingEffort, expansionStyle, timezone, locale, updatedAt
+        case settingsRevision, organizationMode, providerMode, byokProvider, modelSelection
+        case byokFallbackToApp, routingEffort, expansionStyle, timezone, locale, updatedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -54,6 +137,7 @@ public struct UserSettings: Codable, Equatable, Sendable {
             RequiredNullable<AIProvider>.self,
             forKey: .byokProvider
         )
+        modelSelection = try container.decode(AIModelSelection.self, forKey: .modelSelection)
         byokFallbackToApp = try container.decode(Bool.self, forKey: .byokFallbackToApp)
         routingEffort = try container.decode(RoutingEffort.self, forKey: .routingEffort)
         expansionStyle = try container.decode(ExpansionStyle.self, forKey: .expansionStyle)
@@ -62,8 +146,10 @@ public struct UserSettings: Codable, Equatable, Sendable {
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
 
         let providerSelectionIsValid = switch providerMode {
-        case .appDefault: byokProvider == nil && !byokFallbackToApp
-        case .byok: byokProvider != nil
+        case .appDefault:
+            byokProvider == nil && modelSelection == .automatic && !byokFallbackToApp
+        case .byok:
+            byokProvider.map { modelSelection.isCompatible(with: $0) } ?? false
         }
         guard settingsRevision > 0,
               providerSelectionIsValid,
@@ -105,6 +191,7 @@ public struct UserSettingsUpdateRequest: Encodable, Sendable {
     public let organizationMode: OrganizationMode?
     public let providerMode: ProviderMode?
     public let byokProvider: PatchField<AIProvider>
+    public let modelSelection: AIModelSelection?
     public let byokFallbackToApp: Bool?
     public let routingEffort: RoutingEffort?
     public let expansionStyle: ExpansionStyle?
@@ -113,7 +200,8 @@ public struct UserSettingsUpdateRequest: Encodable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case expectedSettingsRevision, idempotencyKey, organizationMode, providerMode
-        case byokProvider, byokFallbackToApp, routingEffort, expansionStyle, timezone, locale
+        case byokProvider, modelSelection, byokFallbackToApp, routingEffort, expansionStyle
+        case timezone, locale
     }
 
     public init(
@@ -122,6 +210,7 @@ public struct UserSettingsUpdateRequest: Encodable, Sendable {
         organizationMode: OrganizationMode? = nil,
         providerMode: ProviderMode? = nil,
         byokProvider: PatchField<AIProvider> = .unchanged,
+        modelSelection: AIModelSelection? = nil,
         byokFallbackToApp: Bool? = nil,
         routingEffort: RoutingEffort? = nil,
         expansionStyle: ExpansionStyle? = nil,
@@ -131,6 +220,7 @@ public struct UserSettingsUpdateRequest: Encodable, Sendable {
         let normalizedTimezone = timezone?.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedLocale = locale?.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasChange = organizationMode != nil || providerMode != nil || byokProvider.isChanged
+            || modelSelection != nil
             || byokFallbackToApp != nil || routingEffort != nil || expansionStyle != nil
             || timezone != nil || locale != nil
         let providerSelectionIsCoherent: Bool
@@ -143,10 +233,20 @@ public struct UserSettingsUpdateRequest: Encodable, Sendable {
         default:
             providerSelectionIsCoherent = true
         }
+        let modelSelectionIsCoherent: Bool
+        switch (providerMode, byokProvider, modelSelection) {
+        case (.some(.appDefault), _, .some(let model)):
+            modelSelectionIsCoherent = model == .automatic
+        case (_, .value(let provider), .some(let model)):
+            modelSelectionIsCoherent = model.isCompatible(with: provider)
+        default:
+            modelSelectionIsCoherent = true
+        }
         guard expectedSettingsRevision > 0,
               IdempotencyKeyContract.isValid(idempotencyKey),
               hasChange,
               providerSelectionIsCoherent,
+              modelSelectionIsCoherent,
               normalizedTimezone.map({ (1 ... 100).contains($0.utf16.count) }) ?? true,
               normalizedLocale.map(UserSettings.isValidLocale) ?? true else {
             throw DomainValidationError.invalidValue("Settings update violates the API contract")
@@ -156,6 +256,7 @@ public struct UserSettingsUpdateRequest: Encodable, Sendable {
         self.organizationMode = organizationMode
         self.providerMode = providerMode
         self.byokProvider = byokProvider
+        self.modelSelection = modelSelection
         self.byokFallbackToApp = byokFallbackToApp
         self.routingEffort = routingEffort
         self.expansionStyle = expansionStyle
@@ -170,6 +271,7 @@ public struct UserSettingsUpdateRequest: Encodable, Sendable {
         try container.encodeIfPresent(organizationMode, forKey: .organizationMode)
         try container.encodeIfPresent(providerMode, forKey: .providerMode)
         try container.encodePatch(byokProvider, forKey: .byokProvider)
+        try container.encodeIfPresent(modelSelection, forKey: .modelSelection)
         try container.encodeIfPresent(byokFallbackToApp, forKey: .byokFallbackToApp)
         try container.encodeIfPresent(routingEffort, forKey: .routingEffort)
         try container.encodeIfPresent(expansionStyle, forKey: .expansionStyle)
@@ -371,6 +473,8 @@ public struct ProviderKeyDeleteResponse: Codable, Equatable, Sendable {
 struct AISettingsDraft: Equatable, Sendable {
     var organizationMode: OrganizationMode
     var providerMode: ProviderMode
+    var byokProvider: AIProvider
+    var modelSelection: AIModelSelection
     var byokFallbackToApp: Bool
     var routingEffort: RoutingEffort
     var expansionStyle: ExpansionStyle
@@ -380,6 +484,8 @@ struct AISettingsDraft: Equatable, Sendable {
     init(settings: UserSettings) {
         organizationMode = settings.organizationMode
         providerMode = settings.providerMode
+        byokProvider = settings.byokProvider ?? .openai
+        modelSelection = settings.modelSelection
         byokFallbackToApp = settings.byokFallbackToApp
         routingEffort = settings.routingEffort
         expansionStyle = settings.expansionStyle
@@ -395,6 +501,45 @@ struct AISettingsDraft: Equatable, Sendable {
         locale.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// The model `auto` resolves to for the drafted provider and effort.
+    var resolvedAutomaticModel: AIModelSelection {
+        AIModelRegistry.automaticModel(for: byokProvider, effort: routingEffort)
+    }
+
+    /// Returns a draft that follows the chosen access mode. App-default mode has no BYOK provider
+    /// choice, so the model returns to Automatic and managed fallback turns off.
+    func selectingProviderMode(_ mode: ProviderMode) -> AISettingsDraft {
+        var next = self
+        next.providerMode = mode
+        if mode == .appDefault {
+            next.modelSelection = .automatic
+            next.byokFallbackToApp = false
+        }
+        return next
+    }
+
+    /// Returns a draft for the chosen provider. An exact model that belongs to the other provider
+    /// resets to Automatic; a compatible choice is kept, and no saved key is affected.
+    func selectingProvider(_ provider: AIProvider) -> AISettingsDraft {
+        var next = self
+        next.byokProvider = provider
+        if !modelSelection.isCompatible(with: provider) {
+            next.modelSelection = .automatic
+        }
+        return next
+    }
+
+    /// Returns a draft whose fallback choice respects the deployment. Unavailable deployments
+    /// force fallback off so the draft, the request, and the confirmed snapshot all agree.
+    func applyingManagedFallbackAvailability(_ isAvailable: Bool) -> AISettingsDraft {
+        var next = self
+        next.byokFallbackToApp = ManagedFallbackContract.fallbackValue(
+            requested: byokFallbackToApp,
+            isAvailable: isAvailable
+        )
+        return next
+    }
+
     var validationMessage: String? {
         if TimeZone(identifier: normalizedTimezone) == nil {
             return "Enter a valid IANA timezone, such as America/Los_Angeles."
@@ -405,23 +550,39 @@ struct AISettingsDraft: Equatable, Sendable {
         return nil
     }
 
+    /// Builds the sparse PATCH for this draft. `managedFallbackAvailable` mirrors the deployment
+    /// flag: when it is `false` the request can never carry `byokFallbackToApp: true`.
     func makeUpdateRequest(
         comparedTo current: UserSettings,
-        idempotencyKey: String
+        idempotencyKey: String,
+        managedFallbackAvailable: Bool
     ) throws -> UserSettingsUpdateRequest? {
         guard validationMessage == nil else {
             throw DomainValidationError.invalidValue("Settings contain an invalid timezone or locale")
         }
 
+        let normalizedProvider: AIProvider? = providerMode == .byok ? byokProvider : nil
+        let normalizedModel: AIModelSelection = providerMode == .byok ? modelSelection : .automatic
+        guard normalizedProvider.map({ normalizedModel.isCompatible(with: $0) }) ?? true else {
+            throw DomainValidationError.invalidValue("The selected model does not match the provider")
+        }
+
         let modeChanged = providerMode != current.providerMode
+        let providerChanged = normalizedProvider != current.byokProvider
         let requestedProvider: PatchField<AIProvider>
-        if modeChanged {
-            requestedProvider = providerMode == .byok ? .value(.openai) : .null
+        if providerChanged {
+            requestedProvider = normalizedProvider.map(PatchField.value) ?? .null
         } else {
             requestedProvider = .unchanged
         }
-        let normalizedFallback = providerMode == .byok ? byokFallbackToApp : false
-        let hasChange = organizationMode != current.organizationMode || modeChanged ||
+        let normalizedFallback = providerMode == .byok
+            ? ManagedFallbackContract.fallbackValue(
+                requested: byokFallbackToApp,
+                isAvailable: managedFallbackAvailable
+            )
+            : false
+        let hasChange = organizationMode != current.organizationMode || modeChanged || providerChanged ||
+            normalizedModel != current.modelSelection ||
             normalizedFallback != current.byokFallbackToApp ||
             routingEffort != current.routingEffort ||
             expansionStyle != current.expansionStyle ||
@@ -435,6 +596,7 @@ struct AISettingsDraft: Equatable, Sendable {
             organizationMode: organizationMode == current.organizationMode ? nil : organizationMode,
             providerMode: modeChanged ? providerMode : nil,
             byokProvider: requestedProvider,
+            modelSelection: normalizedModel == current.modelSelection ? nil : normalizedModel,
             byokFallbackToApp: normalizedFallback == current.byokFallbackToApp
                 ? nil
                 : normalizedFallback,
@@ -448,7 +610,8 @@ struct AISettingsDraft: Equatable, Sendable {
     func matches(_ settings: UserSettings) -> Bool {
         settings.organizationMode == organizationMode &&
             settings.providerMode == providerMode &&
-            settings.byokProvider == (providerMode == .byok ? .openai : nil) &&
+            settings.byokProvider == (providerMode == .byok ? byokProvider : nil) &&
+            settings.modelSelection == (providerMode == .byok ? modelSelection : .automatic) &&
             settings.byokFallbackToApp == (providerMode == .byok ? byokFallbackToApp : false) &&
             settings.routingEffort == routingEffort &&
             settings.expansionStyle == expansionStyle &&
@@ -517,13 +680,14 @@ enum AISettingsMutationContract {
 
     static func accepts(
         _ response: ProviderKeyPutResponse,
+        provider: AIProvider,
         expectedCredentialRevision: Int?,
         submittedKey: String
     ) -> Bool {
         let revisionMatches = expectedCredentialRevision.map {
             response.providerKey.credentialRevision == $0 + 1
         } ?? (response.providerKey.credentialRevision > 0)
-        return response.providerKey.provider == .openai &&
+        return response.providerKey.provider == provider &&
             response.providerKey.status == .active &&
             response.providerKey.validatedAt != nil &&
             revisionMatches &&
@@ -532,9 +696,10 @@ enum AISettingsMutationContract {
 
     static func accepts(
         _ response: ProviderKeyDeleteResponse,
+        provider: AIProvider,
         expectedCredentialRevision: Int
     ) -> Bool {
-        response.provider == .openai && response.deleted &&
+        response.provider == provider && response.deleted &&
             response.deletedCredentialRevision == expectedCredentialRevision
     }
 }

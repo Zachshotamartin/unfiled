@@ -5,13 +5,15 @@ import {
   KeyManagementError,
   KeyManagementErrorCode,
   createManagedKeyResolver,
+  parseManagedKeyRecordV2,
   type IntermediateKeyCustodian,
   type KeyBinding,
   type KeySelector,
   type ManagedKeyRecordV1,
+  type ManagedKeyRecordV2,
   type ManagedKeyStore
 } from "../src/index";
-import { OWNER_A, OWNER_B, managedRecord, rawKey } from "./fixtures";
+import { OWNER_A, OWNER_B, managedRecord, managedRecordV2, rawKey } from "./fixtures";
 
 function expectCode(code: string): (error: unknown) => boolean {
   return (error: unknown) => error instanceof KeyManagementError && error.code === code;
@@ -71,6 +73,45 @@ function store(records: readonly ManagedKeyRecordV1[]): ManagedKeyStore {
 }
 
 describe("managed owner-bound key resolver", () => {
+  it("resolves provider-neutral V2 records only through an explicit V2 parser", async () => {
+    const record = managedRecordV2();
+    const custodian: IntermediateKeyCustodian<ManagedKeyRecordV2> = {
+      withGeneratedIntermediateKey<Result>(): Promise<Result> {
+        return Promise.reject(new Error("not used"));
+      },
+      async withUnwrappedIntermediateKey<Result>(
+        recordValue: unknown,
+        use: (keyBytes: Uint8Array, parsed: ManagedKeyRecordV2) => Promise<Result>
+      ): Promise<Result> {
+        const parsed = parseManagedKeyRecordV2(recordValue);
+        const bytes = rawKey(11);
+        try {
+          return await use(bytes, parsed);
+        } finally {
+          bytes.fill(0);
+        }
+      }
+    };
+    const v2Store: ManagedKeyStore = {
+      findActive(): Promise<unknown> {
+        return Promise.resolve(record);
+      },
+      findById(): Promise<unknown> {
+        return Promise.resolve(record);
+      }
+    };
+    const resolver = createManagedKeyResolver({
+      custodian,
+      parseRecord: parseManagedKeyRecordV2,
+      store: v2Store,
+      workload: "interactive_api"
+    });
+
+    await expect(
+      resolver.activeObjectWrappingKey({ ownerId: OWNER_A, keyClass: "ai_assisted" })
+    ).resolves.toMatchObject({ reference: { keyId: record.keyId, keyVersion: 1 } });
+  });
+
   it("imports distinct non-extractable object-wrap and content-MAC key classes", async () => {
     const objectRecord = managedRecord();
     const macRecord = managedRecord({ purpose: "content_mac" });

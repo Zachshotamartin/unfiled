@@ -129,7 +129,11 @@ function claim(overrides: Record<string, unknown> = {}) {
         jobId: JOB_ID,
         leaseExpiresAt: NOW,
         leaseToken: LEASE,
-        modelId: "gpt-5.4-mini-2026-03-17",
+        modelId: "gpt-5.6-terra",
+        modelSelection: "auto",
+        selectedProvider: "openai",
+        adapterRegistryVersion: "organization-model-registry-v2",
+        settingsRevision: 1,
         occurredAt: NOW,
         ownerId: OWNER_ID,
         promptVersion: "organization-v1",
@@ -367,15 +371,31 @@ const command = Object.freeze({
 });
 
 describe("organizer database adapter", () => {
-  it("strictly parses the lease-bound OpenAI provider route without widening the secret", async () => {
+  it("strictly parses the lease-bound provider route for both providers without widening the secret", async () => {
     const byok = {
+      adapterRegistryVersion: "organization-model-registry-v2",
       credential: "sk-byok-abcdefghijklmnopqrstuvwxyz0123456789",
       credentialRevision: 9,
       expansionStyle: "detailed",
+      modelId: "gpt-5.6-sol",
+      modelSelection: "auto",
       provider: "openai",
       routingEffort: "thorough",
+      settingsRevision: 3,
       source: "byok"
     } as const;
+    const anthropic = {
+      ...byok,
+      credential: "sk-ant-byok-abcdefghijklmnopqrstuvwxyz0123456789",
+      modelId: "claude-opus-5",
+      modelSelection: "claude-opus-5",
+      provider: "anthropic"
+    } as const;
+    const anthropicRepository = createOrganizerRepository(executor([rpc(claim()), rpc(anthropic)]));
+    await anthropicRepository.claim({ leaseSeconds: 120, limit: 1, signal, workerId: "worker-1" });
+    await expect(
+      anthropicRepository.providerRoute({ jobId: JOB_ID, leaseToken: LEASE, signal })
+    ).resolves.toEqual(anthropic);
     const db = executor([rpc(claim()), rpc(byok)]);
     const repository = createOrganizerRepository(db);
     await repository.claim({ leaseSeconds: 120, limit: 1, signal, workerId: "worker-1" });
@@ -389,6 +409,14 @@ describe("organizer database adapter", () => {
 
     for (const malformed of [
       { ...byok, provider: "anthropic" },
+      { ...byok, provider: "google" },
+      { ...byok, modelId: "claude-sonnet-5" },
+      { ...byok, modelId: "gpt-5.6-terra" },
+      { ...byok, modelSelection: "gpt-5.6-luna" },
+      { ...byok, modelSelection: "claude-opus-5" },
+      { ...byok, adapterRegistryVersion: "organization-model-registry-v1" },
+      { ...byok, settingsRevision: 0 },
+      { ...anthropic, modelId: "gpt-5.6-sol" },
       { ...byok, credentialRevision: null },
       { ...byok, credential: `${byok.credential}\n` },
       { ...byok, expansionStyle: "verbose" },

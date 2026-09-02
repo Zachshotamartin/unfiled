@@ -1,0 +1,81 @@
+name: Unfiled beta support
+description: Request product or account help without including private note content.
+title: "[Support] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        GitHub issues are public. Never include note or search text, screenshots with private content, authentication codes, session tokens, API keys, credentials, or account exports.
+
+        Report security vulnerabilities through [private vulnerability reporting](https://github.com/Zachshotamartin/unfiled/security/advisories/new).
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - Product defect
+        - Sign-in or account
+        - Export or deletion
+        - Beta access
+        - Product question
+    validations:
+      required: true
+  - type: dropdown
+    id: client
+    attributes:
+      label: Client
+      options:
+        - Web app
+        - iPhone app
+        - Lock Screen widget
+        - More than one client
+        - Not applicable
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options:
+        - Preview
+        - Production
+        - Local development
+        - Unknown
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: App version, iOS version, browser version, or commit if known.
+      placeholder: Unfiled 0.1 (1), iOS 17.6
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Describe the action, expected result, and observed result using synthetic text.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Safe reproduction steps
+      description: Include only steps and clearly synthetic examples.
+  - type: input
+    id: time
+    attributes:
+      label: Approximate time
+      description: Include the time zone. Do not paste a tokenized URL.
+      placeholder: 2026-09-02 14:30 PDT
+  - type: input
+    id: request_id
+    attributes:
+      label: Content-free request ID or error code
+      description: Leave blank unless the interface displayed a fixed identifier.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Privacy check
+      options:
+        - label: I verified that this report contains no private content, credentials, codes, tokens, keys, or exports.
+          required: true

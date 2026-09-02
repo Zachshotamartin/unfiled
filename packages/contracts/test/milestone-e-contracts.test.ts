@@ -393,7 +393,7 @@ describe("Milestone E public contracts", () => {
       content: "Try grouping this under accountability.",
       state: "proposed",
       stateRevision: 1,
-      modelId: "gpt-5.4-mini-2026-03-17",
+      modelId: "gpt-5.6-terra",
       promptVersion: "organizer-v1",
       createdAt: NOW,
       resolvedAt: null
@@ -481,6 +481,7 @@ describe("Milestone E public contracts", () => {
       organizationMode: "balanced",
       providerMode: "byok",
       byokProvider: "openai",
+      modelSelection: "auto",
       byokFallbackToApp: false,
       routingEffort: "standard",
       expansionStyle: "brief",
@@ -512,14 +513,14 @@ describe("Milestone E public contracts", () => {
     ).toBe(false);
     expect(
       UserSettingsDtoSchema.safeParse({ ...settings, byokProvider: "anthropic" }).success
-    ).toBe(false);
+    ).toBe(true);
     expect(
       UserSettingsUpdateRequestSchema.safeParse({
         expectedSettingsRevision: 3,
-        idempotencyKey: "settings-invalid-provider",
+        idempotencyKey: "settings-anthropic-provider",
         byokProvider: "anthropic"
       }).success
-    ).toBe(false);
+    ).toBe(true);
     expect(
       UserSettingsUpdateRequestSchema.safeParse({
         expectedSettingsRevision: 3,
@@ -558,7 +559,10 @@ describe("Milestone E public contracts", () => {
     ).toBe(false);
     expect(
       ProviderKeyMetadataSchema.safeParse({ ...metadata, provider: "anthropic" }).success
-    ).toBe(false);
+    ).toBe(true);
+    expect(ProviderKeyMetadataSchema.safeParse({ ...metadata, provider: "google" }).success).toBe(
+      false
+    );
     expect(ProviderKeyMetadataSchema.safeParse({ ...metadata, lastFour: "é234" }).success).toBe(
       false
     );
@@ -603,7 +607,7 @@ describe("Milestone E public contracts", () => {
         expectedCredentialRevision: null,
         apiKey: "sk-ant-example-not-a-real-key-1234"
       }).success
-    ).toBe(false);
+    ).toBe(true);
     expect(
       ProviderKeyDeleteRequestSchema.safeParse({
         idempotencyKey: "provider-delete-01",
@@ -728,7 +732,7 @@ describe("Milestone E public contracts", () => {
       "properties.apiKey"
     );
     expect(openApiDocument.components.schemas.ProviderKeyMetadata).toMatchObject({
-      properties: { provider: { const: "openai" } }
+      properties: { provider: { enum: ["openai", "anthropic"] } }
     });
     expect(Object.keys(openApiDocument.paths["/me/settings"].get.responses).sort()).toEqual([
       "200",

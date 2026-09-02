@@ -322,9 +322,12 @@ export function createEnvironmentIndexVerifierClient(
   const origin = environment.UNFILED_RAG_VERIFIER_ORIGIN?.trim();
   const workerOrigin = environment.UNFILED_INDEX_WORKER_ORIGIN?.trim();
   const sourceProjectId = environment.VERCEL_PROJECT_ID?.trim();
+  const runtime = environment.VERCEL_ENV?.trim();
+  const targetRuntime = environment.UNFILED_VERIFIER_ENV?.trim();
   if (
     environment.VERCEL !== "1" ||
-    environment.VERCEL_ENV !== "production" ||
+    (runtime !== "preview" && runtime !== "production") ||
+    targetRuntime !== runtime ||
     origin === undefined ||
     origin === workerOrigin ||
     sourceProjectId === undefined ||

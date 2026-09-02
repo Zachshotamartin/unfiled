@@ -2,7 +2,7 @@ import type { KmsEncryptionContext } from "./aws-transport.js";
 import type { KeyReference } from "./types.js";
 import { parseKeyReference } from "./validation.js";
 
-export function kmsEncryptionContextForKey(value: KeyReference): KmsEncryptionContext {
+export function keyEnvelopeContextForKey(value: KeyReference): KmsEncryptionContext {
   const reference = parseKeyReference({
     ownerId: value.ownerId,
     keyClass: value.keyClass,
@@ -16,4 +16,9 @@ export function kmsEncryptionContextForKey(value: KeyReference): KmsEncryptionCo
     UnfiledKeyPurpose: reference.purpose,
     UnfiledKeyRecordId: reference.keyId
   });
+}
+
+/** Backwards-compatible AWS-facing name for the provider-neutral envelope AAD. */
+export function kmsEncryptionContextForKey(value: KeyReference): KmsEncryptionContext {
+  return keyEnvelopeContextForKey(value);
 }

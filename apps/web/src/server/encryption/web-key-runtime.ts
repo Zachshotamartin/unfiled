@@ -2,16 +2,30 @@ import {
   createAwsKmsEnvelopeCustodian,
   createLocalEnvironmentKeyResolver,
   createVercelOidcKmsTransport,
+  createVercelSensitiveEnvironmentEnvelopeCustodian,
+  createVercelSensitiveEnvironmentKmsTransport,
   type CreateIntermediateKeyRequest,
   type InteractiveKeyCustodian,
   type KeyCustodyOperationOptions,
+  type ManagedKeyRecord,
   type ManagedKeyRecordV1,
+  type ManagedKeyRecordV2,
   type OwnerBoundKeyResolver,
   type RetiredRootKeySet,
-  type RootKeySet
+  type RootKeySet,
+  type VercelSensitiveEnvironmentInteractiveKeyCustodian
 } from "@unfiled/key-management";
 
 import { ConfigurationError } from "@/server/api/errors";
+
+import {
+  parseVercelSensitiveWebKeyConfiguration,
+  VERCEL_SENSITIVE_ROOT_KEY_RING_VARIABLE,
+  VERCEL_SENSITIVE_WEB_CUSTODIAN_MODE,
+  VERCEL_SENSITIVE_WEB_ROOT_REGISTRY_VARIABLE,
+  type VercelSensitiveWebRetiredRootKeySet,
+  type VercelSensitiveWebRootKeySet
+} from "./vercel-sensitive-web-key-configuration";
 
 const ROOT_REGISTRY_VARIABLE = "UNFILED_WEB_ROOT_KEY_REGISTRY_JSON";
 const MAX_ROOT_REGISTRY_BYTES = 65_536;
@@ -60,7 +74,9 @@ const LEGACY_ROOT_CONFIGURATION_VARIABLES = [
 
 const PUBLIC_KEY_CONFIGURATION_VARIABLES = [
   "NEXT_PUBLIC_UNFILED_AWS_ROLE_ARN",
-  "NEXT_PUBLIC_UNFILED_WEB_ROOT_KEY_REGISTRY_JSON"
+  "NEXT_PUBLIC_UNFILED_WEB_ROOT_KEY_REGISTRY_JSON",
+  "NEXT_PUBLIC_UNFILED_WEB_ROOT_KEY_REGISTRY_V2_JSON",
+  "NEXT_PUBLIC_UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1"
 ] as const;
 
 const ROLE_ARN_PATTERN =
@@ -73,7 +89,7 @@ const REGISTRY_ID_PROPERTY_PATTERN =
 
 export type WebKeyRuntimeEnvironment = Readonly<Record<string, string | undefined>>;
 
-type ProductionRuntimeConfiguration = Readonly<{
+type AwsManagedCloudRuntimeConfiguration = Readonly<{
   activeRoots: RootKeySet;
   environment: WebKeyRuntimeEnvironment;
   kind: "aws-oidc";
@@ -82,12 +98,23 @@ type ProductionRuntimeConfiguration = Readonly<{
   roleArn: string;
 }>;
 
+type VercelSensitiveManagedCloudRuntimeConfiguration = Readonly<{
+  activeRoots: VercelSensitiveWebRootKeySet;
+  environment: WebKeyRuntimeEnvironment;
+  expectedRootKeyIds: readonly string[];
+  kind: "vercel-sensitive-env-v1";
+  retiredRoots: VercelSensitiveWebRetiredRootKeySet;
+}>;
+
 type LocalRuntimeConfiguration = Readonly<{
   environment: WebKeyRuntimeEnvironment;
   kind: "local";
 }>;
 
-type WebKeyRuntimeConfiguration = LocalRuntimeConfiguration | ProductionRuntimeConfiguration;
+type WebKeyRuntimeConfiguration =
+  | LocalRuntimeConfiguration
+  | AwsManagedCloudRuntimeConfiguration
+  | VercelSensitiveManagedCloudRuntimeConfiguration;
 
 export type AwsInteractiveWebKeyRuntime = Readonly<{
   kind: "aws-oidc";
@@ -102,7 +129,18 @@ export type LocalInteractiveWebKeyRuntime = Readonly<{
   kind: "local";
 }>;
 
-export type InteractiveWebKeyRuntime = AwsInteractiveWebKeyRuntime | LocalInteractiveWebKeyRuntime;
+export type VercelSensitiveInteractiveWebKeyRuntime = Readonly<{
+  kind: "vercel-sensitive-env-v1";
+  withInteractiveCustodian<Result>(
+    signal: AbortSignal,
+    use: (custodian: VercelSensitiveEnvironmentInteractiveKeyCustodian) => Promise<Result>
+  ): Promise<Result>;
+}>;
+
+export type InteractiveWebKeyRuntime =
+  | AwsInteractiveWebKeyRuntime
+  | LocalInteractiveWebKeyRuntime
+  | VercelSensitiveInteractiveWebKeyRuntime;
 
 export type InteractiveWebKeyRuntimeOptions = Readonly<{
   crypto?: Crypto;
@@ -186,13 +224,16 @@ function assertNoPublicKeyConfiguration(environment: WebKeyRuntimeEnvironment): 
   }
 }
 
-function assertNoProductionRootBytes(environment: WebKeyRuntimeEnvironment): void {
+function assertNoProductionRootBytes(
+  environment: WebKeyRuntimeEnvironment,
+  allowedVariables: readonly string[] = [ROOT_REGISTRY_VARIABLE]
+): void {
   const hasKnownLegacyValue = LEGACY_ROOT_CONFIGURATION_VARIABLES.some((name) =>
     hasValue(environment, name)
   );
   const hasUnknownKeyMaterialValue = Object.keys(environment).some(
     (name) =>
-      name !== ROOT_REGISTRY_VARIABLE &&
+      !allowedVariables.includes(name) &&
       name.startsWith("UNFILED_") &&
       /(?:^|_)(?:KEK|MASTER_KEY|ROOT_KEY|KEY_BYTES|KEY_MATERIAL|KEY_RING)(?:_|$)/u.test(name) &&
       hasValue(environment, name)
@@ -356,13 +397,13 @@ function buildRootSets(
   });
 }
 
-function productionConfiguration(
+function awsManagedCloudConfiguration(
   environment: WebKeyRuntimeEnvironment
-): ProductionRuntimeConfiguration {
+): AwsManagedCloudRuntimeConfiguration {
   if (
     environment.NODE_ENV !== "production" ||
     environment.VERCEL !== "1" ||
-    environment.VERCEL_ENV !== "production" ||
+    (environment.VERCEL_ENV !== "preview" && environment.VERCEL_ENV !== "production") ||
     hasValue(environment, "UNFILED_KEY_CUSTODIAN") ||
     hasValue(environment, "UNFILED_LOCAL_KEY_RING_V1")
   ) {
@@ -393,6 +434,29 @@ function productionConfiguration(
   });
 }
 
+function vercelSensitiveManagedCloudConfiguration(
+  environment: WebKeyRuntimeEnvironment
+): VercelSensitiveManagedCloudRuntimeConfiguration {
+  if (
+    hasValue(environment, ROOT_REGISTRY_VARIABLE) ||
+    hasValue(environment, "UNFILED_AWS_REGION") ||
+    hasValue(environment, "UNFILED_AWS_ROLE_ARN") ||
+    hasValue(environment, "UNFILED_LOCAL_KEY_RING_V1")
+  ) {
+    configurationFailure();
+  }
+  assertNoProductionRootBytes(environment, [
+    VERCEL_SENSITIVE_WEB_ROOT_REGISTRY_VARIABLE,
+    VERCEL_SENSITIVE_ROOT_KEY_RING_VARIABLE
+  ]);
+  const roots = parseVercelSensitiveWebKeyConfiguration(environment);
+  return Object.freeze({
+    ...roots,
+    environment,
+    kind: "vercel-sensitive-env-v1"
+  });
+}
+
 function loadConfiguration(environment: WebKeyRuntimeEnvironment): WebKeyRuntimeConfiguration {
   assertNoStaticAwsCredentials(environment);
   assertNoPublicKeyConfiguration(environment);
@@ -404,6 +468,8 @@ function loadConfiguration(environment: WebKeyRuntimeEnvironment): WebKeyRuntime
   if (isExactLocalRuntime) {
     if (
       hasValue(environment, ROOT_REGISTRY_VARIABLE) ||
+      hasValue(environment, VERCEL_SENSITIVE_WEB_ROOT_REGISTRY_VARIABLE) ||
+      hasValue(environment, VERCEL_SENSITIVE_ROOT_KEY_RING_VARIABLE) ||
       hasValue(environment, "UNFILED_AWS_REGION") ||
       hasValue(environment, "UNFILED_AWS_ROLE_ARN")
     ) {
@@ -411,7 +477,16 @@ function loadConfiguration(environment: WebKeyRuntimeEnvironment): WebKeyRuntime
     }
     return Object.freeze({ environment, kind: "local" });
   }
-  return productionConfiguration(environment);
+  if (environment.UNFILED_KEY_CUSTODIAN === VERCEL_SENSITIVE_WEB_CUSTODIAN_MODE) {
+    return vercelSensitiveManagedCloudConfiguration(environment);
+  }
+  if (
+    hasValue(environment, VERCEL_SENSITIVE_WEB_ROOT_REGISTRY_VARIABLE) ||
+    hasValue(environment, VERCEL_SENSITIVE_ROOT_KEY_RING_VARIABLE)
+  ) {
+    configurationFailure();
+  }
+  return awsManagedCloudConfiguration(environment);
 }
 
 function operationSignal(
@@ -424,22 +499,22 @@ function operationSignal(
     : AbortSignal.any([revocationSignal, requestedSignal]);
 }
 
-function revocableCustodian(
-  underlying: InteractiveKeyCustodian,
+function revocableCustodian<Record extends ManagedKeyRecord>(
+  underlying: InteractiveKeyCustodian<Record>,
   scopeSignal: AbortSignal
-): Readonly<{ custodian: InteractiveKeyCustodian; revoke(): void }> {
+): Readonly<{ custodian: InteractiveKeyCustodian<Record>; revoke(): void }> {
   let open = true;
   const revocation = new AbortController();
   const assertOpen = (): void => {
     if (!open || scopeSignal.aborted || revocation.signal.aborted) configurationFailure();
   };
 
-  const custodian: InteractiveKeyCustodian = Object.freeze({
+  const custodian: InteractiveKeyCustodian<Record> = Object.freeze({
     async rewrapIntermediateKey(
       record: unknown,
       rewrappedAt: string,
       options?: KeyCustodyOperationOptions
-    ): Promise<ManagedKeyRecordV1> {
+    ): Promise<Record> {
       assertOpen();
       const result = await underlying.rewrapIntermediateKey(record, rewrappedAt, {
         signal: operationSignal(revocation.signal, options)
@@ -449,7 +524,7 @@ function revocableCustodian(
     },
     async withGeneratedIntermediateKey<Result>(
       request: CreateIntermediateKeyRequest,
-      use: (keyBytes: Uint8Array, record: ManagedKeyRecordV1) => Promise<Result>,
+      use: (keyBytes: Uint8Array, record: Record) => Promise<Result>,
       options?: KeyCustodyOperationOptions
     ): Promise<Result> {
       assertOpen();
@@ -466,7 +541,7 @@ function revocableCustodian(
     },
     async withUnwrappedIntermediateKey<Result>(
       record: unknown,
-      use: (keyBytes: Uint8Array, parsedRecord: ManagedKeyRecordV1) => Promise<Result>,
+      use: (keyBytes: Uint8Array, parsedRecord: Record) => Promise<Result>,
       options?: KeyCustodyOperationOptions
     ): Promise<Result> {
       assertOpen();
@@ -493,7 +568,9 @@ function revocableCustodian(
   });
 }
 
-function awsRuntime(configuration: ProductionRuntimeConfiguration): AwsInteractiveWebKeyRuntime {
+function awsRuntime(
+  configuration: AwsManagedCloudRuntimeConfiguration
+): AwsInteractiveWebKeyRuntime {
   return Object.freeze({
     kind: "aws-oidc",
     async withInteractiveCustodian<Result>(
@@ -513,11 +590,82 @@ function awsRuntime(configuration: ProductionRuntimeConfiguration): AwsInteracti
         configurationFailure();
       }
 
-      let lease: ReturnType<typeof revocableCustodian>;
+      let lease: Readonly<{ custodian: InteractiveKeyCustodian; revoke(): void }>;
       try {
-        lease = revocableCustodian(
+        lease = revocableCustodian<ManagedKeyRecordV1>(
           createAwsKmsEnvelopeCustodian({
             activeRoots: configuration.activeRoots,
+            retiredRoots: configuration.retiredRoots,
+            transport,
+            workload: "interactive_api"
+          }),
+          signal
+        );
+      } catch {
+        try {
+          transport.destroy();
+        } catch {
+          // Destruction is best-effort after a failed composition.
+        }
+        configurationFailure();
+      }
+
+      let closed = false;
+      const close = (): void => {
+        if (closed) return;
+        closed = true;
+        lease.revoke();
+        try {
+          transport.destroy();
+        } catch {
+          // Never replace the request outcome with a provider cleanup detail.
+        }
+      };
+      signal.addEventListener("abort", close, { once: true });
+      try {
+        assertSignalOpen(signal);
+        const result = await use(lease.custodian);
+        assertSignalOpen(signal);
+        return result;
+      } finally {
+        signal.removeEventListener("abort", close);
+        close();
+      }
+    }
+  });
+}
+
+function vercelSensitiveRuntime(
+  configuration: VercelSensitiveManagedCloudRuntimeConfiguration,
+  cryptoImplementation?: Crypto
+): VercelSensitiveInteractiveWebKeyRuntime {
+  return Object.freeze({
+    kind: "vercel-sensitive-env-v1",
+    async withInteractiveCustodian<Result>(
+      signal: AbortSignal,
+      use: (custodian: VercelSensitiveEnvironmentInteractiveKeyCustodian) => Promise<Result>
+    ): Promise<Result> {
+      assertSignalOpen(signal);
+      let transport: Awaited<ReturnType<typeof createVercelSensitiveEnvironmentKmsTransport>>;
+      try {
+        transport = await createVercelSensitiveEnvironmentKmsTransport({
+          ...(cryptoImplementation === undefined ? {} : { crypto: cryptoImplementation }),
+          environment: configuration.environment,
+          expectedRootKeyIds: configuration.expectedRootKeyIds
+        });
+      } catch {
+        configurationFailure();
+      }
+
+      let lease: Readonly<{
+        custodian: VercelSensitiveEnvironmentInteractiveKeyCustodian;
+        revoke(): void;
+      }>;
+      try {
+        lease = revocableCustodian<ManagedKeyRecordV2>(
+          createVercelSensitiveEnvironmentEnvelopeCustodian({
+            activeRoots: configuration.activeRoots,
+            deploymentEnvironment: "production",
             retiredRoots: configuration.retiredRoots,
             transport,
             workload: "interactive_api"
@@ -567,6 +715,9 @@ export async function createInteractiveWebKeyRuntime(
 ): Promise<InteractiveWebKeyRuntime> {
   const configuration = loadConfiguration(options.environment ?? process.env);
   if (configuration.kind === "aws-oidc") return awsRuntime(configuration);
+  if (configuration.kind === "vercel-sensitive-env-v1") {
+    return vercelSensitiveRuntime(configuration, options.crypto);
+  }
   try {
     const keyResolver = await createLocalEnvironmentKeyResolver({
       ...(options.crypto === undefined ? {} : { crypto: options.crypto }),

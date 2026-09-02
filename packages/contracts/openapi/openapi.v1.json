@@ -4792,6 +4792,15 @@
         "operationId": "getProviderKeyMetadata",
         "summary": "Read provider-key metadata without exposing key material",
         "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": true,
+            "description": "The provider whose isolated Vault-key metadata should be returned.",
+            "schema": { "type": "string", "enum": ["openai", "anthropic"] }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Provider-key metadata",
@@ -13674,7 +13683,18 @@
           "organizationMode": { "type": "string", "enum": ["cautious", "balanced", "automatic"] },
           "providerMode": { "type": "string", "enum": ["app_default", "byok"] },
           "byokProvider": {
-            "anyOf": [{ "type": "string", "const": "openai" }, { "type": "null" }]
+            "anyOf": [{ "type": "string", "enum": ["openai", "anthropic"] }, { "type": "null" }]
+          },
+          "modelSelection": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "gpt-5.6-luna",
+              "gpt-5.6-terra",
+              "gpt-5.6-sol",
+              "claude-sonnet-5",
+              "claude-opus-5"
+            ]
           },
           "byokFallbackToApp": { "type": "boolean" },
           "routingEffort": { "type": "string", "enum": ["economical", "standard", "thorough"] },
@@ -13697,6 +13717,7 @@
           "organizationMode",
           "providerMode",
           "byokProvider",
+          "modelSelection",
           "byokFallbackToApp",
           "routingEffort",
           "expansionStyle",
@@ -13723,7 +13744,18 @@
               },
               "providerMode": { "type": "string", "enum": ["app_default", "byok"] },
               "byokProvider": {
-                "anyOf": [{ "type": "string", "const": "openai" }, { "type": "null" }]
+                "anyOf": [{ "type": "string", "enum": ["openai", "anthropic"] }, { "type": "null" }]
+              },
+              "modelSelection": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "gpt-5.6-luna",
+                  "gpt-5.6-terra",
+                  "gpt-5.6-sol",
+                  "claude-sonnet-5",
+                  "claude-opus-5"
+                ]
               },
               "byokFallbackToApp": { "type": "boolean" },
               "routingEffort": { "type": "string", "enum": ["economical", "standard", "thorough"] },
@@ -13746,6 +13778,7 @@
               "organizationMode",
               "providerMode",
               "byokProvider",
+              "modelSelection",
               "byokFallbackToApp",
               "routingEffort",
               "expansionStyle",
@@ -13776,7 +13809,18 @@
           "organizationMode": { "type": "string", "enum": ["cautious", "balanced", "automatic"] },
           "providerMode": { "type": "string", "enum": ["app_default", "byok"] },
           "byokProvider": {
-            "anyOf": [{ "type": "string", "const": "openai" }, { "type": "null" }]
+            "anyOf": [{ "type": "string", "enum": ["openai", "anthropic"] }, { "type": "null" }]
+          },
+          "modelSelection": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "gpt-5.6-luna",
+              "gpt-5.6-terra",
+              "gpt-5.6-sol",
+              "claude-sonnet-5",
+              "claude-opus-5"
+            ]
           },
           "byokFallbackToApp": { "type": "boolean" },
           "routingEffort": { "type": "string", "enum": ["economical", "standard", "thorough"] },
@@ -13809,7 +13853,18 @@
               },
               "providerMode": { "type": "string", "enum": ["app_default", "byok"] },
               "byokProvider": {
-                "anyOf": [{ "type": "string", "const": "openai" }, { "type": "null" }]
+                "anyOf": [{ "type": "string", "enum": ["openai", "anthropic"] }, { "type": "null" }]
+              },
+              "modelSelection": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "gpt-5.6-luna",
+                  "gpt-5.6-terra",
+                  "gpt-5.6-sol",
+                  "claude-sonnet-5",
+                  "claude-opus-5"
+                ]
               },
               "byokFallbackToApp": { "type": "boolean" },
               "routingEffort": { "type": "string", "enum": ["economical", "standard", "thorough"] },
@@ -13832,6 +13887,7 @@
               "organizationMode",
               "providerMode",
               "byokProvider",
+              "modelSelection",
               "byokFallbackToApp",
               "routingEffort",
               "expansionStyle",
@@ -13849,7 +13905,7 @@
       "ProviderKeyMetadata": {
         "type": "object",
         "properties": {
-          "provider": { "type": "string", "const": "openai" },
+          "provider": { "type": "string", "enum": ["openai", "anthropic"] },
           "lastFour": { "type": "string", "pattern": "^[!-~]{4}$" },
           "status": { "type": "string", "enum": ["active", "invalid", "revoked"] },
           "credentialRevision": {
@@ -13883,6 +13939,12 @@
         ],
         "additionalProperties": false
       },
+      "ProviderKeyQuery": {
+        "type": "object",
+        "properties": { "provider": { "type": "string", "enum": ["openai", "anthropic"] } },
+        "required": ["provider"],
+        "additionalProperties": false
+      },
       "ProviderKeyResponse": {
         "type": "object",
         "properties": {
@@ -13891,7 +13953,7 @@
               {
                 "type": "object",
                 "properties": {
-                  "provider": { "type": "string", "const": "openai" },
+                  "provider": { "type": "string", "enum": ["openai", "anthropic"] },
                   "lastFour": { "type": "string", "pattern": "^[!-~]{4}$" },
                   "status": { "type": "string", "enum": ["active", "invalid", "revoked"] },
                   "credentialRevision": {
@@ -13941,7 +14003,7 @@
             "maxLength": 80,
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
-          "provider": { "type": "string", "const": "openai" },
+          "provider": { "type": "string", "enum": ["openai", "anthropic"] },
           "expectedCredentialRevision": {
             "anyOf": [
               { "type": "integer", "exclusiveMinimum": 0, "maximum": 9007199254740991 },
@@ -13959,7 +14021,7 @@
           "providerKey": {
             "type": "object",
             "properties": {
-              "provider": { "type": "string", "const": "openai" },
+              "provider": { "type": "string", "enum": ["openai", "anthropic"] },
               "lastFour": { "type": "string", "pattern": "^[!-~]{4}$" },
               "status": { "type": "string", "enum": ["active", "invalid", "revoked"] },
               "credentialRevision": {
@@ -14007,7 +14069,7 @@
             "maxLength": 80,
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
-          "provider": { "type": "string", "const": "openai" },
+          "provider": { "type": "string", "enum": ["openai", "anthropic"] },
           "expectedCredentialRevision": {
             "type": "integer",
             "exclusiveMinimum": 0,
@@ -14020,7 +14082,7 @@
       "ProviderKeyDeleteResponse": {
         "type": "object",
         "properties": {
-          "provider": { "type": "string", "const": "openai" },
+          "provider": { "type": "string", "enum": ["openai", "anthropic"] },
           "deleted": { "type": "boolean", "const": true },
           "deletedCredentialRevision": {
             "type": "integer",

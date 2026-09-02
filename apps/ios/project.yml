@@ -57,6 +57,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(UNFILED_APP_BUNDLE_IDENTIFIER)
         PRODUCT_NAME: Unfiled
         SUPPORTS_MACCATALYST: NO
+        TARGETED_DEVICE_FAMILY: "1"
 
   QuickCaptureWidget:
     type: app-extension
@@ -75,6 +76,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(UNFILED_APP_BUNDLE_IDENTIFIER).quickcapture
         PRODUCT_NAME: QuickCaptureWidget
         SKIP_INSTALL: YES
+        TARGETED_DEVICE_FAMILY: "1"
 
   UnfiledTests:
     type: bundle.unit-test
@@ -87,6 +89,7 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: $(UNFILED_APP_BUNDLE_IDENTIFIER).tests
+        TARGETED_DEVICE_FAMILY: "1"
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/Unfiled.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Unfiled
         BUNDLE_LOADER: $(TEST_HOST)
 

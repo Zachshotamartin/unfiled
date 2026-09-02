@@ -23,19 +23,28 @@ const ENVIRONMENT = Object.freeze({
 const worker: IndexWorkerClient = { drain: vi.fn() };
 const verifier: IndexVerifierClient = { verify: vi.fn() };
 
-describe("RAG generation lifecycle production composition", () => {
+describe("RAG generation lifecycle managed-cloud composition", () => {
   it.each([
     [{ ...ENVIRONMENT, NODE_ENV: "test" }],
     [{ ...ENVIRONMENT, VERCEL: "0" }],
-    [{ ...ENVIRONMENT, VERCEL_ENV: "preview" }],
+    [{ ...ENVIRONMENT, VERCEL_ENV: "development" }],
     [{ ...ENVIRONMENT, UNFILED_EMBEDDING_MODEL_ID: "bad model" }],
     [{ ...ENVIRONMENT, UNFILED_EMBEDDING_DIMENSIONS: "0" }],
     [{ ...ENVIRONMENT, UNFILED_EMBEDDING_DIMENSIONS: "1536.5" }],
     [{ ...ENVIRONMENT, UNFILED_OPENAI_EMBEDDING_API_KEY: "must-not-enter-web" }]
-  ])("rejects non-production or worker-incompatible target config", (environment) => {
+  ])("rejects non-cloud or worker-incompatible target config", (environment) => {
     expect(() =>
       createEnvironmentRagGenerationMaintenanceRunner(environment, { worker, verifier })
     ).toThrow(ConfigurationError);
+  });
+
+  it("accepts the exact Preview runtime without accepting a provider key in web", () => {
+    expect(() =>
+      createEnvironmentRagGenerationMaintenanceRunner(
+        { ...ENVIRONMENT, VERCEL_ENV: "preview" },
+        { worker, verifier }
+      )
+    ).not.toThrow();
   });
 
   it("binds the service role client to only the exact five lifecycle RPCs and worker target", async () => {

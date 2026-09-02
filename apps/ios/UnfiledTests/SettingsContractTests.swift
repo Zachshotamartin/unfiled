@@ -12,6 +12,59 @@ final class SettingsContractTests: XCTestCase {
         super.tearDown()
     }
 
+    func testSettingsDecodeEveryProviderAndModelCombinationInTheRegistry() throws {
+        let decoder = APIJSON.makeDecoder()
+        let openAI = try decoder.decode(
+            UserSettingsResponse.self,
+            from: Data(Self.settingsResponseJSON.utf8)
+        )
+        XCTAssertEqual(openAI.settings.byokProvider, .openai)
+        XCTAssertEqual(openAI.settings.modelSelection, .automatic)
+
+        for provider in AIProvider.allCases {
+            for model in AIModelRegistry.selections(for: provider) {
+                let json = Self.byokSettingsJSON(provider: provider, model: model)
+                let settings = try decoder.decode(UserSettings.self, from: Data(json.utf8))
+                XCTAssertEqual(settings.byokProvider, provider)
+                XCTAssertEqual(settings.modelSelection, model)
+            }
+        }
+    }
+
+    func testSettingsRejectMissingUnknownAndCrossProviderModelSelection() throws {
+        let decoder = APIJSON.makeDecoder()
+
+        let missingModel = Self.settingsJSON.replacingOccurrences(
+            of: #""modelSelection":"auto","#,
+            with: ""
+        )
+        XCTAssertFalse(missingModel.contains("modelSelection"))
+        XCTAssertThrowsError(
+            try decoder.decode(UserSettings.self, from: Data(missingModel.utf8)),
+            "modelSelection is a required field of the settings DTO"
+        )
+
+        let unknownModel = Self.settingsJSON.replacingOccurrences(
+            of: #""modelSelection":"auto""#,
+            with: #""modelSelection":"gpt-6-nova""#
+        )
+        XCTAssertThrowsError(try decoder.decode(UserSettings.self, from: Data(unknownModel.utf8)))
+
+        let claudeOnOpenAI = Self.byokSettingsJSON(provider: .openai, model: .claudeOpus5)
+        XCTAssertThrowsError(try decoder.decode(UserSettings.self, from: Data(claudeOnOpenAI.utf8)))
+
+        let gptOnAnthropic = Self.byokSettingsJSON(provider: .anthropic, model: .gpt56Luna)
+        XCTAssertThrowsError(try decoder.decode(UserSettings.self, from: Data(gptOnAnthropic.utf8)))
+
+        let exactModelInAppDefault = Self.appDefaultSettingsJSON.replacingOccurrences(
+            of: #""modelSelection":"auto""#,
+            with: #""modelSelection":"claude-sonnet-5""#
+        )
+        XCTAssertThrowsError(
+            try decoder.decode(UserSettings.self, from: Data(exactModelInAppDefault.utf8))
+        )
+    }
+
     func testSettingsRequireCoherentProviderSelectionAndExactKeys() throws {
         let decoder = APIJSON.makeDecoder()
         XCTAssertNoThrow(try decoder.decode(UserSettingsResponse.self, from: Data(Self.settingsResponseJSON.utf8)))
@@ -75,34 +128,63 @@ final class SettingsContractTests: XCTestCase {
                 routingEffort: .standard
             )
         )
+        XCTAssertThrowsError(
+            try UserSettingsUpdateRequest(
+                expectedSettingsRevision: 1,
+                idempotencyKey: "settings-invalid-model-provider",
+                byokProvider: .value(.anthropic),
+                modelSelection: .gpt56Sol
+            )
+        )
+        XCTAssertNoThrow(
+            try UserSettingsUpdateRequest(
+                expectedSettingsRevision: 1,
+                idempotencyKey: "settings-model-only",
+                modelSelection: .claudeOpus5
+            ),
+            "A model-only patch is validated against the stored provider by the server"
+        )
     }
 
     func testProviderMetadataResponseCannotContainCredentialMaterial() throws {
         let decoder = APIJSON.makeDecoder()
-        let valid = #"{"providerKey":{"provider":"openai","lastFour":"1234","status":"active","credentialRevision":1,"validatedAt":"2026-09-01T12:00:00Z","updatedAt":"2026-09-01T12:00:01Z"}}"#
-        let response = try decoder.decode(ProviderKeyResponse.self, from: Data(valid.utf8))
-        XCTAssertEqual(response.providerKey?.lastFour, "1234")
+        for provider in AIProvider.allCases {
+            let valid = Self.metadataResponseJSON(provider: provider)
+            let response = try decoder.decode(ProviderKeyResponse.self, from: Data(valid.utf8))
+            XCTAssertEqual(response.providerKey?.provider, provider)
+            XCTAssertEqual(response.providerKey?.lastFour, "1234")
 
-        let leakedKey = valid.replacingOccurrences(
-            of: #""lastFour":"1234""#,
-            with: #""lastFour":"1234","apiKey":"sk-secret-value-that-must-never-return""#
+            let leakedKey = valid.replacingOccurrences(
+                of: #""lastFour":"1234""#,
+                with: #""lastFour":"1234","apiKey":"sk-secret-value-that-must-never-return""#
+            )
+            let leakedCiphertext = valid.replacingOccurrences(
+                of: #""lastFour":"1234""#,
+                with: #""lastFour":"1234","encryptedApiKey":"ciphertext""#
+            )
+            let invalidRevision = valid.replacingOccurrences(
+                of: #""credentialRevision":1"#,
+                with: #""credentialRevision":0"#
+            )
+            let unvalidatedActive = valid.replacingOccurrences(
+                of: #""validatedAt":"2026-09-01T12:00:00Z""#,
+                with: #""validatedAt":null"#
+            )
+            XCTAssertThrowsError(try decoder.decode(ProviderKeyResponse.self, from: Data(leakedKey.utf8)))
+            XCTAssertThrowsError(try decoder.decode(ProviderKeyResponse.self, from: Data(leakedCiphertext.utf8)))
+            XCTAssertThrowsError(try decoder.decode(ProviderKeyResponse.self, from: Data(invalidRevision.utf8)))
+            XCTAssertThrowsError(try decoder.decode(ProviderKeyResponse.self, from: Data(unvalidatedActive.utf8)))
+        }
+
+        let absent = try decoder.decode(
+            ProviderKeyResponse.self,
+            from: Data(#"{"providerKey":null}"#.utf8)
         )
-        let leakedCiphertext = valid.replacingOccurrences(
-            of: #""lastFour":"1234""#,
-            with: #""lastFour":"1234","encryptedApiKey":"ciphertext""#
+        XCTAssertNil(absent.providerKey)
+        XCTAssertThrowsError(
+            try decoder.decode(ProviderKeyResponse.self, from: Data("{}".utf8)),
+            "providerKey must be present, even when null"
         )
-        let invalidRevision = valid.replacingOccurrences(
-            of: #""credentialRevision":1"#,
-            with: #""credentialRevision":0"#
-        )
-        let unvalidatedActive = valid.replacingOccurrences(
-            of: #""validatedAt":"2026-09-01T12:00:00Z""#,
-            with: #""validatedAt":null"#
-        )
-        XCTAssertThrowsError(try decoder.decode(ProviderKeyResponse.self, from: Data(leakedKey.utf8)))
-        XCTAssertThrowsError(try decoder.decode(ProviderKeyResponse.self, from: Data(leakedCiphertext.utf8)))
-        XCTAssertThrowsError(try decoder.decode(ProviderKeyResponse.self, from: Data(invalidRevision.utf8)))
-        XCTAssertThrowsError(try decoder.decode(ProviderKeyResponse.self, from: Data(unvalidatedActive.utf8)))
     }
 
     func testProviderPutRequiresAuthenticationBeforeTransport() async throws {
@@ -132,7 +214,7 @@ final class SettingsContractTests: XCTestCase {
         let secret = Self.syntheticProviderKey
         let request = try ProviderKeyPutRequest(
             idempotencyKey: "provider-put-1",
-            provider: .openai,
+            provider: .anthropic,
             expectedCredentialRevision: nil,
             apiKey: secret
         )
@@ -147,7 +229,7 @@ final class SettingsContractTests: XCTestCase {
                 JSONSerialization.jsonObject(with: apiRequestBody(urlRequest)) as? [String: Any]
             )
             XCTAssertEqual(body["apiKey"] as? String, secret)
-            XCTAssertEqual(body["provider"] as? String, "openai")
+            XCTAssertEqual(body["provider"] as? String, "anthropic")
             XCTAssertTrue(body["expectedCredentialRevision"] is NSNull)
             return apiResponse(
                 for: urlRequest,
@@ -157,7 +239,8 @@ final class SettingsContractTests: XCTestCase {
         }
 
         let response = try await makeStubbedAPIClient(tokenProvider: provider).putProviderKey(request)
-        XCTAssertEqual(response.providerKey.lastFour, "7890")
+        XCTAssertEqual(response.providerKey.provider, .anthropic)
+        XCTAssertEqual(response.providerKey.lastFour, "kkkk")
         XCTAssertEqual(response.providerKey.status, .active)
         XCTAssertFalse(response.replayed)
         XCTAssertFalse(String(describing: response).contains(secret))
@@ -184,6 +267,7 @@ final class SettingsContractTests: XCTestCase {
             XCTAssertEqual(body["providerMode"] as? String, "app_default")
             XCTAssertTrue(body["byokProvider"] is NSNull)
             XCTAssertNil(body["organizationMode"])
+            XCTAssertNil(body["modelSelection"])
             return apiResponse(
                 for: urlRequest,
                 json: #"{"settings":\#(Self.appDefaultSettingsJSON),"replayed":false}"#,
@@ -193,12 +277,21 @@ final class SettingsContractTests: XCTestCase {
         let response = try await makeStubbedAPIClient(tokenProvider: provider).updateUserSettings(request)
         XCTAssertEqual(response.settings.providerMode, .appDefault)
         XCTAssertNil(response.settings.byokProvider)
+        XCTAssertEqual(response.settings.modelSelection, .automatic)
     }
 
-    private static let settingsJSON = #"{"settingsRevision":3,"organizationMode":"balanced","providerMode":"byok","byokProvider":"openai","byokFallbackToApp":false,"routingEffort":"standard","expansionStyle":"brief","timezone":"America/Los_Angeles","locale":"en-US","updatedAt":"2026-09-01T12:00:00Z"}"#
-    private static let appDefaultSettingsJSON = #"{"settingsRevision":4,"organizationMode":"balanced","providerMode":"app_default","byokProvider":null,"byokFallbackToApp":false,"routingEffort":"standard","expansionStyle":"brief","timezone":"America/Los_Angeles","locale":"en-US","updatedAt":"2026-09-01T12:00:01Z"}"#
+    private static func byokSettingsJSON(provider: AIProvider, model: AIModelSelection) -> String {
+        #"{"settingsRevision":3,"organizationMode":"balanced","providerMode":"byok","byokProvider":"\#(provider.rawValue)","modelSelection":"\#(model.rawValue)","byokFallbackToApp":false,"routingEffort":"standard","expansionStyle":"brief","timezone":"America/Los_Angeles","locale":"en-US","updatedAt":"2026-09-01T12:00:00Z"}"#
+    }
+
+    private static func metadataResponseJSON(provider: AIProvider) -> String {
+        #"{"providerKey":{"provider":"\#(provider.rawValue)","lastFour":"1234","status":"active","credentialRevision":1,"validatedAt":"2026-09-01T12:00:00Z","updatedAt":"2026-09-01T12:00:01Z"}}"#
+    }
+
+    private static let settingsJSON = #"{"settingsRevision":3,"organizationMode":"balanced","providerMode":"byok","byokProvider":"openai","modelSelection":"auto","byokFallbackToApp":false,"routingEffort":"standard","expansionStyle":"brief","timezone":"America/Los_Angeles","locale":"en-US","updatedAt":"2026-09-01T12:00:00Z"}"#
+    private static let appDefaultSettingsJSON = #"{"settingsRevision":4,"organizationMode":"balanced","providerMode":"app_default","byokProvider":null,"modelSelection":"auto","byokFallbackToApp":false,"routingEffort":"standard","expansionStyle":"brief","timezone":"America/Los_Angeles","locale":"en-US","updatedAt":"2026-09-01T12:00:01Z"}"#
     private static let settingsResponseJSON = #"{"settings":\#(settingsJSON)}"#
-    private static let providerPutResponseJSON = #"{"providerKey":{"provider":"openai","lastFour":"7890","status":"active","credentialRevision":1,"validatedAt":"2026-09-01T12:00:00Z","updatedAt":"2026-09-01T12:00:01Z"},"replayed":false}"#
+    private static let providerPutResponseJSON = #"{"providerKey":{"provider":"anthropic","lastFour":"kkkk","status":"active","credentialRevision":1,"validatedAt":"2026-09-01T12:00:00Z","updatedAt":"2026-09-01T12:00:01Z"},"replayed":false}"#
 }
 
 private func XCTAssertSettingsThrowsAsync<T>(

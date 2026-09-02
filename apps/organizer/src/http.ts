@@ -56,6 +56,12 @@ function json(
   for (const [name, content] of Object.entries(extra)) responseHeaders.set(name, content);
   return new Response(JSON.stringify(value), { headers: responseHeaders, status });
 }
+function attachReleaseIdentity(response: Response, config: OrganizerConfig): void {
+  if (config.releaseIdentity === null) return;
+  response.headers.set("x-unfiled-deployment", config.releaseIdentity.deployment);
+  response.headers.set("x-unfiled-commit", config.releaseIdentity.commit);
+  response.headers.set("x-unfiled-environment", config.releaseIdentity.environment);
+}
 function id(): string {
   return randomUUID();
 }
@@ -274,7 +280,7 @@ export function createOrganizerApp(dependencies: OrganizerAppDependencies): Orga
         const result = await deadline(request, config.requestTimeoutMs, async (signal) => {
           const invocation =
             config.invocationAuth.kind === "bearer"
-              ? config.runtime === "production"
+              ? config.runtime !== "local"
                 ? await Promise.reject(
                     new OrganizerError(503, "provider_unavailable", "Invalid auth composition.", {
                       retryable: true
@@ -283,7 +289,7 @@ export function createOrganizerApp(dependencies: OrganizerAppDependencies): Orga
                 : authorizeLocalOrganizerInvocation({
                     authorizationHeader: request.headers.get("authorization"),
                     requestId,
-                    runtime: config.runtime,
+                    runtime: "local",
                     secret: config.invocationAuth.secret
                   })
               : await productionAuth.authorize(
@@ -329,6 +335,7 @@ export function createOrganizerApp(dependencies: OrganizerAppDependencies): Orga
       reported = error;
       response = errorResponse(error, requestId, config.invocationAuth.kind);
     }
+    attachReleaseIdentity(response, config);
     const classified = reported === undefined ? undefined : classifyOrganizerError(reported);
     logger.log({
       durationMs: Math.max(0, clock.now() - started),

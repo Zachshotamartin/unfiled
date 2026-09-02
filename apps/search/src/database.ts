@@ -4,7 +4,11 @@ import {
   RAG_GENERATION_VERIFICATION_NOTE_CAPACITY,
   type EncryptedUserSearchFilterManifest
 } from "@unfiled/contracts";
-import { parseManagedKeyRecord, type ManagedKeyRecordV1 } from "@unfiled/key-management";
+import {
+  parseManagedKeyRecordV1,
+  type ManagedKeyRecord,
+  type ManagedKeyRecordParser
+} from "@unfiled/key-management";
 import type { PrivateRagGenerationSnapshot, PrivateRagPageReadResult } from "@unfiled/search";
 
 import { SEARCH_EMBEDDING_DIMENSIONS, SEARCH_EMBEDDING_MODEL_ID } from "./config.js";
@@ -70,8 +74,8 @@ export type SearchGenerationBinding = Readonly<{
   generationId: string;
   revisionToken: string;
   attestationDigest: string;
-  embeddingModelId: typeof SEARCH_EMBEDDING_MODEL_ID;
-  embeddingDimensions: typeof SEARCH_EMBEDDING_DIMENSIONS;
+  embeddingModelId: string;
+  embeddingDimensions: number;
   envelopeSchemaVersion: 1;
 }>;
 
@@ -104,7 +108,7 @@ export type SearchRagRecord = Readonly<{
     keyPurpose: "object_wrap";
     keyVersion: number;
   }>;
-  key: ManagedKeyRecordV1;
+  key: ManagedKeyRecord;
   encryptedByteLength: number;
   metadata: SearchRagMetadata;
 }>;
@@ -220,7 +224,17 @@ function decodedBytes(value: unknown): number {
   return length;
 }
 
-function generation(value: unknown): SearchGenerationBinding {
+type SearchEmbeddingProfile = Readonly<{ dimensions: number; modelId: string }>;
+
+const DEFAULT_SEARCH_EMBEDDING_PROFILE: SearchEmbeddingProfile = Object.freeze({
+  dimensions: SEARCH_EMBEDDING_DIMENSIONS,
+  modelId: SEARCH_EMBEDDING_MODEL_ID
+});
+
+function generation(
+  value: unknown,
+  expectedProfile: SearchEmbeddingProfile
+): SearchGenerationBinding {
   const row = exact(value, [
     "embeddingDimensions",
     "embeddingModelId",
@@ -230,8 +244,8 @@ function generation(value: unknown): SearchGenerationBinding {
     "revisionToken"
   ]);
   if (
-    row.embeddingModelId !== SEARCH_EMBEDDING_MODEL_ID ||
-    row.embeddingDimensions !== SEARCH_EMBEDDING_DIMENSIONS ||
+    row.embeddingModelId !== expectedProfile.modelId ||
+    row.embeddingDimensions !== expectedProfile.dimensions ||
     row.envelopeSchemaVersion !== 1
   ) {
     return reject();
@@ -240,8 +254,8 @@ function generation(value: unknown): SearchGenerationBinding {
     generationId: string(row.generationId, GENERATION),
     revisionToken: String(integer(row.revisionToken, 0)),
     attestationDigest: string(row.attestationDigest, DIGEST),
-    embeddingModelId: SEARCH_EMBEDDING_MODEL_ID,
-    embeddingDimensions: SEARCH_EMBEDDING_DIMENSIONS,
+    embeddingModelId: expectedProfile.modelId,
+    embeddingDimensions: expectedProfile.dimensions,
     envelopeSchemaVersion: 1
   });
 }
@@ -260,7 +274,8 @@ function isAborted(signal: AbortSignal): boolean {
 
 function claimed(
   value: unknown,
-  expected: Readonly<{ searchId: string; requestDigest: string }>
+  expected: Readonly<{ searchId: string; requestDigest: string }>,
+  expectedProfile: SearchEmbeddingProfile
 ): ClaimedEncryptedUserSearch {
   const row = exact(value, [
     "filterDigest",
@@ -281,7 +296,7 @@ function claimed(
     leaseExpiresAt: timestamp(row.leaseExpiresAt),
     requestDigest,
     filterDigest: string(row.filterDigest, DIGEST),
-    generation: generation(row.generation)
+    generation: generation(row.generation, expectedProfile)
   });
 }
 
@@ -387,7 +402,7 @@ function metadataMatchesFilter(
 
 function ragRecord(
   value: unknown,
-  keyByIdentity: ReadonlyMap<string, ManagedKeyRecordV1>,
+  keyByIdentity: ReadonlyMap<string, ManagedKeyRecord>,
   ownerId: string
 ): Readonly<{
   indexId: string;
@@ -468,7 +483,9 @@ function pageResult(
     filterManifest: EncryptedUserSearchFilterManifest;
     limit: number;
     maxBytes: number;
-  }>
+  }>,
+  parseRecord: ManagedKeyRecordParser,
+  expectedProfile: SearchEmbeddingProfile
 ): PrivateRagPageReadResult<SearchRagRecord> {
   const root = exact(value, [
     "coverage",
@@ -498,14 +515,17 @@ function pageResult(
     "indexedNoteCount",
     "revisionToken"
   ]);
-  const generationBinding = generation({
-    attestationDigest: generationRow.attestationDigest,
-    embeddingDimensions: generationRow.embeddingDimensions,
-    embeddingModelId: generationRow.embeddingModelId,
-    envelopeSchemaVersion: generationRow.envelopeSchemaVersion,
-    generationId: generationRow.generationId,
-    revisionToken: generationRow.revisionToken
-  });
+  const generationBinding = generation(
+    {
+      attestationDigest: generationRow.attestationDigest,
+      embeddingDimensions: generationRow.embeddingDimensions,
+      embeddingModelId: generationRow.embeddingModelId,
+      envelopeSchemaVersion: generationRow.envelopeSchemaVersion,
+      generationId: generationRow.generationId,
+      revisionToken: generationRow.revisionToken
+    },
+    expectedProfile
+  );
   if (!sameGeneration(generationBinding, input.claim.generation)) return reject();
   const expectedNoteCount = integer(
     generationRow.expectedNoteCount,
@@ -576,11 +596,11 @@ function pageResult(
     return reject();
   }
 
-  const keyByIdentity = new Map<string, ManagedKeyRecordV1>();
+  const keyByIdentity = new Map<string, ManagedKeyRecord>();
   for (const unknownKey of root.keys) {
-    let key: ManagedKeyRecordV1;
+    let key: ManagedKeyRecord;
     try {
-      key = parseManagedKeyRecord(unknownKey);
+      key = parseRecord(unknownKey);
     } catch {
       return reject();
     }
@@ -681,8 +701,18 @@ async function execute(
 }
 
 export function createEncryptedUserSearchRepository(
-  executor: SearchDatabaseExecutor
+  executor: SearchDatabaseExecutor,
+  parseRecord: ManagedKeyRecordParser = parseManagedKeyRecordV1,
+  expectedProfile: SearchEmbeddingProfile = DEFAULT_SEARCH_EMBEDDING_PROFILE
 ): EncryptedUserSearchRepository {
+  if (
+    !Number.isSafeInteger(expectedProfile.dimensions) ||
+    expectedProfile.dimensions < 1 ||
+    expectedProfile.dimensions > 4_096 ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(expectedProfile.modelId)
+  ) {
+    return reject();
+  }
   return Object.freeze({
     async claim(input) {
       const searchId = string(input.searchId.toLowerCase(), UUID);
@@ -695,7 +725,8 @@ export function createEncryptedUserSearchRepository(
           [searchId, input.claimSecret, requestDigest],
           input.signal
         ),
-        { searchId, requestDigest }
+        { searchId, requestDigest },
+        expectedProfile
       );
     },
     async page(input) {
@@ -726,13 +757,18 @@ export function createEncryptedUserSearchRepository(
         ],
         input.signal
       );
-      return pageResult(value, {
-        claim: input.claim,
-        cursor: input.cursor,
-        filterManifest: parsedFilters.data,
-        limit: input.limit,
-        maxBytes: input.maxBytes
-      });
+      return pageResult(
+        value,
+        {
+          claim: input.claim,
+          cursor: input.cursor,
+          filterManifest: parsedFilters.data,
+          limit: input.limit,
+          maxBytes: input.maxBytes
+        },
+        parseRecord,
+        expectedProfile
+      );
     },
     async verify(input) {
       const parsedFilters = EncryptedUserSearchFilterManifestSchema.safeParse(input.filterManifest);

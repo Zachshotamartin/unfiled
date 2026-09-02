@@ -6,6 +6,7 @@ import {
   ProviderKeyDeleteResponseSchema,
   ProviderKeyPutRequestSchema,
   ProviderKeyPutResponseSchema,
+  ProviderKeyQuerySchema,
   ProviderKeyResponseSchema,
   UserSettingsResponseSchema,
   UserSettingsUpdateRequestSchema,
@@ -141,11 +142,31 @@ export function createAiSettingsHandlers(dependencies: AiSettingsHandlerDependen
 
     getProviderKey(request: Request) {
       return run(request, async (repository, context) => {
-        requireNoQuery(request);
+        const url = new URL(request.url);
+        if (
+          [...url.searchParams.keys()].some((key) => key !== "provider") ||
+          url.searchParams.getAll("provider").length !== 1
+        ) {
+          throw new HttpError(
+            400,
+            ApiErrorCode.VALIDATION_FAILED,
+            "Choose exactly one supported AI provider."
+          );
+        }
+        const query = requestInput(ProviderKeyQuerySchema, {
+          provider: url.searchParams.get("provider")
+        });
         const output = repositoryOutput(
           ProviderKeyResponseSchema,
-          await repository.getProviderKey(context)
+          await repository.getProviderKey(context, query.provider)
         );
+        if (output.providerKey !== null && output.providerKey.provider !== query.provider) {
+          throw new HttpError(
+            503,
+            ApiErrorCode.PROVIDER_UNAVAILABLE,
+            "Settings are temporarily unavailable. Try again."
+          );
+        }
         return jsonResponse(output);
       });
     },

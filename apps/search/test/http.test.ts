@@ -22,7 +22,9 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@unfiled/key-management", () => ({
   createAwsKmsEnvelopeCustodian: mocks.createCustodian,
-  createVercelOidcKmsTransport: mocks.createTransport
+  createVercelOidcKmsTransport: mocks.createTransport,
+  parseManagedKeyRecordV1: (value: unknown) => value,
+  parseManagedKeyRecordV2: (value: unknown) => value
 }));
 vi.mock("@vercel/oidc", () => ({ verifyVercelOidcToken: mocks.verifyOidc }));
 
@@ -65,6 +67,11 @@ function config(changes: Partial<SearchConfig> = {}): SearchConfig {
     maxRequestBytes: 16_384,
     pipeline: Object.freeze({ kind: "disabled" as const }),
     port: 8_791,
+    releaseIdentity: Object.freeze({
+      commit: "d".repeat(40),
+      deployment: `sha256:${"e".repeat(64)}` as const,
+      environment: "production" as const
+    }),
     requestTimeoutMs: 500,
     runtime: "production" as const,
     ...changes
@@ -199,7 +206,7 @@ describe("search HTTP boundary", () => {
     const get = await app(new Request("https://search.example/health"));
     expect(get.status).toBe(200);
     expect(await body(get)).toEqual({ service: "unfiled-search", status: "ok" });
-    expect(get.headers.get("allow")).toBeNull();
+    expect(get.headers.get("allow")).toBe("GET, HEAD");
     expect(get.headers.get("cache-control")).toBe("no-store");
     expect(get.headers.get("content-security-policy")).toContain("default-src 'none'");
     expect(get.headers.get("x-content-type-options")).toBe("nosniff");
@@ -217,6 +224,23 @@ describe("search HTTP boundary", () => {
     expect(mocks.verifyOidc).not.toHaveBeenCalled();
     expect(mocks.createTransport).not.toHaveBeenCalled();
     expect(logs.events.map((event) => event.route)).toEqual(["health", "health", "health"]);
+  });
+
+  it("emits only the managed release consistency identity on success and error", async () => {
+    const configured = config();
+    const app = createSearchApp({ config: configured });
+    for (const incoming of [
+      new Request("https://search.example/health"),
+      new Request("https://search.example/missing")
+    ]) {
+      const response = await app(incoming);
+      expect(response.headers.get("x-unfiled-deployment")).toBe(
+        configured.releaseIdentity?.deployment
+      );
+      expect(response.headers.get("x-unfiled-commit")).toBe(configured.releaseIdentity?.commit);
+      expect(response.headers.get("x-unfiled-environment")).toBe("production");
+      expect(JSON.stringify([...response.headers])).not.toContain("dpl_");
+    }
   });
 
   it("rejects unsupported methods and unknown routes before privileged work", async () => {

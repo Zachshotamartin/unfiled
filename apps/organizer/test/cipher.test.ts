@@ -46,10 +46,18 @@ const keyManagementMocks = vi.hoisted(() => ({
   custodianForOrganizerAuthority: vi.fn()
 }));
 
-vi.mock("../src/key-management.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof OrganizerKeyManagementModule>()),
-  custodianForOrganizerAuthority: keyManagementMocks.custodianForOrganizerAuthority
-}));
+vi.mock("../src/key-management.js", async (importOriginal) => {
+  const original = await importOriginal<typeof OrganizerKeyManagementModule>();
+  return {
+    ...original,
+    custodianForOrganizerAuthority: keyManagementMocks.custodianForOrganizerAuthority,
+    managedKeyRecordParserForOrganizerAuthority: () =>
+      original.managedKeyRecordParserForOrganizerBoundary({
+        kind: "local-synthetic",
+        keyClass: "ai_assisted"
+      })
+  };
+});
 
 const OWNER_ID = "22222222-2222-4222-8222-222222222222";
 const OTHER_OWNER_ID = "33333333-3333-4333-8333-333333333333";
@@ -248,7 +256,11 @@ function job(
     jobId: IDS.job,
     leaseExpiresAt: "2026-08-31T20:00:00.000Z",
     leaseToken: "44444444-4444-4444-8444-444444444444",
-    modelId: "gpt-5.4-mini-2026-03-17",
+    modelId: "gpt-5.6-terra",
+    modelSelection: "auto",
+    selectedProvider: "openai",
+    adapterRegistryVersion: "organization-model-registry-v2",
+    settingsRevision: 1,
     occurredAt: OCCURRED_AT,
     ownerId: OWNER_ID,
     promptVersion: "routing-v1",
@@ -1094,7 +1106,7 @@ describe("production organizer cipher", () => {
       reviewReason: "expansion_pending",
       generatedBlock: {
         kind: "suggestion",
-        modelId: "gpt-5.4-mini-2026-03-17",
+        modelId: "gpt-5.6-terra",
         promptVersion: "routing-v1"
       },
       review: { type: "pending_expansion" }

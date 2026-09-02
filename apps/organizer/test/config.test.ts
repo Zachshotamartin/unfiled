@@ -12,6 +12,10 @@ const retiredObjectArn =
   "arn:aws:kms:us-west-2:123456789012:key/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 const pem = "-----BEGIN CERTIFICATE-----\n" + "A".repeat(80) + "\n-----END CERTIFICATE-----\n";
 const providerKey = "a".repeat(32);
+const sensitiveObjectRoot =
+  "urn:unfiled:key-root:vercel-sensitive-env-v1:production:11111111-2222-4333-8444-555555555555";
+const sensitiveMacRoot =
+  "urn:unfiled:key-root:vercel-sensitive-env-v1:production:66666666-7777-4888-8999-000000000000";
 
 function local(overrides: OrganizerEnvironment = {}): OrganizerEnvironment {
   return {
@@ -22,8 +26,12 @@ function local(overrides: OrganizerEnvironment = {}): OrganizerEnvironment {
 }
 function production(overrides: OrganizerEnvironment = {}): OrganizerEnvironment {
   return {
+    UNFILED_KEY_CUSTODIAN: "aws-kms",
     UNFILED_ORGANIZER_ENV: "production",
+    VERCEL: "1",
+    VERCEL_DEPLOYMENT_ID: "dpl_organizerproduction123",
     VERCEL_ENV: "production",
+    VERCEL_GIT_COMMIT_SHA: "b".repeat(40),
     VERCEL_PROJECT_ID: "prj_organizer123",
     UNFILED_AWS_REGION: "us-west-2",
     UNFILED_AWS_ROLE_ARN: "arn:aws:iam::123456789012:role/unfiled-organizer-production",
@@ -43,9 +51,28 @@ function production(overrides: OrganizerEnvironment = {}): OrganizerEnvironment 
     UNFILED_ORGANIZER_DATABASE_EXPECTED_HOST: "aws-0-us-west-2.pooler.supabase.com",
     UNFILED_ORGANIZER_DATABASE_PROJECT_REF: "abcdefghijklmnopqrst",
     UNFILED_ORGANIZER_DATABASE_CA_PEM_BASE64: Buffer.from(pem).toString("base64"),
+    UNFILED_ORGANIZER_EMBEDDING_PROVIDER: "openai",
     UNFILED_ORGANIZER_OPENAI_API_KEY: providerKey,
     ...overrides
   };
+}
+
+function preview(overrides: OrganizerEnvironment = {}): OrganizerEnvironment {
+  return production({
+    UNFILED_ORGANIZER_ENV: "preview",
+    UNFILED_AWS_ROLE_ARN: "arn:aws:iam::123456789012:role/unfiled-organizer-preview",
+    UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN:
+      "arn:aws:kms:us-west-2:123456789012:key/22222222-3333-4444-8555-666666666666",
+    UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN:
+      "arn:aws:kms:us-west-2:123456789012:key/77777777-8888-4999-8aaa-bbbbbbbbbbbb",
+    UNFILED_ORGANIZER_EXPECTED_OIDC_SUBJECT:
+      "owner:team-example:project:unfiled-organizer:environment:preview",
+    UNFILED_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT:
+      "owner:team-example:project:unfiled-web:environment:preview",
+    VERCEL_DEPLOYMENT_ID: "dpl_organizerpreview123",
+    VERCEL_ENV: "preview",
+    ...overrides
+  });
 }
 
 describe("organizer configuration", () => {
@@ -56,8 +83,10 @@ describe("organizer configuration", () => {
         port: 8790,
         requestTimeoutMs: 49_000,
         maxRequestBytes: 1_024,
+        embedding: { kind: "disabled" },
         pipeline: { kind: "disabled" },
         planner: { kind: "disabled" },
+        releaseIdentity: null,
         keyBoundary: { kind: "local-synthetic", keyClass: "ai_assisted" }
       })
     );
@@ -65,6 +94,9 @@ describe("organizer configuration", () => {
       expect.objectContaining({
         acceptsUserSessions: false,
         productionPlannerConfigured: true,
+        providerRegistryVersion: "organization-model-registry-v2",
+        providers: ["openai", "anthropic"],
+        requiresAppDefaultProviderKey: false,
         decryptKeyClasses: ["ai_assisted"]
       })
     );
@@ -76,6 +108,11 @@ describe("organizer configuration", () => {
       })
     );
     expect(config.runtime).toBe("production");
+    expect(config.releaseIdentity).toEqual({
+      commit: "b".repeat(40),
+      deployment: "sha256:8c9bc51347a9872c88c29e382e878b2db392a7acc095242bd419f82923322f68",
+      environment: "production"
+    });
     expect(config.invocationAuth).toMatchObject({
       kind: "production-trusted-source",
       trustedSource: { projectId: "prj_web123", teamSlug: "team-example" }
@@ -92,7 +129,97 @@ describe("organizer configuration", () => {
       concurrency: 2,
       leaseSeconds: 120
     });
-    expect(config.planner).toMatchObject({ kind: "openai-responses" });
+    expect(config.embedding).toEqual({ kind: "openai" });
+    expect(config.planner).toEqual({
+      appDefaultApiKeys: { openai: providerKey },
+      kind: "lease-bound-provider-registry-v2"
+    });
+  });
+  it("loads a BYOK-only production boundary without any operator-funded provider key", () => {
+    const config = loadOrganizerConfig(
+      production({
+        UNFILED_ORGANIZER_EMBEDDING_PROVIDER: "local-hash-v1",
+        UNFILED_ORGANIZER_OPENAI_API_KEY: undefined
+      })
+    );
+    expect(config.planner).toEqual({
+      appDefaultApiKeys: {},
+      kind: "lease-bound-provider-registry-v2"
+    });
+    expect(JSON.stringify(config)).not.toMatch(/ANTHROPIC|sk-/u);
+    expect(
+      loadOrganizerConfig(production({ UNFILED_ORGANIZER_OPENAI_API_KEY: "" })).planner
+    ).toEqual({ appDefaultApiKeys: {}, kind: "lease-bound-provider-registry-v2" });
+  });
+  it.each([
+    ["ANTHROPIC_API_KEY", { ANTHROPIC_API_KEY: providerKey }],
+    ["UNFILED_ORGANIZER_ANTHROPIC_API_KEY", { UNFILED_ORGANIZER_ANTHROPIC_API_KEY: providerKey }],
+    ["UNFILED_ANTHROPIC_API_KEY", { UNFILED_ANTHROPIC_API_KEY: providerKey }],
+    ["UNFILED_ORGANIZER_OPENAI_MODEL", { UNFILED_ORGANIZER_OPENAI_MODEL: "gpt-5.6-sol" }],
+    ["UNFILED_ORGANIZER_ANTHROPIC_MODEL", { UNFILED_ORGANIZER_ANTHROPIC_MODEL: "claude-opus-5" }],
+    ["ANTHROPIC_BASE_URL", { ANTHROPIC_BASE_URL: "https://example.invalid" }]
+  ])(
+    "rejects an operator Claude key or provider override %s in production",
+    (variable, overrides) => {
+      expect(() => loadOrganizerConfig(production(overrides))).toThrow(variable);
+    }
+  );
+  it("loads the provider-free local hash retrieval profile", () => {
+    expect(
+      loadOrganizerConfig(production({ UNFILED_ORGANIZER_EMBEDDING_PROVIDER: "local-hash-v1" }))
+    ).toMatchObject({
+      embedding: {
+        dimensions: 512,
+        kind: "local-hash-v1",
+        modelId: "unfiled-local-hash-v1"
+      }
+    });
+  });
+  it("loads Vercel sensitive-environment custody without AWS workload identity", () => {
+    expect(
+      loadOrganizerConfig(
+        production({
+          UNFILED_KEY_CUSTODIAN: "vercel-sensitive-env-v1",
+          UNFILED_AWS_REGION: undefined,
+          UNFILED_AWS_ROLE_ARN: undefined,
+          UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN: undefined,
+          UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN: undefined,
+          UNFILED_ORGANIZER_EXPECTED_OIDC_SUBJECT: undefined,
+          UNFILED_ORGANIZER_AI_OBJECT_WRAP_ROOT_KEY_ID: sensitiveObjectRoot,
+          UNFILED_ORGANIZER_AI_CONTENT_MAC_ROOT_KEY_ID: sensitiveMacRoot,
+          UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1: '{"version":1}'
+        })
+      )
+    ).toMatchObject({
+      keyBoundary: {
+        aiContentMacRootKeyId: sensitiveMacRoot,
+        aiObjectWrapRootKeyId: sensitiveObjectRoot,
+        deploymentEnvironment: "production",
+        kind: "vercel-sensitive-env-v1",
+        retiredRoots: { ai_assisted: { content_mac: [], object_wrap: [] } }
+      }
+    });
+  });
+  it("loads Preview through its exact managed trust, KMS, database, and provider boundary", () => {
+    const config = loadOrganizerConfig(preview());
+    expect(config).toMatchObject({
+      runtime: "preview",
+      releaseIdentity: { environment: "preview" },
+      invocationAuth: {
+        kind: "production-trusted-source",
+        trustedSource: {
+          environment: "preview",
+          expectedSubject: "owner:team-example:project:unfiled-web:environment:preview"
+        }
+      },
+      keyBoundary: {
+        kind: "aws-oidc",
+        expectedOidcSubject: "owner:team-example:project:unfiled-organizer:environment:preview",
+        roleArn: "arn:aws:iam::123456789012:role/unfiled-organizer-preview"
+      },
+      pipeline: { kind: "enabled" },
+      planner: { kind: "lease-bound-provider-registry-v2" }
+    });
   });
   it.each([
     ["missing runtime", {}, ["UNFILED_ORGANIZER_ENV"]],
@@ -144,12 +271,38 @@ describe("organizer configuration", () => {
     expect(() => loadOrganizerConfig(environment)).toThrow(expected[0]);
   });
   it("rejects Vercel runtime mismatches", () => {
+    expect(() => loadOrganizerConfig(local({ VERCEL: "1" }))).toThrow("VERCEL_ENV");
+    expect(() =>
+      loadOrganizerConfig(local({ VERCEL_DEPLOYMENT_ID: "dpl_localmustnotexist" }))
+    ).toThrow("VERCEL_DEPLOYMENT_ID");
     expect(() => loadOrganizerConfig(local({ VERCEL_ENV: "preview" }))).toThrow("VERCEL_ENV");
     expect(() => loadOrganizerConfig(production({ VERCEL_ENV: "preview" }))).toThrow("VERCEL_ENV");
+    expect(() => loadOrganizerConfig(preview({ VERCEL: undefined }))).toThrow("VERCEL_ENV");
+    expect(() => loadOrganizerConfig(preview({ VERCEL_DEPLOYMENT_ID: undefined }))).toThrow(
+      "VERCEL_DEPLOYMENT_ID"
+    );
+    expect(() => loadOrganizerConfig(preview({ VERCEL_DEPLOYMENT_ID: "unsafe/value" }))).toThrow(
+      "VERCEL_DEPLOYMENT_ID"
+    );
+    expect(() => loadOrganizerConfig(preview({ VERCEL_GIT_COMMIT_SHA: "B".repeat(40) }))).toThrow(
+      "VERCEL_GIT_COMMIT_SHA"
+    );
+    expect(() =>
+      loadOrganizerConfig(
+        preview({
+          UNFILED_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT:
+            "owner:team-example:project:unfiled-web:environment:production"
+        })
+      )
+    ).toThrow("UNFILED_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT");
+    expect(() =>
+      loadOrganizerConfig(preview({ UNFILED_ORGANIZER_DRAIN_SECRET: "x".repeat(32) }))
+    ).toThrow("UNFILED_ORGANIZER_DRAIN_SECRET");
   });
   it.each([
-    [{ UNFILED_ORGANIZER_OPENAI_API_KEY: undefined }, "UNFILED_ORGANIZER_OPENAI_API_KEY"],
+    [{ UNFILED_ORGANIZER_EMBEDDING_PROVIDER: "implicit" }, "UNFILED_ORGANIZER_EMBEDDING_PROVIDER"],
     [{ UNFILED_ORGANIZER_OPENAI_API_KEY: "short" }, "UNFILED_ORGANIZER_OPENAI_API_KEY"],
+    [{ UNFILED_ORGANIZER_OPENAI_API_KEY: `${providerKey}\n` }, "UNFILED_ORGANIZER_OPENAI_API_KEY"],
     [{ UNFILED_ORGANIZER_OPENAI_API_KEY: ` ${providerKey}` }, "UNFILED_ORGANIZER_OPENAI_API_KEY"],
     [{ UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN: objectArn }, "UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN"],
     [{ UNFILED_AWS_REGION: "invalid" }, "UNFILED_AWS_REGION"],

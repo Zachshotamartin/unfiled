@@ -1,5 +1,9 @@
 terraform {
-  required_version = ">= 1.8.0"
+  required_version = ">= 1.10.0"
+
+  # Account-specific values are supplied from an ignored *.tfbackend file.
+  # Terraform 1.10+ is required for native S3 lockfile support.
+  backend "s3" {}
 
   required_providers {
     aws = {

@@ -34,7 +34,7 @@ export function authorizeLocalOrganizerInvocation(
   input: Readonly<{
     authorizationHeader: string | null;
     requestId: string;
-    runtime: "local" | "preview";
+    runtime: "local";
     secret: string;
   }>
 ): VerifiedOrganizerInvocation {
@@ -155,7 +155,7 @@ export function createVercelTrustedSourcesInvocationAuth(
       if (signal.aborted) throw new OrganizerUnavailableError();
       if (!exactClaims(result, options.trustedSource, Math.floor(Date.now() / 1_000)))
         throw unauthorized();
-      return issue({ requestId: proof.requestId, runtime: "production" });
+      return issue({ requestId: proof.requestId, runtime: options.trustedSource.environment });
     }
   });
 }

@@ -10,6 +10,7 @@ import type {
 import type { AwsOrganizerKeyBoundary, VercelTrustedSource } from "../src/config.js";
 import { OrganizerUnavailableError } from "../src/errors.js";
 import { createVercelTrustedSourcesInvocationAuth } from "../src/invocation-auth.js";
+import type { OrganizerIntermediateKeyCustodian } from "../src/key-management.js";
 
 const keyMocks = vi.hoisted(() => ({
   assertReadiness: vi.fn((input?: unknown) => {
@@ -30,7 +31,9 @@ const keyMocks = vi.hoisted(() => ({
 vi.mock("@unfiled/key-management", () => ({
   assertAiAssistedKmsReadiness: keyMocks.assertReadiness,
   createAwsKmsEnvelopeCustodian: keyMocks.createCustodian,
-  createVercelOidcKmsTransport: keyMocks.createTransport
+  createVercelOidcKmsTransport: keyMocks.createTransport,
+  parseManagedKeyRecordV1: (value: unknown) => value,
+  parseManagedKeyRecordV2: (value: unknown) => value
 }));
 vi.mock("@vercel/oidc", () => ({ verifyVercelOidcToken: keyMocks.verifyOidc }));
 
@@ -105,25 +108,25 @@ function recordingCustodian(calls: {
   });
 }
 
-async function productionInvocation() {
+async function trustedInvocation(source: VercelTrustedSource = trustedSource) {
   const now = Math.floor(Date.now() / 1_000);
   keyMocks.verifyOidc.mockResolvedValue({
     payload: {
-      aud: trustedSource.audience,
-      environment: trustedSource.environment,
+      aud: source.audience,
+      environment: source.environment,
       exp: now + 300,
       iat: now,
-      iss: trustedSource.issuer,
+      iss: source.issuer,
       nbf: now,
-      owner: trustedSource.teamSlug,
-      owner_id: trustedSource.ownerId,
-      project: trustedSource.projectName,
-      project_id: trustedSource.projectId,
-      sub: trustedSource.expectedSubject
+      owner: source.teamSlug,
+      owner_id: source.ownerId,
+      project: source.projectName,
+      project_id: source.projectId,
+      sub: source.expectedSubject
     },
     protectedHeader: { alg: "RS256" }
   });
-  return createVercelTrustedSourcesInvocationAuth({ trustedSource }).authorize(
+  return createVercelTrustedSourcesInvocationAuth({ trustedSource: source }).authorize(
     {
       authorizationHeader: null,
       protectionBypassHeader: null,
@@ -134,6 +137,8 @@ async function productionInvocation() {
   );
 }
 
+const productionInvocation = trustedInvocation;
+
 describe("production organizer key-management composition", () => {
   beforeEach(() => {
     keyMocks.assertReadiness.mockReset().mockResolvedValue(undefined);
@@ -142,9 +147,67 @@ describe("production organizer key-management composition", () => {
     keyMocks.verifyOidc.mockReset();
   });
 
+  it("opens the separately configured Preview KMS boundary without synthetic fallback", async () => {
+    const previewSource: VercelTrustedSource = {
+      ...trustedSource,
+      environment: "preview",
+      expectedSubject: "owner:team-example:project:unfiled-web:environment:preview"
+    };
+    const previewBoundary: AwsOrganizerKeyBoundary = {
+      ...awsBoundary,
+      expectedOidcSubject: "owner:team-example:project:unfiled-organizer:environment:preview",
+      roleArn: "arn:aws:iam::123456789012:role/unfiled-organizer-preview"
+    };
+
+    await expect(
+      createOrganizerKeyManagementAdapter().withAiAssistedAuthority(
+        previewBoundary,
+        {
+          invocation: await trustedInvocation(previewSource),
+          oidcToken: "preview.workload.signature",
+          requestId: "request-1",
+          runtime: "preview"
+        },
+        new AbortController().signal,
+        () => Promise.resolve("preview")
+      )
+    ).resolves.toBe("preview");
+
+    expect(keyMocks.createTransport).toHaveBeenCalledWith({
+      maxAttempts: 2,
+      region: "us-west-2",
+      roleArn: "arn:aws:iam::123456789012:role/unfiled-organizer-preview",
+      workload: "organization_worker"
+    });
+  });
+
+  it("rejects a cross-environment KMS boundary before opening AWS", async () => {
+    const previewSource: VercelTrustedSource = {
+      ...trustedSource,
+      environment: "preview",
+      expectedSubject: "owner:team-example:project:unfiled-web:environment:preview"
+    };
+
+    await expect(
+      createOrganizerKeyManagementAdapter().withAiAssistedAuthority(
+        awsBoundary,
+        {
+          invocation: await trustedInvocation(previewSource),
+          oidcToken: "preview.workload.signature",
+          requestId: "request-1",
+          runtime: "preview"
+        },
+        new AbortController().signal,
+        () => Promise.resolve("must-not-run")
+      )
+    ).rejects.toBeInstanceOf(OrganizerUnavailableError);
+
+    expect(keyMocks.createTransport).not.toHaveBeenCalled();
+  });
+
   it("opens only the organizer KMS roots and revokes the request-scoped custodian", async () => {
     let retainedAuthority: Parameters<typeof custodianForOrganizerAuthority>[0] | undefined;
-    let retainedFacade: IntermediateKeyCustodian | undefined;
+    let retainedFacade: OrganizerIntermediateKeyCustodian | undefined;
     const closeSawRevoked: boolean[] = [];
     const transport = {
       destroy: vi.fn(() => {
@@ -173,12 +236,11 @@ describe("production organizer key-management composition", () => {
       signal,
       async (authority) => {
         retainedAuthority = authority;
-        retainedFacade = custodianForOrganizerAuthority(authority);
-        expect(retainedFacade).not.toBe(custodian);
-        await retainedFacade.withGeneratedIntermediateKey(keyRequest, () =>
-          Promise.resolve("generated")
-        );
-        await retainedFacade.withUnwrappedIntermediateKey({}, () => Promise.resolve("unwrapped"));
+        const facade = custodianForOrganizerAuthority(authority);
+        retainedFacade = facade;
+        expect(facade).not.toBe(custodian);
+        await facade.withGeneratedIntermediateKey(keyRequest, () => Promise.resolve("generated"));
+        await facade.withUnwrappedIntermediateKey({}, () => Promise.resolve("unwrapped"));
         return "complete";
       }
     );
