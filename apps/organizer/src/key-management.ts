@@ -314,8 +314,10 @@ async function assertSensitiveRootReady(
   await custodian.withGeneratedIntermediateKey(
     request,
     (generated, record) =>
+      // The custodian only opens active or retired records, so the throwaway
+      // readiness record is activated in memory; it is never persisted.
       custodian.withUnwrappedIntermediateKey(
-        record,
+        { ...record, activatedAt: record.createdAt, status: "active" },
         (unwrapped) => {
           if (
             generated.byteLength !== unwrapped.byteLength ||
