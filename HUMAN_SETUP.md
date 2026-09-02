@@ -12,15 +12,15 @@ This file contains only steps that require a human account, physical device, pai
 
 ## Remaining release gates at a glance
 
-The Milestone D organizer, cipher, encrypted RAG path, and OpenAI adapters and the Milestone E1–E3 encrypted correction/Review/batch-Undo, routing-rule, generated-block, and duplicate-suggestion slices are implemented in code. E2's credential-free aggregate/HTTP/PR-CI gate is green. E3's credential-free local aggregate and built-local B–E3 HTTP gates plus PR #16's required CI lanes are green; its deployed canary remains pending. E4 and Milestones F–G remain pending. The following steps still require a human-controlled account, credential, environment, or device and remain release-blocking:
+The Milestone D organizer, cipher, encrypted RAG path, and OpenAI adapters and the Milestone E1–E4 encrypted correction/Review/batch-Undo, routing-rule, generated-block, duplicate-suggestion, AI-settings, and Vault-only OpenAI BYOK slices are implemented in code. E2's credential-free aggregate/HTTP/PR-CI gate is green. E3's credential-free local aggregate and built-local B–E3 HTTP gates plus PR #16's required CI lanes are green; its deployed canary remains pending. E4's credential-free local aggregate and built-local B–E4 HTTP gates are green, its independent final audit is clear, and PR #17's required CI lanes are green. Milestones F–G remain pending. The following steps still require a human-controlled account, credential, environment, or device and remain release-blocking:
 
 1. Create the dedicated OpenAI Production project/service account, restrict its model/key authority, set rate/spend controls, decide and document its data-retention posture, and place the key only in the organizer Production secret store.
 2. Keep `pnpm eval:routing` as the deterministic mock safety gate and run `pnpm eval:routing:pipeline` for the deterministic production-component seam. Its report names the real components exercised and the database/runtime guarantees it excludes. The optional credentialed runner is checked in as `pnpm eval:routing:live`; it requires only `UNFILED_ROUTING_EVAL_OPENAI_API_KEY`, runs exactly three samples per eligible synthetic case, and emits safe content-free telemetry. No credentialed live run or stochastic provider report exists yet.
-3. Provision and prove the exact Vercel Trusted Sources, AWS OIDC/KMS roles, CloudTrail trail, and TLS-only PostgreSQL logins. None of the four required Vercel projects is provisioned or deployed yet. The organizer login must expose exactly ten RPCs through Milestone D/E3; only E4 may add the eleventh lease-bound Vault credential RPC.
+3. Provision and prove the exact Vercel Trusted Sources, AWS OIDC/KMS roles, CloudTrail trail, and TLS-only PostgreSQL logins. None of the four required Vercel projects is provisioned or deployed yet. The organizer login now exposes exactly eleven RPCs: the ten Milestone D/E3 capabilities plus E4's sole lease-bound Vault credential resolver.
 4. Run the staged synthetic organizer canaries and outage/race/replay cases, verify ciphertext-only durable state, and record the disable/rollback decision points before admitting a small cohort.
 5. Complete the restore drill, apply the one-way C.5d production contract from a real database-owner session, verify the post-contract canary, and track every pre-contract backup until expiry.
 6. Complete Apple signing, signed archive inspection, SQLCipher/Keychain/App Group checks, and the Lock Screen widget matrix on a physical iPhone.
-7. Before enabling E1–E3 in Production, run the deployed owner-interaction, private-rule, generated-block, duplicate-suggestion, and retention account/canary gates below. Extend that evidence after E4 through Vault-only BYOK. No user BYOK or Anthropic control may be enabled from the current E3 code state.
+7. Before enabling E1–E4 in Production, run the deployed owner-interaction, private-rule, generated-block, duplicate-suggestion, retention, and Vault-only BYOK account/canary gates below. The local E4 implementation is not permission to enable production BYOK. Anthropic remains unavailable until its adapter and provider-specific evaluation/release gates pass.
 
 The production storage promise is application encryption at rest with scoped server-side decryption. It is not end-to-end encryption or zero-knowledge storage.
 
@@ -49,7 +49,7 @@ Complete these human validation items before treating Milestone 0 as approved:
 
 1. Create separate preview and production projects at Supabase.
 2. Enable Vault and confirm the project plan supports the required backup and point-in-time recovery targets.
-3. Store each project URL, anonymous key, service-role key, and database password only in the matching interactive web/API Vercel environment. The isolated `apps/worker`, `apps/verifier`, and `apps/organizer` projects must never receive a global Supabase service-role/secret key; their narrowly scoped C.5c database credentials are provisioned separately below.
+3. Store each project URL, anonymous key, and service-role key only in the matching interactive web/API Vercel environment. Do **not** put the Supabase database password in any web or workload runtime; keep it in the approved operator secret manager for migrations and recovery only. The isolated `apps/worker`, `apps/verifier`, and `apps/organizer` projects must never receive a global Supabase service-role/secret key; their narrowly scoped C.5c database credentials are provisioned separately below.
 4. Link preview from a trusted shell: `pnpm supabase link --project-ref <preview-project-ref>`.
 5. Review migrations, then apply: `pnpm supabase db push --linked`.
 6. Never link a developer preview deployment to production data.
@@ -521,10 +521,12 @@ Official references: [project service-account keys](https://developers.openai.co
 ### Dedicated encrypted-organizer database login — provision separately
 
 Migration `20260830000020_encrypted_organizer_runtime.sql`, as narrowed and extended by
-`20260901000000_milestone_d_organizer_retrieval.sql`, creates the exact PostgreSQL role
+`20260901000000_milestone_d_organizer_retrieval.sql` and
+`20260901000005_vault_byok_and_ai_settings.sql`, creates the exact PostgreSQL role
 `unfiled_organizer_worker` as `NOLOGIN`, `NOINHERIT`, and `NOBYPASSRLS`. It has no table, sequence,
 private-schema, public-create, inherited-role, service-role, index-worker, verifier, or key-admin
-capability. It can execute exactly ten job/lease-scoped public RPCs. None accepts an owner UUID;
+capability. It can execute exactly eleven job/lease-scoped public RPCs: the ten Milestone D/E3
+capabilities plus E4's sole lease-bound provider-credential resolver. None accepts an owner UUID;
 ownership is derived from the currently leased organization job. The matching `apps/organizer`
 deployment is a fourth trust domain with a 49-second maximum request deadline and AI-assisted
 object-wrap/content-MAC custody only. Milestone D composes the production cipher, encrypted RAG
@@ -532,7 +534,7 @@ retrieval, OpenAI planner, and atomic create-or-append/Review path; the real-pro
 account canary above still gate actual personal-note traffic.
 
 1. Apply `supabase/roles.sql` and every migration through
-   `20260901000000_milestone_d_organizer_retrieval.sql` before provisioning the login. Inspect
+   `20260901000005_vault_byok_and_ai_settings.sql` before provisioning the current login. Inspect
    `pg_auth_members`: zero membership rows touching `unfiled_organizer_worker` is preferred after a
    real bootstrap-superuser cleanup. If the managed Supabase bootstrap grant cannot be removed, the
    only permitted row is granted role `unfiled_organizer_worker`, member `postgres`, grantor
@@ -669,7 +671,7 @@ account canary above still gate actual personal-note traffic.
 12. Rotate this credential independently of the web, worker, verifier, and Supabase service keys.
     Pause organizer invocations, use the trusted verified-TLS `\password unfiled_organizer_worker`
     prompt, update only the organizer Production secret, redeploy/recycle its pool, prove the old
-    credential is rejected and the new session preserves the exact ten-RPC ACL, run the empty-queue
+    credential is rejected and the new session preserves the exact eleven-RPC ACL, run the empty-queue
     readiness and denial probes again, then resume. Re-prove alias ownership, OIDC, database session,
     and KMS denials after a project transfer, alias change, role/policy change, CA rotation, database
     restore, or migration replay.
@@ -707,8 +709,9 @@ the owner-authorized web/native interactions. E2 migration
 service-only capabilities, encrypted explicit/learned rule lifecycle, and content-free organizer
 snapshot. E3 migration `20260901000004_encrypted_generated_blocks_and_duplicate_suggestions.sql`
 implements separately encrypted generated blocks, non-destructive duplicate suggestions, and the sole
-new public generated-block resolver without expanding the organizer's ten-RPC allowlist. E4 retains
-assigned migration `20260901000005`. The E2 credential-free aggregate/HTTP/PR-CI gate is green;
+new public generated-block resolver without expanding the organizer's ten-RPC allowlist. E4 migration
+`20260901000005_vault_byok_and_ai_settings.sql` implements exact owner settings/provider-key RPCs,
+Vault-only OpenAI-key storage, and the sole eleventh organizer capability. The E2 credential-free aggregate/HTTP/PR-CI gate is green;
 E3's credential-free local aggregate and built-local B–E3 HTTP gates plus PR #16's required CI lanes
 are green, while its deployed canary remains pending. The credential-free E1 gate is green: the full built-local HTTP B–E1
 suite passed; web passed 78 files / 651 tests; organizer, worker, and verifier passed 18 / 281,
@@ -729,10 +732,25 @@ boundaries, and OpenAPI were green. Routing passed 175/175, the production-compo
 `liveProviderEvidence=false`, verifier capacity passed 1/1, retrieval recorded cold p95 381.58 ms
 and warm p95 11.98 ms, the dependency audit found no known vulnerabilities, and the independent final security/hygiene audit was clear. None of this
 replaces the human-controlled deployment/account checks below. E3 closes Milestone D's
-generated-expansion discard gap in code, while user BYOK remains disabled.
+generated-expansion discard gap in code.
 
-1. From the current E3 release candidate, verify the database applied the shared E0, E1, E2, and E3
-   migrations in order. When E4 lands, the complete release candidate must apply exactly these
+The E4 credential-free local gate is also green: a clean reset passed 39 pgTAP files / 1,901
+assertions, focused `092` passed 65/65, combined `087` + `092` passed 148/148, database lint returned
+zero findings, and the two local Vault REST profile probes each failed closed with `406 PGRST106`.
+The built-local B–E4 HTTP suite passed exact replay/CAS, validator-count, secret-free snapshot,
+live-lease, delete/recreate ABA, and canary checks. Web passed 97 files / 827 tests; organizer 19 / 314;
+API client 4 / 38; contracts 7 / 55; encrypted aggregate 8 / 144; AI routing 11 / 79; and Swift
+181/181. Workspace lint/typecheck/coverage passed 26/26, build passed 16/16, all three built-server
+smokes and focused configuration 35/35 passed, and boundaries/OpenAPI were green. Routing passed
+175/175, the production-component seam passed 15/15 with `liveProviderEvidence=false`, verifier
+capacity passed 1/1, retrieval recorded cold p95 392.80 ms and warm p95 12.98 ms, and the dependency
+audit found no known vulnerabilities, E4's independent final audit is clear, and PR #17's required CI lanes are green.
+Production BYOK remains disabled until the account-controlled Vault/provider/canary/backup steps
+below pass; the local gate does not prove deployment, provider-account behavior, Apple hardware, or
+E2EE.
+
+1. From the current E4 release candidate, verify the database applied the shared E0, E1, E2, E3,
+   and E4 migrations in exactly this order:
    feature migrations in order:
    `20260901000001_milestone_e0_interaction_contracts.sql`,
    `20260901000002_encrypted_decision_corrections.sql`,
@@ -780,23 +798,35 @@ generated-expansion discard gap in code, while user BYOK remains disabled.
    remains before seven days, is hard-deleted at or after seven days, and a replayed retention run
    cannot consume a second block batch.
 5. In the Production Supabase project, confirm Vault is enabled and included in the approved backup,
-   restore, audit, and retention posture. E4 must remove or permanently constrain the legacy
-   `user_provider_keys.key_ciphertext` fallback. If Vault or these controls are unavailable, leave
+   restore, audit, and retention posture. E4 permanently constrains the legacy
+   `user_provider_keys.key_ciphertext` fallback and aborts rather than silently migrating unsupported
+   legacy credential state. If Vault or these controls are unavailable, leave
    BYOK disabled; do not create an app-layer provider-key KEK or store credential ciphertext in an
    ordinary table/content envelope.
-6. Run a PostgreSQL privilege probe. Browser/native, `anon`, `authenticated`, `service_role`, index
-   worker, verifier, and organizer must have no direct provider-key table, Vault table/view/function,
-   or arbitrary secret access. The owner-authorized web boundary may call only
+6. Run both a PostgreSQL privilege probe and a deployed Supabase REST exposure probe. Browser/native,
+   `anon`, `authenticated`, index worker, verifier, and organizer must have no direct provider-key
+   table, Vault table/view/function, or arbitrary secret access. `service_role` must have no direct
+   provider-key or private E4 evidence-table access. Supabase's Vault extension may retain grants to
+   its built-in `service_role` from `supabase_admin` that a project migration cannot revoke; do not
+   claim otherwise. Keep `vault` absent from the hosted API exposed schemas and extra search path,
+   keep every database password out of the web runtime, and prove service-key requests with both
+   `Accept-Profile: vault` and `Content-Profile: vault` are rejected. If an owner-authorized Supabase
+   operation or support procedure can revoke the latent grants, execute it and record the catalog
+   denial. The owner-authorized web boundary may call only
    `get_owner_ai_settings`, `update_owner_ai_settings`, `get_user_provider_key_status`,
    `put_user_provider_key`, and `delete_user_provider_key`. The organizer gains only
-   `get_lease_bound_organizer_provider_credential`; after E4 its complete public allowlist must be
-   exactly eleven rather than ten.
+   `get_lease_bound_organizer_provider_credential`; its complete E4 public allowlist must be exactly
+   eleven rather than ten.
 7. Create a low-value, separately budgeted synthetic-provider key. Enter it only into the masked
    authenticated settings form; do not paste it into a CLI argument, shell history, screenshot,
    ticket, chat, fixture, or report. A deliberately invalid key must fail the minimal provider check
    and create no Vault secret or metadata row. A valid write must return only provider, status,
    last-four, validation time, and credential revision; replace it and prove the superseded Vault
-   secret is destroyed atomically.
+   secret is destroyed atomically. Repeat the exact PUT after an ambiguous response. Its first
+   database replay probe must compare the submitted key transiently with the live Vault secret and
+   receipt-bound revision, without a durable secret-derived fingerprint; exact replay returns the
+   original safe response without another provider validation, while secret/revision drift fails
+   closed and only a genuine replay miss invokes external provider validation and storage.
 8. Queue a synthetic BYOK job and inspect application tables through an administrative schema-only
    query. Its immutable snapshot may contain provider mode/provider, effort, expansion style,
    explicit fallback, registry version, and settings revision, but no provider key, Vault secret ID,
@@ -837,7 +867,7 @@ Supabase HTTP API. Use a verified database-owner session where `session_user = c
    history/undo, capture, authenticated body-only search, export, deletion, and retention operation
    succeeds through its encrypted adapter. A rollout lookup, RPC, KMS, or projection failure must
    fail closed; it must never invoke a legacy repository. Keep AI organization disabled until the
-   dedicated OpenAI project, separate live stochastic report, exact ten-RPC organizer proof, and
+   dedicated OpenAI project, separate live stochastic report, exact eleven-RPC organizer proof, and
    synthetic canary gate above pass.
 2. Pause signups, interactive writes, organizer drains, index maintenance, and retention. Record the
    exact web/organizer/worker/verifier deployment IDs and migration checksum. Create the required

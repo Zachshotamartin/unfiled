@@ -2,10 +2,10 @@
 
 set -euo pipefail
 
-trap 'echo "Milestones B–E3 HTTP E2E failed near line $LINENO." >&2' ERR
+trap 'echo "Milestones B–E4 HTTP E2E failed near line $LINENO." >&2' ERR
 
 if ! command -v psql >/dev/null 2>&1; then
-  echo "The Milestones B–E3 HTTP E2E requires the PostgreSQL psql client." >&2
+  echo "The Milestones B–E4 HTTP E2E requires the PostgreSQL psql client." >&2
   exit 1
 fi
 e2e_psql_version="$(psql --version)"
@@ -16,11 +16,13 @@ case "$e2e_psql_version" in
     exit 1
     ;;
 esac
-printf 'Milestones B–E3 HTTP E2E PostgreSQL client: %s\n' "$e2e_psql_version"
+printf 'Milestones B–E4 HTTP E2E PostgreSQL client: %s\n' "$e2e_psql_version"
 
 e2e_tmp_dir="$(mktemp -d)"
 e2e_app_pid=""
+e2e_provider_mock_pid=""
 e2e_encrypted_owner_id=""
+e2e_e4_worker_login_active="0"
 e2e_stage="bootstrap"
 
 cleanup() {
@@ -29,6 +31,34 @@ cleanup() {
   if [[ -n "$e2e_app_pid" ]]; then
     kill "$e2e_app_pid" 2>/dev/null || true
     wait "$e2e_app_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$e2e_provider_mock_pid" ]]; then
+    kill "$e2e_provider_mock_pid" 2>/dev/null || true
+    wait "$e2e_provider_mock_pid" 2>/dev/null || true
+  fi
+  if [[ "$e2e_e4_worker_login_active" == "1" ]]; then
+    psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
+      --no-psqlrc --set=ON_ERROR_STOP=1 --quiet \
+      --command='alter role unfiled_organizer_worker nologin password null' \
+      >/dev/null 2>&1 || true
+  fi
+  if [[ "${e2e_encrypted_owner_id:-}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]; then
+    # Local-test fallback for an interrupted E4 PUT: remove only this
+    # synthetic owner's provider row and its captured Vault locator before
+    # Auth cascading removes the owner metadata.
+    psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
+      --no-psqlrc --set=ON_ERROR_STOP=1 --quiet \
+      --set=e4_cleanup_owner="$e2e_encrypted_owner_id" <<'SQL' \
+      >/dev/null 2>&1 || true
+with removed_provider_keys as (
+  delete from public.user_provider_keys
+  where user_id = :'e4_cleanup_owner'::uuid
+  returning vault_secret_id
+)
+delete from vault.secrets as secret
+using removed_provider_keys as removed
+where secret.id = removed.vault_secret_id;
+SQL
   fi
   if [[ -n "${e2e_encrypted_owner_id:-}" && -n "${SERVICE_ROLE_KEY:-}" ]]; then
     curl --silent --output /dev/null \
@@ -39,7 +69,7 @@ cleanup() {
       || true
   fi
   if [[ "$exit_code" -ne 0 && -f "$e2e_tmp_dir/web.log" ]]; then
-    printf 'Milestones B–E3 HTTP E2E stopped at stage: %s\n' "$e2e_stage" >&2
+    printf 'Milestones B–E4 HTTP E2E stopped at stage: %s\n' "$e2e_stage" >&2
     # Keep failure diagnostics bounded without ever echoing a plaintext test
     # canary if the application has regressed and logged one.
     tail -n 120 "$e2e_tmp_dir/web.log" | \
@@ -88,6 +118,8 @@ cleanup() {
       E2E_LOG_E3_DISMISS_BODY="${e2e_e3_dismiss_body:-}" \
       E2E_LOG_E3_DISMISS_DESTINATION="${e2e_e3_dismiss_destination_title:-}" \
       E2E_LOG_E3_DESTINATION_BODY="${e2e_e3_destination_body:-}" \
+      E2E_LOG_E4_PROVIDER_KEY="${e2e_e4_provider_key_canary:-}" \
+      E2E_LOG_E4_RECREATE_KEY="${e2e_e4_provider_recreate_canary:-}" \
       E2E_LOG_CAPTURE_CANARY="${e2e_capture_canary:-}" \
       E2E_LOG_SEARCH_CANARY="${e2e_private_search_canary:-}" node -e '
         let input = "";
@@ -121,6 +153,9 @@ if [[ ! "$e2e_run_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$ ]]; then
   echo "E2E_RUN_ID must contain 1-32 safe identifier characters." >&2
   exit 1
 fi
+e2e_e4_provider_key_canary="sk-e4-http-$e2e_run_id-VaultCanary7Qz9"
+e2e_e4_provider_recreate_canary="sk-e4-http-recreate-$e2e_run_id-ABA2Canary3Lm8"
+e2e_e4_validation_url="http://127.0.0.1:3101/v1/models/gpt-5.4-mini-2026-03-17"
 e2e_standalone_dir="$e2e_tmp_dir/standalone"
 
 case "$e2e_supabase_url" in
@@ -379,6 +414,68 @@ node -e '
   fs.writeFileSync(path, source.replace(anchor, replacement));
 ' "$e2e_standalone_dir/apps/web/server.js"
 
+E2E_PROVIDER_KEY="$e2e_e4_provider_key_canary" \
+E2E_PROVIDER_RECREATE_KEY="$e2e_e4_provider_recreate_canary" node -e '
+  const http = require("node:http");
+  const expectedKeys = new Set([
+    process.env.E2E_PROVIDER_KEY,
+    process.env.E2E_PROVIDER_RECREATE_KEY
+  ]);
+  if (
+    expectedKeys.size !== 2 ||
+    [...expectedKeys].some((value) => typeof value !== "string" || value.length < 20)
+  ) process.exit(1);
+  let validations = 0;
+  const server = http.createServer((request, response) => {
+    response.setHeader("cache-control", "no-store");
+    response.setHeader("pragma", "no-cache");
+    if (request.method === "GET" && request.url === "/health") {
+      response.writeHead(204).end();
+      return;
+    }
+    if (request.method === "GET" && request.url === "/metrics") {
+      response.setHeader("content-type", "application/json; charset=utf-8");
+      response.writeHead(200).end(JSON.stringify({ validations }));
+      return;
+    }
+    if (
+      request.method === "GET" &&
+      request.url === "/v1/models/gpt-5.4-mini-2026-03-17"
+    ) {
+      validations += 1;
+      const credential = request.headers.authorization?.replace(/^Bearer /u, "");
+      const accepted =
+        typeof credential === "string" &&
+        expectedKeys.has(credential) &&
+        request.headers.accept === "application/json" &&
+        request.headers["cache-control"] === "no-store" &&
+        request.headers.pragma === "no-cache" &&
+        request.headers.cookie === undefined &&
+        request.headers.referer === undefined;
+      response.writeHead(
+        accepted ? 200 : 401
+      ).end();
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  server.listen(3101, "127.0.0.1");
+  process.once("SIGTERM", () => server.close(() => process.exit(0)));
+' >"$e2e_tmp_dir/provider-mock.log" 2>&1 &
+e2e_provider_mock_pid="$!"
+for _ in $(seq 1 30); do
+  if ! kill -0 "$e2e_provider_mock_pid" 2>/dev/null; then
+    echo "The E4 provider-validation mock exited before becoming ready." >&2
+    exit 1
+  fi
+  if curl --fail --silent --output /dev/null "http://127.0.0.1:3101/health"; then
+    break
+  fi
+  sleep 1
+done
+curl --fail --silent --show-error --output /dev/null "http://127.0.0.1:3101/health"
+
+env -u VERCEL -u VERCEL_ENV -u VERCEL_PROJECT_ID -u VERCEL_URL \
 NEXT_PUBLIC_SUPABASE_URL="$e2e_supabase_url" \
 NEXT_PUBLIC_SUPABASE_ANON_KEY="$ANON_KEY" \
 SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY" \
@@ -387,6 +484,8 @@ NODE_ENV="test" \
 UNFILED_HTTP_E2E_NODE_ENV="test" \
 AUTH_RATE_LIMIT_PEPPER="ci-auth-rate-limit-pepper-000000000001" \
 CI="true" \
+UNFILED_ALLOW_TEST_PROVIDER_VALIDATION_OVERRIDE="1" \
+UNFILED_TEST_OPENAI_VALIDATION_URL="$e2e_e4_validation_url" \
 UNFILED_ALLOW_INSECURE_LOCAL_SUPABASE_E2E="1" \
 UNFILED_E1_HTTP_DIAGNOSTICS="1" \
 UNFILED_KEY_CUSTODIAN="local" \
@@ -3336,6 +3435,11 @@ done
 # shellcheck source=.github/workflows/scripts/milestone-e3-http-e2e.sh
 source .github/workflows/scripts/milestone-e3-http-e2e.sh
 
+# E4 adds owner AI settings, Vault-only BYOK, immutable job snapshots, and
+# lease-bound live credential resolution on the same built server and owner.
+# shellcheck source=.github/workflows/scripts/milestone-e4-http-e2e.sh
+source .github/workflows/scripts/milestone-e4-http-e2e.sh
+
 e2e_second_key="milestone-b-http-create-second-$e2e_run_id"
 e2e_second="$(
   request_json POST /notes \
@@ -3776,4 +3880,4 @@ request_json POST /auth/sign-out | node -e '
   });
 '
 
-echo "Milestones B–E3 local HTTP E2E passed."
+echo "Milestones B–E4 local HTTP E2E passed."

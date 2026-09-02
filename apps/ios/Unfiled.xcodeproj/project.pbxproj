@@ -72,6 +72,7 @@
 		ABA39B2C9F82C9F64D485E37 /* RoutingRulesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFF164C2178F1759DA96EF95 /* RoutingRulesView.swift */; };
 		ADECF952CB50558495832BD5 /* AuthSessionVaultTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 521948BD6497C55D237E52B4 /* AuthSessionVaultTests.swift */; };
 		B693E60841DD7CEDE0A11E9D /* RevisionHistoryViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA583ADC062BBC9C055D58AF /* RevisionHistoryViewTests.swift */; };
+		B6E2F4EB657E89A575C1C5B1 /* AISettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F090EB2DF3593C24D6945E5 /* AISettingsTests.swift */; };
 		B8F139FB44412E8C5071D9CA /* CommonModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C1539C6E7A3360A61D252AE /* CommonModels.swift */; };
 		BACD16CB8C83BDA176019D5B /* NoteContextModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = D52269C1DAF959F381478780 /* NoteContextModels.swift */; };
 		BBC79D43EC619883B451A211 /* EmailOTPSignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7CEF00755656B589FE28C0C /* EmailOTPSignInView.swift */; };
@@ -136,6 +137,7 @@
 		032EEF3A7FAC4B1587A94616 /* CaptureModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureModels.swift; sourceTree = "<group>"; };
 		07F068FC245F72E3A693CEF6 /* CaptureSyncEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureSyncEngine.swift; sourceTree = "<group>"; };
 		0AC23A3D8720994992DEA4B3 /* DatabaseKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatabaseKeyStore.swift; sourceTree = "<group>"; };
+		0F090EB2DF3593C24D6945E5 /* AISettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AISettingsTests.swift; sourceTree = "<group>"; };
 		1BBEBA9E7C30C23E939F2285 /* ULIDGeneratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ULIDGeneratorTests.swift; sourceTree = "<group>"; };
 		1C1539C6E7A3360A61D252AE /* CommonModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommonModels.swift; sourceTree = "<group>"; };
 		1C3607C84D1B9FCD6695B9D7 /* RoutingRuleModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutingRuleModels.swift; sourceTree = "<group>"; };
@@ -386,6 +388,7 @@
 		83E6244E303FDBA6B64B2777 /* UnfiledTests */ = {
 			isa = PBXGroup;
 			children = (
+				0F090EB2DF3593C24D6945E5 /* AISettingsTests.swift */,
 				B743DE4B34F22FC0FC2C50B7 /* APIClientTests.swift */,
 				A1AE9873ED57B21BBAA54299 /* APIModelsTests.swift */,
 				7C4162F4B2605D62507BBC22 /* APITestSupport.swift */,
@@ -760,6 +763,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B6E2F4EB657E89A575C1C5B1 /* AISettingsTests.swift in Sources */,
 				D5BE01F93112E701DDF9C902 /* APIClientTests.swift in Sources */,
 				282C74BF56C2CAF468BACEAD /* APIModelsTests.swift in Sources */,
 				5CD1B761F2CC2E1D2A55AB09 /* APITestSupport.swift in Sources */,

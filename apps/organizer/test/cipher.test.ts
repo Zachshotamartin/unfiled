@@ -253,9 +253,11 @@ function job(
     ownerId: OWNER_ID,
     promptVersion: "routing-v1",
     replanCount: 0,
+    routingEffort: "standard",
     routingMode: "balanced",
     schemaVersion: 1,
     source,
+    expansionStyle: "brief",
     commandProjection
   });
 }

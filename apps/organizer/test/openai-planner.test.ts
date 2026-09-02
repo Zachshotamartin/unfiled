@@ -4,6 +4,7 @@ import { OrganizerPlannerReviewError, OrganizerProviderError } from "../src/erro
 import { createOpenAIOrganizerPlanner, OPENAI_ROUTING_PROFILE } from "../src/openai-planner.js";
 import { OPENAI_ORGANIZATION_PLAN_SCHEMA } from "../src/openai-schema.js";
 import type { PlannerInput } from "../src/planner.js";
+import { createOrganizerProviderCredentialAccess } from "../src/provider-credential.js";
 
 const API_KEY = "a".repeat(32);
 const candidateId = "note_01ARZ3NDEKTSV4RRFFQ69G5FAB" as const;
@@ -69,7 +70,11 @@ function responseWithPlan(value: unknown): Response {
 
 type DisclosedProviderInput = Readonly<{
   candidates: readonly Readonly<{ candidateId: string }>[];
-  controls: Readonly<{ explicitDestinationCandidateId: string | null }>;
+  controls: Readonly<{
+    expansionDisabled: boolean;
+    expansionStyle: "off" | "brief" | "detailed";
+    explicitDestinationCandidateId: string | null;
+  }>;
 }>;
 
 function disclosedProviderInput(init: RequestInit | undefined): DisclosedProviderInput {
@@ -280,6 +285,97 @@ describe("OpenAI Responses organizer planner", () => {
     expect(fetchImplementation.mock.calls[0]?.[1]?.body).toBe(
       fetchImplementation.mock.calls[1]?.[1]?.body
     );
+  });
+
+  it("re-resolves the lease-bound BYOK key on retry and applies the snapshotted effort budget", async () => {
+    const firstKey = "sk-first-abcdefghijklmnopqrstuvwxyz0123456789";
+    const replacementKey = "sk-replacement-abcdefghijklmnopqrstuvwxyz0123456789";
+    const route = (credential: string, credentialRevision: number) => ({
+      credential,
+      credentialRevision,
+      expansionStyle: "brief" as const,
+      provider: "openai" as const,
+      routingEffort: "thorough" as const,
+      source: "byok" as const
+    });
+    const resolve = vi
+      .fn()
+      .mockResolvedValueOnce(route(firstKey, 1))
+      .mockResolvedValueOnce(route(replacementKey, 2));
+    const providerCredential = createOrganizerProviderCredentialAccess({
+      appDefaultApiKey: API_KEY,
+      resolve
+    });
+    let calls = 0;
+    const fetchImplementation = vi.fn<typeof fetch>().mockImplementation((_url, init) => {
+      calls += 1;
+      if (calls === 1) return Promise.resolve(new Response(null, { status: 503 }));
+      const providerCandidateId = disclosedProviderInput(init).candidates[0]?.candidateId;
+      if (providerCandidateId === undefined) throw new Error("Expected a provider candidate.");
+      return Promise.resolve(responseWithPlan(providerPlan(providerCandidateId)));
+    });
+    await expect(
+      createOpenAIOrganizerPlanner({ fetchImplementation }).plan(
+        plannerInput({ providerCredential, routingEffort: "thorough" })
+      )
+    ).resolves.toEqual(plan);
+    expect(resolve).toHaveBeenCalledTimes(2);
+    expect(fetchImplementation.mock.calls[0]?.[1]?.headers).toMatchObject({
+      authorization: `Bearer ${firstKey}`
+    });
+    expect(fetchImplementation.mock.calls[1]?.[1]?.headers).toMatchObject({
+      authorization: `Bearer ${replacementKey}`
+    });
+    const serializedRequest = fetchImplementation.mock.calls[1]?.[1]?.body;
+    if (typeof serializedRequest !== "string") throw new Error("Expected serialized request.");
+    const request = JSON.parse(serializedRequest) as {
+      max_output_tokens: number;
+      reasoning: { effort: string };
+    };
+    expect(request).toMatchObject({
+      max_output_tokens: 16_384,
+      reasoning: { effort: "low" }
+    });
+  });
+
+  it("enforces off/brief/detailed expansion preferences at the provider boundary", async () => {
+    const expansion = { kind: "suggestion" as const, text: "x".repeat(300) };
+    for (const [expansionStyle, expansionDisabled, expectedExpansion, disclosedStyle] of [
+      ["off", true, null, "off"],
+      ["brief", false, null, "brief"],
+      ["detailed", false, expansion, "detailed"],
+      ["detailed", true, null, "off"]
+    ] as const) {
+      const selectedControls = Object.freeze({
+        expansionDisabled,
+        explicitDestinationNoteId: noteId,
+        ruleMatch: null
+      });
+      const fetchImplementation = successfulFetchImplementation((candidateIds) => {
+        const providerCandidateId = candidateIds[0];
+        if (providerCandidateId === undefined) throw new Error("Expected a provider candidate.");
+        return {
+          ...plan,
+          destination: { candidateId: providerCandidateId, newNote: null },
+          generatedExpansion: expansion
+        };
+      });
+      await expect(
+        createOpenAIOrganizerPlanner({ apiKey: API_KEY, fetchImplementation }).plan(
+          plannerInput({
+            capture: { controls: selectedControls, rawContent: "Remember milk" },
+            controls: selectedControls,
+            expansionStyle
+          })
+        )
+      ).resolves.toMatchObject({ generatedExpansion: expectedExpansion });
+      expect(disclosedProviderInput(fetchImplementation.mock.calls[0]?.[1]).controls).toMatchObject(
+        {
+          expansionDisabled,
+          expansionStyle: disclosedStyle
+        }
+      );
+    }
   });
 
   it("translates every provider candidate reference back to its internal candidate ID", async () => {

@@ -402,7 +402,7 @@ select ok(
 );
 select ok(
   (
-    select count(*) = 10
+    select count(*) = 11
     from pg_proc as procedure
     join pg_namespace as namespace on namespace.oid = procedure.pronamespace
     where namespace.nspname = 'public'
@@ -410,7 +410,7 @@ select ok(
         'unfiled_organizer_worker', procedure.oid, 'EXECUTE'
       )
   ),
-  'E0 does not widen the organizer ten-RPC boundary'
+  'E4 widens the organizer boundary by exactly its lease-bound resolver'
 );
 select ok(
   not has_function_privilege(
@@ -652,9 +652,9 @@ insert into public.captures(
 
 -- A BYOK profile snapshots only selection/fallback/registry settings.  Live
 -- credential availability is intentionally outside the durable job row and
--- will be resolved under the future E4 lease boundary.
+-- is resolved under the E4 lease boundary.
 update public.profiles
-set provider_mode = 'byok', byok_provider = 'anthropic',
+set provider_mode = 'byok', byok_provider = 'openai',
   byok_fallback_to_app = false
 where id = '22222222-2222-4222-8222-222222222222';
 insert into public.organization_jobs(
@@ -668,7 +668,7 @@ insert into public.organization_jobs(
 select ok(
   (
     select provider_mode = 'byok'
-      and selected_provider = 'anthropic'
+      and selected_provider = 'openai'
       and not byok_fallback_to_app
       and adapter_registry_version = 'organization-model-registry-v1'
     from public.organization_job_ai_settings

@@ -55,10 +55,12 @@ public final class APIClient: Sendable {
     func get<Response: Decodable>(_ path: String, query: [URLQueryItem] = [], authenticated: Bool = true,
                                   explicitToken: String? = nil,
                                   maximumResponseBytes: Int? = nil,
+                                  requirePrivateNoStore: Bool = false,
                                   as: Response.Type = Response.self) async throws -> Response {
         let auth: Authentication = explicitToken.map(Authentication.explicit) ?? (authenticated ? .required : .none)
         return try await send("GET", path: path, query: query, body: Optional<NoBody>.none,
                               authentication: auth, maximumResponseBytes: maximumResponseBytes,
+                              requirePrivateNoStore: requirePrivateNoStore,
                               response: Response.self)
     }
 
@@ -107,21 +109,42 @@ public final class APIClient: Sendable {
     func put<Response: Decodable, Body: Encodable>(_ path: String, body: Body,
                                                     idempotencyKey: String? = nil,
                                                     authenticated: Bool = false,
+                                                    maximumRequestBytes: Int? = nil,
+                                                    maximumResponseBytes: Int? = nil,
+                                                    requirePrivateNoStore: Bool = false,
                                                     as: Response.Type = Response.self) async throws -> Response {
         try await send("PUT", path: path, body: body, idempotencyKey: idempotencyKey,
-                       authentication: authenticated ? .required : .none, response: Response.self)
+                       authentication: authenticated ? .required : .none,
+                       maximumRequestBytes: maximumRequestBytes,
+                       maximumResponseBytes: maximumResponseBytes,
+                       requirePrivateNoStore: requirePrivateNoStore,
+                       response: Response.self)
     }
 
     func patch<Response: Decodable, Body: Encodable>(_ path: String, body: Body, idempotencyKey: String,
+                                                      maximumRequestBytes: Int? = nil,
+                                                      maximumResponseBytes: Int? = nil,
+                                                      requirePrivateNoStore: Bool = false,
                                                       as: Response.Type = Response.self) async throws -> Response {
         try await send("PATCH", path: path, body: body, idempotencyKey: idempotencyKey,
-                       authentication: .required, response: Response.self)
+                       authentication: .required,
+                       maximumRequestBytes: maximumRequestBytes,
+                       maximumResponseBytes: maximumResponseBytes,
+                       requirePrivateNoStore: requirePrivateNoStore,
+                       response: Response.self)
     }
 
     func delete<Response: Decodable, Body: Encodable>(_ path: String, body: Body, idempotencyKey: String,
+                                                       maximumRequestBytes: Int? = nil,
+                                                       maximumResponseBytes: Int? = nil,
+                                                       requirePrivateNoStore: Bool = false,
                                                        as: Response.Type = Response.self) async throws -> Response {
         try await send("DELETE", path: path, body: body, idempotencyKey: idempotencyKey,
-                       authentication: .required, response: Response.self)
+                       authentication: .required,
+                       maximumRequestBytes: maximumRequestBytes,
+                       maximumResponseBytes: maximumResponseBytes,
+                       requirePrivateNoStore: requirePrivateNoStore,
+                       response: Response.self)
     }
 
     /// Account-deletion capabilities stay in the encrypted HTTP body. Unlike
@@ -144,7 +167,10 @@ public final class APIClient: Sendable {
     private func send<Response: Decodable, Body: Encodable>(
         _ method: String, path: String, query: [URLQueryItem] = [], body: Body?,
         idempotencyKey: String? = nil, authentication: Authentication,
-        maximumResponseBytes: Int? = nil, response: Response.Type
+        maximumRequestBytes: Int? = nil,
+        maximumResponseBytes: Int? = nil,
+        requirePrivateNoStore: Bool = false,
+        response: Response.Type
     ) async throws -> Response {
         let firstCredential: AccessTokenCredential?
         let firstToken: String?
@@ -167,6 +193,7 @@ public final class APIClient: Sendable {
 
         let first = try await perform(method, path: path, query: query, body: body,
                                       idempotencyKey: idempotencyKey, token: firstToken,
+                                      maximumRequestBytes: maximumRequestBytes,
                                       maximumResponseBytes: maximumResponseBytes)
         if first.http.statusCode == 401, case .required = authentication, let tokenProvider,
            let rejectedCredential = firstCredential {
@@ -183,14 +210,26 @@ public final class APIClient: Sendable {
             }
             let retry = try await perform(method, path: path, query: query, body: body,
                                           idempotencyKey: idempotencyKey, token: refreshed.token,
+                                          maximumRequestBytes: maximumRequestBytes,
                                           maximumResponseBytes: maximumResponseBytes)
-            return try decode(retry.data, response: retry.http, as: Response.self)
+            return try decode(
+                retry.data,
+                response: retry.http,
+                requirePrivateNoStore: requirePrivateNoStore,
+                as: Response.self
+            )
         }
-        return try decode(first.data, response: first.http, as: Response.self)
+        return try decode(
+            first.data,
+            response: first.http,
+            requirePrivateNoStore: requirePrivateNoStore,
+            as: Response.self
+        )
     }
 
     private func perform<Body: Encodable>(_ method: String, path: String, query: [URLQueryItem],
                                            body: Body?, idempotencyKey: String?, token: String?,
+                                           maximumRequestBytes: Int?,
                                            maximumResponseBytes: Int?) async throws
         -> (data: Data, http: HTTPURLResponse) {
         guard !path.contains(".."), var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
@@ -217,8 +256,13 @@ public final class APIClient: Sendable {
             let encoded: Data
             do { encoded = try APIJSON.makeEncoder().encode(body) }
             catch { throw APIClientError.invalidRequest }
-            guard encoded.count <= limits.requestBodyBytes else {
-                throw APIClientError.requestBodyTooLarge(limit: limits.requestBodyBytes)
+            let requestLimit = min(
+                maximumRequestBytes ?? limits.requestBodyBytes,
+                limits.requestBodyBytes
+            )
+            guard requestLimit > 0 else { throw APIClientError.invalidRequest }
+            guard encoded.count <= requestLimit else {
+                throw APIClientError.requestBodyTooLarge(limit: requestLimit)
             }
             request.httpBody = encoded
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -293,8 +337,18 @@ public final class APIClient: Sendable {
         catch { throw APIClientError.transportFailure }
     }
 
-    private func decode<Response: Decodable>(_ data: Data, response: HTTPURLResponse,
-                                              as: Response.Type) throws -> Response {
+    private func decode<Response: Decodable>(
+        _ data: Data,
+        response: HTTPURLResponse,
+        requirePrivateNoStore: Bool,
+        as: Response.Type
+    ) throws -> Response {
+        if requirePrivateNoStore {
+            guard response.value(forHTTPHeaderField: "Cache-Control") == "private, no-store",
+                  response.value(forHTTPHeaderField: "Pragma") == "no-cache" else {
+                throw APIClientError.malformedResponse(status: response.statusCode)
+            }
+        }
         guard (200 ... 299).contains(response.statusCode) else {
             let payload = try? APIJSON.makeDecoder().decode(APIErrorPayload.self, from: data)
             throw APIClientError.http(status: response.statusCode, code: payload?.code,

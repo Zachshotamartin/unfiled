@@ -164,7 +164,7 @@ select ok(
 );
 select ok(
   (
-    select count(*) = 10
+    select count(*) = 11
     from pg_proc as procedure
     join pg_namespace as namespace on namespace.oid = procedure.pronamespace
     where namespace.nspname = 'public'
@@ -172,7 +172,7 @@ select ok(
         'unfiled_organizer_worker', procedure.oid, 'EXECUTE'
       )
   ),
-  'the organizer has exactly ten lease-bound public RPC capabilities'
+  'the organizer has exactly eleven lease-bound public RPC capabilities after E4'
 );
 select ok(
   has_function_privilege(

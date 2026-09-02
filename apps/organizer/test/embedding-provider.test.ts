@@ -5,6 +5,7 @@ import {
   type OrganizerEmbeddingProvider
 } from "../src/embedding-provider.js";
 import { OrganizerProviderError } from "../src/errors.js";
+import { createOrganizerProviderCredentialAccess } from "../src/provider-credential.js";
 
 const API_KEY = "a".repeat(32);
 const MODEL_ID = "text-embedding-3-small";
@@ -266,6 +267,43 @@ describe("OpenAI organizer embedding provider", () => {
     expect(fetchImplementation.mock.calls[0]?.[1]?.signal).toBe(
       fetchImplementation.mock.calls[1]?.[1]?.signal
     );
+  });
+
+  it("re-resolves a lease-bound BYOK key between embedding retries", async () => {
+    const firstKey = "sk-first-abcdefghijklmnopqrstuvwxyz0123456789";
+    const replacementKey = "sk-replacement-abcdefghijklmnopqrstuvwxyz0123456789";
+    const route = (credential: string, credentialRevision: number) => ({
+      credential,
+      credentialRevision,
+      expansionStyle: "brief" as const,
+      provider: "openai" as const,
+      routingEffort: "standard" as const,
+      source: "byok" as const
+    });
+    const resolve = vi
+      .fn()
+      .mockResolvedValueOnce(route(firstKey, 1))
+      .mockResolvedValueOnce(route(replacementKey, 2));
+    const providerCredential = createOrganizerProviderCredentialAccess({
+      appDefaultApiKey: API_KEY,
+      resolve
+    });
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(jsonResponse(payload()));
+    await expect(
+      createOpenAIOrganizerEmbeddingProvider({ fetchImplementation }).embed(
+        input({ providerCredential })
+      )
+    ).resolves.toEqual(new Float32Array([0.25, -0.5, 1]));
+    expect(resolve).toHaveBeenCalledTimes(2);
+    expect(fetchImplementation.mock.calls[0]?.[1]?.headers).toMatchObject({
+      authorization: `Bearer ${firstKey}`
+    });
+    expect(fetchImplementation.mock.calls[1]?.[1]?.headers).toMatchObject({
+      authorization: `Bearer ${replacementKey}`
+    });
   });
 
   it("retries one asynchronous or synchronous transport failure without retaining content", async () => {

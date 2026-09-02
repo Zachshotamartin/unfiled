@@ -71,6 +71,7 @@ const job: ClaimedOrganizerJob = Object.freeze({
   ownerId: "22222222-2222-4222-8222-222222222222",
   promptVersion: "routing-v1",
   replanCount: 0,
+  routingEffort: "standard",
   routingMode: "balanced",
   schemaVersion: 1,
   source: {
@@ -79,6 +80,7 @@ const job: ClaimedOrganizerJob = Object.freeze({
     cipher: {},
     key: {}
   },
+  expansionStyle: "brief",
   commandProjection: "encrypted_only"
 });
 const candidate = Object.freeze({
@@ -151,6 +153,14 @@ function repository(overrides: Partial<OrganizerRepository> = {}): OrganizerRepo
       .fn()
       .mockResolvedValue({ deadLetteredCount: 0, recoveredCount: 0, requeuedCount: 0 }),
     claim: vi.fn().mockResolvedValue([job]),
+    providerRoute: vi.fn().mockResolvedValue({
+      credential: null,
+      credentialRevision: null,
+      expansionStyle: "brief",
+      provider: "openai",
+      routingEffort: "standard",
+      source: "app_default"
+    }),
     heartbeat: vi.fn().mockResolvedValue({
       candidateCount: 1,
       currentRevision: 1,
@@ -266,9 +276,11 @@ function drain(
   repo: OrganizerRepository,
   planner = appendPlanner,
   crypto = cipher(),
-  routingPolicyContext: OrganizerRoutingPolicyContext | null = automaticPolicyContext
+  routingPolicyContext: OrganizerRoutingPolicyContext | null = automaticPolicyContext,
+  appDefaultProviderApiKey?: string
 ) {
   return createOrganizerDrain({
+    ...(appDefaultProviderApiKey === undefined ? {} : { appDefaultProviderApiKey }),
     cipher: crypto,
     claimLimit: 2,
     concurrency: 2,
@@ -1078,6 +1090,55 @@ describe("organizer drain", () => {
       trigger: "schedule"
     });
     expect(repo.fail).toHaveBeenCalledWith(expect.objectContaining({ errorCode: code, retryable }));
+    expect(repo.commit).not.toHaveBeenCalled();
+  });
+
+  it("binds a BYOK 401 failure to the exact lease-resolved credential revision", async () => {
+    const byok = "sk-byok-abcdefghijklmnopqrstuvwxyz0123456789";
+    const providerRoute = vi.fn().mockResolvedValue({
+      credential: byok,
+      credentialRevision: 14,
+      expansionStyle: job.expansionStyle,
+      provider: "openai",
+      routingEffort: job.routingEffort,
+      source: "byok"
+    });
+    const repo = repository({
+      fail: vi.fn().mockResolvedValue({ state: "failed" }),
+      providerRoute
+    });
+    const planner: OrganizerPlanner = {
+      plan: vi.fn().mockImplementation((input: Parameters<OrganizerPlanner["plan"]>[0]) => {
+        if (input.providerCredential === undefined) throw new Error("missing credential access");
+        return input.providerCredential.use((credential) =>
+          credential.withApiKey((apiKey) => {
+            expect(apiKey).toBe(byok);
+            return Promise.reject(new OrganizerProviderError("provider_key_invalid", false, 401));
+          })
+        );
+      })
+    };
+    const result = await drain(
+      repo,
+      planner,
+      cipher(),
+      automaticPolicyContext,
+      "sk-app-abcdefghijklmnopqrstuvwxyz0123456789"
+    ).drain({ authority, requestId: "byok-401", signal, trigger: "schedule" });
+    expect(result).toEqual({ claimed: 1, completed: 0, failed: 1, retryScheduled: 0 });
+    expect(providerRoute).toHaveBeenCalledWith({
+      jobId: job.jobId,
+      leaseToken: job.leaseToken,
+      signal
+    });
+    expect(repo.fail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        errorCode: "provider_key_invalid",
+        providerCredentialRevision: 14,
+        providerSource: "byok",
+        retryable: false
+      })
+    );
     expect(repo.commit).not.toHaveBeenCalled();
   });
 

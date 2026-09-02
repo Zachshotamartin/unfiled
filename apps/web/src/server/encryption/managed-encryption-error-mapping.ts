@@ -161,7 +161,7 @@ function httpError(mapping: HttpMapping): HttpError {
 
 export function mappedServiceRpcHttpError(
   error: ServiceRpcError,
-  subject: "capture" | "note" | "routing rule"
+  subject: "capture" | "note" | "provider key" | "routing rule" | "settings"
 ): HttpError {
   if (error.code === ServiceRpcErrorCode.STALE_REVISION) {
     return new HttpError(

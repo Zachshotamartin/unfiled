@@ -468,6 +468,32 @@ const privateGeneratedBlockResolveErrors = {
   "413": privateErrorResponse
 } as const;
 
+const privateOwnerSettingsReadErrors = {
+  "400": privateErrorResponse,
+  "401": privateErrorResponse,
+  "403": privateErrorResponse,
+  "404": privateErrorResponse,
+  "429": privateErrorResponse,
+  "500": privateErrorResponse,
+  "503": privateErrorResponse
+} as const;
+
+const privateOwnerSettingsWriteErrors = {
+  "400": privateErrorResponse,
+  "401": privateErrorResponse,
+  "403": privateErrorResponse,
+  "404": privateErrorResponse,
+  "409": privateErrorResponse,
+  "413": privateErrorResponse,
+  "429": privateErrorResponse,
+  "500": privateErrorResponse,
+  "503": privateErrorResponse
+} as const;
+
+const privateProviderKeyReadErrors = privateOwnerSettingsReadErrors;
+
+const privateProviderKeyWriteErrors = privateOwnerSettingsWriteErrors;
+
 export const openApiDocument = {
   openapi: "3.1.0",
   info: {
@@ -1110,8 +1136,8 @@ export const openApiDocument = {
         summary: "Read organization and AI settings",
         security: authenticated,
         responses: {
-          "200": jsonResponse("Current user settings", "UserSettingsResponse"),
-          ...commonErrors
+          "200": privateJsonResponse("Current user settings", "UserSettingsResponse"),
+          ...privateOwnerSettingsReadErrors
         }
       },
       patch: {
@@ -1121,8 +1147,8 @@ export const openApiDocument = {
         parameters: [idempotencyHeader],
         requestBody: jsonBody("UserSettingsUpdateRequest"),
         responses: {
-          "200": jsonResponse("Updated user settings", "UserSettingsUpdateResponse"),
-          ...commonErrors
+          "200": privateJsonResponse("Updated user settings", "UserSettingsUpdateResponse"),
+          ...privateOwnerSettingsWriteErrors
         }
       }
     },
@@ -1133,7 +1159,7 @@ export const openApiDocument = {
         security: authenticated,
         responses: {
           "200": privateJsonResponse("Provider-key metadata", "ProviderKeyResponse"),
-          ...commonErrors
+          ...privateProviderKeyReadErrors
         }
       },
       put: {
@@ -1144,7 +1170,7 @@ export const openApiDocument = {
         requestBody: jsonBody("ProviderKeyPutRequest"),
         responses: {
           "200": privateJsonResponse("Stored provider-key metadata", "ProviderKeyPutResponse"),
-          ...commonErrors
+          ...privateProviderKeyWriteErrors
         }
       },
       delete: {
@@ -1155,7 +1181,7 @@ export const openApiDocument = {
         requestBody: jsonBody("ProviderKeyDeleteRequest"),
         responses: {
           "200": privateJsonResponse("Deleted provider key", "ProviderKeyDeleteResponse"),
-          ...commonErrors
+          ...privateProviderKeyWriteErrors
         }
       }
     },

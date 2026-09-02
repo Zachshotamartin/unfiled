@@ -17,7 +17,8 @@ import type {
   OrganizerRagSelection,
   OrganizerRepository
 } from "./drain.js";
-import { OrganizerUnavailableError } from "./errors.js";
+import { OrganizerProviderError, OrganizerUnavailableError } from "./errors.js";
+import type { LeaseBoundOrganizerProviderRoute } from "./provider-credential.js";
 const EXPECTED_ROLE = "unfiled_organizer_worker";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const ENTITY_SUFFIX = "[0-9A-HJKMNP-TV-Z]{26}";
@@ -54,7 +55,8 @@ export const ORGANIZER_RPC_NAMES = Object.freeze([
   "fail_encrypted_organizer_job",
   "recover_stale_encrypted_organizer_jobs",
   "list_encrypted_organizer_rag_page",
-  "select_encrypted_organizer_candidates"
+  "select_encrypted_organizer_candidates",
+  "get_lease_bound_organizer_provider_credential"
 ] as const);
 
 export const ORGANIZER_IDENTITY_SQL =
@@ -75,7 +77,9 @@ export const ORGANIZER_RPC_SQL = Object.freeze({
   prepareAppend:
     "select public.prepare_encrypted_organizer_append($1::text, $2::text, $3::text, $4::bigint, $5::text) as result",
   commit: "select public.commit_encrypted_organizer_job($1::text, $2::text, $3::jsonb) as result",
-  fail: "select public.fail_encrypted_organizer_job($1::text, $2::text, $3::text, $4::boolean) as result",
+  fail: "select public.fail_encrypted_organizer_job($1::text, $2::text, $3::text, $4::boolean, $5::text, $6::bigint) as result",
+  providerRoute:
+    "select public.get_lease_bound_organizer_provider_credential($1::text, $2::text) as result",
   recover: "select public.recover_stale_encrypted_organizer_jobs($1::integer) as result"
 });
 
@@ -432,9 +436,11 @@ function claimResult(value: unknown, limit: number): readonly ClaimedOrganizerJo
         "ownerId",
         "promptVersion",
         "replanCount",
+        "routingEffort",
         "routingMode",
         "schemaVersion",
         "source",
+        "expansionStyle",
         "commandProjection"
       ]);
       const jobId = string(row.jobId, JOB);
@@ -452,7 +458,13 @@ function claimResult(value: unknown, limit: number): readonly ClaimedOrganizerJo
         !/^[A-Za-z_+-][A-Za-z0-9_+./:-]{0,99}$/u.test(row.clientTimezone) ||
         (row.routingMode !== "cautious" &&
           row.routingMode !== "balanced" &&
-          row.routingMode !== "automatic")
+          row.routingMode !== "automatic") ||
+        (row.routingEffort !== "economical" &&
+          row.routingEffort !== "standard" &&
+          row.routingEffort !== "thorough") ||
+        (row.expansionStyle !== "off" &&
+          row.expansionStyle !== "brief" &&
+          row.expansionStyle !== "detailed")
       )
         reject();
       if (row.commandProjection !== "legacy" && row.commandProjection !== "encrypted_only")
@@ -472,6 +484,7 @@ function claimResult(value: unknown, limit: number): readonly ClaimedOrganizerJo
         ownerId,
         promptVersion,
         replanCount,
+        routingEffort: row.routingEffort,
         routingMode: row.routingMode,
         schemaVersion,
         source: projection(row.source, {
@@ -480,6 +493,7 @@ function claimResult(value: unknown, limit: number): readonly ClaimedOrganizerJo
           recordVersion: 1,
           resourceId: captureId
         }),
+        expansionStyle: row.expansionStyle,
         commandProjection: row.commandProjection
       });
     }
@@ -495,6 +509,54 @@ function claimResult(value: unknown, limit: number): readonly ClaimedOrganizerJo
   )
     reject();
   return Object.freeze(jobs);
+}
+
+function providerRoute(value: unknown): LeaseBoundOrganizerProviderRoute {
+  const row = exact(value, [
+    "credential",
+    "credentialRevision",
+    "expansionStyle",
+    "provider",
+    "routingEffort",
+    "source"
+  ]);
+  if (
+    row.provider !== "openai" ||
+    (row.source !== "app_default" && row.source !== "byok") ||
+    (row.routingEffort !== "economical" &&
+      row.routingEffort !== "standard" &&
+      row.routingEffort !== "thorough") ||
+    (row.expansionStyle !== "off" &&
+      row.expansionStyle !== "brief" &&
+      row.expansionStyle !== "detailed")
+  )
+    reject();
+  const credentialRevision =
+    row.credentialRevision === null ? null : integer(row.credentialRevision, 1);
+  if (row.source === "app_default") {
+    if (row.credential !== null || credentialRevision !== null) reject();
+  } else if (
+    typeof row.credential !== "string" ||
+    row.credential.length < 20 ||
+    row.credential.length > 500 ||
+    row.credential.trim() !== row.credential ||
+    credentialRevision === null
+  ) {
+    reject();
+  } else {
+    for (let index = 0; index < row.credential.length; index += 1) {
+      const codeUnit = row.credential.charCodeAt(index);
+      if (codeUnit <= 0x20 || codeUnit === 0x7f) reject();
+    }
+  }
+  return Object.freeze({
+    credential: row.credential,
+    credentialRevision,
+    expansionStyle: row.expansionStyle,
+    provider: "openai",
+    routingEffort: row.routingEffort,
+    source: row.source
+  });
 }
 
 function candidateEntries(
@@ -1219,6 +1281,14 @@ function normalizeDatabaseFailure(error: unknown): never {
     typeof error === "object" && error !== null && "code" in error
       ? (error as Readonly<{ code?: unknown }>).code
       : undefined;
+  const message =
+    typeof error === "object" && error !== null && "message" in error
+      ? (error as Readonly<{ message?: unknown }>).message
+      : undefined;
+  if (code === "P0001" && message === "provider_key_invalid")
+    throw new OrganizerProviderError("provider_key_invalid", false);
+  if (code === "P0001" && message === "provider_unavailable")
+    throw new OrganizerProviderError("provider_unavailable", true);
   if (
     typeof code === "string" &&
     (code.startsWith("08") ||
@@ -1314,6 +1384,18 @@ export function createOrganizerRepository(
         jobs.set(job.jobId, Object.freeze({ controls: job.controls, ownerId: job.ownerId }));
       }
       return claimedJobs;
+    },
+    async providerRoute(input) {
+      const context = jobs.get(input.jobId);
+      if (context === undefined) reject();
+      return providerRoute(
+        await execute(
+          executor,
+          ORGANIZER_RPC_SQL.providerRoute,
+          [input.jobId, input.leaseToken],
+          input.signal
+        )
+      );
     },
     async heartbeat(input) {
       const context = jobs.get(input.jobId);
@@ -1566,7 +1648,14 @@ export function createOrganizerRepository(
         await execute(
           executor,
           ORGANIZER_RPC_SQL.fail,
-          [input.jobId, input.leaseToken, input.errorCode, input.retryable],
+          [
+            input.jobId,
+            input.leaseToken,
+            input.errorCode,
+            input.retryable,
+            input.providerSource,
+            input.providerCredentialRevision
+          ],
           input.signal
         ),
         ["jobId", "replayed", "state"]

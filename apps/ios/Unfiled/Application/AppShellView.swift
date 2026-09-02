@@ -194,6 +194,22 @@ struct AppShellView: View {
             SettingsView(
                 email: model.currentUser?.email ?? "",
                 apiHost: model.apiHostLabel,
+                aiSettings: model.aiSettings,
+                providerKey: model.providerKeyMetadata,
+                isLoadingAISettings: model.isLoadingAISettings,
+                hasLoadedAISettings: model.hasLoadedAISettings,
+                isSavingAISettings: model.isSavingAISettings,
+                hasPendingAISettingsRetry: model.hasPendingAISettingsRetry,
+                isMutatingProviderKey: model.isMutatingProviderKey,
+                hasPendingProviderKeyRetry: model.hasPendingProviderKeyRetry,
+                aiSettingsError: model.aiSettingsError,
+                providerKeyError: model.providerKeyError,
+                onRefreshAISettings: model.loadAISettings,
+                onSaveAISettings: model.saveAISettings,
+                onDiscardAISettingsRetry: model.discardAISettingsRetry,
+                onSaveProviderKey: model.saveProviderKey,
+                onDiscardProviderKeyRetry: model.discardProviderKeyRetry,
+                onDeleteProviderKey: model.deleteProviderKey,
                 onOpenRoutingRules: { model.navigationPath.append(.routingRules) },
                 onSignOut: model.signOut
             )

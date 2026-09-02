@@ -24,7 +24,7 @@ import type {
   OrganizerRoutingPolicyContext
 } from "./drain.js";
 import type { OrganizerEmbeddingProvider } from "./embedding-provider.js";
-import { OrganizerUnavailableError } from "./errors.js";
+import { OrganizerProviderError, OrganizerUnavailableError } from "./errors.js";
 import type { OrganizerKeyAuthority } from "./key-management.js";
 import { organizerLocalDate } from "./local-date.js";
 import {
@@ -35,6 +35,7 @@ import {
 import { createOrganizerRagPayloadOpener } from "./rag-crypto.js";
 
 const CANDIDATE_LIMIT = 8;
+const ECONOMICAL_CANDIDATE_LIMIT = 6;
 const MAX_TRACKED_CACHE_OWNERS = 512;
 const MINIMUM_SEMANTIC_MATCH = 0.8;
 const MINIMUM_TRIGRAM_MATCH = 0.5;
@@ -107,6 +108,10 @@ function compatibleType(
   if (kind === "project_update") return noteType === "project" ? 1 : 0;
   if (kind === "principle") return noteType === "principle" ? 1 : 0;
   return noteType === "generic" ? 1 : 0.25;
+}
+
+function candidateLimit(job: ClaimedOrganizerJob): number {
+  return job.routingEffort === "economical" ? ECONOMICAL_CANDIDATE_LIMIT : CANDIDATE_LIMIT;
 }
 
 function meaningfulTokens(value: string): ReadonlySet<string> {
@@ -446,7 +451,7 @@ export function createOrganizerCandidateRetrieval(
     const page = await options.repository.candidates({
       jobId: input.job.jobId,
       leaseToken: input.job.leaseToken,
-      limit: CANDIDATE_LIMIT,
+      limit: candidateLimit(input.job),
       signal: input.signal
     });
     const currentCapture = Object.freeze({
@@ -472,7 +477,7 @@ export function createOrganizerCandidateRetrieval(
     const page = await options.repository.candidates({
       jobId: input.job.jobId,
       leaseToken: input.job.leaseToken,
-      limit: CANDIDATE_LIMIT,
+      limit: candidateLimit(input.job),
       signal: input.signal
     });
     const currentCapture = Object.freeze({
@@ -545,10 +550,15 @@ export function createOrganizerCandidateRetrieval(
         queryEmbedding = await options.embeddingProvider.embed({
           dimensions: probe.page.snapshot.dimensions,
           modelId: probe.page.snapshot.modelId,
+          ...(input.providerCredential === undefined
+            ? {}
+            : { providerCredential: input.providerCredential }),
           signal: input.signal,
           text: input.capture.rawContent
         });
-      } catch {
+      } catch (error: unknown) {
+        if (error instanceof OrganizerProviderError && error.safeCode === "provider_key_invalid")
+          throw error;
         return fallback(input);
       }
 
@@ -587,7 +597,9 @@ export function createOrganizerCandidateRetrieval(
           invalidateOwner(input.job.ownerId);
           return await fallback(input);
         }
-        const usableMatches = result.matches.filter(hasUsableRetrievalEvidence);
+        const usableMatches = result.matches
+          .filter(hasUsableRetrievalEvidence)
+          .slice(0, candidateLimit(input.job));
         if (usableMatches.length === 0) {
           return await completeNoMatch(input, result.snapshot.generationId);
         }

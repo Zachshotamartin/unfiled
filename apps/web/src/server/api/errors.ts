@@ -95,14 +95,14 @@ function requestTooLarge(): HttpError {
   return new HttpError(413, ApiErrorCode.VALIDATION_FAILED, "That request is too large.");
 }
 
-function validateDeclaredContentLength(request: Request): void {
+function validateDeclaredContentLength(request: Request, maximumBytes: number): void {
   const declaredLength = request.headers.get("content-length");
   if (declaredLength === null) return;
   if (!/^\d+$/u.test(declaredLength)) throw invalidJsonRequest();
-  if (BigInt(declaredLength) > BigInt(MAX_JSON_REQUEST_BYTES)) throw requestTooLarge();
+  if (BigInt(declaredLength) > BigInt(maximumBytes)) throw requestTooLarge();
 }
 
-async function readBoundedRequestBody(request: Request): Promise<Uint8Array> {
+async function readBoundedRequestBody(request: Request, maximumBytes: number): Promise<Uint8Array> {
   if (request.body === null) return new Uint8Array();
 
   const reader = request.body.getReader();
@@ -112,7 +112,7 @@ async function readBoundedRequestBody(request: Request): Promise<Uint8Array> {
     for (;;) {
       const chunk = await reader.read();
       if (chunk.done) break;
-      if (chunk.value.byteLength > MAX_JSON_REQUEST_BYTES - length) {
+      if (chunk.value.byteLength > maximumBytes - length) {
         try {
           await reader.cancel();
         } catch {
@@ -128,7 +128,11 @@ async function readBoundedRequestBody(request: Request): Promise<Uint8Array> {
     if (error instanceof HttpError) throw error;
     throw invalidJsonRequest();
   } finally {
-    reader.releaseLock();
+    try {
+      reader.releaseLock();
+    } catch {
+      // A nonconforming stream cannot override the sanitized parse result.
+    }
   }
 
   const bytes = new Uint8Array(length);
@@ -144,10 +148,20 @@ async function readBoundedRequestBody(request: Request): Promise<Uint8Array> {
   return bytes;
 }
 
-export async function readJsonObject(request: Request): Promise<Record<string, unknown>> {
-  validateDeclaredContentLength(request);
+export async function readJsonObject(
+  request: Request,
+  maximumBytes = MAX_JSON_REQUEST_BYTES
+): Promise<Record<string, unknown>> {
+  if (
+    !Number.isSafeInteger(maximumBytes) ||
+    maximumBytes < 1 ||
+    maximumBytes > MAX_JSON_REQUEST_BYTES
+  ) {
+    throw new ConfigurationError();
+  }
+  validateDeclaredContentLength(request, maximumBytes);
 
-  const bytes = await readBoundedRequestBody(request);
+  const bytes = await readBoundedRequestBody(request, maximumBytes);
   let value: unknown;
   try {
     value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));

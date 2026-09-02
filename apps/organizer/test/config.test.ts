@@ -116,6 +116,9 @@ describe("organizer configuration", () => {
     ],
     ["user session", local({ AUTH_SECRET: "present" }), ["AUTH_SECRET"]],
     ["provider key", local({ OPENAI_API_KEY: "present" }), ["OPENAI_API_KEY"]],
+    ["generic BYOK key", local({ UNFILED_BYOK_API_KEY: "present" }), ["UNFILED_BYOK_API_KEY"]],
+    ["user BYOK key", local({ USER_BYOK_KEY: "present" }), ["USER_BYOK_KEY"]],
+    ["lowercase BYOK key", local({ user_byok_key: "present" }), ["user_byok_key"]],
     [
       "dedicated provider key outside production",
       local({ UNFILED_ORGANIZER_OPENAI_API_KEY: providerKey }),

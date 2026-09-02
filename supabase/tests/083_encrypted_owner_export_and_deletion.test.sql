@@ -423,25 +423,25 @@ insert into owner_delete_secrets(owner_id, secret_id) values
     )
   );
 insert into public.user_provider_keys (
-  id, user_id, provider, vault_secret_id, key_last4
+  id, user_id, provider, vault_secret_id, key_last4, validated_at
 )
 select
   'key_83000000000000000000000001', owner_id,
-  'openai'::public.ai_provider, secret_id, '8301'
+  'openai'::public.ai_provider, secret_id, '8301', now()
 from owner_delete_secrets
 where owner_id = '83838383-8383-4383-8383-838383838383'
 union all
 select
   'key_84000000000000000000000001', owner_id,
-  'anthropic'::public.ai_provider, secret_id, '8401'
+  'openai'::public.ai_provider, secret_id, '8401', now()
 from owner_delete_secrets
 where owner_id = '84848484-8484-4484-8484-848484848484';
 insert into public.user_provider_keys (
-  id, user_id, provider, vault_secret_id, key_last4
+  id, user_id, provider, vault_secret_id, key_last4, validated_at
 ) values (
   'key_85000000000000000000000001',
   '85858585-8585-4585-8585-858585858585', 'openai',
-  '85000000-0000-4000-8000-000000000001', '8501'
+  '85000000-0000-4000-8000-000000000001', '8501', now()
 );
 
 set local role service_role;

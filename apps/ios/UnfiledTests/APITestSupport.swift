@@ -44,10 +44,20 @@ func makeStubbedAPIClient(tokenProvider: (any AccessTokenProviding)? = nil,
                          tokenProvider: tokenProvider, limits: limits)
 }
 
-func apiResponse(for request: URLRequest, status: Int = 200, json: String) -> (HTTPURLResponse, Data) {
+func apiResponse(
+    for request: URLRequest,
+    status: Int = 200,
+    json: String,
+    privateNoStore: Bool = false
+) -> (HTTPURLResponse, Data) {
+    var headers = ["Content-Type": "application/json"]
+    if privateNoStore {
+        headers["Cache-Control"] = "private, no-store"
+        headers["Pragma"] = "no-cache"
+    }
     let response = HTTPURLResponse(url: request.url!, statusCode: status,
                                    httpVersion: "HTTP/1.1",
-                                   headerFields: ["Content-Type": "application/json"])!
+                                   headerFields: headers)!
     return (response, Data(json.utf8))
 }
 

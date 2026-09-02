@@ -43,6 +43,40 @@ final class SettingsContractTests: XCTestCase {
         XCTAssertThrowsError(try decoder.decode(UserSettingsResponse.self, from: Data(unknownKey.utf8)))
     }
 
+    func testSettingsMutationsRejectIncoherentProviderChangesAndInvalidIdempotency() {
+        XCTAssertThrowsError(
+            try UserSettingsUpdateRequest(
+                expectedSettingsRevision: 1,
+                idempotencyKey: "settings-invalid-provider",
+                providerMode: .appDefault,
+                byokProvider: .value(.openai)
+            )
+        )
+        XCTAssertThrowsError(
+            try UserSettingsUpdateRequest(
+                expectedSettingsRevision: 1,
+                idempotencyKey: "settings-invalid-byok",
+                providerMode: .byok,
+                byokProvider: .null
+            )
+        )
+        XCTAssertThrowsError(
+            try UserSettingsUpdateRequest(
+                expectedSettingsRevision: 1,
+                idempotencyKey: "settings-invalid-fallback",
+                byokProvider: .null,
+                byokFallbackToApp: true
+            )
+        )
+        XCTAssertThrowsError(
+            try UserSettingsUpdateRequest(
+                expectedSettingsRevision: 1,
+                idempotencyKey: "contains spaces",
+                routingEffort: .standard
+            )
+        )
+    }
+
     func testProviderMetadataResponseCannotContainCredentialMaterial() throws {
         let decoder = APIJSON.makeDecoder()
         let valid = #"{"providerKey":{"provider":"openai","lastFour":"1234","status":"active","credentialRevision":1,"validatedAt":"2026-09-01T12:00:00Z","updatedAt":"2026-09-01T12:00:01Z"}}"#
@@ -61,9 +95,14 @@ final class SettingsContractTests: XCTestCase {
             of: #""credentialRevision":1"#,
             with: #""credentialRevision":0"#
         )
+        let unvalidatedActive = valid.replacingOccurrences(
+            of: #""validatedAt":"2026-09-01T12:00:00Z""#,
+            with: #""validatedAt":null"#
+        )
         XCTAssertThrowsError(try decoder.decode(ProviderKeyResponse.self, from: Data(leakedKey.utf8)))
         XCTAssertThrowsError(try decoder.decode(ProviderKeyResponse.self, from: Data(leakedCiphertext.utf8)))
         XCTAssertThrowsError(try decoder.decode(ProviderKeyResponse.self, from: Data(invalidRevision.utf8)))
+        XCTAssertThrowsError(try decoder.decode(ProviderKeyResponse.self, from: Data(unvalidatedActive.utf8)))
     }
 
     func testProviderPutRequiresAuthenticationBeforeTransport() async throws {
@@ -76,6 +115,7 @@ final class SettingsContractTests: XCTestCase {
         let request = try ProviderKeyPutRequest(
             idempotencyKey: "provider-put-1",
             provider: .openai,
+            expectedCredentialRevision: nil,
             apiKey: Self.syntheticProviderKey
         )
 
@@ -93,6 +133,7 @@ final class SettingsContractTests: XCTestCase {
         let request = try ProviderKeyPutRequest(
             idempotencyKey: "provider-put-1",
             provider: .openai,
+            expectedCredentialRevision: nil,
             apiKey: secret
         )
         APIURLProtocolStub.install { urlRequest in
@@ -103,11 +144,16 @@ final class SettingsContractTests: XCTestCase {
             XCTAssertEqual(urlRequest.value(forHTTPHeaderField: "Idempotency-Key"), "provider-put-1")
             XCTAssertEqual(urlRequest.value(forHTTPHeaderField: "Cache-Control"), "no-store")
             let body = try XCTUnwrap(
-                JSONSerialization.jsonObject(with: apiRequestBody(urlRequest)) as? [String: String]
+                JSONSerialization.jsonObject(with: apiRequestBody(urlRequest)) as? [String: Any]
             )
-            XCTAssertEqual(body["apiKey"], secret)
-            XCTAssertEqual(body["provider"], "openai")
-            return apiResponse(for: urlRequest, json: Self.providerPutResponseJSON)
+            XCTAssertEqual(body["apiKey"] as? String, secret)
+            XCTAssertEqual(body["provider"] as? String, "openai")
+            XCTAssertTrue(body["expectedCredentialRevision"] is NSNull)
+            return apiResponse(
+                for: urlRequest,
+                json: Self.providerPutResponseJSON,
+                privateNoStore: true
+            )
         }
 
         let response = try await makeStubbedAPIClient(tokenProvider: provider).putProviderKey(request)
@@ -140,7 +186,8 @@ final class SettingsContractTests: XCTestCase {
             XCTAssertNil(body["organizationMode"])
             return apiResponse(
                 for: urlRequest,
-                json: #"{"settings":\#(Self.appDefaultSettingsJSON),"replayed":false}"#
+                json: #"{"settings":\#(Self.appDefaultSettingsJSON),"replayed":false}"#,
+                privateNoStore: true
             )
         }
         let response = try await makeStubbedAPIClient(tokenProvider: provider).updateUserSettings(request)

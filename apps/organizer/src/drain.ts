@@ -17,6 +17,14 @@ import { createHash } from "node:crypto";
 
 import type { OrganizerKeyAuthority } from "./key-management.js";
 import {
+  createOrganizerProviderCredentialAccess,
+  type LeaseBoundOrganizerProviderRoute,
+  type OrganizerExpansionStyle,
+  type OrganizerProviderCredentialAccess,
+  type OrganizerProviderSource,
+  type OrganizerRoutingEffort
+} from "./provider-credential.js";
+import {
   type DecryptedCandidate,
   type DecryptedCapture,
   type OrganizerCaptureControls,
@@ -61,9 +69,11 @@ export type ClaimedOrganizerJob = Readonly<{
   ownerId: string;
   promptVersion: string;
   replanCount: 0 | 1;
+  routingEffort: OrganizerRoutingEffort;
   routingMode: RoutingBehaviorMode;
   schemaVersion: number;
   source: EncryptedProjection;
+  expansionStyle: OrganizerExpansionStyle;
   commandProjection: "encrypted_only" | "legacy";
 }>;
 export type EncryptedCandidate = Readonly<{
@@ -221,6 +231,7 @@ export type OrganizerCandidateRetrievalPort = Readonly<{
       authority: OrganizerKeyAuthority;
       capture: DecryptedCapture;
       job: ClaimedOrganizerJob;
+      providerCredential?: OrganizerProviderCredentialAccess;
       signal: AbortSignal;
     }>
   ): Promise<
@@ -243,6 +254,9 @@ export type OrganizerRepository = Readonly<{
   claim(
     input: Readonly<{ leaseSeconds: number; limit: number; signal: AbortSignal; workerId: string }>
   ): Promise<readonly ClaimedOrganizerJob[]>;
+  providerRoute(
+    input: Readonly<{ jobId: string; leaseToken: string; signal: AbortSignal }>
+  ): Promise<LeaseBoundOrganizerProviderRoute>;
   heartbeat(
     input: Readonly<{
       candidateManifest: CandidateRevalidationManifest;
@@ -305,6 +319,8 @@ export type OrganizerRepository = Readonly<{
       errorCode: string;
       jobId: string;
       leaseToken: string;
+      providerCredentialRevision: number | null;
+      providerSource: OrganizerProviderSource | null;
       retryable: boolean;
       signal: AbortSignal;
     }>
@@ -632,6 +648,7 @@ function assertCommandBinding(
 
 export function createOrganizerDrain(
   options: Readonly<{
+    appDefaultProviderApiKey?: string;
     candidateLimit?: number;
     claimLimit: number;
     concurrency: number;
@@ -650,6 +667,25 @@ export function createOrganizerDrain(
     authority: OrganizerKeyAuthority,
     signal: AbortSignal
   ): Promise<"completed" | "failed" | "retry"> {
+    const providerCredential =
+      options.appDefaultProviderApiKey === undefined
+        ? undefined
+        : createOrganizerProviderCredentialAccess({
+            appDefaultApiKey: options.appDefaultProviderApiKey,
+            async resolve() {
+              const route = await options.repository.providerRoute({
+                jobId: job.jobId,
+                leaseToken: job.leaseToken,
+                signal
+              });
+              if (
+                route.routingEffort !== job.routingEffort ||
+                route.expansionStyle !== job.expansionStyle
+              )
+                throw new OrganizerUnavailableError();
+              return route;
+            }
+          });
     try {
       const capture = await options.cipher.openCapture({ authority, job, signal });
       if (!sameOrganizerCaptureControls(capture.controls, job.controls))
@@ -745,12 +781,21 @@ export function createOrganizerDrain(
           page = await options.repository.candidates({
             jobId: job.jobId,
             leaseToken: job.leaseToken,
-            limit: options.candidateLimit ?? 8,
+            limit: Math.min(
+              options.candidateLimit ?? 8,
+              job.routingEffort === "economical" ? 6 : 8
+            ),
             signal
           });
           routingPolicyContext = options.routingPolicyContext ?? FAIL_CLOSED_ROUTING_CONTEXT;
         } else {
-          const retrieved = await options.retrieval.retrieve({ authority, capture, job, signal });
+          const retrieved = await options.retrieval.retrieve({
+            authority,
+            capture,
+            job,
+            ...(providerCredential === undefined ? {} : { providerCredential }),
+            signal
+          });
           page = retrieved;
           ragGenerationId = retrieved.ragGenerationId ?? null;
           routingPolicyContext = retrieved.routingPolicyContext;
@@ -880,7 +925,10 @@ export function createOrganizerDrain(
               candidates,
               captureId: job.captureId,
               controls,
+              expansionStyle: job.expansionStyle,
               promptVersion: job.promptVersion,
+              ...(providerCredential === undefined ? {} : { providerCredential }),
+              routingEffort: job.routingEffort,
               schemaVersion: job.schemaVersion,
               signal
             });
@@ -1114,11 +1162,14 @@ export function createOrganizerDrain(
       }
     } catch (error: unknown) {
       const failure = safeFailure(error);
+      const providerSelection = providerCredential?.lastSelection() ?? null;
       try {
         const result = await options.repository.fail({
           errorCode: failure.errorCode,
           jobId: job.jobId,
           leaseToken: job.leaseToken,
+          providerCredentialRevision: providerSelection?.credentialRevision ?? null,
+          providerSource: providerSelection?.source ?? null,
           retryable: failure.retryable,
           signal
         });

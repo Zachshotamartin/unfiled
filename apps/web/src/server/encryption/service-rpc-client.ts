@@ -1,6 +1,7 @@
 import { ConfigurationError } from "@/server/api/errors";
 
 const FUNCTION_NAME_PATTERN = /^[a-z][a-z0-9_]{0,99}$/u;
+const MAX_CONFIGURED_RPC_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 export const ServiceRpcErrorCode = Object.freeze({
   CONFLICT_REQUIRES_REVIEW: "conflict_requires_review",
@@ -42,7 +43,84 @@ export type ServiceRpcClientOptions = Readonly<{
   fetch?: typeof fetch;
   /** Revokes every request made by this capability-scoped client. */
   signal?: AbortSignal;
+  /** Optional per-response byte ceiling for small capability results. */
+  maximumResponseBytes?: number;
 }>;
+
+async function boundedResponseJson(
+  response: Response,
+  maximumResponseBytes: number | undefined
+): Promise<unknown> {
+  if (maximumResponseBytes === undefined) {
+    return response.json().catch(() => null);
+  }
+  const declared = response.headers.get("content-length");
+  if (declared !== null) {
+    const declaredBytes = Number(declared);
+    if (
+      !/^\d+$/u.test(declared) ||
+      !Number.isSafeInteger(declaredBytes) ||
+      declaredBytes > maximumResponseBytes
+    ) {
+      try {
+        await response.body?.cancel();
+      } catch {
+        // The content-free size failure remains authoritative.
+      }
+      throw new ServiceRpcError(ServiceRpcErrorCode.PROVIDER_UNAVAILABLE);
+    }
+  }
+  if (response.body === null) return null;
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      if (chunk.value.byteLength > maximumResponseBytes - length) {
+        try {
+          await reader.cancel();
+        } catch {
+          // The content-free size failure remains authoritative.
+        }
+        throw new ServiceRpcError(ServiceRpcErrorCode.PROVIDER_UNAVAILABLE);
+      }
+      length += chunk.value.byteLength;
+      chunks.push(chunk.value);
+    }
+    const bytes = new Uint8Array(length);
+    let offset = 0;
+    try {
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      const serialized = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      return JSON.parse(serialized) as unknown;
+    } catch (error: unknown) {
+      if (error instanceof ServiceRpcError) throw error;
+      return null;
+    } finally {
+      bytes.fill(0);
+    }
+  } catch (error: unknown) {
+    try {
+      await reader.cancel();
+    } catch {
+      // The content-free transport failure remains authoritative.
+    }
+    if (error instanceof ServiceRpcError) throw error;
+    throw new ServiceRpcError(ServiceRpcErrorCode.PROVIDER_UNAVAILABLE);
+  } finally {
+    for (const chunk of chunks) chunk.fill(0);
+    try {
+      reader.releaseLock();
+    } catch {
+      // A nonconforming stream cannot override the content-free decode result.
+    }
+  }
+}
 
 export function throwIfServiceOperationAborted(signal: AbortSignal): void {
   if (signal.aborted) {
@@ -218,6 +296,14 @@ export function createServiceRpcClient(options: ServiceRpcClientOptions): Servic
   ) {
     throw new ConfigurationError();
   }
+  if (
+    options.maximumResponseBytes !== undefined &&
+    (!Number.isSafeInteger(options.maximumResponseBytes) ||
+      options.maximumResponseBytes < 1 ||
+      options.maximumResponseBytes > MAX_CONFIGURED_RPC_RESPONSE_BYTES)
+  ) {
+    throw new ConfigurationError();
+  }
   const allowedFunctions = new Set(options.allowedFunctions);
   const config = configuration(options.environment ?? process.env);
   const request = options.fetch ?? globalThis.fetch;
@@ -237,7 +323,9 @@ export function createServiceRpcClient(options: ServiceRpcClientOptions): Servic
           method: "POST",
           body: JSON.stringify(parameters),
           cache: "no-store",
+          credentials: "omit",
           redirect: "error",
+          referrerPolicy: "no-referrer",
           ...(options.signal === undefined ? {} : { signal: options.signal }),
           headers: {
             apikey: config.serviceRoleKey,
@@ -249,7 +337,9 @@ export function createServiceRpcClient(options: ServiceRpcClientOptions): Servic
         throw new ServiceRpcError(ServiceRpcErrorCode.PROVIDER_UNAVAILABLE);
       }
       const body: unknown =
-        response.status === 204 ? null : await response.json().catch(() => null);
+        response.status === 204
+          ? null
+          : await boundedResponseJson(response, options.maximumResponseBytes);
       if (!response.ok) throw databaseError(response.status, body);
       return body;
     }
