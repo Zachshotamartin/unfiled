@@ -22,10 +22,21 @@ export type OrganizerClient = Readonly<{
 
 export type OrganizerClientEnvironment = Readonly<Record<string, string | undefined>>;
 
+/** Content-free classification of where an invocation failed; safe to log. */
+export type InvocationFailureReason = "aborted" | "oidc_token" | "token_shape" | "transport";
+
+/** Reads abort state through a call so control-flow narrowing cannot assume it is stale. */
+function abortedNow(signal: AbortSignal): boolean {
+  return signal.aborted;
+}
+
 export class OrganizerInvocationError extends Error {
-  public constructor() {
-    super("The encrypted organizer is unavailable.");
+  public readonly reason: InvocationFailureReason | undefined;
+
+  public constructor(reason?: InvocationFailureReason, cause?: unknown) {
+    super("The encrypted organizer is unavailable.", cause === undefined ? undefined : { cause });
     this.name = "OrganizerInvocationError";
+    this.reason = reason;
   }
 }
 
@@ -206,14 +217,19 @@ export function createOrganizerClient(
         externalSignal === undefined ? timeout : AbortSignal.any([externalSignal, timeout]);
       let response: Response;
       try {
-        if (signal.aborted) throw new OrganizerInvocationError();
-        const oidcToken = await abortable(token, signal);
+        if (signal.aborted) throw new OrganizerInvocationError("aborted");
+        let oidcToken: string;
+        try {
+          oidcToken = await abortable(token, signal);
+        } catch (error: unknown) {
+          throw new OrganizerInvocationError(abortedNow(signal) ? "aborted" : "oidc_token", error);
+        }
         if (
           oidcToken.length < 32 ||
           oidcToken.length > 16_384 ||
           !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(oidcToken)
         ) {
-          throw new OrganizerInvocationError();
+          throw new OrganizerInvocationError("token_shape");
         }
         response = await request(url, {
           body: JSON.stringify({ trigger }),
@@ -228,7 +244,7 @@ export function createOrganizerClient(
         });
       } catch (error: unknown) {
         if (error instanceof OrganizerInvocationError) throw error;
-        throw new OrganizerInvocationError();
+        throw new OrganizerInvocationError(abortedNow(signal) ? "aborted" : "transport", error);
       }
       return parseDrainResult(await boundedJson(response, signal));
     }

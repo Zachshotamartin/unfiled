@@ -183,7 +183,9 @@ describe("errorResponse server-side failure log", () => {
         ApiErrorCode.PROVIDER_UNAVAILABLE,
         "The encrypted organizer is unavailable."
       );
-      wrapped.cause = new TypeError("fetch failed: private-detail");
+      const cause = new TypeError("fetch failed: private-detail") as TypeError & { reason: string };
+      cause.reason = "oidc_token";
+      wrapped.cause = cause;
       errorResponse(wrapped, request);
       expect(sink).toHaveBeenCalledTimes(1);
       const line = String(sink.mock.calls[0]?.[0]);
@@ -194,6 +196,7 @@ describe("errorResponse server-side failure log", () => {
         code: ApiErrorCode.PROVIDER_UNAVAILABLE,
         errorClass: "HttpError",
         causeClass: "TypeError",
+        causeReason: "oidc_token",
         method: "GET",
         path: "/api/internal/captures/drain"
       });

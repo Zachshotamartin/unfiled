@@ -63,14 +63,13 @@ export function createCaptureWorkflowHandler(
       });
     } catch (error: unknown) {
       if (error instanceof OrganizerInvocationError) {
-        return noStoreError(
-          new HttpError(
-            503,
-            ApiErrorCode.PROVIDER_UNAVAILABLE,
-            "The encrypted organizer is unavailable."
-          ),
-          request
+        const unavailable = new HttpError(
+          503,
+          ApiErrorCode.PROVIDER_UNAVAILABLE,
+          "The encrypted organizer is unavailable."
         );
+        unavailable.cause = error;
+        return noStoreError(unavailable, request);
       }
       return noStoreError(error, request);
     }

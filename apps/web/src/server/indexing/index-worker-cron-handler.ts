@@ -53,14 +53,13 @@ export function createIndexWorkerCronHandler(
       });
     } catch (error: unknown) {
       if (error instanceof IndexWorkerInvocationError) {
-        return errorResponse(
-          new HttpError(
-            503,
-            ApiErrorCode.PROVIDER_UNAVAILABLE,
-            "The encrypted index worker is temporarily unavailable."
-          ),
-          request
+        const unavailable = new HttpError(
+          503,
+          ApiErrorCode.PROVIDER_UNAVAILABLE,
+          "The encrypted index worker is temporarily unavailable."
         );
+        unavailable.cause = error;
+        return errorResponse(unavailable, request);
       }
       return errorResponse(error, request);
     }

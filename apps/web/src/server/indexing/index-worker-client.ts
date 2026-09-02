@@ -22,10 +22,24 @@ export type IndexWorkerClient = Readonly<{
 
 export type IndexWorkerEnvironment = Readonly<Record<string, string | undefined>>;
 
+/** Content-free classification of where an invocation failed; safe to log. */
+export type InvocationFailureReason = "aborted" | "oidc_token" | "token_shape" | "transport";
+
+/** Reads abort state through a call so control-flow narrowing cannot assume it is stale. */
+function abortedNow(signal: AbortSignal): boolean {
+  return signal.aborted;
+}
+
 export class IndexWorkerInvocationError extends Error {
-  public constructor() {
-    super("The encrypted index worker is unavailable.");
+  public readonly reason: InvocationFailureReason | undefined;
+
+  public constructor(reason?: InvocationFailureReason, cause?: unknown) {
+    super(
+      "The encrypted index worker is unavailable.",
+      cause === undefined ? undefined : { cause }
+    );
     this.name = "IndexWorkerInvocationError";
+    this.reason = reason;
   }
 }
 
@@ -214,14 +228,22 @@ export function createIndexWorkerClient(
         externalSignal === undefined ? timeout : AbortSignal.any([externalSignal, timeout]);
       let response: Response;
       try {
-        if (signal.aborted) throw new IndexWorkerInvocationError();
-        const oidcToken = await abortable(token, signal);
+        if (signal.aborted) throw new IndexWorkerInvocationError("aborted");
+        let oidcToken: string;
+        try {
+          oidcToken = await abortable(token, signal);
+        } catch (error: unknown) {
+          throw new IndexWorkerInvocationError(
+            abortedNow(signal) ? "aborted" : "oidc_token",
+            error
+          );
+        }
         if (
           oidcToken.length < 32 ||
           oidcToken.length > 16_384 ||
           !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(oidcToken)
         ) {
-          throw new IndexWorkerInvocationError();
+          throw new IndexWorkerInvocationError("token_shape");
         }
         response = await request(url, {
           body: JSON.stringify({ trigger }),
@@ -236,7 +258,7 @@ export function createIndexWorkerClient(
         });
       } catch (error: unknown) {
         if (error instanceof IndexWorkerInvocationError) throw error;
-        throw new IndexWorkerInvocationError();
+        throw new IndexWorkerInvocationError(abortedNow(signal) ? "aborted" : "transport", error);
       }
       return parseDrainResult(await boundedJson(response, signal));
     }
