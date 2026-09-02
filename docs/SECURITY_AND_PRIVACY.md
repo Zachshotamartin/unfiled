@@ -68,17 +68,15 @@ Boundaries: (B1) client ↔ API, (B2) API ↔ database, (B3) workflow ↔ model 
 
 ### 3.1 Native iPhone storage and extension boundary
 
-- The SwiftUI application is the only process allowed to hold a session, open the SQLCipher database, or call authenticated API routes. The WidgetKit extension does not receive auth tokens, database keys, provider keys, or database access.
+- The SwiftUI application is the only process allowed to hold a session, open the SQLCipher database, or call authenticated API routes. There is no app extension.
 - GRDB must open the local store through SQLCipher and verify a non-empty `PRAGMA cipher_version` in a native integration test. A successful package resolution or simulator compile alone is not encryption evidence. The plaintext database header must be absent after first durable write.
 - The SQLCipher directory and database file use `FileProtectionType.complete`, matching the unlocked-only key boundary. Retry and reconciliation run only while the scene is active; entering an inactive/background state stops the lifecycle. Unfiled makes no background-decryption or background-sync promise. Database-key loss is handled as local-cache loss, but the app must never silently create a second store while an unreadable outbox exists.
-- The App Group contains only content-free widget coordination: schema version, bounded pending count, and a transient random intent nonce. Capture text, note titles, destinations, email, session state, and encryption material may not be shared. If draft handoff is added later, it requires an encrypted, authenticated format and a separate security review.
-- Native URLs must match the configured scheme and `capture` host. The current router reads only a recognized `source`; it ignores all other path/query material and normalizes a missing or unrecognized source to the ordinary in-app capture origin. No URL value becomes capture content, a resource identifier, an operation, a credential, or a return destination. Opening a blank composer is the only effect before normal authorization and user submission.
 - App Transport Security remains enabled. Production and preview builds use HTTPS endpoints from reviewed build configuration. Development HTTP is restricted to the local configuration and must not appear in a release archive.
 - Native logs, signposts, crash metadata, and accessibility identifiers follow the content-free logging policy. Swift error descriptions must not interpolate request bodies, decrypted payloads, tokens, SQL arguments, or draft text.
 - Account profile presentation such as display name is identity metadata, not note content. It is excluded from the note-envelope promise, minimized, and never used as a channel for capture or note text.
 - Uninstall removes the application container, including the SQLCipher database, drafts, and unsynced outbox. Keychain entries may survive according to iOS behavior, but they are not a backup and do not recover deleted local rows. Synced server content can rehydrate after sign-in; an unsynced capture cannot. If a database file remains but its key cannot be read, the app must fail visibly rather than replace the store and lose the outbox silently.
 
-Unsigned simulator CI verifies compilation, tests, target composition, and deterministic project generation. It does not verify Apple signing, a signed archive's entitlements, Keychain behavior after reboot, App Group isolation, Lock Screen redaction, extension launch, protected-data states, or SQLCipher behavior on a physical device. Those checks are release-blocking human evidence in `HUMAN_SETUP.md`.
+Unsigned simulator CI verifies compilation, tests, target composition, and deterministic project generation. It does not verify Apple signing, a signed archive's entitlements, Keychain behavior after reboot, protected-data states, or SQLCipher behavior on a physical device. Those checks are release-blocking human evidence in `HUMAN_SETUP.md`.
 
 ## 4. AI privacy modes and disclosure
 
@@ -203,8 +201,7 @@ Note deletion: soft 30 days (restorable and excluded from retrieval), then hard 
 - [ ] Export completeness verified against fixture library
 - [ ] Secrets scan clean; rotation procedures written
 - [ ] Native SQLCipher test reports a cipher version and encrypted file header; migration/restart and unreadable-key behavior pass on a physical iPhone
-- [ ] Signed archive contains the expected host and widget identifiers, App Group entitlements, privacy manifest, and no development HTTP endpoint or secret configuration
-- [ ] Lock Screen widget and App Intent expose no protected content; locked-device, first-unlock, sign-out, and App Group isolation checks pass on hardware
+- [ ] Signed archive contains the expected host identifier, privacy manifest, and no development HTTP endpoint or secret configuration
 - [x] E1 credential-free correction/Undo/Review gate, including full built-local HTTP, proves two-phase MAC/reservation replay, exact inverses, encrypted owner-bound receipts/history, server-derived canonical batches, terminal batch Undo, action-limited conflict Review, sorted multi-note locking, all-or-nothing rollback, one feedback anchor, and attested projection-only timestamp repair; Production/account evidence is not implied
 - [ ] Before enabling E2 in Production, complete the deployed private-rule canary; the credential-free aggregate B–E2 HTTP/PR-CI gate is green, but it does not prove the cloud path
 - [ ] Before enabling E3 in Production, complete the deployed generated-block/duplicate/retention canary; the credential-free local aggregate/HTTP gate and PR #16's required CI lanes are green and keep generated blocks separately encrypted, exclude rejected content from public reads, leave note revisions unchanged, make duplicate actions non-destructive, and purge rejected blocks after seven days without proving the cloud path

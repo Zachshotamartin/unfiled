@@ -32,7 +32,7 @@ The `production` row is the free private-beta target. The five Vercel projects e
 | 4 contract                | TypeScript contract fixtures, error-code stability, and generated OpenAPI freshness                                                                                        | Linux  | yes      |
 | 5 routing (deterministic) | full corpus against mock adapter: preservation, validation, banding, injection cases                                                                                       | Linux  | yes      |
 | 6 web build               | production Next.js build                                                                                                                                                   | Linux  | yes      |
-| 7 native generate/build   | clean XcodeGen generation; unsigned application + WidgetKit extension build with `CODE_SIGNING_ALLOWED=NO` for an iOS 17+ Simulator                                        | macOS  | yes      |
+| 7 native generate/build   | clean XcodeGen generation; unsigned application build with `CODE_SIGNING_ALLOWED=NO` for an iOS 17+ Simulator                                                              | macOS  | yes      |
 | 8 native tests            | Swift unit, integration, repository, and presentation-model tests in the generated project's current test target                                                           | macOS  | yes      |
 | 9 local HTTP E2E          | built Next.js + local Supabase: auth/manual-note/capture baseline plus encrypted E1 interactions and E2 routing-rule CRUD, matching, learning, replay, and rejection cases | Linux  | yes      |
 | 10 automated security     | committed-content secret scan and `pnpm audit --prod --audit-level high`                                                                                                   | Linux  | yes      |
@@ -74,7 +74,7 @@ Production web deploy: merge to main → staging checks → migration approval g
 
 `contracts`: Zod schema round-trips, error-code table completeness, version compatibility (previous schema fixtures still parse).
 
-`apps/ios`: strict `Codable` boundary decoding; auth session state; URL normalization; SQLCipher open/migration/header and complete-file-protection checks; draft→outbox atomicity; retry/idempotency; restart recovery; foreground-only retry lifecycle with inactive-state cancellation; Swift concurrency cancellation; Today, library, search, review, note edit/history, and capture presentation states; Dynamic Type and accessibility identifiers; content-free WidgetKit timeline and App Intent routing. Network and repository tests use deterministic hand-authored fixtures and never require production credentials.
+`apps/ios`: strict `Codable` boundary decoding; auth session state; URL normalization; SQLCipher open/migration/header and complete-file-protection checks; draft→outbox atomicity; retry/idempotency; restart recovery; foreground-only retry lifecycle with inactive-state cancellation; Swift concurrency cancellation; Today, library, search, review, note edit/history, and capture presentation states; Dynamic Type and accessibility identifiers. Network and repository tests use deterministic hand-authored fixtures and never require production credentials.
 
 ## 5. Test inventory — database (SQL)
 
@@ -151,7 +151,7 @@ Preview browser coverage and signed native physical-device acceptance remain req
 - E2E-19: provider spy observes zero calls and index rows for private content/query; flip/delete during retrieval and prove exclusion before model and write.
 - E2E-20: KMS outage/tamper fails closed; retry retains ciphertext; restored authorized keys decrypt post-cutover backup, while a role lacking the correct class cannot.
 
-Native device matrix: the oldest supported iPhone class plus one current device; iOS 17 and the current shipping iOS; app terminated/backgrounded/foregrounded; keyboard-open capture; largest Dynamic Type sizes; VoiceOver, Switch Control, Reduce Motion, and Bold Text; dark mode; online/offline/reconnect; valid/expired session; device restart; locked-device widget launch; App Group and Keychain protected-data states. Simulator automation covers repeatable UI paths, but at least one signed physical-device pass is mandatory for a release candidate.
+Native device matrix: the oldest supported iPhone class plus one current device; iOS 17 and the current shipping iOS; app terminated/backgrounded/foregrounded; keyboard-open capture; largest Dynamic Type sizes; VoiceOver, Switch Control, Reduce Motion, and Bold Text; dark mode; online/offline/reconnect; valid/expired session; device restart; Keychain protected-data states. Simulator automation covers repeatable UI paths, but at least one signed physical-device pass is mandatory for a release candidate.
 
 ## 8. Performance verification
 
@@ -222,7 +222,7 @@ The recorded production dependency audit reported zero known high-severity advis
 
 **Web/API release:** CI green including the applicable local E2E lanes; migration gate approved; eval reports current for both providers' registry-v2 models; cloud canary-log and performance checks recorded on the Production deployment with synthetic accounts; error budget not exhausted; changelog updated; rollback = previous Vercel deployment + no destructive migration in window. ADR-0013's AI-assisted search requires the deployed search identity, one-use ticket/RPC gate, root-subset and database denials, privacy canary, and lexical fallback evidence; organizer/index credentials and roots cannot be reused to shortcut that gate.
 
-**Native iPhone release:** tag; clean XcodeGen generation; Release configuration pinned; Swift Package resolution reviewed; privacy manifest and store metadata current; SQLCipher upgrade and restart tests pass; URL routes, WidgetKit, App Intents, Keychain, and App Group behavior verified on a physical iPhone; signed archive identifiers/entitlements inspected; TestFlight acceptance complete; staged rollout with crash and capture-loss gates.
+**Native iPhone release:** tag; clean XcodeGen generation; Release configuration pinned; Swift Package resolution reviewed; privacy manifest and store metadata current; SQLCipher upgrade and restart tests pass; Keychain behavior verified on a physical iPhone; signed archive identifiers/entitlements inspected; TestFlight acceptance complete; staged rollout with crash and capture-loss gates.
 
 **First public beta additionally:** SECURITY_AND_PRIVACY §10 checklist complete; restore drill performed within last 30 days; support + security contact live; demo account seeded with labeled synthetic data.
 

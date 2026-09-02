@@ -27,7 +27,6 @@ body:
       options:
         - Web app
         - iPhone app
-        - Lock Screen widget
         - More than one client
         - Not applicable
     validations:

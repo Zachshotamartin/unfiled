@@ -89,7 +89,7 @@ waivers.
 | Monitoring          | Dashboards, alerts, synthetic probes, test page acknowledgment                                                                                                                                                                   | Unrouted page, blind critical signal, or privacy-unsafe telemetry                                         |
 | Backup/restore      | Fresh backup, restore within objective, deletion replay, backup-expiry register                                                                                                                                                  | Failed/stale drill or unavailable compatible key/deployment                                               |
 | Web deployment      | Five immutable deployment IDs, health/readiness, canary, rollback target                                                                                                                                                         | Mixed commit set or unknown rollback target                                                               |
-| Native              | Signed archive inspection, privacy manifest, TestFlight, physical device/SQLCipher/widget matrix                                                                                                                                 | Wrong entitlement/endpoint, plaintext DB, capture loss, or unsigned-only evidence                         |
+| Native              | Signed archive inspection, privacy manifest, TestFlight, physical device/SQLCipher matrix                                                                                                                                        | Wrong entitlement/endpoint, plaintext DB, capture loss, or unsigned-only evidence                         |
 | Legal/support       | Reviewed privacy/terms/security/support/deletion text; controlled-origin route proof; verified private vulnerability reporting; content-free public support intake; private account-support path; operator/jurisdiction decision | Missing private account path, unproved origin, unreviewed operator/legal terms, or claim exceeds evidence |
 
 AI-assisted search and BYOK are independent feature gates. The free beta ships BYOK-only (no
@@ -145,8 +145,8 @@ Withdraw the candidate when:
 - the deployed topology cannot be rolled back as one compatible set;
 - Production would require enabling an unapproved feature, secret fallback, broad database role, or
   plaintext compatibility path;
-- the signed archive contains a development endpoint, wrong identifier, missing extension, or wrong
-  App Group entitlement.
+- the signed archive contains a development endpoint, a wrong identifier, or an unexpected
+  extension.
 
 ## 8. Evidence retention and review
 

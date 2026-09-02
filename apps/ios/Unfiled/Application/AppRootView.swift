@@ -46,9 +46,6 @@ struct AppRootView: View {
                 }
             }
         }
-        .onOpenURL { url in
-            Task { @MainActor in await model.handleDeepLink(url) }
-        }
         .onChange(of: scenePhase) { _, newPhase in
             Task { @MainActor in
                 if newPhase == .active {

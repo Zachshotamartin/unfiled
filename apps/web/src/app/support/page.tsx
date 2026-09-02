@@ -40,7 +40,7 @@ export default function SupportPage() {
 
       <PublicSection id="include" title="What to include">
         <ul>
-          <li>whether you used the web app, iPhone app, or Lock Screen widget;</li>
+          <li>whether you used the web app or the iPhone app;</li>
           <li>the Preview or Production environment, without copying a tokenized URL;</li>
           <li>the app version, iOS version, browser, and approximate time of the problem;</li>
           <li>the action you attempted, the result you expected, and what happened instead;</li>

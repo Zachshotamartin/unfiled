@@ -43,7 +43,7 @@ If accidental access occurs, record only content-free evidence, stop testing, de
 ## In-scope areas after launch
 
 - authenticated web and versioned API authorization;
-- native session, Keychain, SQLCipher, App Group, and WidgetKit boundaries;
+- native session, Keychain, and SQLCipher boundaries;
 - owner isolation and database row-level security;
 - encrypted content envelopes, key context, replay protection, and deletion;
 - organizer, index worker, verifier, and AI-assisted search trust separation;

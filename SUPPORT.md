@@ -53,7 +53,7 @@ Use another trusted session to sign out when possible. Device-local unsynced dra
 
 ## Supported product scope
 
-The planned first beta supports the hosted web product and the native iPhone application on iOS 17 or newer, with the user's own OpenAI or Claude API key. App-funded AI, Android, imports, voice capture, Home Screen widget variants, share extensions, and collaborative workspaces are not supported release features.
+The planned first beta supports the hosted web product and the native iPhone application on iOS 17 or newer, with the user's own OpenAI or Claude API key. App-funded AI, Android, imports, voice capture, widgets, share extensions, and collaborative workspaces are not supported release features.
 
 ## Response expectations
 

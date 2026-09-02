@@ -17,9 +17,7 @@ Do not record certificate private material, provisioning-profile payloads, Apple
 | Check                                                 | State   | Safe observation |
 | ----------------------------------------------------- | ------- | ---------------- |
 | Archive SHA-256 recorded                              | pending |                  |
-| Exactly one QuickCaptureWidget extension embedded     | pending |                  |
 | Host/extension identifiers match ADR-0003             | pending |                  |
-| Host and extension share the expected App Group       | pending |                  |
 | Release API origin and URL scheme are correct         | pending |                  |
 | Privacy manifests are present and reviewed            | pending |                  |
 | SQLCipher GRDB resolved versions are reviewed         | pending |                  |
@@ -45,7 +43,6 @@ Do not record certificate private material, provisioning-profile payloads, Apple
 | Circular and rectangular Lock Screen controls          |                      |             | pending |
 | Keyboard focus and Dynamic Type at 200%                |                      |             | pending |
 | VoiceOver/reduced motion                               |                      |             | pending |
-| App Group snapshot contains no content                 |                      |             | pending |
 | Locked Keychain/SQLCipher denial then unlock recovery  |                      |             | pending |
 | Deletion leaves no local ghost row                     |                      |             | pending |
 

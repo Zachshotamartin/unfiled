@@ -75,10 +75,10 @@ The milestone owner recorded the credential-free aggregate Gate 3 decision as gr
 | aggregate format, lint, typecheck, coverage, build, OpenAPI, native Xcode, database, and routing gates                 | pass                                                           |
 | frozen-lockfile install, production dependency audit, and built-app/local-Supabase HTTP E2E                            | pass; zero known production vulnerabilities                    |
 | responsive production UI and static assets                                                                             | pass at desktop and 390 px; no failed images                   |
-| focused WidgetKit tests, Swift 6 checks, and generated-project/resource inspect gate                                   | pass                                                           |
-| GRDB with SQLCipher plus the WidgetKit/App Intents target `QuickCaptureWidget`                                         | pass; native dependencies and target boundaries are explicit   |
-| unsigned SwiftUI application and `QuickCaptureWidget` extension builds with selected Xcode 26.6                        | pass for the iPhone 17 Pro simulator only                      |
-| Apple signing/archive, physical iPhone SQLCipher/widget matrix, cloud canary/log audit, and preview performance        | pending human evidence in `HUMAN_SETUP.md`                     |
+| focused Swift tests, Swift 6 checks, and generated-project/resource inspect gate                                       | pass                                                           |
+| GRDB with SQLCipher (no app extension targets)                                                                         | pass; native dependencies and target boundaries are explicit   |
+| unsigned SwiftUI application build with selected Xcode 26.6                                                            | pass for the iPhone 17 Pro simulator only                      |
+| Apple signing/archive, physical iPhone SQLCipher matrix, cloud canary/log audit, and preview performance               | pending human evidence in `HUMAN_SETUP.md`                     |
 | C.5a custody/expansion code                                                                                            | pass; 989 pgTAP + 12 Terraform tests; account evidence pending |
 | C.5b encrypted aggregate and managed adapters                                                                          | implemented; focused evidence recorded below                   |
 | C.5c–D private RAG/organizer and C.5d plaintext contraction                                                            | locally implemented; live-provider/production evidence pending |

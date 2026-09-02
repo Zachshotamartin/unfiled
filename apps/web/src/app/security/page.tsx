@@ -65,8 +65,8 @@ export default function SecurityPage() {
             authentication codes, session tokens, and encryption material.
           </li>
           <li>
-            The iPhone app uses SQLCipher, iOS complete file protection, Keychain-backed key
-            custody, and an App Group shared only with its capture widget.
+            The iPhone app uses SQLCipher, iOS complete file protection, and Keychain-backed key
+            custody.
           </li>
           <li>
             Account deletion is atomic for live server data, revokes sessions, and returns a

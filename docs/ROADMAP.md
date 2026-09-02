@@ -20,15 +20,13 @@ Exit condition: the selected launch name and every public contact/channel used b
 
 ### G1b. Capture without unlocking the phone (owner request, 2026-09-02)
 
-The Lock Screen widget opens the capture screen through an App Intent with `openAppWhenRun`, so iOS
-unlocks the phone on the way in. Two platform limits shape the next step: WidgetKit exposes no text
-input in any widget family, and the Lock Screen rectangular family is fixed at half width. Deliver,
-in this order: (1) a Siri App Shortcut whose intent takes a dictation or text parameter, queues the
-capture in the App Group outbox without opening the app, and syncs on next launch; (2) an Action
-Button binding to that shortcut; (3) a full-width Home Screen widget (`systemMedium`) with one Capture
-button that opens the app with the field focused and the keyboard raised. Evidence: intent unit
-tests, snapshot tests for the new family, a device run from the Lock Screen with the phone locked,
-and the existing HTTP capture stages unchanged.
+The Lock Screen widget was removed on 2026-09-02 at the owner's direction (ADR-0017): WidgetKit
+exposes no text input in any widget family and the Lock Screen rectangular family is fixed at half
+width, so a widget could only ever open the app. Deliver instead: (1) a Siri App Shortcut whose intent
+takes a dictation or text parameter, queues the capture in the SQLCipher outbox without opening the
+app, and syncs on next launch; (2) an Action Button binding to that shortcut. Evidence: intent unit
+tests, a device run from the Lock Screen with the phone locked, and the existing HTTP capture stages
+unchanged. No widget of any family is planned.
 
 ### G2. Prove the hosted topology
 
@@ -60,10 +58,10 @@ Exit condition: policy text, product copy, actual configuration, and support ope
 Deliver:
 
 - select the final Release configuration;
-- inspect a signed archive for the exact host, widget, App Group, URL, privacy, and environment settings;
+- inspect a signed archive for the exact host, privacy, and environment settings;
 - distribute an internal TestFlight build;
 - run the physical-iPhone matrix on the oldest supported iOS release and the current release; and
-- verify SQLCipher, Keychain protected-data behavior, offline outbox recovery, Lock Screen launch, App Intent routing, sign-out, account deletion, and accessibility.
+- verify SQLCipher, Keychain protected-data behavior, offline outbox recovery, sign-out, account deletion, and accessibility.
 
 Exit condition: the signed build and physical-device results are recorded with build numbers and dates. Simulator success remains separate evidence.
 
@@ -109,7 +107,7 @@ The following items are roadmap ideas, not implemented release features unless a
 | -------------------------------------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Imports                                            | Deferred                   | File-format, size, parser, privacy, provenance, and deduplication design plus hostile-file tests.                                                                                                           |
 | Voice capture                                      | Deferred                   | Recording disclosure, transcription provider/privacy decision, permissions, background behavior, and accessibility review.                                                                                  |
-| Home Screen widget variants                        | Deferred                   | Separate value case, redaction model, timeline budget, and device matrix.                                                                                                                                   |
+| Home Screen widget variants                        | Out of scope               | Separate value case, redaction model, timeline budget, and device matrix.                                                                                                                                   |
 | Share extension                                    | Deferred                   | Extension-safe encrypted staging, content limits, source attribution, App Group isolation, and restart tests.                                                                                               |
 | Interactive tables                                 | Deferred v1.1 candidate    | Typed-column schema, editing semantics, accessibility, export, conflict, and migration design.                                                                                                              |
 | Planned workout sessions and rest timers           | Deferred v1.1 candidate    | Template model, timer lifecycle, notifications, accessibility, and background execution design.                                                                                                             |

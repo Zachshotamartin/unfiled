@@ -30,7 +30,7 @@ const pages = [
   {
     name: "support",
     page: SupportPage,
-    expected: ["GitHub issues are public", "Protect private data", "Lock Screen widget"]
+    expected: ["GitHub issues are public", "Protect private data", "iPhone app"]
   },
   {
     name: "account deletion",

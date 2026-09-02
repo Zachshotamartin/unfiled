@@ -22,7 +22,6 @@ Unfiled uses application encryption at rest with authorized server-side decrypti
 ```mermaid
 flowchart LR
   subgraph Owner[Owner devices]
-    Widget[Lock Screen widget<br/>content-free launcher]
     IOS[Native iPhone app<br/>SwiftUI + SQLCipher]
     Browser[Web browser<br/>encrypted offline drafts]
   end
@@ -48,7 +47,6 @@ flowchart LR
   Provider[OpenAI or Claude<br/>user-owned key, bounded routing requests only]
   Proof[FINAL_REPORT.md account evidence<br/>deployment, migration, canary, restore, device]
 
-  Widget -->|App Intent opens focused composer; no note content| IOS
   IOS -->|HTTPS, owner session| Web
   Browser -->|HTTPS, owner session| Web
   Web -->|authenticate and revoke| Auth
@@ -85,7 +83,7 @@ flowchart LR
   classDef data fill:#181b1f,stroke:#9da3a6,color:#f2efe8,stroke-width:1px;
   classDef isolated fill:#0b0c0e,stroke:#ee6f55,color:#f2efe8,stroke-width:1px;
   classDef external fill:#0b0c0e,stroke:#9da3a6,color:#f2efe8,stroke-width:1px,stroke-dasharray:5 4;
-  class Widget,IOS,Browser owner;
+  class IOS,Browser owner;
   class Web app;
   class Auth,DB,Vault,Roots data;
   class Organizer,Worker,Verifier,Search isolated;
@@ -98,7 +96,7 @@ Solid arrows describe intended implemented data or capability paths. Dotted arro
 
 ### Components
 
-1. The Lock Screen widget contains no note or capture content. It invokes an App Intent that opens the native app to a focused composer.
+1. The native app ships no widget or app extension; capture happens only inside the signed-in app (the Lock Screen widget was removed on 2026-09-02, ADR-0017).
 2. The native iPhone app stores its local capture outbox and note cache in SQLCipher under a device-generated Keychain-held key. The browser separately encrypts offline draft content using Web Crypto.
 3. Both clients communicate over HTTPS with the owner-authorized web/API service. The service authenticates the owner, hydrates authorized reads, performs encrypted writes, coordinates export and deletion, and is the only public application trust domain shown here.
 4. Supabase Auth owns user authentication. PostgreSQL stores encrypted content aggregates and content-free operational state. Supabase Vault is the accepted store for user-supplied OpenAI and Claude credentials, addressed per provider. In the free beta the four content root families live in a Vercel Sensitive environment root ring bound to the exact project ID and `production` environment; AWS KMS is the deferred paid alternative.

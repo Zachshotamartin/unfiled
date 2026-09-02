@@ -33,18 +33,18 @@ Use only a dedicated synthetic account. Never place the email, user UUID, deleti
 
 ## Postconditions
 
-| Assertion                                                                  | State   | Safe result |
-| -------------------------------------------------------------------------- | ------- | ----------- |
-| Live notes/captures/revisions/workflows/reviews/index rows are absent      | pending |             |
-| Vault provider credentials are absent                                      | pending |             |
-| Search tickets/capabilities are terminal or absent                         | pending |             |
-| Sessions are revoked                                                       | pending |             |
-| Web local encrypted state is cleared                                       | pending |             |
-| iOS session, SQLCipher profile, widget snapshot, and sync stop are cleared | pending |             |
-| Exact replay returns the original content-free receipt                     | pending |             |
-| No alternate account is affected                                           | pending |             |
-| Backup copy is entered in expiry register                                  | pending |             |
-| Reconciliation reports zero findings                                       | pending |             |
+| Assertion                                                             | State   | Safe result |
+| --------------------------------------------------------------------- | ------- | ----------- |
+| Live notes/captures/revisions/workflows/reviews/index rows are absent | pending |             |
+| Vault provider credentials are absent                                 | pending |             |
+| Search tickets/capabilities are terminal or absent                    | pending |             |
+| Sessions are revoked                                                  | pending |             |
+| Web local encrypted state is cleared                                  | pending |             |
+| iOS session, SQLCipher profile, and sync stop are cleared             | pending |             |
+| Exact replay returns the original content-free receipt                | pending |             |
+| No alternate account is affected                                      | pending |             |
+| Backup copy is entered in expiry register                             | pending |             |
+| Reconciliation reports zero findings                                  | pending |             |
 
 ## Evidence and result
 

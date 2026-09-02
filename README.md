@@ -2,7 +2,7 @@
 
 Unfiled is a capture-first notes product: write before deciding where a thought belongs, then inspect, correct, or undo the organization result.
 
-The canonical phone client is the native Apple app in [`apps/ios`](./apps/ios). It targets iOS 17 and newer and uses SwiftUI, a WidgetKit Lock Screen extension driven by App Intents, and an Xcode project generated from [`apps/ios/project.yml`](./apps/ios/project.yml) with XcodeGen. Its local capture outbox and note cache use GRDB's SQLCipher build, complete file protection, and a device-generated database key that Keychain releases only while the device is unlocked. The web client and iOS app share the same authenticated backend contracts. [ADR-0010](./docs/decisions/ADR-0010-native-ios-client-replacement.md) records the replacement. Android is intentionally outside this milestone; there is no supported Android client in the current product surface.
+The canonical phone client is the native Apple app in [`apps/ios`](./apps/ios). It targets iOS 17 and newer and uses SwiftUI and an Xcode project generated from [`apps/ios/project.yml`](./apps/ios/project.yml) with XcodeGen. Its local capture outbox and note cache use GRDB's SQLCipher build, complete file protection, and a device-generated database key that Keychain releases only while the device is unlocked. The web client and iOS app share the same authenticated backend contracts. [ADR-0010](./docs/decisions/ADR-0010-native-ios-client-replacement.md) records the replacement. Android is intentionally outside this milestone; there is no supported Android client in the current product surface.
 
 ## Current state
 
@@ -19,7 +19,7 @@ The encrypted server path is split across five trust domains: `apps/web` owns au
 
 Checked-in evaluation tooling includes the deterministic mock routing gate, a deterministic production-component seam with an explicit scope report, and two optional explicit-key live runners (`pnpm eval:routing:live` for OpenAI and `pnpm eval:routing:live:anthropic` for Claude) with exactly three samples per eligible synthetic case and content-free telemetry. No credentialed live run has been executed yet.
 
-The repository still requires Apple signing, archive inspection, TestFlight, physical-iPhone evidence, name/legal/mailbox clearance, provider-key entry through the product UI, live provider canaries, and the Vercel Deployment Protection change described in [HUMAN_SETUP.md](./HUMAN_SETUP.md) before a production release claim. Unsigned simulator builds verify compilation and tests, but do not establish provisioning, App Group behavior, Keychain/SQLCipher behavior on hardware, extension packaging, or App Store readiness. Paid point-in-time recovery and the irreversible storage contraction remain deferred. The product must not be described as end-to-end encrypted or zero knowledge.
+The repository still requires Apple signing, archive inspection, TestFlight, physical-iPhone evidence, name/legal/mailbox clearance, provider-key entry through the product UI, live provider canaries, and the Vercel Deployment Protection change described in [HUMAN_SETUP.md](./HUMAN_SETUP.md) before a production release claim. Unsigned simulator builds verify compilation and tests, but do not establish provisioning, Keychain/SQLCipher behavior on hardware, or App Store readiness. Paid point-in-time recovery and the irreversible storage contraction remain deferred. The product must not be described as end-to-end encrypted or zero knowledge.
 
 ## Native iOS quick start
 

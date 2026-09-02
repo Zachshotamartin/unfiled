@@ -37,7 +37,6 @@ The account must be visibly labeled synthetic. Do not record its email, UUID, cr
 - Only synthetic content visible:
 - OTP/email/token/provider settings excluded:
 - No unobserved success implied by editing:
-- Widget shown as app launcher, not inline text input:
 - AI and encryption claims match deployed evidence:
 
 ## Published assets

@@ -58,7 +58,7 @@ Store sensitive artifacts in an access-controlled evidence system with retention
 - templates/backup-expiry-register.md: sanitized tracking for retained pre-contract copies
 - templates/account-deletion-drill.md: live deletion, replay, local cleanup, and backup record
 - templates/demo-acceptance-and-video.md: flagship behavior and recording provenance
-- templates/ios-signed-archive-device.md: signed archive, TestFlight, SQLCipher, and WidgetKit
+- templates/ios-signed-archive-device.md: signed archive, TestFlight, and SQLCipher
 - templates/legal-name-channels-approval.md: name, policies, domain, mailboxes, and source-license decision
 
 ## Claim boundary

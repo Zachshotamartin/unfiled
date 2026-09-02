@@ -145,7 +145,6 @@ final class AppModel: ObservableObject {
         let auth: AuthSessionManager
         let database: LocalDatabase
         let captureSync: CaptureSyncEngine
-        let widgetSnapshotStore: WidgetSnapshotStore
         let accountDeletionRecoveryStore: KeychainAccountDeletionRecoveryStore
     }
 
@@ -327,15 +326,13 @@ final class AppModel: ObservableObject {
             let database = try LocalDatabase.open(
                 bundleIdentifier: configuration.bundleIdentifier
             )
-            let widgetSnapshotStore = WidgetSnapshotStore()
             let accountDeletionRecoveryStore = KeychainAccountDeletionRecoveryStore(
                 service: "\(configuration.bundleIdentifier).account-deletion"
             )
             let captureSync = CaptureSyncEngine(
                 database: database,
                 api: authenticatedAPI,
-                profileAuthorizer: auth,
-                widgetSnapshotStore: widgetSnapshotStore
+                profileAuthorizer: auth
             )
             runtime = Runtime(
                 configuration: configuration,
@@ -344,7 +341,6 @@ final class AppModel: ObservableObject {
                 auth: auth,
                 database: database,
                 captureSync: captureSync,
-                widgetSnapshotStore: widgetSnapshotStore,
                 accountDeletionRecoveryStore: accountDeletionRecoveryStore
             )
         } catch {
@@ -369,22 +365,15 @@ final class AppModel: ObservableObject {
         if await reconcilePendingAccountDeletion(runtime: runtime) { return }
         if explicitSignOutBarrier.isActive {
             try? await runtime.auth.clearLocalSession()
-            runtime.widgetSnapshotStore.clear()
             phase = .signedOut
             return
         }
         if let user = await runtime.auth.currentUser() {
-            runtime.widgetSnapshotStore.clear()
             activate(user)
-            await publishWidgetSnapshot(for: user, runtime: runtime)
-            if AppGroupConfiguration.consumeQuickCaptureSignal() {
-                await prepareCapture(source: .iosLockScreenWidget)
-            }
             await refreshAll()
             await runtime.captureSync.activate(profileID: user.id)
             await refreshAll()
         } else {
-            runtime.widgetSnapshotStore.clear()
             phase = .signedOut
         }
     }
@@ -413,13 +402,8 @@ final class AppModel: ObservableObject {
                 try? await runtime.auth.clearLocalSession()
                 throw AuthenticationError.sessionStorageUnavailable
             }
-            runtime.widgetSnapshotStore.clear()
             activate(session.user)
             authStep = .email
-            await publishWidgetSnapshot(for: session.user, runtime: runtime)
-            if AppGroupConfiguration.consumeQuickCaptureSignal() {
-                await prepareCapture(source: .iosLockScreenWidget)
-            }
             await refreshAll()
             await runtime.captureSync.activate(profileID: session.user.id)
             await refreshAll()
@@ -435,7 +419,6 @@ final class AppModel: ObservableObject {
             bannerMessage = "Unfiled could not safely record sign-out on this iPhone. Try again."
             return
         }
-        runtime.widgetSnapshotStore.clear()
         if let user = currentUser {
             await runtime.captureSync.deactivate(profileID: user.id)
         }
@@ -880,9 +863,6 @@ final class AppModel: ObservableObject {
 
     func becameActive() async {
         guard let runtime, let user = currentUser else { return }
-        if AppGroupConfiguration.consumeQuickCaptureSignal() {
-            await prepareCapture(source: .iosLockScreenWidget)
-        }
         await runtime.captureSync.activate(profileID: user.id)
         await refreshAll()
     }
@@ -890,16 +870,6 @@ final class AppModel: ObservableObject {
     func becameInactive() async {
         guard let runtime, let user = currentUser else { return }
         await runtime.captureSync.deactivate(profileID: user.id)
-    }
-
-    func handleDeepLink(_ url: URL) async {
-        guard let configuredScheme = AppGroupConfiguration.urlScheme,
-              AppGroupConfiguration.isValidQuickCaptureURL(
-                url,
-                expectedScheme: configuredScheme
-              )
-        else { return }
-        await prepareCapture(source: .iosLockScreenWidget)
     }
 
     func openNote(_ noteID: String) {
@@ -4165,7 +4135,6 @@ final class AppModel: ObservableObject {
         runtime: Runtime
     ) async {
         let barrierRecorded = explicitSignOutBarrier.activate()
-        runtime.widgetSnapshotStore.clear()
         await runtime.captureSync.deactivate(profileID: record.ownerID)
 
         let localDataRemoved: Bool
@@ -4361,15 +4330,6 @@ final class AppModel: ObservableObject {
 
     private func isCurrent(_ context: AccountContext) -> Bool {
         currentUser?.id == context.userID && accountEpoch == context.epoch && phase == .signedIn
-    }
-
-    private func publishWidgetSnapshot(for user: AuthUser, runtime: Runtime) async {
-        let context = currentAccountContext(for: user)
-        let count = (try? await runtime.database.pendingCount(
-            profileID: user.id.uuidString.lowercased()
-        )) ?? 0
-        guard isCurrent(context) else { return }
-        runtime.widgetSnapshotStore.publish(pendingCaptureCount: count)
     }
 
     private func deviceIdentifier() -> String {
