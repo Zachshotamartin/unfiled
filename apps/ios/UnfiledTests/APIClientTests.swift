@@ -8,21 +8,39 @@ final class APIClientTests: XCTestCase {
         super.tearDown()
     }
 
-    func testOTPRequestNormalizesBodyAndDisablesCaching() async throws {
+    func testSignInNormalizesBodyAndDisablesCaching() async throws {
         APIURLProtocolStub.install { request in
             XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertEqual(request.url?.path, "/api/v1/auth/otp")
+            XCTAssertEqual(request.url?.path, "/api/v1/auth/sign-in")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Cache-Control"), "no-store")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Pragma"), "no-cache")
             XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
             let object = try JSONSerialization.jsonObject(with: apiRequestBody(request)) as? [String: String]
             XCTAssertEqual(object?["email"], "person@example.com")
-            return apiResponse(for: request, status: 202,
-                               json: #"{"accepted":true,"retryAfterSeconds":30}"#)
+            XCTAssertEqual(object?["password"], "correct horse battery")
+            return apiResponse(for: request, status: 200, json: """
+            {"accessToken":"access","refreshToken":"refresh","expiresAt":"2030-01-01T00:00:00Z",
+             "user":{"id":"00000000-0000-4000-8000-000000000001","email":"person@example.com"}}
+            """)
         }
-        let response = try await makeStubbedAPIClient().requestOTP(email: " Person@Example.COM ")
-        XCTAssertTrue(response.accepted)
-        XCTAssertEqual(response.retryAfterSeconds, 30)
+        let session = try await makeStubbedAPIClient().signIn(email: " Person@Example.COM ", password: "correct horse battery")
+        XCTAssertEqual(session.user.email, "person@example.com")
+        XCTAssertEqual(session.accessToken, "access")
+    }
+
+    func testSignUpUsesTheSignUpRouteAndRejectsShortPasswordsLocally() async throws {
+        APIURLProtocolStub.install { request in
+            XCTAssertEqual(request.url?.path, "/api/v1/auth/sign-up")
+            return apiResponse(for: request, status: 200, json: """
+            {"accessToken":"access","refreshToken":"refresh","expiresAt":"2030-01-01T00:00:00Z",
+             "user":{"id":"00000000-0000-4000-8000-000000000001","email":"person@example.com"}}
+            """)
+        }
+        let session = try await makeStubbedAPIClient().signUp(email: "person@example.com", password: "correct horse battery")
+        XCTAssertEqual(session.refreshToken, "refresh")
+        await XCTAssertThrowsErrorAsync(try await makeStubbedAPIClient().signUp(email: "person@example.com", password: "short")) {
+            XCTAssertEqual($0 as? APIClientError, .invalidRequest)
+        }
     }
 
     func testProtectedRequestRetriesOnceWithRefreshedBearer() async throws {
@@ -128,7 +146,7 @@ final class APIClientTests: XCTestCase {
                         json: #"{"code":"rate_limited","message":"secret upstream detail","requestId":"safe-id","retryAfterSeconds":9,"details":{"token":"never"}}"#)
         }
         do {
-            _ = try await makeStubbedAPIClient().requestOTP(email: "a@b.com")
+            _ = try await makeStubbedAPIClient().signIn(email: "a@b.com", password: "correct horse battery")
             XCTFail("Expected rejection")
         } catch let error as APIClientError {
             XCTAssertEqual(error, .http(status: 429, code: .rateLimited,
@@ -141,12 +159,12 @@ final class APIClientTests: XCTestCase {
     func testRequestAndResponseLimitsFailClosed() async throws {
         APIURLProtocolStub.install { request in apiResponse(for: request, json: String(repeating: "x", count: 128)) }
         let requestLimited = try makeStubbedAPIClient(limits: .init(requestBodyBytes: 8, responseBodyBytes: 1_024))
-        await XCTAssertThrowsErrorAsync(try await requestLimited.requestOTP(email: "long@example.com")) {
+        await XCTAssertThrowsErrorAsync(try await requestLimited.signIn(email: "long@example.com", password: "correct horse battery")) {
             XCTAssertEqual($0 as? APIClientError, .requestBodyTooLarge(limit: 8))
         }
 
         let responseLimited = try makeStubbedAPIClient(limits: .init(requestBodyBytes: 1_024, responseBodyBytes: 16))
-        await XCTAssertThrowsErrorAsync(try await responseLimited.requestOTP(email: "a@b.com")) {
+        await XCTAssertThrowsErrorAsync(try await responseLimited.signIn(email: "a@b.com", password: "correct horse battery")) {
             XCTAssertEqual($0 as? APIClientError, .responseBodyTooLarge(limit: 16))
         }
     }

@@ -94,9 +94,16 @@ function authSession(value: unknown): AuthSession | null {
 export interface AuthProvider {
   getUser(accessToken: string): Promise<AuthUser | null>;
   refresh(refreshToken: string): Promise<AuthSession | null>;
-  requestCode(email: string): Promise<void>;
+  signInWithPassword(email: string, password: string): Promise<AuthSession>;
   signOut(accessToken: string): Promise<void>;
-  verifyCode(email: string, code: string): Promise<AuthSession>;
+  signUp(email: string, password: string): Promise<AuthSession>;
+}
+
+function providerMessage(value: unknown): string {
+  if (value === null || typeof value !== "object") return "";
+  const record = value as Record<string, unknown>;
+  const candidate = record.msg ?? record.message ?? record.error_description ?? record.error;
+  return typeof candidate === "string" ? candidate.toLowerCase() : "";
 }
 
 export const supabaseAuthProvider: AuthProvider = {
@@ -119,45 +126,56 @@ export const supabaseAuthProvider: AuthProvider = {
     if (!response.ok) throw providerUnavailable();
     return requireAuthSession(await response.json().catch(() => null));
   },
-  async requestCode(email) {
-    const response = await authFetch("/otp", {
+  async signInWithPassword(email, password) {
+    const response = await authFetch("/token?grant_type=password", {
       method: "POST",
-      body: JSON.stringify({ email, create_user: true })
+      body: JSON.stringify({ email, password })
     });
-    if (!response.ok && response.status !== 429) {
-      throw new HttpError(
-        503,
-        ApiErrorCode.PROVIDER_UNAVAILABLE,
-        "The sign-in email could not be sent. Try again."
-      );
+    if (response.status === 400 || response.status === 401 || response.status === 403) {
+      throw new HttpError(401, ApiErrorCode.UNAUTHORIZED, "Email or password is incorrect.");
     }
-    if (response.status === 429) {
-      const retryAfter = parseRetryAfter(response.headers.get("retry-after")) ?? 60;
-      throw new HttpError(429, ApiErrorCode.RATE_LIMITED, "Try requesting another code later.", {
-        retryAfterSeconds: retryAfter
-      });
-    }
+    if (response.status === 429) throw providerRateLimit(response);
+    if (!response.ok) throw providerUnavailable();
+    return requireAuthSession(await response.json().catch(() => null));
   },
   async signOut(accessToken) {
     const response = await authFetch("/logout?scope=global", { method: "POST" }, accessToken);
     if (response.status === 429) throw providerRateLimit(response);
     if (!response.ok) throw providerUnavailable();
   },
-  async verifyCode(email, code) {
-    const response = await authFetch("/verify", {
+  async signUp(email, password) {
+    const response = await authFetch("/signup", {
       method: "POST",
-      body: JSON.stringify({ email, token: code, type: "email" })
+      body: JSON.stringify({ email, password })
     });
-    if (response.status === 400 || response.status === 401 || response.status === 403) {
-      throw new HttpError(
-        401,
-        ApiErrorCode.UNAUTHORIZED,
-        "That code is invalid or expired. Request a new one."
-      );
+    const body: unknown = await response.json().catch(() => null);
+    if (response.status === 400 || response.status === 422) {
+      const message = providerMessage(body);
+      if (message.includes("already") || message.includes("registered")) {
+        throw new HttpError(
+          400,
+          ApiErrorCode.VALIDATION_FAILED,
+          "An account with this email already exists. Sign in instead."
+        );
+      }
+      if (message.includes("password")) {
+        throw new HttpError(400, ApiErrorCode.VALIDATION_FAILED, "Choose a longer password.");
+      }
+      throw new HttpError(400, ApiErrorCode.VALIDATION_FAILED, "Check your email and password.");
     }
     if (response.status === 429) throw providerRateLimit(response);
     if (!response.ok) throw providerUnavailable();
-    return requireAuthSession(await response.json().catch(() => null));
+    const session = authSession(body);
+    if (session === null) {
+      // The identity provider created the account but withheld a session, which means it
+      // still expects an email confirmation step. That step is not part of this product.
+      throw new HttpError(
+        503,
+        ApiErrorCode.PROVIDER_UNAVAILABLE,
+        "Account creation is not available right now. Try again later."
+      );
+    }
+    return session;
   }
 };
 
@@ -184,7 +202,8 @@ function hmac(value: string): string {
   return createHmac("sha256", pepper).update(value).digest("hex");
 }
 
-export async function consumeOtpQuota(email: string, ipAddress: string): Promise<void> {
+/** Hourly per-email and per-IP attempt quota shared by account creation and failed sign-ins. */
+export async function consumeAuthQuota(email: string, ipAddress: string): Promise<void> {
   const config = configuration();
   const emailHash = hmac(`email:${email}`);
   const ipHash = hmac(`ip:${ipAddress}`);
@@ -205,7 +224,7 @@ export async function consumeOtpQuota(email: string, ipAddress: string): Promise
         ? (result as { code?: unknown }).code
         : undefined;
     if (response.status === 429 || errorCode === ApiErrorCode.RATE_LIMITED) {
-      throw new HttpError(429, ApiErrorCode.RATE_LIMITED, "Try requesting another code later.", {
+      throw new HttpError(429, ApiErrorCode.RATE_LIMITED, "Too many attempts. Try again later.", {
         retryAfterSeconds: parseRetryAfter(response.headers.get("retry-after")) ?? 60
       });
     }
@@ -213,7 +232,7 @@ export async function consumeOtpQuota(email: string, ipAddress: string): Promise
       throw new HttpError(
         503,
         ApiErrorCode.PROVIDER_UNAVAILABLE,
-        "The sign-in email could not be sent. Try again."
+        "Sign-in is temporarily unavailable. Try again."
       );
     }
     if (
@@ -224,7 +243,7 @@ export async function consumeOtpQuota(email: string, ipAddress: string): Promise
       throw new HttpError(
         503,
         ApiErrorCode.PROVIDER_UNAVAILABLE,
-        "The sign-in email could not be sent. Try again."
+        "Sign-in is temporarily unavailable. Try again."
       );
     }
     return;
@@ -240,7 +259,7 @@ export async function consumeOtpQuota(email: string, ipAddress: string): Promise
       localRetryAfter(emailHash, 5, now),
       localRetryAfter(ipHash, 20, now)
     );
-    throw new HttpError(429, ApiErrorCode.RATE_LIMITED, "Try requesting another code later.", {
+    throw new HttpError(429, ApiErrorCode.RATE_LIMITED, "Too many attempts. Try again later.", {
       retryAfterSeconds
     });
   }

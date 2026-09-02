@@ -89,29 +89,15 @@ private struct AuthenticationFlowView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        switch model.authStep {
-        case .email:
-            EmailOTPSignInView(
-                onRequestCode: model.requestOTP,
-                onCodeRequested: { email, response in
-                    model.authStep = .code(
-                        email: email,
-                        retryAfterSeconds: response.retryAfterSeconds
-                    )
-                }
-            )
-        case let .code(email, retryAfterSeconds):
-            OTPVerificationView(
-                email: email,
-                resendDelaySeconds: retryAfterSeconds,
-                onVerifyCode: model.verifyOTP,
-                onResendCode: model.requestOTP,
-                onVerified: { session in
-                    Task { @MainActor in await model.acceptVerifiedSession(session) }
-                },
-                onCorrectEmail: { _ in model.authStep = .email }
-            )
-        }
+        PasswordSignInView(
+            mode: $model.authMode,
+            onSubmit: { request, mode in
+                mode == .signUp ? try await model.signUp(request) : try await model.signIn(request)
+            },
+            onSignedIn: { session in
+                Task { @MainActor in await model.acceptVerifiedSession(session) }
+            }
+        )
     }
 }
 

@@ -7,19 +7,14 @@ enum AuthAccessibilityIdentifier {
     static let emailError = "auth.email.error"
     static let emailSubmit = "auth.email.submit"
 
-    static let codeScreen = "auth.code.screen"
-    static let codeField = "auth.code.field"
-    static let codeError = "auth.code.error"
-    static let codeSubmit = "auth.code.submit"
-    static let codeResend = "auth.code.resend"
-    static let codeDeliveryStatus = "auth.code.delivery-status"
-    static let correctEmail = "auth.code.correct-email"
+    static let passwordField = "auth.password.field"
+    static let modeToggle = "auth.mode.toggle"
 }
 
 enum AuthFormRules {
-    static let codeLength = 6
+    static let minimumPasswordLength = AuthPasswordRequest.minimumPasswordLength
+    static let maximumPasswordLength = AuthPasswordRequest.maximumPasswordLength
     static let maximumEmailByteCount = 254
-    static let maximumCooldownSeconds = 3_600
 
     static func normalizedEmail(_ rawValue: String) -> String {
         rawValue
@@ -58,32 +53,13 @@ enum AuthFormRules {
         return true
     }
 
-    static func sanitizedCode(_ rawValue: String) -> String {
-        let digits = rawValue.filter { character in
-            guard character.unicodeScalars.count == 1,
-                  let scalar = character.unicodeScalars.first
-            else {
-                return false
-            }
-            return (48 ... 57).contains(scalar.value)
-        }
-        return String(digits.prefix(codeLength))
+    static func isValidPassword(_ password: String) -> Bool {
+        (minimumPasswordLength ... maximumPasswordLength).contains(password.utf8.count)
     }
 
-    static func canRequestCode(email: String, isSubmitting: Bool) -> Bool {
-        !isSubmitting && !normalizedEmail(email).isEmpty
-    }
-
-    static func canVerifyCode(code: String, isSubmitting: Bool) -> Bool {
-        !isSubmitting && sanitizedCode(code).count == codeLength
-    }
-
-    static func boundedCooldown(_ seconds: Int) -> Int {
-        min(max(seconds, 0), maximumCooldownSeconds)
-    }
-
-    static func resendSecondsRemaining(availableAt: Date, now: Date) -> Int {
-        max(0, Int(ceil(availableAt.timeIntervalSince(now))))
+    /// Submission needs a plausible email, a bounded password, and no request in flight.
+    static func canSubmitCredentials(email: String, password: String, isSubmitting: Bool) -> Bool {
+        !isSubmitting && isValidEmail(email) && isValidPassword(password)
     }
 
     static func displayMessage(for error: Error, fallback: String) -> String {

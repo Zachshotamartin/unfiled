@@ -56,7 +56,7 @@ Boundaries: (B1) client ↔ API, (B2) API ↔ database, (B3) workflow ↔ model 
 
 ## 3. Authentication and authorization
 
-- Supabase Auth (email OTP / magic link). API routes verify the JWT server-side and derive `user_id`; request bodies never carry a user ID that is trusted.
+- Supabase Auth (email and password; email confirmation off for the private beta). API routes verify the JWT server-side and derive `user_id`; request bodies never carry a user ID that is trusted.
 - iPhone access/refresh tokens and the random SQLCipher database key live in the iOS Keychain as `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`; they are unavailable while the device is locked, remain bound to this device, and do not synchronize through iCloud. The database key is never derived from a user password or checked configuration. An expired session may preserve an account-scoped outbox, but sign-out makes credentials unavailable before attempting online global revocation.
 - Sign-out clears the device credential before requesting Supabase global revocation. If that online revocation fails, the device remains signed out and shows an explicit warning; the documentation does not claim offline global revocation.
 - The interactive/admin service-role key exists only in its server environment and is used only by reviewed capability functions, never routine user CRUD. It is forbidden in `apps/worker`, `apps/verifier`, and `apps/organizer`.

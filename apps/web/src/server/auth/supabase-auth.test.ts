@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 
 import type { HttpError } from "@/server/api/errors";
 
-import { consumeOtpQuota, supabaseAuthProvider } from "./supabase-auth";
+import { consumeAuthQuota, supabaseAuthProvider } from "./supabase-auth";
 
 const previous = {
   anonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
@@ -35,14 +35,14 @@ afterAll(() => {
   else process.env.SUPABASE_SERVICE_ROLE_KEY = previous.serviceRole;
 });
 
-describe("local OTP quota fallback", () => {
+describe("local auth quota fallback", () => {
   it("allows five requests per email and returns the remaining rolling-window interval", async () => {
     const email = "email-limit-41@example.com";
     for (let index = 0; index < 5; index += 1) {
-      await consumeOtpQuota(email, `198.51.100.${index + 1}`);
+      await consumeAuthQuota(email, `198.51.100.${index + 1}`);
     }
 
-    const attempt = consumeOtpQuota(email, "198.51.100.99");
+    const attempt = consumeAuthQuota(email, "198.51.100.99");
     await expect(attempt).rejects.toMatchObject({
       status: 429,
       code: "rate_limited",
@@ -54,10 +54,10 @@ describe("local OTP quota fallback", () => {
   it("allows twenty requests per IP and returns a safe retry interval on the twenty-first", async () => {
     const ipAddress = "203.0.113.241";
     for (let index = 0; index < 20; index += 1) {
-      await consumeOtpQuota(`ip-limit-${index}@example.com`, ipAddress);
+      await consumeAuthQuota(`ip-limit-${index}@example.com`, ipAddress);
     }
 
-    await expect(consumeOtpQuota("ip-limit-over@example.com", ipAddress)).rejects.toMatchObject({
+    await expect(consumeAuthQuota("ip-limit-over@example.com", ipAddress)).rejects.toMatchObject({
       status: 429,
       code: "rate_limited",
       retryAfterSeconds: 3_600
@@ -70,11 +70,11 @@ describe("local OTP quota fallback", () => {
     const email = "rolling-window@example.com";
     try {
       for (let index = 0; index < 5; index += 1) {
-        await consumeOtpQuota(email, `192.0.2.${index + 1}`);
+        await consumeAuthQuota(email, `192.0.2.${index + 1}`);
         vi.advanceTimersByTime(10_000);
       }
 
-      await expect(consumeOtpQuota(email, "192.0.2.99")).rejects.toMatchObject({
+      await expect(consumeAuthQuota(email, "192.0.2.99")).rejects.toMatchObject({
         retryAfterSeconds: 3_550
       } satisfies Partial<HttpError>);
     } finally {
@@ -83,7 +83,7 @@ describe("local OTP quota fallback", () => {
   });
 });
 
-describe("durable OTP quota adapter", () => {
+describe("durable auth quota adapter", () => {
   it("persists only HMAC digests and validates the database allowance", async () => {
     process.env.AUTH_RATE_LIMIT_PEPPER = "test-only-pepper";
     process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-test";
@@ -97,7 +97,7 @@ describe("durable OTP quota adapter", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await consumeOtpQuota("never-persist@example.com", "198.51.100.201");
+    await consumeAuthQuota("never-persist@example.com", "198.51.100.201");
 
     const call = fetchMock.mock.calls.at(0);
     if (call?.[1] === undefined || typeof call[1].body !== "string") {
@@ -129,7 +129,7 @@ describe("durable OTP quota adapter", () => {
     );
 
     await expect(
-      consumeOtpQuota("durable-limit@example.com", "198.51.100.202")
+      consumeAuthQuota("durable-limit@example.com", "198.51.100.202")
     ).rejects.toMatchObject({
       status: 429,
       code: "rate_limited",
@@ -151,7 +151,7 @@ describe("durable OTP quota adapter", () => {
     );
 
     await expect(
-      supabaseAuthProvider.requestCode("provider-limit@example.com")
+      supabaseAuthProvider.signInWithPassword("provider-limit@example.com", "correct horse battery")
     ).rejects.toMatchObject({
       status: 429,
       code: "rate_limited",

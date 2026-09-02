@@ -1,15 +1,16 @@
 import {
   ApiErrorCode,
-  AuthOtpRequestSchema,
-  AuthOtpVerifyRequestSchema,
+  AuthPasswordSignInRequestSchema,
+  AuthPasswordSignUpRequestSchema,
   AuthRefreshRequestSchema
 } from "@unfiled/contracts";
 
 import { authenticateRequest, clearedSessionCookies, sessionCookies } from "@/server/auth/session";
 import {
-  consumeOtpQuota,
+  consumeAuthQuota,
   supabaseAuthProvider,
-  type AuthProvider
+  type AuthProvider,
+  type AuthSession
 } from "@/server/auth/supabase-auth";
 
 import { errorResponse, HttpError, jsonResponse, readJsonObject } from "./errors";
@@ -29,43 +30,57 @@ function invalidAuthBody(): HttpError {
   return new HttpError(
     400,
     ApiErrorCode.VALIDATION_FAILED,
-    "Check your email and code, then try again."
+    "Enter a valid email address and a password of at least 8 characters."
+  );
+}
+
+function sessionResponse(session: AuthSession): Response {
+  const expiresAt = new Date(Date.now() + session.expiresIn * 1_000).toISOString();
+  return jsonResponse(
+    {
+      accessToken: session.accessToken,
+      refreshToken: session.refreshToken,
+      expiresAt,
+      user: session.user
+    },
+    200,
+    sessionCookies(session)
   );
 }
 
 export function createAuthHandlers(dependencies: AuthHandlerDependencies = {}) {
   const provider = dependencies.provider ?? supabaseAuthProvider;
-  const quota = dependencies.consumeQuota ?? consumeOtpQuota;
+  const quota = dependencies.consumeQuota ?? consumeAuthQuota;
 
   return Object.freeze({
-    async requestCode(request: Request): Promise<Response> {
+    /** Creates an account; every attempt consumes the hourly quota to slow enumeration. */
+    async signUp(request: Request): Promise<Response> {
       try {
-        const parsed = AuthOtpRequestSchema.safeParse(await readJsonObject(request));
+        const parsed = AuthPasswordSignUpRequestSchema.safeParse(await readJsonObject(request));
         if (!parsed.success) throw invalidAuthBody();
         await quota(parsed.data.email, clientIp(request));
-        await provider.requestCode(parsed.data.email);
-        return jsonResponse({ accepted: true, retryAfterSeconds: 60 }, 202);
+        const session = await provider.signUp(parsed.data.email, parsed.data.password);
+        return sessionResponse(session);
       } catch (error) {
         return errorResponse(error, request);
       }
     },
 
-    async verifyCode(request: Request): Promise<Response> {
+    /** Signs in; only rejected credentials consume the hourly quota, so normal use is never blocked. */
+    async signIn(request: Request): Promise<Response> {
       try {
-        const parsed = AuthOtpVerifyRequestSchema.safeParse(await readJsonObject(request));
+        const parsed = AuthPasswordSignInRequestSchema.safeParse(await readJsonObject(request));
         if (!parsed.success) throw invalidAuthBody();
-        const session = await provider.verifyCode(parsed.data.email, parsed.data.code);
-        const expiresAt = new Date(Date.now() + session.expiresIn * 1_000).toISOString();
-        return jsonResponse(
-          {
-            accessToken: session.accessToken,
-            refreshToken: session.refreshToken,
-            expiresAt,
-            user: session.user
-          },
-          200,
-          sessionCookies(session)
-        );
+        let session: AuthSession;
+        try {
+          session = await provider.signInWithPassword(parsed.data.email, parsed.data.password);
+        } catch (error) {
+          if (error instanceof HttpError && error.status === 401) {
+            await quota(parsed.data.email, clientIp(request));
+          }
+          throw error;
+        }
+        return sessionResponse(session);
       } catch (error) {
         return errorResponse(error, request);
       }

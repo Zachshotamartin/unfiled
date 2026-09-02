@@ -4,15 +4,12 @@ import {
   AccountDeletionReceiptReplayRequestSchema,
   AccountDeletionTokenSchema,
   ApiErrorSchema,
-  AuthOtpAcceptedResponseSchema,
-  AuthOtpRequestSchema,
-  AuthOtpVerifyRequestSchema,
+  AuthPasswordSignInRequestSchema,
+  AuthPasswordSignUpRequestSchema,
   AuthRefreshRequestSchema,
   AuthSessionResponseSchema,
   AuthSessionSchema,
   AuthSignOutResponseSchema,
-  AuthVerifyRequestSchema,
-  AuthVerifyResponseSchema,
   CaptureCreateRequestSchema,
   CaptureCreateResponseSchema,
   CaptureDeleteRequestSchema,
@@ -102,10 +99,9 @@ import {
   type ApiError,
   type AccountDeleteRequest,
   type AccountDeletionReceiptReplayRequest,
-  type AuthOtpRequest,
-  type AuthOtpVerifyRequest,
+  type AuthPasswordSignInRequest,
+  type AuthPasswordSignUpRequest,
   type AuthRefreshRequest,
-  type AuthVerifyRequest,
   type CaptureCreateRequest,
   type CaptureDeleteRequest,
   type CaptureListQuery,
@@ -404,26 +400,21 @@ export function createApiClient(options: ApiClientOptions) {
   }
 
   return Object.freeze({
-    requestOtp(input: AuthOtpRequest) {
-      const body = AuthOtpRequestSchema.parse(input);
+    signUp(input: AuthPasswordSignUpRequest) {
+      const body = AuthPasswordSignUpRequestSchema.parse(input);
       return request(
-        "/auth/otp",
+        "/auth/sign-up",
         { authenticated: false, body, method: "POST" },
-        AuthOtpAcceptedResponseSchema
+        AuthSessionSchema
       );
     },
 
-    verifyOtp(input: AuthOtpVerifyRequest) {
-      const body = AuthOtpVerifyRequestSchema.parse(input);
-      return request("/auth/otp", { authenticated: false, body, method: "PUT" }, AuthSessionSchema);
-    },
-
-    verifyAuth(input: AuthVerifyRequest) {
-      const body = AuthVerifyRequestSchema.parse(input);
+    signIn(input: AuthPasswordSignInRequest) {
+      const body = AuthPasswordSignInRequestSchema.parse(input);
       return request(
-        "/auth/verify",
-        { authenticated: false, body, method: "PUT" },
-        AuthVerifyResponseSchema
+        "/auth/sign-in",
+        { authenticated: false, body, method: "POST" },
+        AuthSessionSchema
       );
     },
 

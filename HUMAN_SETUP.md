@@ -144,33 +144,21 @@ Complete these human validation items before treating Milestone 0 as approved:
    `sslmode=verify-full`, and that CA base64-encoded into the workload's `*_DATABASE_CA_PEM_BASE64`
    variable. PostgreSQL must still report `session_user` and `current_user` as the unsuffixed role.
 
-### Sign-in email delivery (required before inviting anyone)
+### Sign-in (email and password, no verification codes)
 
-The web and iPhone sign-in screens accept a **six-digit code**, not a magic link. On 2026-09-02
-the remote project was found with an eight-digit OTP length and the default magic-link template;
-the OTP length was corrected to **6** through the dashboard (verified through the management
-API). The template could not be corrected: with Supabase's built-in SMTP the dashboard refuses
-template edits ("Set up custom SMTP to edit templates"), and the built-in service allows only two
-authentication emails per hour for the whole project. Until custom SMTP exists, real users
-receive a link without a code and cannot sign in; synthetic canaries still work because the
-operator mints codes through the Auth admin API. The built-in service also delivers only to
-addresses of members of the Supabase organization: on 2026-09-02 a code request for a synthetic
-non-member address failed at Supabase and the deployed web app answered
-`503 provider_unavailable` ("The sign-in email could not be sent"), which is the expected fail-closed
-response, not a web defect.
+Both clients sign in with an email address and password; account creation returns a usable session
+immediately. This was the owner's decision on 2026-09-02 (ADR-0018) after the earlier passwordless
+code flow proved unusable on the free Supabase mailer. Remote project settings that make it work:
 
-Required owner action:
-
-1. Create a sender at an SMTP provider you control (free tiers of Resend, Postmark, or Brevo are
-   sufficient for a private beta) and verify its sending domain.
-2. **Authentication → Emails → SMTP Settings**: enable custom SMTP with that host, port, sender
-   address, and credentials. Keep the credentials in the provider's console, never in this
-   repository.
-3. **Authentication → Emails → Magic link or OTP**: set the subject to a content-free line such as
-   "Your Unfiled sign-in code" and a body that includes the code, for example:
-   `Your Unfiled sign-in code is {{ .Token }}. It expires shortly and works once.`
-4. **Authentication → Sign In / Providers → Email → Email OTP length**: confirm **6**.
-5. Send yourself a code from the deployed sign-in page and confirm the email contains six digits.
+1. **Authentication → Sign In / Providers → Email**: enabled; **Confirm email is off** (set on
+   2026-09-02, so sign-up does not wait on an email). Minimum password length stays at the Supabase
+   default; the API additionally requires 8 to 72 characters.
+2. **Allow new users to sign up**: on for the private beta. Turn it off to freeze the cohort.
+3. The web API applies the hourly attempt quota (5 per email, 20 per IP) to every sign-up and to
+   every rejected sign-in; Supabase's own throttle covers the rest. A dedicated sign-in limiter is
+   on the roadmap.
+4. No SMTP is required for sign-in or sign-up. Password reset is not built; reset a beta user's
+   password from **Authentication → Users** in the dashboard when asked.
 
 ## Vercel — five projects, Production scope only
 
@@ -789,7 +777,7 @@ When the paid gate is funded:
 There is no Preview deployment. Run these checks against `https://unfiled-web.vercel.app` with
 synthetic accounts only, after the Deployment Protection change above.
 
-1. Request an OTP and verify the 60-second resend cooldown is shown, survives a validation error,
+1. Create an account with an email address and password, sign out, and sign in again; verify a wrong password is rejected with a stable message and that repeated failures are throttled,
    and reaches zero without enabling early resend.
 2. Verify sign-in, refresh after a full browser restart, sign-out, and direct navigation to an
    authenticated route after sign-out.

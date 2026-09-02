@@ -27,7 +27,7 @@ Never send note text, capture text, screenshots containing notes or notification
 
 ### Sign-in
 
-Unfiled uses a short-lived sign-in code. Never share a code with support or enter a code supplied by another person. Respect the visible resend cooldown. Repeated failures should be reported with a timestamp and error category, not the email address or code.
+Unfiled signs you in with your email address and a password. Never share your password with support or enter a password supplied by another person. Respect the visible resend cooldown. Repeated failures should be reported with a timestamp and error category, not the email address or code.
 
 ### Offline captures
 

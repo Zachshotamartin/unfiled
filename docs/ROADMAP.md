@@ -28,6 +28,13 @@ app, and syncs on next launch; (2) an Action Button binding to that shortcut. Ev
 tests, a device run from the Lock Screen with the phone locked, and the existing HTTP capture stages
 unchanged. No widget of any family is planned.
 
+### G1c. Password recovery and a dedicated sign-in limiter (after ADR-0018)
+
+Sign-in is email and password with no verification step. Deliver self-service password reset once
+an email sender exists (Supabase custom SMTP or an application mailer), and a sign-in throttle
+keyed on failures per email and per IP that is independent of the sign-up quota. Evidence: handler
+tests, an e2e stage for reset and throttle, and a live run on the deployed beta.
+
 ### G2. Prove the hosted topology
 
 Deliver:

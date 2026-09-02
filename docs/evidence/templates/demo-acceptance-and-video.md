@@ -12,7 +12,7 @@
 - Operator:
 - Reviewer:
 
-The account must be visibly labeled synthetic. Do not record its email, UUID, credentials, or sign-in code.
+The account must be visibly labeled synthetic. Do not record its email, UUID, or password.
 
 ## Flagship acceptance
 
@@ -35,7 +35,7 @@ The account must be visibly labeled synthetic. Do not record its email, UUID, cr
 - Personal accounts signed out:
 - Status-bar/location identifiers reviewed:
 - Only synthetic content visible:
-- OTP/email/token/provider settings excluded:
+- Password/email/token/provider settings excluded:
 - No unobserved success implied by editing:
 - AI and encryption claims match deployed evidence:
 

@@ -7,23 +7,23 @@
   },
   "servers": [{ "url": "/api/v1" }],
   "paths": {
-    "/auth/otp": {
+    "/auth/sign-up": {
       "post": {
-        "operationId": "requestOtp",
-        "summary": "Request a non-enumerating email OTP",
+        "operationId": "signUp",
+        "summary": "Create an account with an email address and password",
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/AuthOtpRequest" } }
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AuthPasswordSignUpRequest" }
+            }
           }
         },
         "responses": {
-          "202": {
-            "description": "OTP request accepted",
+          "200": {
+            "description": "Authenticated session",
             "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/AuthOtpAcceptedResponse" }
-              }
+              "application/json": { "schema": { "$ref": "#/components/schemas/AuthSession" } }
             }
           },
           "400": {
@@ -37,17 +37,25 @@
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
             }
+          },
+          "503": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
           }
         }
-      },
-      "put": {
-        "operationId": "verifyOtp",
-        "summary": "Verify a six-digit email OTP",
+      }
+    },
+    "/auth/sign-in": {
+      "post": {
+        "operationId": "signIn",
+        "summary": "Sign in with an email address and password",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/AuthOtpVerifyRequest" }
+              "schema": { "$ref": "#/components/schemas/AuthPasswordSignInRequest" }
             }
           }
         },
@@ -155,46 +163,6 @@
             }
           },
           "401": {
-            "description": "Stable API error",
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
-            }
-          }
-        }
-      }
-    },
-    "/auth/verify": {
-      "put": {
-        "operationId": "verifyAuth",
-        "summary": "Verify a six-digit email OTP",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/AuthVerifyRequest" } }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Authenticated session",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/AuthVerifyResponse" }
-              }
-            }
-          },
-          "400": {
-            "description": "Stable API error",
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
-            }
-          },
-          "401": {
-            "description": "Stable API error",
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
-            }
-          },
-          "429": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
@@ -6180,32 +6148,7 @@
         "required": ["code", "message", "requestId"],
         "additionalProperties": false
       },
-      "AuthOtpRequest": {
-        "type": "object",
-        "properties": {
-          "email": {
-            "type": "string",
-            "format": "email",
-            "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
-          }
-        },
-        "required": ["email"],
-        "additionalProperties": false
-      },
-      "AuthOtpAcceptedResponse": {
-        "type": "object",
-        "properties": {
-          "accepted": { "type": "boolean", "const": true },
-          "retryAfterSeconds": {
-            "type": "integer",
-            "exclusiveMinimum": 0,
-            "maximum": 9007199254740991
-          }
-        },
-        "required": ["accepted", "retryAfterSeconds"],
-        "additionalProperties": false
-      },
-      "AuthOtpVerifyRequest": {
+      "AuthPasswordSignInRequest": {
         "type": "object",
         "properties": {
           "email": {
@@ -6213,9 +6156,22 @@
             "format": "email",
             "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
           },
-          "code": { "type": "string", "pattern": "^\\d{6}$" }
+          "password": { "type": "string", "minLength": 8, "maxLength": 72 }
         },
-        "required": ["email", "code"],
+        "required": ["email", "password"],
+        "additionalProperties": false
+      },
+      "AuthPasswordSignUpRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+          },
+          "password": { "type": "string", "minLength": 8, "maxLength": 72 }
+        },
+        "required": ["email", "password"],
         "additionalProperties": false
       },
       "AuthRefreshRequest": {
@@ -6283,50 +6239,6 @@
         "type": "object",
         "properties": { "signedOut": { "type": "boolean", "const": true } },
         "required": ["signedOut"],
-        "additionalProperties": false
-      },
-      "AuthVerifyRequest": {
-        "type": "object",
-        "properties": {
-          "email": {
-            "type": "string",
-            "format": "email",
-            "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
-          },
-          "code": { "type": "string", "pattern": "^\\d{6}$" }
-        },
-        "required": ["email", "code"],
-        "additionalProperties": false
-      },
-      "AuthVerifyResponse": {
-        "type": "object",
-        "properties": {
-          "accessToken": { "type": "string", "minLength": 1 },
-          "refreshToken": { "type": "string", "minLength": 1 },
-          "expiresAt": {
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
-          },
-          "user": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string",
-                "format": "uuid",
-                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-              },
-              "email": {
-                "type": "string",
-                "format": "email",
-                "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
-              }
-            },
-            "required": ["id", "email"],
-            "additionalProperties": false
-          }
-        },
-        "required": ["accessToken", "refreshToken", "expiresAt", "user"],
         "additionalProperties": false
       },
       "CaptureCreateRequest": {

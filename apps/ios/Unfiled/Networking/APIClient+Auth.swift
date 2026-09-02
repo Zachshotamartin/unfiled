@@ -6,20 +6,16 @@ public protocol AuthRemote: Sendable {
 }
 
 extension APIClient: AuthRemote {
-    public func requestOTP(email: String) async throws -> AuthOTPAcceptedResponse {
-        let request = AuthOTPRequest(email: email)
-        guard !request.email.isEmpty, request.email.utf8.count <= 254, request.email.contains("@") else {
-            throw APIClientError.invalidRequest
-        }
-        return try await post("/auth/otp", body: request, authenticated: false)
+    public func signUp(email: String, password: String) async throws -> AuthSession {
+        let request: AuthPasswordRequest
+        do { request = try AuthPasswordRequest(email: email, password: password) } catch { throw APIClientError.invalidRequest }
+        return try await post("/auth/sign-up", body: request, authenticated: false)
     }
 
-    public func verifyOTP(email: String, code: String) async throws -> AuthSession {
-        try await put("/auth/otp", body: AuthOTPVerifyRequest(email: email, code: code), authenticated: false)
-    }
-
-    public func verifyAuth(email: String, code: String) async throws -> AuthSession {
-        try await put("/auth/verify", body: AuthOTPVerifyRequest(email: email, code: code), authenticated: false)
+    public func signIn(email: String, password: String) async throws -> AuthSession {
+        let request: AuthPasswordRequest
+        do { request = try AuthPasswordRequest(email: email, password: password) } catch { throw APIClientError.invalidRequest }
+        return try await post("/auth/sign-in", body: request, authenticated: false)
     }
 
     public func refreshSession(refreshToken: String) async throws -> AuthSession {

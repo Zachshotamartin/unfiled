@@ -188,7 +188,7 @@ final class AppModel: ObservableObject {
     }
 
     @Published private(set) var phase: AppPhase = .booting
-    @Published var authStep: AuthStep = .email
+    @Published var authMode: AuthMode = .signIn
     @Published private(set) var currentUser: AuthUser?
     @Published private(set) var notes: [NotePresentation] = []
     @Published private(set) var noteDetails: [String: NoteDetailPresentation] = [:]
@@ -378,17 +378,14 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func requestOTP(_ request: AuthOTPRequest) async throws -> AuthOTPAcceptedResponse {
+    func signIn(_ request: AuthPasswordRequest) async throws -> AuthSession {
         guard let runtime else { throw APIClientError.invalidConfiguration }
-        return try await runtime.unauthenticatedAPI.requestOTP(email: request.email)
+        return try await runtime.unauthenticatedAPI.signIn(email: request.email, password: request.password)
     }
 
-    func verifyOTP(_ request: AuthOTPVerifyRequest) async throws -> AuthSession {
+    func signUp(_ request: AuthPasswordRequest) async throws -> AuthSession {
         guard let runtime else { throw APIClientError.invalidConfiguration }
-        return try await runtime.unauthenticatedAPI.verifyAuth(
-            email: request.email,
-            code: request.code
-        )
+        return try await runtime.unauthenticatedAPI.signUp(email: request.email, password: request.password)
     }
 
     func acceptVerifiedSession(_ session: AuthSession) async {
@@ -403,7 +400,7 @@ final class AppModel: ObservableObject {
                 throw AuthenticationError.sessionStorageUnavailable
             }
             activate(session.user)
-            authStep = .email
+            authMode = .signIn
             await refreshAll()
             await runtime.captureSync.activate(profileID: session.user.id)
             await refreshAll()
@@ -4306,7 +4303,7 @@ final class AppModel: ObservableObject {
         captureSheet = nil
         editorSheet = nil
         destinationPickerSheet = nil
-        authStep = .email
+        authMode = .signIn
         isLoadingLibrary = false
         isLoadingReview = false
         isSearching = false

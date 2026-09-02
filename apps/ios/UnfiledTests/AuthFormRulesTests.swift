@@ -18,47 +18,28 @@ final class AuthFormRulesTests: XCTestCase {
         XCTAssertFalse(AuthFormRules.isValidEmail("person@example..com"))
     }
 
-    func testEmailSubmissionAllowsVisibleValidationAndPreventsDuplicateWork() {
-        XCTAssertFalse(AuthFormRules.canRequestCode(email: "   ", isSubmitting: false))
-        XCTAssertTrue(AuthFormRules.canRequestCode(email: "not-yet-valid", isSubmitting: false))
+    func testPasswordsAreBoundedByLengthOnly() {
+        XCTAssertFalse(AuthFormRules.isValidPassword("short"))
+        XCTAssertTrue(AuthFormRules.isValidPassword("eightch."))
+        XCTAssertTrue(AuthFormRules.isValidPassword(String(repeating: "x", count: 72)))
+        XCTAssertFalse(AuthFormRules.isValidPassword(String(repeating: "x", count: 73)))
+    }
+
+    func testSubmissionRequiresValidCredentialsAndAnIdleRequest() {
+        XCTAssertTrue(
+            AuthFormRules.canSubmitCredentials(email: "person@example.com", password: "correct horse", isSubmitting: false)
+        )
         XCTAssertFalse(
-            AuthFormRules.canRequestCode(email: "person@example.com", isSubmitting: true)
+            AuthFormRules.canSubmitCredentials(email: "not-an-email", password: "correct horse", isSubmitting: false)
+        )
+        XCTAssertFalse(
+            AuthFormRules.canSubmitCredentials(email: "person@example.com", password: "short", isSubmitting: false)
+        )
+        XCTAssertFalse(
+            AuthFormRules.canSubmitCredentials(email: "person@example.com", password: "correct horse", isSubmitting: true)
         )
     }
 
-    func testCodeSanitizationKeepsOnlySixASCIIDigits() {
-        XCTAssertEqual(AuthFormRules.sanitizedCode("12a 34-567"), "123456")
-        XCTAssertEqual(AuthFormRules.sanitizedCode("１２3456"), "3456")
-        XCTAssertEqual(AuthFormRules.sanitizedCode("98\n76"), "9876")
-    }
-
-    func testVerificationRequiresSixDigitsAndAnIdleRequest() {
-        XCTAssertFalse(AuthFormRules.canVerifyCode(code: "12345", isSubmitting: false))
-        XCTAssertTrue(AuthFormRules.canVerifyCode(code: "123456", isSubmitting: false))
-        XCTAssertFalse(AuthFormRules.canVerifyCode(code: "123456", isSubmitting: true))
-    }
-
-    func testCooldownIsBoundedAndRoundsUpPartialSeconds() {
-        XCTAssertEqual(AuthFormRules.boundedCooldown(-1), 0)
-        XCTAssertEqual(AuthFormRules.boundedCooldown(60), 60)
-        XCTAssertEqual(AuthFormRules.boundedCooldown(8_000), 3_600)
-
-        let now = Date(timeIntervalSince1970: 100)
-        XCTAssertEqual(
-            AuthFormRules.resendSecondsRemaining(
-                availableAt: Date(timeIntervalSince1970: 105.01),
-                now: now
-            ),
-            6
-        )
-        XCTAssertEqual(
-            AuthFormRules.resendSecondsRemaining(
-                availableAt: Date(timeIntervalSince1970: 99),
-                now: now
-            ),
-            0
-        )
-    }
 
     func testAccessibilityIdentifiersRemainUnique() {
         let identifiers = [
@@ -66,13 +47,8 @@ final class AuthFormRulesTests: XCTestCase {
             AuthAccessibilityIdentifier.emailField,
             AuthAccessibilityIdentifier.emailError,
             AuthAccessibilityIdentifier.emailSubmit,
-            AuthAccessibilityIdentifier.codeScreen,
-            AuthAccessibilityIdentifier.codeField,
-            AuthAccessibilityIdentifier.codeError,
-            AuthAccessibilityIdentifier.codeSubmit,
-            AuthAccessibilityIdentifier.codeResend,
-            AuthAccessibilityIdentifier.codeDeliveryStatus,
-            AuthAccessibilityIdentifier.correctEmail
+            AuthAccessibilityIdentifier.passwordField,
+            AuthAccessibilityIdentifier.modeToggle
         ]
 
         XCTAssertEqual(Set(identifiers).count, identifiers.count)

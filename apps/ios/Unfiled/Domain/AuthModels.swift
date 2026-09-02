@@ -1,34 +1,21 @@
 import Foundation
 
-public struct AuthOTPRequest: Codable, Equatable, Sendable {
+public struct AuthPasswordRequest: Codable, Equatable, Sendable {
+    public static let minimumPasswordLength = 8
+    public static let maximumPasswordLength = 72
+
     public let email: String
-    public init(email: String) { self.email = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-}
+    public let password: String
 
-public struct AuthOTPAcceptedResponse: Codable, Equatable, Sendable {
-    public let accepted: Bool
-    public let retryAfterSeconds: Int
-
-    private enum CodingKeys: String, CodingKey { case accepted, retryAfterSeconds }
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        let accepted = try c.decode(Bool.self, forKey: .accepted)
-        guard accepted else { throw DecodingError.dataCorruptedError(forKey: .accepted, in: c, debugDescription: "Expected true") }
-        self.accepted = true; retryAfterSeconds = try c.decode(Int.self, forKey: .retryAfterSeconds)
-    }
-}
-
-public struct AuthOTPVerifyRequest: Codable, Equatable, Sendable {
-    public let email: String
-    public let code: String
-
-    public init(email: String, code: String) throws {
+    public init(email: String, password: String) throws {
         let normalized = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard normalized.utf8.count <= 254, code.utf8.count == 6,
-              code.utf8.allSatisfy({ (48 ... 57).contains($0) })
-        else { throw DomainValidationError.invalidValue("Invalid email or OTP") }
+        guard !normalized.isEmpty,
+              normalized.utf8.count <= 254,
+              normalized.contains("@"),
+              (Self.minimumPasswordLength ... Self.maximumPasswordLength).contains(password.utf8.count)
+        else { throw DomainValidationError.invalidValue("Invalid email or password") }
         self.email = normalized
-        self.code = code
+        self.password = password
     }
 }
 
@@ -110,8 +97,3 @@ public struct AuthSignOutResponse: Codable, Equatable, Sendable {
     }
 }
 
-public typealias AuthOtpRequest = AuthOTPRequest
-public typealias AuthOtpAcceptedResponse = AuthOTPAcceptedResponse
-public typealias AuthOtpVerifyRequest = AuthOTPVerifyRequest
-public typealias AuthVerifyRequest = AuthOTPVerifyRequest
-public typealias AuthVerifyResponse = AuthSession

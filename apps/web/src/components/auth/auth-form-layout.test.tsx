@@ -8,31 +8,38 @@ vi.mock("next/navigation", () => ({
 }));
 
 describe("AuthForm layout", () => {
-  it("keeps the email label above its field and the submit action in its own region", () => {
+  it("keeps labels above their fields and the submit action in its own region", () => {
     const html = renderToStaticMarkup(<AuthForm />);
 
-    const label = html.indexOf('for="email"');
-    const input = html.indexOf('id="email"');
+    const emailLabel = html.indexOf('for="email"');
+    const emailInput = html.indexOf('id="email"');
+    const passwordLabel = html.indexOf('for="password"');
+    const passwordInput = html.indexOf('id="password"');
     const feedback = html.indexOf('class="auth-feedback"');
     const actions = html.indexOf('class="auth-actions"');
     const submit = html.indexOf('type="submit"');
 
-    expect(label).toBeGreaterThan(-1);
-    expect(input).toBeGreaterThan(label);
-    expect(feedback).toBeGreaterThan(input);
+    expect(emailLabel).toBeGreaterThan(-1);
+    expect(emailInput).toBeGreaterThan(emailLabel);
+    expect(passwordLabel).toBeGreaterThan(emailInput);
+    expect(passwordInput).toBeGreaterThan(passwordLabel);
+    expect(feedback).toBeGreaterThan(passwordInput);
     expect(actions).toBeGreaterThan(feedback);
     expect(submit).toBeGreaterThan(actions);
     expect(html).toContain('aria-live="polite"');
-    expect(html).toContain("Send sign-in code");
-    expect(html).not.toContain("Send another code");
+    expect(html).toContain("Sign in");
+    expect(html).toContain("Create an account");
+    expect(html).not.toContain("code");
+    expect(html).toMatch(/<input[^>]*type="password"[^>]*autocomplete="current-password"/iu);
     expect(html).toMatch(/<button[^>]*type="submit"[^>]*class="button-primary w-full/u);
   });
 
-  it("never renders the submit button adjacent to the text input", () => {
-    const html = renderToStaticMarkup(<AuthForm />);
+  it("starts in account creation when asked and never renders the submit button adjacent to an input", () => {
+    const html = renderToStaticMarkup(<AuthForm initialMode="sign-up" />);
 
+    expect(html).toContain("Create account");
+    expect(html).toMatch(/autocomplete="new-password"/iu);
     expect(html).not.toMatch(/<\/input>\s*<button/u);
     expect(html).not.toMatch(/<input[^>]*\/?>\s*<button/u);
-    expect(html).toMatch(/<input[^>]*id="email"[^>]*\/?>\s*<\/div>\s*<div aria-live="polite"/u);
   });
 });

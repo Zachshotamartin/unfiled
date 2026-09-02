@@ -84,17 +84,16 @@ final class APIModelsTests: XCTestCase {
         let oversizedCursor = String(repeating: "c", count: 513)
         XCTAssertThrowsError(try decoder.decode(PageInfo.self,
                                                 from: Data(#"{"hasMore":true,"nextCursor":"\#(oversizedCursor)"}"#.utf8)))
-        XCTAssertThrowsError(try decoder.decode(AuthOTPAcceptedResponse.self,
-                                                from: Data(#"{"accepted":false,"retryAfterSeconds":30}"#.utf8)))
         XCTAssertThrowsError(try decoder.decode(ToggleItemCheckedOperation.self,
                                                 from: Data(#"{"type":"remove_item","itemId":"itm_00000000000000000000000000","checked":true}"#.utf8)))
     }
 
-    func testOTPRequiresExactlySixDecimalDigits() throws {
-        XCTAssertNoThrow(try AuthOTPVerifyRequest(email: "A@Example.COM", code: "123456"))
-        XCTAssertThrowsError(try AuthOTPVerifyRequest(email: "a@example.com", code: "12345"))
-        XCTAssertThrowsError(try AuthOTPVerifyRequest(email: "a@example.com", code: "12345x"))
-        XCTAssertThrowsError(try AuthOTPVerifyRequest(email: "a@example.com", code: "١٢٣٤٥٦"))
+    func testPasswordRequestNormalizesEmailAndBoundsPasswordLength() throws {
+        let request = try AuthPasswordRequest(email: " A@Example.COM ", password: "correct horse")
+        XCTAssertEqual(request.email, "a@example.com")
+        XCTAssertThrowsError(try AuthPasswordRequest(email: "a@example.com", password: "short"))
+        XCTAssertThrowsError(try AuthPasswordRequest(email: "a@example.com", password: String(repeating: "x", count: 73)))
+        XCTAssertThrowsError(try AuthPasswordRequest(email: "not-an-email", password: "correct horse"))
     }
 
     func testCaptureCreateResponseRequiresCleanQueuedAcknowledgementAndExactKeys() throws {
