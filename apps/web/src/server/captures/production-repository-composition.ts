@@ -1,3 +1,10 @@
+import { encryptedAggregateRuntimeRpcFunctions } from "@/server/encryption/encrypted-aggregate-runtime";
+import {
+  createManagedOwnerKeyBootstrap,
+  freshOwnerOnboardingEnabled,
+  freshOwnerOnboardingRpcFunctions,
+  FreshOwnerOnboardingRolloutSource
+} from "@/server/encryption/fresh-owner-onboarding";
 import { ManagedEncryptedCaptureRepository } from "@/server/encryption/managed-encrypted-capture-repository";
 import {
   ContentEncryptionRolloutRpcSource,
@@ -15,17 +22,43 @@ export type ProductionCaptureCompositionOptions = Readonly<{
   environment?: WebKeyRuntimeEnvironment;
   fetch?: typeof fetch;
   signal?: AbortSignal;
+  /**
+   * Drives owners with no legacy objects through the official rollout on first
+   * use. Defaults to "no legacy content key is configured"; test seam otherwise.
+   */
+  freshOwnerOnboarding?: boolean;
 }>;
 
 /** Creates one request-scoped capture composition with no fallback path. */
 export function createProductionCaptureComposition(
   options: ProductionCaptureCompositionOptions
 ): CaptureRepository {
-  const rolloutClient = createServiceRpcClient({
-    allowedFunctions: rolloutRpcFunctions,
+  const clientOptions = {
     ...(options.environment === undefined ? {} : { environment: options.environment }),
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
     ...(options.signal === undefined ? {} : { signal: options.signal })
+  };
+  const rolloutClient = createServiceRpcClient({
+    allowedFunctions: rolloutRpcFunctions,
+    ...clientOptions
+  });
+  const rollout = new FreshOwnerOnboardingRolloutSource({
+    rollout: new ContentEncryptionRolloutRpcSource(rolloutClient),
+    client: createServiceRpcClient({
+      allowedFunctions: freshOwnerOnboardingRpcFunctions,
+      ...clientOptions
+    }),
+    ensureOwnerKeys: createManagedOwnerKeyBootstrap({
+      client: createServiceRpcClient({
+        allowedFunctions: encryptedAggregateRuntimeRpcFunctions,
+        ...clientOptions
+      }),
+      ...(options.environment === undefined ? {} : { environment: options.environment }),
+      ...(options.signal === undefined ? {} : { signal: options.signal })
+    }),
+    enabled:
+      options.freshOwnerOnboarding ??
+      freshOwnerOnboardingEnabled(options.environment ?? process.env)
   });
   const encrypted =
     options.encrypted ??
@@ -34,9 +67,5 @@ export function createProductionCaptureComposition(
       ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
       ...(options.signal === undefined ? {} : { signalForOperation: () => options.signal })
     });
-  return new RolloutAwareCaptureRepository(
-    new ContentEncryptionRolloutRpcSource(rolloutClient),
-    options.legacy,
-    encrypted
-  );
+  return new RolloutAwareCaptureRepository(rollout, options.legacy, encrypted);
 }

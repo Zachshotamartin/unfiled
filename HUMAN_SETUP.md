@@ -286,6 +286,14 @@ Rules:
 
 ### Capture encryption and durable workflow
 
+Every owner row starts in the `expanded` rollout state, which routes to the legacy
+environment-key adapter. Because the Vercel runtime rejects the legacy keys, the web drives each
+brand-new owner (zero required and zero missing objects in the authoritative rollout) through the
+official rollout on first use — managed key bootstrap, `expanded → dual_write`, empty backfill,
+`dual_write → encrypted_read`, empty plaintext scrub, `encrypted_read → encrypted_only` — before
+selecting a repository. No operator step is needed for new beta users; owners that hold legacy
+objects still require the explicit rollout operation described under the storage contract.
+
 1. For **local development only**, generate three independent values with
    `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`, place each directly into a password manager,
    and add these server-only values to `apps/web/.env.local`:

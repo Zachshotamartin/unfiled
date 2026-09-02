@@ -174,4 +174,38 @@ describe("production capture repository composition", () => {
     await composition.getReceipt(context, captureV1Fixture.clientCaptureId);
     expect(fetcher.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
   });
+  it("keeps a fresh owner off the legacy adapter when no legacy content key is configured", async () => {
+    const legacy = repository();
+    const encrypted = repository();
+    const fresh = {
+      ...rollout("expanded"),
+      found: false,
+      backfill: null,
+      readiness: {
+        ...readiness(),
+        requiredObjectCount: 0,
+        missingObjectCount: 0,
+        missingBySurface: {}
+      }
+    };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response(fresh));
+    const composition = createProductionCaptureComposition({
+      legacy,
+      encrypted,
+      fetch: fetcher,
+      environment: {
+        NEXT_PUBLIC_SUPABASE_URL: "https://capture-rollout.test",
+        SUPABASE_SERVICE_ROLE_KEY: "service-role-test-key"
+      }
+    });
+
+    // Onboarding begins with managed key bootstrap; without custody configuration the
+    // request fails closed and never reaches the legacy adapter.
+    await expect(composition.createCapture(context, captureV1Fixture)).rejects.toMatchObject({
+      status: 503,
+      code: "provider_unavailable"
+    });
+    expect(legacy.createCapture).not.toHaveBeenCalled();
+    expect(encrypted.createCapture).not.toHaveBeenCalled();
+  });
 });

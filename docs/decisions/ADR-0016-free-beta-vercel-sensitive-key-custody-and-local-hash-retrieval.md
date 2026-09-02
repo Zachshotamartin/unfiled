@@ -49,7 +49,17 @@ Its limitation is stated wherever AI-assisted search is described: it is a lexic
 
 `infra/aws-kms`, the `aws-kms` custodian branches, and their tests are preserved as deferred paid hardening. They are not required, applied, or claimed for the free beta. A later decision may adopt them without changing the envelope format, key classes, or RPC allowlists, because the root ID and registry shapes are custodian-specific while owner intermediate keys and object envelopes are not.
 
-### 7. What this decision does not claim
+### 7. Fresh owners reach `encrypted_only` automatically
+
+Every owner row is created in the `expanded` rollout state, and the free-beta runtime configures
+no legacy content key, so without intervention a new user could never write. Instead of adding a
+new database transition, the web runs the existing official sequence for owners whose
+authoritative rollout reports zero required and zero missing objects: managed key bootstrap,
+`expanded → dual_write`, empty backfill, `dual_write → encrypted_read`, empty plaintext scrub,
+`encrypted_read → encrypted_only`. The database keeps enforcing every precondition; owners with
+legacy objects are untouched; the source is a pass-through when `UNFILED_CONTENT_KEK` exists.
+
+### 8. What this decision does not claim
 
 - It does not make Unfiled end-to-end encrypted or zero knowledge. Root material is available to the Vercel platform and to any process in the receiving project; the owner-authorized application service can decrypt content for its scoped operations.
 - It does not provide hardware-backed isolation, per-call audit logging, or grant-based denial evidence equivalent to a KMS/HSM. Denial evidence is limited to configuration rejection and the per-workload subset.

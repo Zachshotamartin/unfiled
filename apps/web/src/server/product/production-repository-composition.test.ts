@@ -118,6 +118,7 @@ describe("production manual-note repository composition", () => {
       legacy,
       encrypted,
       environment: ENVIRONMENT,
+      freshOwnerOnboarding: false,
       fetch: fetcher,
       signal: controller.signal
     });
@@ -150,6 +151,7 @@ describe("production manual-note repository composition", () => {
       legacy,
       encrypted,
       environment: ENVIRONMENT,
+      freshOwnerOnboarding: false,
       fetch: () => Promise.resolve(json(completeProjection("dual_write")))
     });
 
@@ -191,8 +193,32 @@ describe("production manual-note repository composition", () => {
     }
   );
 
+  it("keeps a fresh owner off the legacy adapter when no legacy content key is configured", async () => {
+    const legacy = new InMemoryManualNotesRepository(false);
+    const encrypted = new InMemoryManualNotesRepository(false);
+    const legacyList = vi.spyOn(legacy, "listNotes");
+    const encryptedList = vi.spyOn(encrypted, "listNotes");
+    const fetcher = vi.fn<typeof fetch>(() => Promise.resolve(json(absentProjection())));
+    const repository = createProductionManualNotesComposition({
+      legacy,
+      encrypted,
+      environment: ENVIRONMENT,
+      fetch: fetcher
+    });
+    // Onboarding starts with managed key bootstrap; this environment carries no custody
+    // configuration, so the request fails closed instead of touching legacy storage.
+    await expect(repository.listNotes(CONTEXT, {})).rejects.toMatchObject({
+      status: 503,
+      code: "provider_unavailable"
+    });
+    expect(legacyList).not.toHaveBeenCalled();
+    expect(encryptedList).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
   it("wires the public factory to rollout lookup and forwards the request signal", async () => {
     vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("UNFILED_CONTENT_KEK", "legacy-content-key-configured");
     vi.stubEnv("UNFILED_WEB_DATA_ADAPTER", "supabase");
     vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://unfiled.test");
     vi.stubEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "anon-key");
