@@ -12,7 +12,7 @@ import finalCtaImage from "../../../../../design/brand/web/06-final-cta.png";
 import { SiteFooter } from "@/components/marketing/site-footer";
 import { SiteHeader } from "@/components/site-header";
 
-const waitlistHref = "mailto:hello@unfiled.app?subject=Unfiled%20waitlist";
+const signInHref = "/auth";
 
 export function MarketingPage() {
   return (
@@ -36,8 +36,8 @@ export function MarketingPage() {
               Capture a thought now. Unfiled organizes it after.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
-              <a href={waitlistHref} className="button-primary">
-                Join the waitlist
+              <a href={signInHref} className="button-primary">
+                Sign in
                 <ArrowRightIcon size={18} weight="bold" aria-hidden="true" />
               </a>
               <Link href="/app" className="button-secondary">
@@ -188,8 +188,8 @@ export function MarketingPage() {
               >
                 Write it down before it disappears.
               </h2>
-              <a href={waitlistHref} className="button-primary mt-8">
-                Join the waitlist
+              <a href={signInHref} className="button-primary mt-8">
+                Sign in
                 <ArrowRightIcon size={18} weight="bold" aria-hidden="true" />
               </a>
             </div>
