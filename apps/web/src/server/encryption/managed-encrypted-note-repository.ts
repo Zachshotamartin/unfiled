@@ -468,7 +468,7 @@ export class ManagedEncryptedNoteRepository implements ManualNotesRepository {
 
   public async search(...parameters: Parameters<ManualNotesRepository["search"]>) {
     return this.scoped(parameters[0], (repository) =>
-      new EncryptedLexicalSearch(repository).search(parameters[1], parameters[2], parameters[3])
+      new EncryptedLexicalSearch(repository).search(parameters[1], parameters[2])
     );
   }
 

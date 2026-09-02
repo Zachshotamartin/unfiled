@@ -403,7 +403,7 @@ export function AiSettings() {
             <fieldset className="ai-settings-group" disabled={settingsLocked}>
               <legend>Routing effort</legend>
               <p className="ai-settings-help">
-                A preference and budget profile—not a provider or model promise. BYOK cost usually
+                A preference and budget profile, not a provider or model promise. BYOK cost usually
                 rises with effort.
               </p>
               <div className="ai-choice-grid">

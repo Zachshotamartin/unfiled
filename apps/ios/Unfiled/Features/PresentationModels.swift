@@ -74,6 +74,7 @@ struct NoteDetailPresentation: Equatable, Identifiable, Sendable {
     let spacePath: String
     let currentRevision: Int
     let checklistItems: [ChecklistItemPresentation]
+    let logEntries: [LogEntryPresentation]
     let provenance: String?
 }
 
@@ -81,6 +82,19 @@ struct ChecklistItemPresentation: Equatable, Identifiable, Sendable {
     let id: String
     let text: String
     let checked: Bool
+}
+
+struct LogEntryPresentation: Equatable, Identifiable, Sendable {
+    let id: String
+    let occurredAt: Date
+    let fields: [LogFieldPresentation]
+}
+
+struct LogFieldPresentation: Equatable, Identifiable, Sendable {
+    let id: String
+    let path: [String]
+    let label: String
+    let value: LogFieldValue
 }
 
 struct SpacePresentation: Equatable, Identifiable, Sendable {

@@ -19,7 +19,8 @@ import {
   sealUtf8,
   serializeContentEnvelope,
   type ContentEnvelopeV1,
-  type EncryptionContext
+  type EncryptionContext,
+  type KeyEncryptionKey
 } from "../src/index";
 
 const context: EncryptionContext = {
@@ -31,6 +32,23 @@ const context: EncryptionContext = {
 
 async function key(keyId = "content-kek-2026-08"): ReturnType<typeof generateKeyEncryptionKey> {
   return generateKeyEncryptionKey(keyId);
+}
+
+async function keyWithUsages(
+  raw: Uint8Array,
+  usages: readonly KeyUsage[],
+  keyId = "least-privilege-kek"
+): Promise<KeyEncryptionKey> {
+  return Object.freeze({
+    keyId,
+    key: await crypto.subtle.importKey(
+      "raw",
+      Uint8Array.from(raw),
+      { name: "AES-GCM", length: 256 },
+      false,
+      usages
+    )
+  });
 }
 
 function expectCode(code: string): (error: unknown) => boolean {
@@ -102,6 +120,35 @@ describe("content envelope encryption", () => {
 
     expect(JSON.stringify(envelope)).not.toContain("Roosevelt");
     await expect(openUtf8(envelope, context, encryptionKey)).resolves.toBe(plaintext);
+  });
+
+  it("accepts only the key usage required by each envelope operation", async () => {
+    const oldRaw = new Uint8Array(32).fill(71);
+    const newRaw = new Uint8Array(32).fill(72);
+    const writeOnlyOld = await keyWithUsages(oldRaw, ["encrypt"], "old-least-privilege-kek");
+    const readOnlyOld = await keyWithUsages(oldRaw, ["decrypt"], "old-least-privilege-kek");
+    const writeOnlyNew = await keyWithUsages(newRaw, ["encrypt"], "new-least-privilege-kek");
+    const readOnlyNew = await keyWithUsages(newRaw, ["decrypt"], "new-least-privilege-kek");
+    oldRaw.fill(0);
+    newRaw.fill(0);
+
+    const envelope = await sealUtf8("least privilege", context, writeOnlyOld);
+    await expect(openUtf8(envelope, context, readOnlyOld)).resolves.toBe("least privilege");
+    await expect(sealUtf8("cannot write", context, readOnlyOld)).rejects.toSatisfy(
+      expectCode(ContentCryptoErrorCode.INVALID_KEY)
+    );
+    await expect(openUtf8(envelope, context, writeOnlyOld)).rejects.toSatisfy(
+      expectCode(ContentCryptoErrorCode.INVALID_KEY)
+    );
+
+    const rewrapped = await rewrapEnvelope(envelope, context, readOnlyOld, writeOnlyNew);
+    await expect(openUtf8(rewrapped, context, readOnlyNew)).resolves.toBe("least privilege");
+    await expect(rewrapEnvelope(envelope, context, writeOnlyOld, writeOnlyNew)).rejects.toSatisfy(
+      expectCode(ContentCryptoErrorCode.INVALID_KEY)
+    );
+    await expect(rewrapEnvelope(envelope, context, readOnlyOld, readOnlyNew)).rejects.toSatisfy(
+      expectCode(ContentCryptoErrorCode.INVALID_KEY)
+    );
   });
 
   it("uses a fresh data key and nonce for every seal", async () => {

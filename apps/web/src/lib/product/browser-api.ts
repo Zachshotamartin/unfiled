@@ -51,3 +51,16 @@ export function isAmbiguousProductMutationFailure(reason: unknown): boolean {
   }
   return false;
 }
+
+/**
+ * Replays one exact idempotent mutation after a transport-ambiguous outcome.
+ * Callers must close over an immutable request, including its idempotency key.
+ */
+export async function retryAmbiguousProductMutation<T>(mutation: () => Promise<T>): Promise<T> {
+  try {
+    return await mutation();
+  } catch (reason) {
+    if (!isAmbiguousProductMutationFailure(reason)) throw reason;
+    return mutation();
+  }
+}

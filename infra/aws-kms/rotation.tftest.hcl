@@ -66,6 +66,15 @@ override_resource {
 }
 
 override_resource {
+  target          = aws_iam_role.search
+  override_during = plan
+  values = {
+    arn = "arn:aws:iam::123456789012:role/unfiled-production-search"
+    id  = "unfiled-production-search"
+  }
+}
+
+override_resource {
   target          = aws_kms_key.root["ai_assisted_object_wrap_v1"]
   override_during = plan
   values = {
@@ -141,12 +150,14 @@ variables {
   aws_region = "us-west-2"
   key_administrator_arns = [
     "arn:aws:iam::123456789012:role/unfiled-kms-admin",
+    "arn:aws:iam::123456789012:role/unfiled-kms-recovery",
   ]
   vercel_team_slug       = "unfiled-team"
   web_project_name       = "unfiled-web"
   worker_project_name    = "unfiled-worker"
   verifier_project_name  = "unfiled-verifier"
   organizer_project_name = "unfiled-organizer"
+  search_project_name    = "unfiled-search"
 }
 
 run "v1_baseline" {
@@ -260,6 +271,31 @@ run "stage_v2_while_v1_remains_active" {
 
   assert {
     condition = (
+      toset(one([
+        for statement in jsondecode(aws_iam_role_policy.search_kms.policy).Statement : statement
+        if statement.Sid == "DescribeActiveAndRetiredAiObjectWrapGenerations"
+        ]).Resource) == toset([
+        aws_kms_key.root["ai_assisted_object_wrap_v1"].arn,
+      ])
+      && length([
+        for statement in jsondecode(aws_iam_role_policy.search_kms.policy).Statement : statement
+        if startswith(statement.Sid, "Decrypt")
+      ]) == 1
+      && toset(one([
+        for statement in jsondecode(aws_iam_role_policy.search_kms.policy).Statement : statement
+        if statement.Sid == "DenyEveryStagedAiObjectWrapGenerationEvenIfAnotherPolicyChanges"
+        ]).Resource) == toset([
+        aws_kms_key.root["ai_assisted_object_wrap_v2"].arn,
+      ])
+      && length(output.search_root_key_registry) == 1
+      && !contains(keys(output.search_root_key_registry), "ai_assisted_object_wrap_v2")
+      && length(regexall(aws_iam_role.search.arn, aws_kms_key.root["ai_assisted_object_wrap_v2"].policy)) == 0
+    )
+    error_message = "Owner search must neither see nor use a staged AI index root and must explicitly deny it even if another identity policy changes."
+  }
+
+  assert {
+    condition = (
       length([
         for statement in jsondecode(aws_iam_role_policy.organizer_kms.policy).Statement : statement
         if startswith(statement.Sid, "Use")
@@ -289,6 +325,7 @@ run "stage_v2_while_v1_remains_active" {
         length(regexall(aws_iam_role.worker.arn, aws_kms_key.root[registry_id].policy)) == 0
         && length(regexall(aws_iam_role.verifier.arn, aws_kms_key.root[registry_id].policy)) == 0
         && length(regexall(aws_iam_role.organizer.arn, aws_kms_key.root[registry_id].policy)) == 0
+        && length(regexall(aws_iam_role.search.arn, aws_kms_key.root[registry_id].policy)) == 0
       )
     ])
     error_message = "Private staged key policies must not identify the worker as a principal."
@@ -300,9 +337,11 @@ run "stage_v2_while_v1_remains_active" {
       && length(output.worker_root_key_registry) == 2
       && length(output.verifier_root_key_registry) == 2
       && length(output.organizer_root_key_registry) == 4
+      && length(output.search_root_key_registry) == 1
       && alltrue([for generation in values(output.worker_root_key_registry) : generation.key_class == "ai_assisted" && generation.purpose == "object_wrap"])
       && alltrue([for generation in values(output.verifier_root_key_registry) : generation.key_class == "ai_assisted" && generation.purpose == "object_wrap"])
       && alltrue([for generation in values(output.organizer_root_key_registry) : generation.key_class == "ai_assisted"])
+      && alltrue([for generation in values(output.search_root_key_registry) : generation.key_class == "ai_assisted" && generation.purpose == "object_wrap" && generation.status != "staged"])
       && alltrue([for staged_arns in values(output.staged_root_key_arns) : length(staged_arns) == 1])
     )
     error_message = "Readiness configuration must expose staged roots to web, expose only AI object-wrap roots to worker, and keep content-MAC/private identifiers out of worker output."
@@ -480,6 +519,77 @@ run "promote_v2_and_retire_v1" {
   assert {
     condition = (
       length([
+        for statement in jsondecode(aws_iam_role_policy.search_kms.policy).Statement : statement
+        if startswith(statement.Sid, "Decrypt")
+        && toset(statement.Action) == toset(["kms:Decrypt"])
+      ]) == 2
+      && toset(one([
+        for statement in jsondecode(aws_iam_role_policy.search_kms.policy).Statement : statement
+        if statement.Sid == "DescribeActiveAndRetiredAiObjectWrapGenerations"
+        ]).Resource) == toset([
+        aws_kms_key.root["ai_assisted_object_wrap_v1"].arn,
+        aws_kms_key.root["ai_assisted_object_wrap_v2"].arn,
+      ])
+      && length(flatten([
+        for statement in jsondecode(aws_iam_role_policy.search_kms.policy).Statement : [
+          for action in statement.Action : action
+          if contains([
+            "kms:CreateGrant",
+            "kms:Encrypt",
+            "kms:GenerateDataKey*",
+            "kms:ReEncrypt*",
+            "kms:ScheduleKeyDeletion",
+          ], action)
+        ] if statement.Effect == "Allow"
+      ])) == 0
+      && alltrue([
+        for binding in [
+          { registry_id = "ai_assisted_object_wrap_v1", status = "retired" },
+          { registry_id = "ai_assisted_object_wrap_v2", status = "active" },
+          ] : (
+          local.root_key_generations[binding.registry_id].status == binding.status
+          && length([
+            for statement in jsondecode(aws_kms_key.root[binding.registry_id].policy).Statement : statement
+            if statement.Sid == "SearchDecryptAiIndexObjectWrap"
+          ]) == 1
+          && alltrue([
+            for statement in jsondecode(aws_kms_key.root[binding.registry_id].policy).Statement : (
+              toset(keys(statement)) == toset(["Sid", "Effect", "Principal", "Action", "Resource", "Condition"])
+              && statement.Effect == "Allow"
+              && length(keys(statement.Principal)) == 1
+              && statement.Principal.AWS == aws_iam_role.search.arn
+              && length(statement.Action) == 1
+              && toset(statement.Action) == toset(["kms:Decrypt"])
+              && statement.Resource == "*"
+              && toset(keys(statement.Condition)) == toset(["StringEquals", "ForAllValues:StringEquals", "Null"])
+              && length(keys(statement.Condition.StringEquals)) == 2
+              && statement.Condition.StringEquals["kms:EncryptionContext:UnfiledKeyClass"] == "ai_assisted"
+              && statement.Condition.StringEquals["kms:EncryptionContext:UnfiledKeyPurpose"] == "object_wrap"
+              && length(keys(statement.Condition["ForAllValues:StringEquals"])) == 1
+              && toset(statement.Condition["ForAllValues:StringEquals"]["kms:EncryptionContextKeys"]) == toset(local.encryption_context_keys)
+              && statement.Condition.Null == local.required_context
+            ) if statement.Sid == "SearchDecryptAiIndexObjectWrap"
+          ])
+        )
+      ])
+      && length(output.search_root_key_registry) == 2
+      && alltrue([for generation in values(output.search_root_key_registry) : generation.key_class == "ai_assisted" && generation.purpose == "object_wrap" && contains(["active", "retired"], generation.status)])
+      && jsondecode(output.search_retired_ai_object_wrap_roots_json) == [aws_kms_key.root["ai_assisted_object_wrap_v1"].arn]
+      && output.search_cloud_environment.UNFILED_SEARCH_AI_OBJECT_WRAP_KMS_KEY_ARN == aws_kms_key.root["ai_assisted_object_wrap_v2"].arn
+      && jsondecode(output.search_cloud_environment.UNFILED_SEARCH_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON) == [aws_kms_key.root["ai_assisted_object_wrap_v1"].arn]
+      && length(regexall(aws_iam_role.search.arn, aws_kms_key.root["ai_assisted_object_wrap_v1"].policy)) > 0
+      && length(regexall(aws_iam_role.search.arn, aws_kms_key.root["ai_assisted_object_wrap_v2"].policy)) > 0
+      && length(regexall(aws_iam_role.search.arn, aws_kms_key.root["ai_assisted_content_mac_v1"].policy)) == 0
+      && length(regexall(aws_iam_role.search.arn, aws_kms_key.root["ai_assisted_content_mac_v2"].policy)) == 0
+      && length(regexall(aws_iam_role.search.arn, aws_kms_key.root["private_manual_object_wrap_v1"].policy)) == 0
+      && length(regexall(aws_iam_role.search.arn, aws_kms_key.root["private_manual_object_wrap_v2"].policy)) == 0
+    )
+    error_message = "Owner search must decrypt/describe exactly active and retired AI object-wrap roots across rotation, with no generation, encryption, rewrap, grant, deletion, content-MAC, or private authority."
+  }
+
+  assert {
+    condition = (
+      length([
         for statement in jsondecode(aws_iam_role_policy.organizer_kms.policy).Statement : statement
         if startswith(statement.Sid, "Use")
         && toset(statement.Action) == toset(["kms:Decrypt", "kms:GenerateDataKey"])
@@ -520,10 +630,13 @@ run "promote_v2_and_retire_v1" {
       length(output.web_root_key_registry) == 8
       && length(output.worker_root_key_registry) == 2
       && length(output.verifier_root_key_registry) == 2
+      && length(output.search_root_key_registry) == 2
       && alltrue([for generation in values(output.worker_root_key_registry) : generation.key_class == "ai_assisted" && generation.purpose == "object_wrap"])
       && alltrue([for generation in values(output.verifier_root_key_registry) : generation.key_class == "ai_assisted" && generation.purpose == "object_wrap"])
+      && alltrue([for generation in values(output.search_root_key_registry) : generation.key_class == "ai_assisted" && generation.purpose == "object_wrap" && contains(["active", "retired"], generation.status)])
       && jsondecode(output.verifier_retired_ai_object_wrap_roots_json) == [aws_kms_key.root["ai_assisted_object_wrap_v1"].arn]
       && jsondecode(output.worker_retired_ai_object_wrap_roots_json) == [aws_kms_key.root["ai_assisted_object_wrap_v1"].arn]
+      && jsondecode(output.search_retired_ai_object_wrap_roots_json) == [aws_kms_key.root["ai_assisted_object_wrap_v1"].arn]
     )
     error_message = "Application registries must expose all web roots and exact AI object-wrap-only worker configuration without leaking content-MAC, private, or staged identifiers."
   }

@@ -97,6 +97,23 @@ const rules: Readonly<Record<string, BoundaryRule>> = Object.freeze({
       "@unfiled/ai-routing/application"
     ],
     sourceRoots: ["src", "api"]
+  },
+  "apps/search": {
+    forbidden: [
+      "next",
+      "react",
+      ...retiredClientDependencies,
+      "@supabase",
+      "openai",
+      "@anthropic-ai",
+      "@unfiled/ai-routing",
+      "@unfiled/domain",
+      "@unfiled/web",
+      "@unfiled/worker",
+      "@unfiled/verifier",
+      "@unfiled/organizer"
+    ],
+    sourceRoots: ["src", "api"]
   }
 });
 
@@ -243,6 +260,24 @@ function assertScannerSelfTest(): void {
     throw new Error(
       "Boundary scanner self-test failed: organizer owner-application access was not detected"
     );
+  }
+
+  const searchRule = rules["apps/search"];
+  if (searchRule === undefined || !searchRule.sourceRoots.includes("api")) {
+    throw new Error("Boundary scanner self-test failed: search API root is not covered");
+  }
+  const searchFixture = sourceViolations(
+    "apps/search/src/fixture.ts",
+    'import { unsafe } from "@unfiled/web/server";\nvoid unsafe;',
+    searchRule.forbidden
+  );
+  const searchManifestFixture = manifestViolations(
+    "apps/search",
+    { dependencies: { "@unfiled/organizer": "workspace:*" } },
+    searchRule.forbidden
+  );
+  if (searchFixture.length !== 1 || searchManifestFixture.length !== 1) {
+    throw new Error("Boundary scanner self-test failed: search violations were not detected");
   }
 }
 

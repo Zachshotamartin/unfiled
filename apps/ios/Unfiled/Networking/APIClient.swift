@@ -99,10 +99,12 @@ public final class APIClient: Sendable {
     func post<Response: Decodable, Body: Encodable>(_ path: String, body: Body?, idempotencyKey: String? = nil,
                                                      authenticated: Bool = true, explicitToken: String? = nil,
                                                      maximumResponseBytes: Int? = nil,
+                                                     requirePrivateNoStore: Bool = false,
                                                      as: Response.Type = Response.self) async throws -> Response {
         let auth: Authentication = explicitToken.map(Authentication.explicit) ?? (authenticated ? .required : .none)
         return try await send("POST", path: path, body: body, idempotencyKey: idempotencyKey,
                               authentication: auth, maximumResponseBytes: maximumResponseBytes,
+                              requirePrivateNoStore: requirePrivateNoStore,
                               response: Response.self)
     }
 
@@ -153,6 +155,7 @@ public final class APIClient: Sendable {
     func deleteBodyOnly<Response: Decodable, Body: Encodable>(
         _ path: String,
         body: Body,
+        requirePrivateNoStore: Bool = false,
         as: Response.Type = Response.self
     ) async throws -> Response {
         try await send(
@@ -160,6 +163,7 @@ public final class APIClient: Sendable {
             path: path,
             body: body,
             authentication: .required,
+            requirePrivateNoStore: requirePrivateNoStore,
             response: Response.self
         )
     }

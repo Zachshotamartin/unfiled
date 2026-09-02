@@ -10,6 +10,14 @@ describe("SearchView", () => {
     expect(html).toContain('role="search"');
     expect(html).toContain('maxLength="200"');
     expect(html).toContain('value=""');
+    expect(html).toContain("All notes");
+    expect(html).toContain("Private exact-text search");
+    expect(html).toContain("AI-assisted notes");
+    expect(html).toContain("OpenAI through Unfiled&#x27;s dedicated search service");
+    expect(html).toContain("does not use your saved organizer key");
+    expect(html).not.toContain("configured AI provider");
+    expect(html).toContain('name="search-scope"');
+    expect(html).toContain('value="ai_assisted"');
     expect(html).not.toContain("/api/v1/search?");
     expect(html).not.toContain("/app/search?");
     expect(html).not.toContain('name="q"');

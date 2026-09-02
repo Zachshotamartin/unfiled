@@ -15,7 +15,9 @@ function resultKey(result: SearchNoteResult): string {
   return result.noteId;
 }
 
-function usePrivateSearch(query: string, includeArchived: boolean) {
+type SearchScope = "all" | "ai_assisted";
+
+function usePrivateSearch(query: string, includeArchived: boolean, scope: SearchScope) {
   const operation = useRef(0);
   const [data, setData] = useState<SearchNotesResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -42,6 +44,7 @@ function usePrivateSearch(query: string, includeArchived: boolean) {
             query,
             archive: includeArchived ? "include" : "exclude",
             limit: 50,
+            ...(scope === "ai_assisted" ? { privacy: "ai_assisted" as const } : {}),
             ...(cursor === undefined ? {} : { cursor })
           },
           signal
@@ -75,7 +78,7 @@ function usePrivateSearch(query: string, includeArchived: boolean) {
         }
       }
     },
-    [includeArchived, query]
+    [includeArchived, query, scope]
   );
 
   useEffect(() => {
@@ -101,9 +104,10 @@ function usePrivateSearch(query: string, includeArchived: boolean) {
 
 function Results({
   includeArchived,
-  query
-}: Readonly<{ includeArchived: boolean; query: string }>) {
-  const resource = usePrivateSearch(query, includeArchived);
+  query,
+  scope
+}: Readonly<{ includeArchived: boolean; query: string; scope: SearchScope }>) {
+  const resource = usePrivateSearch(query, includeArchived, scope);
   if (resource.loading && resource.data === null) return <ResourceSkeleton rows={3} />;
   if (resource.error !== null && resource.data === null)
     return (
@@ -173,6 +177,7 @@ export function SearchView() {
   const [input, setInput] = useState("");
   const [search, setSearch] = useState({ query: "", sequence: 0 });
   const [includeArchived, setIncludeArchived] = useState(false);
+  const [scope, setScope] = useState<SearchScope>("all");
 
   useEffect(() => {
     const pending = privateNavigation.pending;
@@ -189,30 +194,64 @@ export function SearchView() {
   return (
     <div>
       <form onSubmit={submit} role="search" className="search-form">
-        <MagnifyingGlassIcon size={21} className="text-muted-content" aria-hidden="true" />
-        <label htmlFor="library-search" className="sr-only">
-          Search your notes
-        </label>
-        <input
-          id="library-search"
-          type="search"
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          placeholder="Search titles and note text"
-          maxLength={200}
-          autoFocus
-        />
-        <label className="search-archive-toggle">
+        <div className="search-query-row">
+          <MagnifyingGlassIcon size={21} className="text-muted-content" aria-hidden="true" />
+          <label htmlFor="library-search" className="sr-only">
+            Search your notes
+          </label>
           <input
-            type="checkbox"
-            checked={includeArchived}
-            onChange={(event) => setIncludeArchived(event.target.checked)}
-          />{" "}
-          <span>Include archive</span>
-        </label>
-        <button type="submit" className="button-primary" disabled={input.trim().length === 0}>
-          Search
-        </button>
+            id="library-search"
+            type="search"
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            placeholder="Search titles and note text"
+            maxLength={200}
+            autoFocus
+          />
+          <button type="submit" className="button-primary" disabled={input.trim().length === 0}>
+            Search
+          </button>
+        </div>
+        <fieldset className="search-scope-controls">
+          <legend>Search scope</legend>
+          <label className="search-scope-option">
+            <input
+              type="radio"
+              name="search-scope"
+              value="all"
+              checked={scope === "all"}
+              onChange={() => setScope("all")}
+            />
+            <span>
+              <strong>All notes</strong>
+              <small>Private exact-text search</small>
+            </span>
+          </label>
+          <label className="search-scope-option">
+            <input
+              type="radio"
+              name="search-scope"
+              value="ai_assisted"
+              checked={scope === "ai_assisted"}
+              onChange={() => setScope("ai_assisted")}
+            />
+            <span>
+              <strong>AI-assisted notes</strong>
+              <small>
+                Your query is sent to OpenAI through Unfiled&apos;s dedicated search service. It
+                does not use your saved organizer key.
+              </small>
+            </span>
+          </label>
+          <label className="search-archive-toggle">
+            <input
+              type="checkbox"
+              checked={includeArchived}
+              onChange={(event) => setIncludeArchived(event.target.checked)}
+            />
+            <span>Include archive</span>
+          </label>
+        </fieldset>
       </form>
       <section aria-label="Search results" className="mt-10">
         {search.query.length === 0 ? (
@@ -221,7 +260,12 @@ export function SearchView() {
             body="Search looks across note titles and Markdown. Archived notes stay out unless you include them."
           />
         ) : (
-          <Results key={search.sequence} query={search.query} includeArchived={includeArchived} />
+          <Results
+            key={search.sequence}
+            query={search.query}
+            includeArchived={includeArchived}
+            scope={scope}
+          />
         )}
       </section>
     </div>

@@ -127,8 +127,17 @@ struct GeneratedBlockLookup: Hashable, Sendable {
     let noteID: NoteID
 }
 
+private enum NoteContextLoadResult<Value: Sendable>: Sendable {
+    case value(Value)
+    case failure(NoteContextFailure)
+}
+
 @MainActor
 final class AppModel: ObservableObject {
+    private static let noteContextPageLimit = 30
+    private static let noteContextDisplayLimitMessage =
+        "Only the first 600 items are shown. Refine this note before loading more."
+
     private struct Runtime {
         let configuration: AppConfiguration
         let unauthenticatedAPI: APIClient
@@ -137,6 +146,7 @@ final class AppModel: ObservableObject {
         let database: LocalDatabase
         let captureSync: CaptureSyncEngine
         let widgetSnapshotStore: WidgetSnapshotStore
+        let accountDeletionRecoveryStore: KeychainAccountDeletionRecoveryStore
     }
 
     private struct AccountContext: Equatable, Sendable {
@@ -156,6 +166,14 @@ final class AppModel: ObservableObject {
         let noteID: NoteID
         let resolution: GeneratedBlockResolution
         let request: GeneratedBlockResolveRequest
+    }
+
+    private struct LogFieldUpdateAttempt: Equatable, Sendable {
+        let noteID: NoteID
+        let entryID: EntryID
+        let fieldPath: [String]
+        let value: LogFieldValue
+        let request: InteractiveOperationsRequest
     }
 
     private struct AISettingsAttempt: Sendable {
@@ -191,6 +209,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var generatedBlockLoadMoreErrors: [String: String] = [:]
     @Published private(set) var generatedBlockHasMoreNoteIDs: Set<String> = []
     @Published private(set) var generatedBlockPaginationNotices: [String: String] = [:]
+    @Published private(set) var noteContextByNoteID: [String: NoteContextViewState] = [:]
     @Published private(set) var routingRules: [RoutingRule] = []
     @Published private(set) var aiSettings: UserSettings?
     @Published private(set) var providerKeyMetadata: ProviderKeyMetadata?
@@ -203,6 +222,21 @@ final class AppModel: ObservableObject {
     @Published private(set) var aiSettingsError: String?
     @Published private(set) var providerKeyError: String?
     @Published private(set) var searchResults: [SearchResultPresentation] = []
+    @Published private(set) var searchFailure: SearchFailure?
+    @Published private(set) var searchHasMore = false
+    @Published private(set) var isLoadingMoreSearch = false
+    @Published private(set) var searchLoadMoreFailure: SearchFailure?
+    @Published private(set) var searchPaginationNotice: String?
+    @Published private(set) var searchOpeningResultIDs: Set<String> = []
+    @Published private(set) var searchDeletedResultIDs: Set<String> = []
+    @Published private(set) var searchResultFailures: [String: SearchFailure] = [:]
+    @Published private(set) var accountExportArtifact: AccountExportArtifact?
+    @Published private(set) var isPreparingAccountExport = false
+    @Published private(set) var accountExportError: String?
+    @Published private(set) var isDeletingAccount = false
+    @Published private(set) var hasPendingAccountDeletionReplay = false
+    @Published private(set) var accountDeletionError: String?
+    @Published private(set) var accountDeletionReceipt: AccountDeletionReceiptPresentation?
     @Published private(set) var archiveNotes: [NotePresentation] = []
     @Published private(set) var deletedNotes: [NotePresentation] = []
     @Published private(set) var revisions: [String: [RevisionPresentation]] = [:]
@@ -240,6 +274,10 @@ final class AppModel: ObservableObject {
     private var generatedBlockPagesByNoteID: [String: GeneratedBlockPaginationState] = [:]
     private var reviewGeneratedBlocksByID: [String: GeneratedBlock] = [:]
     private var generatedBlockEpochs: [String: UInt64] = [:]
+    private var noteSourcePagesByNoteID: [String: NoteSourcesPaginationState] = [:]
+    private var noteBacklinkPagesByNoteID: [String: NoteBacklinksPaginationState] = [:]
+    private var noteSourceEpochs: [String: UInt64] = [:]
+    private var noteBacklinkEpochs: [String: UInt64] = [:]
     private var routingRuleCollection = RoutingRuleCollection()
     private var routingRulesEpoch: UInt64 = 0
     private var reviewQueueGeneration = ReviewQueueGeneration()
@@ -248,6 +286,7 @@ final class AppModel: ObservableObject {
     private var undoAttempts: [String: MutationUndoRequest] = [:]
     private var routingRuleAttempts: [String: RoutingRuleAttempt] = [:]
     private var generatedBlockAttempts: [String: GeneratedBlockAttempt] = [:]
+    private var logFieldUpdateAttempts: [String: LogFieldUpdateAttempt] = [:]
     private var aiSettingsAttempt: AISettingsAttempt?
     private var providerKeyPutAttempt: ProviderKeyPutAttempt?
     private var providerKeyDeleteAttempt: ProviderKeyDeleteAttempt?
@@ -257,9 +296,11 @@ final class AppModel: ObservableObject {
     private var refreshEpoch: UInt64 = 0
     private var searchEpoch: UInt64 = 0
     private var searchTask: Task<Void, Never>?
+    private var searchPaginationState: SearchPaginationState?
     private let explicitSignOutBarrier: ExplicitSignOutBarrier
 
     init(bundle: Bundle = .main, userDefaults: UserDefaults = .standard) {
+        SecureAccountExportWriter.removeStaleArtifacts()
         explicitSignOutBarrier = ExplicitSignOutBarrier(defaults: userDefaults)
         do {
             let configuration = try AppConfiguration.load(bundle: bundle)
@@ -285,6 +326,9 @@ final class AppModel: ObservableObject {
                 bundleIdentifier: configuration.bundleIdentifier
             )
             let widgetSnapshotStore = WidgetSnapshotStore()
+            let accountDeletionRecoveryStore = KeychainAccountDeletionRecoveryStore(
+                service: "\(configuration.bundleIdentifier).account-deletion"
+            )
             let captureSync = CaptureSyncEngine(
                 database: database,
                 api: authenticatedAPI,
@@ -298,7 +342,8 @@ final class AppModel: ObservableObject {
                 auth: auth,
                 database: database,
                 captureSync: captureSync,
-                widgetSnapshotStore: widgetSnapshotStore
+                widgetSnapshotStore: widgetSnapshotStore,
+                accountDeletionRecoveryStore: accountDeletionRecoveryStore
             )
         } catch {
             phase = .failed(
@@ -314,6 +359,7 @@ final class AppModel: ObservableObject {
     func bootstrap() async {
         guard !didBootstrap, let runtime else { return }
         didBootstrap = true
+        if await reconcilePendingAccountDeletion(runtime: runtime) { return }
         if explicitSignOutBarrier.isActive {
             try? await runtime.auth.clearLocalSession()
             runtime.widgetSnapshotStore.clear()
@@ -394,6 +440,114 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func prepareAccountExport() async {
+        guard let runtime,
+              let user = currentUser,
+              !isPreparingAccountExport,
+              !isDeletingAccount else { return }
+        discardAccountExport()
+        let context = currentAccountContext(for: user)
+        isPreparingAccountExport = true
+        accountExportError = nil
+        do {
+            let stream = try await runtime.authenticatedAPI.streamAccountExport()
+            let artifact = try await SecureAccountExportWriter.write(stream)
+            guard isCurrent(context) else {
+                SecureAccountExportWriter.remove(artifact)
+                return
+            }
+            accountExportArtifact = artifact
+            isPreparingAccountExport = false
+            announce("Private export ready to share.")
+        } catch {
+            guard isCurrent(context) else { return }
+            accountExportError = AccountDataPresentation.exportFailure(error)
+            isPreparingAccountExport = false
+            announce("The private export could not be prepared.")
+        }
+    }
+
+    func discardAccountExport(_ artifact: AccountExportArtifact) {
+        removeAccountExport(artifact)
+    }
+
+    func discardAccountExport() {
+        guard let artifact = accountExportArtifact else { return }
+        removeAccountExport(artifact)
+    }
+
+    private func removeAccountExport(_ current: AccountExportArtifact) {
+        SecureAccountExportWriter.remove(current)
+        if accountExportArtifact?.id == current.id {
+            accountExportArtifact = nil
+        }
+    }
+
+    func deleteAccount() async -> Bool {
+        guard let runtime,
+              let user = currentUser,
+              !isDeletingAccount,
+              !isPreparingAccountExport else { return false }
+        let record: AccountDeletionRecoveryRecord
+        do {
+            if let pending = try runtime.accountDeletionRecoveryStore.load() {
+                guard pending.ownerID == user.id else {
+                    accountDeletionError =
+                        "A protected deletion recovery key belongs to another account on this iPhone. Sign out and finish that account first."
+                    return false
+                }
+                record = pending
+            } else {
+                record = try AccountDeletionRecoveryRecord(
+                    ownerID: user.id,
+                    capability: AccountDeletionToken.generate()
+                )
+                try runtime.accountDeletionRecoveryStore.save(record)
+            }
+        } catch {
+            accountDeletionError =
+                "Unfiled could not protect a deletion recovery key in Keychain, so nothing was deleted."
+            return false
+        }
+
+        isDeletingAccount = true
+        hasPendingAccountDeletionReplay = true
+        accountDeletionError = nil
+        let receipt: AccountDeletionReceipt
+        do {
+            if let confirmed = record.confirmedReceipt {
+                receipt = confirmed
+            } else {
+                do {
+                    receipt = try await runtime.authenticatedAPI.deleteAccount(
+                        .init(idempotencyKey: record.capability)
+                    )
+                } catch where Self.isAmbiguousInteractionFailure(error) {
+                    receipt = try await runtime.unauthenticatedAPI.replayAccountDeletionReceipt(
+                        .init(idempotencyKey: record.capability)
+                    )
+                }
+                try? runtime.accountDeletionRecoveryStore.save(record.confirming(receipt))
+            }
+            await finalizeAccountDeletion(
+                record: record,
+                receipt: receipt,
+                runtime: runtime
+            )
+            return true
+        } catch {
+            isDeletingAccount = false
+            hasPendingAccountDeletionReplay = true
+            accountDeletionError = AccountDataPresentation.deletionFailure(isPendingReplay: true)
+            announce("Account deletion could not be confirmed.")
+            return false
+        }
+    }
+
+    func dismissAccountDeletionReceipt() {
+        accountDeletionReceipt = nil
+    }
+
     func refreshAll() async {
         guard let runtime, let user = currentUser else { return }
         let context = currentAccountContext(for: user)
@@ -463,11 +617,17 @@ final class AppModel: ObservableObject {
             for noteID in staleActiveIDs {
                 notesByID.removeValue(forKey: noteID)
                 noteDetails.removeValue(forKey: noteID)
+                discardNoteContext(noteID: noteID)
             }
             for value in details {
                 if notesByID[value.id.rawValue].map({
                     $0.currentRevision > value.currentRevision
                 }) != true {
+                    discardNoteContextIfChanged(
+                        noteID: value.id.rawValue,
+                        previous: notesByID[value.id.rawValue],
+                        replacement: value
+                    )
                     notesByID[value.id.rawValue] = value
                     await cache(value, profileID: user.id, database: runtime.database)
                 }
@@ -489,6 +649,11 @@ final class AppModel: ObservableObject {
             for note in decoded where notesByID[note.id.rawValue].map({
                 $0.currentRevision > note.currentRevision
             }) != true {
+                discardNoteContextIfChanged(
+                    noteID: note.id.rawValue,
+                    previous: notesByID[note.id.rawValue],
+                    replacement: note
+                )
                 notesByID[note.id.rawValue] = note
             }
             for note in decoded {
@@ -1812,8 +1977,8 @@ final class AppModel: ObservableObject {
         await refreshAll()
     }
 
-    func loadNote(_ rawNoteID: String) async -> Note? {
-        if let note = notesByID[rawNoteID] { return note }
+    func loadNote(_ rawNoteID: String, force: Bool = false) async -> Note? {
+        if !force, let note = notesByID[rawNoteID] { return note }
         guard let runtime, let user = currentUser, let noteID = NoteID(rawValue: rawNoteID) else {
             return nil
         }
@@ -1821,6 +1986,11 @@ final class AppModel: ObservableObject {
         do {
             let note = try await runtime.authenticatedAPI.getNote(noteID).note
             guard isCurrent(context) else { return nil }
+            discardNoteContextIfChanged(
+                noteID: rawNoteID,
+                previous: notesByID[rawNoteID],
+                replacement: note
+            )
             notesByID[rawNoteID] = note
             noteDetails[rawNoteID] = PresentationMapping.detail(
                 note,
@@ -1829,6 +1999,7 @@ final class AppModel: ObservableObject {
             await cache(note, profileID: user.id, database: runtime.database)
             return note
         } catch {
+            if force { return notesByID[rawNoteID] }
             guard let cached = try? await runtime.database.cachedNote(
                 profileID: user.id.uuidString.lowercased(),
                 noteID: rawNoteID
@@ -1842,6 +2013,313 @@ final class AppModel: ObservableObject {
                 spaces: Array(spacesByID.values)
             )
             return note
+        }
+    }
+
+    func noteContext(noteID: String, revision: Int) -> NoteContextViewState {
+        if let current = noteContextByNoteID[noteID], current.revision == revision {
+            return current
+        }
+        var loading = NoteContextViewState(revision: revision)
+        loading.isLoadingSources = true
+        loading.isLoadingBacklinks = true
+        return loading
+    }
+
+    func loadNoteContext(
+        noteID rawNoteID: String,
+        force: Bool = false,
+        refreshNotice: String? = nil
+    ) async {
+        guard let runtime,
+              let user = currentUser,
+              let noteID = NoteID(rawValue: rawNoteID),
+              let note = notesByID[rawNoteID],
+              note.deletedAt == nil else { return }
+        let revision = note.currentRevision
+        if !force,
+           let current = noteContextByNoteID[rawNoteID],
+           current.revision == revision,
+           !current.isLoadingSources,
+           !current.isLoadingBacklinks,
+           (current.hasLoadedSources || current.sourcesFailure != nil),
+           (current.hasLoadedBacklinks || current.backlinksFailure != nil) {
+            return
+        }
+
+        let context = currentAccountContext(for: user)
+        let sourceEpoch = noteSourceEpochs[rawNoteID, default: 0] &+ 1
+        let backlinkEpoch = noteBacklinkEpochs[rawNoteID, default: 0] &+ 1
+        noteSourceEpochs[rawNoteID] = sourceEpoch
+        noteBacklinkEpochs[rawNoteID] = backlinkEpoch
+        noteSourcePagesByNoteID.removeValue(forKey: rawNoteID)
+        noteBacklinkPagesByNoteID.removeValue(forKey: rawNoteID)
+
+        var loading = NoteContextViewState(revision: revision)
+        loading.isLoadingSources = true
+        loading.isLoadingBacklinks = true
+        loading.sourcesNotice = refreshNotice
+        loading.backlinksNotice = refreshNotice
+        noteContextByNoteID[rawNoteID] = loading
+
+        async let sourcesResult = Self.fetchNoteSources(
+            api: runtime.authenticatedAPI,
+            noteID: noteID,
+            limit: Self.noteContextPageLimit
+        )
+        async let backlinksResult = Self.fetchNoteBacklinks(
+            api: runtime.authenticatedAPI,
+            noteID: noteID,
+            limit: Self.noteContextPageLimit
+        )
+        let (sources, backlinks) = await (sourcesResult, backlinksResult)
+        guard isCurrent(context),
+              noteSourceEpochs[rawNoteID] == sourceEpoch,
+              noteBacklinkEpochs[rawNoteID] == backlinkEpoch,
+              notesByID[rawNoteID]?.currentRevision == revision else { return }
+
+        var presented = NoteContextViewState(revision: revision)
+        presented.hasLoadedSources = true
+        presented.hasLoadedBacklinks = true
+        presented.sourcesNotice = refreshNotice
+        presented.backlinksNotice = refreshNotice
+
+        switch sources {
+        case let .value(page):
+            do {
+                let state = try NoteSourcesPaginationState(
+                    first: page,
+                    boundRevision: revision,
+                    pageLimit: Self.noteContextPageLimit
+                )
+                noteSourcePagesByNoteID[rawNoteID] = state
+                presented.sources = state.items
+                presented.hasMoreSources = state.canLoadMore
+                if state.reachedDisplayLimit {
+                    presented.sourcesNotice = Self.noteContextDisplayLimitMessage
+                }
+            } catch {
+                presented.sourcesFailure = .unavailable
+            }
+        case let .failure(failure):
+            presented.sourcesFailure = failure
+        }
+
+        switch backlinks {
+        case let .value(page):
+            do {
+                let state = try NoteBacklinksPaginationState(
+                    first: page,
+                    boundRevision: revision,
+                    pageLimit: Self.noteContextPageLimit
+                )
+                noteBacklinkPagesByNoteID[rawNoteID] = state
+                presented.backlinks = state.items
+                presented.hasMoreBacklinks = state.canLoadMore
+                if state.reachedDisplayLimit {
+                    presented.backlinksNotice = Self.noteContextDisplayLimitMessage
+                }
+            } catch {
+                presented.backlinksFailure = .unavailable
+            }
+        case let .failure(failure):
+            presented.backlinksFailure = failure
+        }
+
+        if presented.sourcesFailure == .deleted || presented.backlinksFailure == .deleted {
+            presented.sources = []
+            presented.backlinks = []
+            presented.sourcesFailure = .deleted
+            presented.backlinksFailure = .deleted
+            noteSourcePagesByNoteID.removeValue(forKey: rawNoteID)
+            noteBacklinkPagesByNoteID.removeValue(forKey: rawNoteID)
+        }
+        noteContextByNoteID[rawNoteID] = presented
+    }
+
+    func loadMoreNoteSources(noteID rawNoteID: String) async {
+        guard let runtime,
+              let user = currentUser,
+              let noteID = NoteID(rawValue: rawNoteID),
+              let note = notesByID[rawNoteID],
+              var pageState = noteSourcePagesByNoteID[rawNoteID],
+              pageState.boundRevision == note.currentRevision,
+              pageState.canLoadMore,
+              let cursor = pageState.nextCursor,
+              noteContextByNoteID[rawNoteID]?.isLoadingMoreSources != true else { return }
+        let context = currentAccountContext(for: user)
+        let epoch = noteSourceEpochs[rawNoteID, default: 0] &+ 1
+        noteSourceEpochs[rawNoteID] = epoch
+        updateNoteContext(rawNoteID, revision: note.currentRevision) {
+            $0.isLoadingMoreSources = true
+            $0.sourcesFailure = nil
+        }
+
+        do {
+            let page = try await runtime.authenticatedAPI.listNoteSources(
+                noteID,
+                query: .init(cursor: cursor, limit: pageState.pageLimit)
+            )
+            try pageState.append(page, after: cursor)
+            guard isCurrent(context),
+                  noteSourceEpochs[rawNoteID] == epoch,
+                  notesByID[rawNoteID]?.currentRevision == pageState.boundRevision,
+                  noteSourcePagesByNoteID[rawNoteID]?.nextCursor == cursor else { return }
+            noteSourcePagesByNoteID[rawNoteID] = pageState
+            updateNoteContext(rawNoteID, revision: pageState.boundRevision) {
+                $0.sources = pageState.items
+                $0.isLoadingMoreSources = false
+                $0.hasMoreSources = pageState.canLoadMore
+                $0.sourcesNotice = pageState.reachedDisplayLimit
+                    ? Self.noteContextDisplayLimitMessage
+                    : nil
+            }
+        } catch {
+            guard isCurrent(context), noteSourceEpochs[rawNoteID] == epoch else { return }
+            let failure = Self.noteContextFailure(error)
+            if failure == .stale {
+                await recoverStaleNoteContext(noteID: rawNoteID, surface: "Sources")
+                return
+            }
+            if failure == .deleted {
+                markNoteContextDeleted(noteID: rawNoteID, revision: note.currentRevision)
+                return
+            }
+            updateNoteContext(rawNoteID, revision: note.currentRevision) {
+                $0.isLoadingMoreSources = false
+                $0.sourcesFailure = failure
+            }
+        }
+    }
+
+    func loadMoreNoteBacklinks(noteID rawNoteID: String) async {
+        guard let runtime,
+              let user = currentUser,
+              let noteID = NoteID(rawValue: rawNoteID),
+              let note = notesByID[rawNoteID],
+              var pageState = noteBacklinkPagesByNoteID[rawNoteID],
+              pageState.boundRevision == note.currentRevision,
+              pageState.canLoadMore,
+              let cursor = pageState.nextCursor,
+              noteContextByNoteID[rawNoteID]?.isLoadingMoreBacklinks != true else { return }
+        let context = currentAccountContext(for: user)
+        let epoch = noteBacklinkEpochs[rawNoteID, default: 0] &+ 1
+        noteBacklinkEpochs[rawNoteID] = epoch
+        updateNoteContext(rawNoteID, revision: note.currentRevision) {
+            $0.isLoadingMoreBacklinks = true
+            $0.backlinksFailure = nil
+        }
+
+        do {
+            let page = try await runtime.authenticatedAPI.listNoteBacklinks(
+                noteID,
+                query: .init(cursor: cursor, limit: pageState.pageLimit)
+            )
+            try pageState.append(page, after: cursor)
+            guard isCurrent(context),
+                  noteBacklinkEpochs[rawNoteID] == epoch,
+                  notesByID[rawNoteID]?.currentRevision == pageState.boundRevision,
+                  noteBacklinkPagesByNoteID[rawNoteID]?.nextCursor == cursor else { return }
+            noteBacklinkPagesByNoteID[rawNoteID] = pageState
+            updateNoteContext(rawNoteID, revision: pageState.boundRevision) {
+                $0.backlinks = pageState.items
+                $0.isLoadingMoreBacklinks = false
+                $0.hasMoreBacklinks = pageState.canLoadMore
+                $0.backlinksNotice = pageState.reachedDisplayLimit
+                    ? Self.noteContextDisplayLimitMessage
+                    : nil
+            }
+        } catch {
+            guard isCurrent(context), noteBacklinkEpochs[rawNoteID] == epoch else { return }
+            let failure = Self.noteContextFailure(error)
+            if failure == .stale {
+                await recoverStaleNoteContext(noteID: rawNoteID, surface: "Backlinks")
+                return
+            }
+            if failure == .deleted {
+                markNoteContextDeleted(noteID: rawNoteID, revision: note.currentRevision)
+                return
+            }
+            updateNoteContext(rawNoteID, revision: note.currentRevision) {
+                $0.isLoadingMoreBacklinks = false
+                $0.backlinksFailure = failure
+            }
+        }
+    }
+
+    private func recoverStaleNoteContext(noteID: String, surface: String) async {
+        _ = await loadNote(noteID, force: true)
+        guard let note = notesByID[noteID], note.deletedAt == nil else {
+            discardNoteContext(noteID: noteID)
+            return
+        }
+        await loadNoteContext(
+            noteID: noteID,
+            force: true,
+            refreshNotice: "\(surface) refreshed because this note changed."
+        )
+    }
+
+    private func updateNoteContext(
+        _ noteID: String,
+        revision: Int,
+        update: (inout NoteContextViewState) -> Void
+    ) {
+        guard var state = noteContextByNoteID[noteID], state.revision == revision else {
+            return
+        }
+        update(&state)
+        noteContextByNoteID[noteID] = state
+    }
+
+    private func markNoteContextDeleted(noteID: String, revision: Int) {
+        var deleted = NoteContextViewState(revision: revision)
+        deleted.hasLoadedSources = true
+        deleted.hasLoadedBacklinks = true
+        deleted.sourcesFailure = .deleted
+        deleted.backlinksFailure = .deleted
+        noteContextByNoteID[noteID] = deleted
+        noteSourcePagesByNoteID.removeValue(forKey: noteID)
+        noteBacklinkPagesByNoteID.removeValue(forKey: noteID)
+    }
+
+    private nonisolated static func fetchNoteSources(
+        api: APIClient,
+        noteID: NoteID,
+        limit: Int
+    ) async -> NoteContextLoadResult<NoteSourcesResponse> {
+        do {
+            return .value(try await api.listNoteSources(noteID, query: .init(limit: limit)))
+        } catch {
+            return .failure(noteContextFailure(error))
+        }
+    }
+
+    private nonisolated static func fetchNoteBacklinks(
+        api: APIClient,
+        noteID: NoteID,
+        limit: Int
+    ) async -> NoteContextLoadResult<NoteBacklinksResponse> {
+        do {
+            return .value(try await api.listNoteBacklinks(noteID, query: .init(limit: limit)))
+        } catch {
+            return .failure(noteContextFailure(error))
+        }
+    }
+
+    private nonisolated static func noteContextFailure(_ error: Error) -> NoteContextFailure {
+        guard let clientError = error as? APIClientError else { return .unavailable }
+        switch clientError {
+        case .transportFailure:
+            return .offline
+        case let .http(status, code, _, _)
+            where status == 404 || code == .notFound:
+            return .deleted
+        case let .http(status, code, _, _)
+            where status == 409 || code == .staleRevision:
+            return .stale
+        default:
+            return .unavailable
         }
     }
 
@@ -2065,6 +2543,122 @@ final class AppModel: ObservableObject {
         await applyNoteBatch([result.note], user: user, runtime: runtime, context: context)
         guard isCurrent(context) else { throw AuthenticationError.signedOut }
         await refreshAll()
+    }
+
+    func updateLogField(
+        noteID rawNoteID: String,
+        entryID rawEntryID: String,
+        fieldPath: [String],
+        value: LogFieldValue
+    ) async throws {
+        guard let runtime,
+              let user = currentUser,
+              let noteID = NoteID(rawValue: rawNoteID),
+              let entryID = EntryID(rawValue: rawEntryID),
+              fieldPath.count == 1,
+              let note = notesByID[rawNoteID],
+              note.deletedAt == nil,
+              Self.logFieldValue(in: note, entryID: entryID, fieldPath: fieldPath) != nil else {
+            throw LogFieldUpdateFailure.deleted
+        }
+        let context = currentAccountContext(for: user)
+        let intentID = Self.logFieldIntentID(
+            noteID: noteID,
+            entryID: entryID,
+            fieldPath: fieldPath
+        )
+        let attempt: LogFieldUpdateAttempt
+        if let pending = logFieldUpdateAttempts[intentID] {
+            guard pending.noteID == noteID,
+                  pending.entryID == entryID,
+                  pending.fieldPath == fieldPath,
+                  pending.value == value else {
+                throw LogFieldUpdateFailure.ambiguous
+            }
+            attempt = pending
+        } else {
+            let operation: UpdateLogFieldOperation
+            do {
+                operation = try UpdateLogFieldOperation(
+                    entryId: entryID,
+                    fieldPath: fieldPath,
+                    value: value
+                )
+            } catch {
+                throw LogFieldUpdateFailure.unavailable
+            }
+            attempt = LogFieldUpdateAttempt(
+                noteID: noteID,
+                entryID: entryID,
+                fieldPath: fieldPath,
+                value: value,
+                request: InteractiveOperationsRequest(
+                    expectedRevision: note.currentRevision,
+                    idempotencyKey: UUID().uuidString.lowercased(),
+                    operations: [.updateLogField(operation)]
+                )
+            )
+            logFieldUpdateAttempts[intentID] = attempt
+        }
+
+        do {
+            let result = try await runtime.authenticatedAPI.applyNoteOperations(
+                noteID,
+                request: attempt.request
+            )
+            guard isCurrent(context),
+                  result.note.id == noteID,
+                  result.note.deletedAt == nil,
+                  result.note.currentRevision == attempt.request.expectedRevision + 1,
+                  result.revision.noteId == noteID,
+                  result.revision.revision == result.note.currentRevision,
+                  result.revision.source == .interactive,
+                  Self.logFieldValue(
+                      in: result.note,
+                      entryID: entryID,
+                      fieldPath: fieldPath
+                  ) == value else {
+                throw APIClientError.malformedResponse(status: 200)
+            }
+            logFieldUpdateAttempts.removeValue(forKey: intentID)
+            await applyNoteBatch([result.note], user: user, runtime: runtime, context: context)
+            guard isCurrent(context) else { throw AuthenticationError.signedOut }
+            announce("Log value updated.")
+        } catch {
+            guard isCurrent(context) else { throw AuthenticationError.signedOut }
+            if Self.isStaleRevisionFailure(error) {
+                logFieldUpdateAttempts.removeValue(forKey: intentID)
+                let latest: Note
+                do {
+                    latest = try await runtime.authenticatedAPI.getNote(noteID).note
+                } catch {
+                    if Self.isNotFoundFailure(error) {
+                        discardNoteContext(noteID: rawNoteID)
+                        throw LogFieldUpdateFailure.deleted
+                    }
+                    throw LogFieldUpdateFailure.unavailable
+                }
+                guard isCurrent(context) else { throw AuthenticationError.signedOut }
+                guard latest.id == noteID,
+                      latest.deletedAt == nil,
+                      latest.currentRevision > note.currentRevision else {
+                    throw LogFieldUpdateFailure.unavailable
+                }
+                await applyNoteBatch([latest], user: user, runtime: runtime, context: context)
+                guard isCurrent(context) else { throw AuthenticationError.signedOut }
+                throw LogFieldUpdateFailure.staleRevision
+            }
+            if Self.isNotFoundFailure(error) {
+                logFieldUpdateAttempts.removeValue(forKey: intentID)
+                discardNoteContext(noteID: rawNoteID)
+                throw LogFieldUpdateFailure.deleted
+            }
+            if Self.isAmbiguousInteractionFailure(error) {
+                throw LogFieldUpdateFailure.ambiguous
+            }
+            logFieldUpdateAttempts.removeValue(forKey: intentID)
+            throw LogFieldUpdateFailure.unavailable
+        }
     }
 
     func setArchived(noteID: String, archived: Bool) async throws {
@@ -2528,14 +3122,27 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func search(query: String, includesArchived: Bool) {
+    func search(_ request: SearchRequest) {
         searchTask?.cancel()
         searchEpoch &+= 1
         let operationEpoch = searchEpoch
-        let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty else {
-            searchResults = []
+        let normalized = SearchRequest(
+            query: request.query,
+            includesArchived: request.includesArchived,
+            scope: request.scope
+        )
+        searchPaginationState = nil
+        searchHasMore = false
+        isLoadingMoreSearch = false
+        searchLoadMoreFailure = nil
+        searchPaginationNotice = nil
+        searchOpeningResultIDs = []
+        searchDeletedResultIDs = []
+        searchResultFailures = [:]
+        searchResults = []
+        guard normalized.hasQuery else {
             searchError = nil
+            searchFailure = nil
             isSearching = false
             return
         }
@@ -2543,26 +3150,116 @@ final class AppModel: ObservableObject {
         let context = currentAccountContext(for: user)
         isSearching = true
         searchError = nil
+        searchFailure = nil
         searchTask = Task { @MainActor [weak self] in
             do {
-                let items = try await Self.fetchAllSearchResults(
-                    query: normalized,
-                    archive: includesArchived ? .include : .exclude,
-                    api: runtime.authenticatedAPI
+                let page = try await runtime.authenticatedAPI.searchNotes(
+                    normalized.apiRequest(limit: 50)
+                )
+                let pagination = try SearchPaginationState(
+                    first: page,
+                    request: normalized,
+                    pageLimit: 50
                 )
                 guard let self,
                       !Task.isCancelled,
                       self.isCurrent(context),
                       self.searchEpoch == operationEpoch else { return }
-                self.searchResults = items.map { PresentationMapping.search($0) }
+                self.searchPaginationState = pagination
+                self.searchResults = pagination.items.map { PresentationMapping.search($0) }
+                self.searchHasMore = pagination.canLoadMore
                 self.isSearching = false
             } catch {
                 guard let self,
                       !Task.isCancelled,
                       self.isCurrent(context),
                       self.searchEpoch == operationEpoch else { return }
-                self.searchError = "Search is unavailable. Check your connection and try again."
+                self.searchResults = []
+                self.searchPaginationState = nil
+                self.searchHasMore = false
+                self.searchFailure = Self.privateSearchFailure(error)
+                self.searchError = self.searchFailure?.message
                 self.isSearching = false
+            }
+        }
+    }
+
+    func loadMoreSearch() async {
+        guard let runtime,
+              let user = currentUser,
+              var pagination = searchPaginationState,
+              pagination.canLoadMore,
+              let cursor = pagination.nextCursor,
+              !isSearching,
+              !isLoadingMoreSearch else { return }
+        let context = currentAccountContext(for: user)
+        let operationEpoch = searchEpoch
+        isLoadingMoreSearch = true
+        searchLoadMoreFailure = nil
+        do {
+            let page = try await runtime.authenticatedAPI.searchNotes(
+                pagination.request.apiRequest(cursor: cursor, limit: pagination.pageLimit)
+            )
+            try pagination.append(page, after: cursor)
+            guard isCurrent(context),
+                  searchEpoch == operationEpoch,
+                  searchPaginationState?.nextCursor == cursor else { return }
+            searchPaginationState = pagination
+            searchResults = pagination.items.map { PresentationMapping.search($0) }
+            searchHasMore = pagination.canLoadMore
+            if pagination.reachedDisplayLimit {
+                searchPaginationNotice = SearchPaginationState.displayLimitMessage
+            }
+            isLoadingMoreSearch = false
+        } catch {
+            guard isCurrent(context), searchEpoch == operationEpoch else { return }
+            searchLoadMoreFailure = Self.privateSearchFailure(error)
+            isLoadingMoreSearch = false
+        }
+    }
+
+    func openSearchResult(noteID rawNoteID: String) async {
+        guard let runtime,
+              let user = currentUser,
+              let noteID = NoteID(rawValue: rawNoteID),
+              searchResults.contains(where: { $0.id == rawNoteID }),
+              !searchOpeningResultIDs.contains(rawNoteID) else { return }
+        if notesByID[rawNoteID]?.deletedAt != nil {
+            searchDeletedResultIDs.insert(rawNoteID)
+            searchResultFailures.removeValue(forKey: rawNoteID)
+            return
+        }
+        let context = currentAccountContext(for: user)
+        let operationEpoch = searchEpoch
+        searchOpeningResultIDs.insert(rawNoteID)
+        searchResultFailures.removeValue(forKey: rawNoteID)
+        defer {
+            if isCurrent(context), searchEpoch == operationEpoch {
+                searchOpeningResultIDs.remove(rawNoteID)
+            }
+        }
+        do {
+            let note = try await runtime.authenticatedAPI.getNote(noteID).note
+            guard isCurrent(context), searchEpoch == operationEpoch else { return }
+            guard note.id == noteID else {
+                throw APIClientError.malformedResponse(status: 200)
+            }
+            guard note.deletedAt == nil else {
+                searchDeletedResultIDs.insert(rawNoteID)
+                return
+            }
+            await applyNoteBatch([note], user: user, runtime: runtime, context: context)
+            guard isCurrent(context), searchEpoch == operationEpoch else { return }
+            navigationPath.append(.note(rawNoteID))
+        } catch {
+            guard isCurrent(context), searchEpoch == operationEpoch else { return }
+            if Self.isNotFoundFailure(error) {
+                searchDeletedResultIDs.insert(rawNoteID)
+                searchResultFailures.removeValue(forKey: rawNoteID)
+                announce("That search result was deleted.")
+            } else {
+                searchResultFailures[rawNoteID] = Self.privateSearchFailure(error)
+                announce("That note could not be opened.")
             }
         }
     }
@@ -2915,6 +3612,11 @@ final class AppModel: ObservableObject {
         var accepted: [Note] = []
         for note in values {
             if notesByID[note.id.rawValue].map({ $0.currentRevision > note.currentRevision }) != true {
+                discardNoteContextIfChanged(
+                    noteID: note.id.rawValue,
+                    previous: notesByID[note.id.rawValue],
+                    replacement: note
+                )
                 notesByID[note.id.rawValue] = note
                 accepted.append(note)
             }
@@ -3112,6 +3814,43 @@ final class AppModel: ObservableObject {
         return code == .staleRevision
     }
 
+    private nonisolated static func isNotFoundFailure(_ error: Error) -> Bool {
+        guard case let APIClientError.http(status, code, _, _) = error else { return false }
+        return status == 404 || code == .notFound
+    }
+
+    private nonisolated static func privateSearchFailure(_ error: Error) -> SearchFailure {
+        guard let error = error as? APIClientError else { return .unavailable }
+        return switch error {
+        case .transportFailure, .invalidHTTPResponse:
+            .offline
+        default:
+            .unavailable
+        }
+    }
+
+    private nonisolated static func logFieldValue(
+        in note: Note,
+        entryID: EntryID,
+        fieldPath: [String]
+    ) -> LogFieldValue? {
+        guard fieldPath.count == 1,
+              let field = fieldPath.first,
+              case let .log(entries) = note.structuredData,
+              let entry = entries.first(where: { $0.id == entryID }) else { return nil }
+        return entry.fields[field]
+    }
+
+    nonisolated static func logFieldIntentID(
+        noteID: NoteID,
+        entryID: EntryID,
+        fieldPath: [String]
+    ) -> String {
+        ([noteID.rawValue, entryID.rawValue] + fieldPath)
+            .map { "\($0.utf8.count):\($0)" }
+            .joined(separator: "|")
+    }
+
     nonisolated static func isGeneratedBlockVisibilityNotFound(_ error: Error) -> Bool {
         guard case let APIClientError.http(status, _, _, _) = error else { return false }
         return status == 404
@@ -3301,7 +4040,14 @@ final class AppModel: ObservableObject {
             )
             let details = await Self.fetchNoteDetails(summaries, api: runtime.authenticatedAPI)
             guard isCurrent(context) else { return [] }
-            for note in details { notesByID[note.id.rawValue] = note }
+            for note in details {
+                discardNoteContextIfChanged(
+                    noteID: note.id.rawValue,
+                    previous: notesByID[note.id.rawValue],
+                    replacement: note
+                )
+                notesByID[note.id.rawValue] = note
+            }
             rebuildNoteDetails()
             return summaries.map { summary in
                 notesByID[summary.id.rawValue].map { PresentationMapping.note($0) }
@@ -3336,13 +4082,133 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func reconcilePendingAccountDeletion(runtime: Runtime) async -> Bool {
+        let record: AccountDeletionRecoveryRecord
+        do {
+            guard let pending = try runtime.accountDeletionRecoveryStore.load() else {
+                hasPendingAccountDeletionReplay = false
+                return false
+            }
+            record = pending
+            hasPendingAccountDeletionReplay = true
+        } catch {
+            try? runtime.accountDeletionRecoveryStore.clear()
+            hasPendingAccountDeletionReplay = false
+            return false
+        }
+
+        let receipt: AccountDeletionReceipt
+        if let confirmed = record.confirmedReceipt {
+            receipt = confirmed
+        } else {
+            do {
+                receipt = try await runtime.unauthenticatedAPI.replayAccountDeletionReceipt(
+                    .init(idempotencyKey: record.capability)
+                )
+                try? runtime.accountDeletionRecoveryStore.save(record.confirming(receipt))
+            } catch {
+                return false
+            }
+        }
+        await finalizeAccountDeletion(record: record, receipt: receipt, runtime: runtime)
+        return true
+    }
+
+    private func finalizeAccountDeletion(
+        record: AccountDeletionRecoveryRecord,
+        receipt: AccountDeletionReceipt,
+        runtime: Runtime
+    ) async {
+        let barrierRecorded = explicitSignOutBarrier.activate()
+        runtime.widgetSnapshotStore.clear()
+        await runtime.captureSync.deactivate(profileID: record.ownerID)
+
+        let localDataRemoved: Bool
+        do {
+            try await runtime.database.removeProfile(
+                profileID: record.ownerID.uuidString.lowercased()
+            )
+            localDataRemoved = true
+        } catch {
+            localDataRemoved = false
+        }
+
+        let localSessionCleared: Bool
+        do {
+            try await runtime.auth.clearLocalSession()
+            localSessionCleared = true
+        } catch {
+            localSessionCleared = false
+        }
+
+        let recoveryRecordCleared: Bool
+        if localDataRemoved, localSessionCleared, barrierRecorded {
+            do {
+                try runtime.accountDeletionRecoveryStore.clear()
+                recoveryRecordCleared = true
+            } catch {
+                recoveryRecordCleared = false
+            }
+        } else {
+            recoveryRecordCleared = false
+        }
+        discardAccountExport()
+        clearAuthenticatedState()
+        hasPendingAccountDeletionReplay = !(
+            localDataRemoved && localSessionCleared && barrierRecorded && recoveryRecordCleared
+        )
+        isDeletingAccount = false
+        accountDeletionError = nil
+        accountDeletionReceipt = AccountDeletionReceiptPresentation(
+            receipt: receipt,
+            localDataRemoved: localDataRemoved,
+            localSessionCleared: localSessionCleared && barrierRecorded,
+            recoveryRecordCleared: recoveryRecordCleared
+        )
+        bannerMessage = "Account deleted. Every session was revoked."
+        announce("Your Unfiled account was deleted.")
+    }
+
     private func activate(_ user: AuthUser) {
+        let hasProtectedDeletionRecovery: Bool
+        if let runtime {
+            do {
+                hasProtectedDeletionRecovery = try runtime.accountDeletionRecoveryStore.load() != nil
+            } catch {
+                hasProtectedDeletionRecovery = false
+            }
+        } else {
+            hasProtectedDeletionRecovery = false
+        }
         clearAuthenticatedState()
         currentUser = user
+        hasPendingAccountDeletionReplay = hasProtectedDeletionRecovery
         phase = .signedIn
     }
 
+    private func discardNoteContextIfChanged(
+        noteID: String,
+        previous: Note?,
+        replacement: Note
+    ) {
+        guard replacement.deletedAt != nil ||
+              previous?.currentRevision != replacement.currentRevision else { return }
+        discardNoteContext(noteID: noteID)
+        logFieldUpdateAttempts = logFieldUpdateAttempts.filter {
+            $0.value.noteID.rawValue != noteID
+        }
+    }
+
+    private func discardNoteContext(noteID: String) {
+        noteSourceEpochs[noteID, default: 0] &+= 1
+        noteBacklinkEpochs[noteID, default: 0] &+= 1
+        noteContextByNoteID.removeValue(forKey: noteID)
+        noteSourcePagesByNoteID.removeValue(forKey: noteID)
+        noteBacklinkPagesByNoteID.removeValue(forKey: noteID)
+    }
+
     private func clearAuthenticatedState() {
+        discardAccountExport()
         accountEpoch &+= 1
         refreshEpoch &+= 1
         searchEpoch &+= 1
@@ -3361,6 +4227,7 @@ final class AppModel: ObservableObject {
         generatedBlockLoadMoreErrors = [:]
         generatedBlockHasMoreNoteIDs = []
         generatedBlockPaginationNotices = [:]
+        noteContextByNoteID = [:]
         routingRules = []
         aiSettings = nil
         providerKeyMetadata = nil
@@ -3373,6 +4240,21 @@ final class AppModel: ObservableObject {
         aiSettingsError = nil
         providerKeyError = nil
         searchResults = []
+        searchFailure = nil
+        searchHasMore = false
+        isLoadingMoreSearch = false
+        searchLoadMoreFailure = nil
+        searchPaginationNotice = nil
+        searchOpeningResultIDs = []
+        searchDeletedResultIDs = []
+        searchResultFailures = [:]
+        searchPaginationState = nil
+        isPreparingAccountExport = false
+        accountExportError = nil
+        isDeletingAccount = false
+        hasPendingAccountDeletionReplay = false
+        accountDeletionError = nil
+        accountDeletionReceipt = nil
         archiveNotes = []
         deletedNotes = []
         revisions = [:]
@@ -3389,6 +4271,10 @@ final class AppModel: ObservableObject {
         generatedBlockPagesByNoteID = [:]
         reviewGeneratedBlocksByID = [:]
         generatedBlockEpochs = [:]
+        noteSourcePagesByNoteID = [:]
+        noteBacklinkPagesByNoteID = [:]
+        noteSourceEpochs = [:]
+        noteBacklinkEpochs = [:]
         routingRuleCollection = RoutingRuleCollection()
         routingRulesEpoch &+= 1
         reviewQueueGeneration.invalidate()
@@ -3397,6 +4283,7 @@ final class AppModel: ObservableObject {
         undoAttempts = [:]
         routingRuleAttempts = [:]
         generatedBlockAttempts = [:]
+        logFieldUpdateAttempts = [:]
         aiSettingsAttempt = nil
         providerKeyPutAttempt = nil
         providerKeyDeleteAttempt = nil
@@ -3701,30 +4588,6 @@ final class AppModel: ObservableObject {
             guard items.count <= 1_000 - page.items.count else {
                 throw PaginationError.pageLimitExceeded
             }
-            items.append(contentsOf: page.items)
-            guard let next = try validatedNextCursor(page.pageInfo, seen: &seen) else {
-                return items
-            }
-            cursor = next
-        }
-        throw PaginationError.pageLimitExceeded
-    }
-
-    private nonisolated static func fetchAllSearchResults(
-        query: String,
-        archive: ArchiveFilter,
-        api: APIClient
-    ) async throws -> [SearchNoteResult] {
-        var items: [SearchNoteResult] = []
-        var cursor: String?
-        var seen = Set<String>()
-        var identities = PaginationIdentityValidator()
-        for _ in 0 ..< 200 {
-            try Task.checkCancellation()
-            let page = try await api.searchNotes(
-                .init(query: query, archive: archive, cursor: cursor, limit: 100)
-            )
-            try identities.accept(page.items.map { $0.noteId.rawValue })
             items.append(contentsOf: page.items)
             guard let next = try validatedNextCursor(page.pageInfo, seen: &seen) else {
                 return items

@@ -2,10 +2,10 @@
 
 set -euo pipefail
 
-trap 'echo "Milestones B–E4 HTTP E2E failed near line $LINENO." >&2' ERR
+trap 'echo "Milestones B–F HTTP E2E failed near line $LINENO." >&2' ERR
 
 if ! command -v psql >/dev/null 2>&1; then
-  echo "The Milestones B–E4 HTTP E2E requires the PostgreSQL psql client." >&2
+  echo "The Milestones B–F HTTP E2E requires the PostgreSQL psql client." >&2
   exit 1
 fi
 e2e_psql_version="$(psql --version)"
@@ -16,7 +16,7 @@ case "$e2e_psql_version" in
     exit 1
     ;;
 esac
-printf 'Milestones B–E4 HTTP E2E PostgreSQL client: %s\n' "$e2e_psql_version"
+printf 'Milestones B–F HTTP E2E PostgreSQL client: %s\n' "$e2e_psql_version"
 
 e2e_tmp_dir="$(mktemp -d)"
 e2e_app_pid=""
@@ -69,7 +69,7 @@ SQL
       || true
   fi
   if [[ "$exit_code" -ne 0 && -f "$e2e_tmp_dir/web.log" ]]; then
-    printf 'Milestones B–E4 HTTP E2E stopped at stage: %s\n' "$e2e_stage" >&2
+    printf 'Milestones B–F HTTP E2E stopped at stage: %s\n' "$e2e_stage" >&2
     # Keep failure diagnostics bounded without ever echoing a plaintext test
     # canary if the application has regressed and logged one.
     tail -n 120 "$e2e_tmp_dir/web.log" | \
@@ -120,6 +120,7 @@ SQL
       E2E_LOG_E3_DESTINATION_BODY="${e2e_e3_destination_body:-}" \
       E2E_LOG_E4_PROVIDER_KEY="${e2e_e4_provider_key_canary:-}" \
       E2E_LOG_E4_RECREATE_KEY="${e2e_e4_provider_recreate_canary:-}" \
+      E2E_LOG_F_SEARCH="${e2e_f_search_canary:-}" \
       E2E_LOG_CAPTURE_CANARY="${e2e_capture_canary:-}" \
       E2E_LOG_SEARCH_CANARY="${e2e_private_search_canary:-}" node -e '
         let input = "";
@@ -483,6 +484,7 @@ NEXT_PUBLIC_SITE_URL="$e2e_app_url" \
 NODE_ENV="test" \
 UNFILED_HTTP_E2E_NODE_ENV="test" \
 AUTH_RATE_LIMIT_PEPPER="ci-auth-rate-limit-pepper-000000000001" \
+ACCOUNT_DELETION_REPLAY_RATE_LIMIT_PEPPER="ci-account-deletion-replay-pepper-000001" \
 CI="true" \
 UNFILED_ALLOW_TEST_PROVIDER_VALIDATION_OVERRIDE="1" \
 UNFILED_TEST_OPENAI_VALIDATION_URL="$e2e_e4_validation_url" \
@@ -3440,6 +3442,12 @@ source .github/workflows/scripts/milestone-e3-http-e2e.sh
 # shellcheck source=.github/workflows/scripts/milestone-e4-http-e2e.sh
 source .github/workflows/scripts/milestone-e4-http-e2e.sh
 
+# F adds encrypted note context, explicit AI-assisted hybrid-search fallback,
+# streaming export, and atomic owner deletion with unauthenticated receipt
+# recovery on the same built server and synthetic encrypted owner.
+# shellcheck source=.github/workflows/scripts/milestone-f-http-e2e.sh
+source .github/workflows/scripts/milestone-f-http-e2e.sh
+
 e2e_second_key="milestone-b-http-create-second-$e2e_run_id"
 e2e_second="$(
   request_json POST /notes \
@@ -3813,16 +3821,12 @@ request_json DELETE "/notes/$e2e_second_note_id" \
   "{\"expectedRevision\":3,\"idempotencyKey\":\"$e2e_delete_second_key\"}" \
   "$e2e_delete_second_key" >/dev/null
 
-# Delete the synthetic encrypted owner through the Auth admin boundary, then
-# prove every public owner-bound row cascaded and the immutable storage
-# contract returns to its exact pre-fixture readiness projection. The EXIT
-# trap retains this deletion as a fallback for any earlier assertion failure.
-e2e_stage="e1-cleanup"
-curl --fail --silent --show-error --output /dev/null \
-  --request DELETE \
-  --header "apikey: $SERVICE_ROLE_KEY" \
-  --header "authorization: Bearer $SERVICE_ROLE_KEY" \
-  "$e2e_supabase_url/auth/v1/admin/users/$e2e_encrypted_owner_id"
+# Delete the synthetic encrypted owner through F's public owner-data boundary,
+# recover the content-free receipt after session revocation, and only then
+# prove every owner-bound row was removed. The EXIT trap retains the Auth admin
+# call solely as an interrupted-test fallback.
+e2e_stage="f-account-deletion"
+e2e_f_delete_encrypted_owner
 psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
   --no-psqlrc --set=ON_ERROR_STOP=1 --quiet \
   --set=owner_id="$e2e_encrypted_owner_id" <<'SQL' >/dev/null
@@ -3880,4 +3884,4 @@ request_json POST /auth/sign-out | node -e '
   });
 '
 
-echo "Milestones B–E4 local HTTP E2E passed."
+echo "Milestones B–F local HTTP E2E passed."

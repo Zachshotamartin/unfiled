@@ -17,6 +17,10 @@ import {
   NoteUpdateRequestSchema,
   ReviewItemListQuerySchema,
   SearchNotesRequestSchema,
+  ENCRYPTED_USER_SEARCH_REQUEST_VERSION,
+  USER_HYBRID_SEARCH_RANKING_VERSION,
+  USER_SEMANTIC_SEARCH_RANKING_VERSION,
+  encryptedUserSearchMaterialFromRequest,
   SpaceArchiveRequestSchema,
   SpaceCreateRequestSchema,
   SpaceUpdateRequestSchema,
@@ -25,17 +29,28 @@ import {
   TagUpdateRequestSchema,
   entityIdSchema,
   type EntityId,
+  type EncryptedUserSearchContinuation,
+  type EncryptedUserSearchMaterial,
+  type EncryptedUserSearchResult,
   type NoteDto,
   type NoteSummary,
   type SearchNoteResult,
   type Space
 } from "@unfiled/contracts";
+import { normalizePrivateRagText } from "@unfiled/search";
 
-import type { NoteMutationResult, NoteRecord, SpaceRecord } from "@/lib/product/types";
+import type {
+  NoteMutationResult,
+  NoteRecord,
+  SearchResult,
+  SpaceRecord
+} from "@/lib/product/types";
 import { authenticateRequest, type AuthenticatedRequest } from "@/server/auth/session";
 import { scheduleIndexDrain as scheduleProductionIndexDrain } from "@/server/indexing/index-worker-scheduler";
+import { runHybridSearch } from "@/server/product/hybrid-search";
 import { createProductionRepository } from "@/server/product/supabase-http-repository";
 import type { ManualNotesRepository, RepositoryContext } from "@/server/product/repository";
+import { createProductionSemanticSearchCoordinator } from "@/server/search/production-composition";
 
 import {
   ConfigurationError,
@@ -61,24 +76,56 @@ export type ManualNotesDependencies = Readonly<{
   getPrivateSearchCursorKey?: () => string | undefined;
   repository: ManualNotesRepository | ((request: Request) => ManualNotesRepository);
   scheduleIndexDrain?: () => void;
+  semanticSearch?: (
+    context: RepositoryContext,
+    signal: AbortSignal
+  ) => Readonly<{
+    search(
+      material: EncryptedUserSearchMaterial,
+      signal?: AbortSignal
+    ): Promise<EncryptedUserSearchResult>;
+  }>;
 }>;
 
 const MAX_PRIVATE_SEARCH_REQUEST_BYTES = 4_096;
 const PRIVATE_OWNER_CONTENT_CACHE_CONTROL = "private, no-store";
-const PRIVATE_SEARCH_CURSOR_DOMAIN = "unfiled/private-search-cursor/hmac-sha256/v1";
+const PRIVATE_SEARCH_CURSOR_DOMAIN = "unfiled/private-search-cursor/hmac-sha256/v3";
 const PRIVATE_SEARCH_CURSOR_KEY_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 const PRIVATE_SEARCH_CURSOR_NONCE_BYTES = 16;
-const PRIVATE_SEARCH_CURSOR_PAYLOAD_BYTES = 1 + 4 + PRIVATE_SEARCH_CURSOR_NONCE_BYTES;
 const PRIVATE_SEARCH_CURSOR_TAG_BYTES = 32;
-const PRIVATE_SEARCH_CURSOR_BYTES =
-  PRIVATE_SEARCH_CURSOR_PAYLOAD_BYTES + PRIVATE_SEARCH_CURSOR_TAG_BYTES;
-const PRIVATE_SEARCH_CURSOR_PATTERN = /^[A-Za-z0-9_-]{71}$/u;
-const MAX_CURSOR_OFFSET = 100_000;
+const PRIVATE_SEARCH_CURSOR_PATTERN = /^[A-Za-z0-9_-]{1,512}$/u;
+const PRIVATE_SEARCH_CURSOR_VERSION = 3 as const;
+const PRIVATE_SEARCH_DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
+
+type PrivateSearchSemanticContinuation = EncryptedUserSearchContinuation;
+
+type PrivateSearchHybridBoundary = Readonly<{
+  combinedScore: number;
+  currentRevision: number;
+  noteId: EntityId<"note">;
+  updatedAt: string;
+}>;
+
+type PrivateSearchContinuation = Readonly<{
+  hybrid: PrivateSearchHybridBoundary;
+  semantic: PrivateSearchSemanticContinuation | null;
+}>;
 
 type PrivateSearchCursorScope = Readonly<{
-  archive: "exclude" | "include" | "only";
+  filters: Readonly<{
+    archive: "exclude" | "include" | "only";
+    limit: number;
+    privacy: "ai_assisted" | "private_manual" | null;
+    space: Readonly<{ id: string | null; mode: "any" | "exact" | "root" }>;
+    tagIds: readonly string[];
+    type: "generic" | "list" | "log" | "principle" | "project" | null;
+    updatedFrom: string | null;
+    updatedTo: string | null;
+  }>;
   ownerId: string;
   query: string;
+  requestVersion: typeof ENCRYPTED_USER_SEARCH_REQUEST_VERSION;
+  rankingVersion: typeof USER_HYBRID_SEARCH_RANKING_VERSION;
 }>;
 
 function parse<T>(schema: Schema<T>, value: unknown): T {
@@ -243,85 +290,310 @@ function privateSearchCursorTag(
   const mac = createHmac("sha256", key);
   mac.update(PRIVATE_SEARCH_CURSOR_DOMAIN, "utf8");
   updatePrivateSearchCursorMacField(mac, scope.ownerId);
-  updatePrivateSearchCursorMacField(mac, scope.archive);
   updatePrivateSearchCursorMacField(mac, scope.query);
+  updatePrivateSearchCursorMacField(mac, JSON.stringify(scope.filters));
+  updatePrivateSearchCursorMacField(mac, scope.requestVersion);
+  updatePrivateSearchCursorMacField(mac, scope.rankingVersion);
   mac.update(payload);
   return mac.digest();
 }
 
+function validPrivateSearchScore(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1.2;
+}
+
+function privateSearchNoteId(value: unknown): EntityId<"note"> {
+  const parsed = entityIdSchema("note").safeParse(value);
+  if (!parsed.success) throw new TypeError("invalid cursor note");
+  return parsed.data;
+}
+
+function privateSearchSemanticContinuation(
+  value: unknown
+): PrivateSearchSemanticContinuation | null {
+  if (value === null) return null;
+  if (!Array.isArray(value) || value.length !== 4) throw new TypeError("invalid cursor semantic");
+  const generationBindingDigest: unknown = value[0];
+  const rankingVersion: unknown = value[1];
+  const resultDigest: unknown = value[2];
+  const boundaryValue: unknown = value[3];
+  if (
+    typeof generationBindingDigest !== "string" ||
+    !PRIVATE_SEARCH_DIGEST_PATTERN.test(generationBindingDigest) ||
+    rankingVersion !== USER_SEMANTIC_SEARCH_RANKING_VERSION ||
+    typeof resultDigest !== "string" ||
+    !PRIVATE_SEARCH_DIGEST_PATTERN.test(resultDigest)
+  ) {
+    throw new TypeError("invalid cursor semantic");
+  }
+  let boundary: PrivateSearchSemanticContinuation["boundary"] = null;
+  if (boundaryValue !== null) {
+    if (!Array.isArray(boundaryValue) || boundaryValue.length !== 3) {
+      throw new TypeError("invalid cursor semantic boundary");
+    }
+    const score: unknown = boundaryValue[0];
+    const noteId: unknown = boundaryValue[1];
+    const indexedRevision: unknown = boundaryValue[2];
+    if (
+      !validPrivateSearchScore(score) ||
+      !Number.isSafeInteger(indexedRevision) ||
+      typeof indexedRevision !== "number" ||
+      indexedRevision < 1
+    ) {
+      throw new TypeError("invalid cursor semantic boundary");
+    }
+    boundary = Object.freeze({
+      score,
+      noteId: privateSearchNoteId(noteId),
+      indexedRevision
+    });
+  }
+  return Object.freeze({
+    boundary,
+    generationBindingDigest,
+    rankingVersion: USER_SEMANTIC_SEARCH_RANKING_VERSION,
+    resultDigest
+  });
+}
+
+function privateSearchHybridBoundary(value: unknown): PrivateSearchHybridBoundary {
+  if (!Array.isArray(value) || value.length !== 4) {
+    throw new TypeError("invalid cursor hybrid boundary");
+  }
+  const combinedScore: unknown = value[0];
+  const updatedAt: unknown = value[1];
+  const noteId: unknown = value[2];
+  const currentRevision: unknown = value[3];
+  if (
+    !validPrivateSearchScore(combinedScore) ||
+    typeof updatedAt !== "string" ||
+    updatedAt.length < 1 ||
+    updatedAt.length > 64 ||
+    !Number.isFinite(Date.parse(updatedAt)) ||
+    !Number.isSafeInteger(currentRevision) ||
+    typeof currentRevision !== "number" ||
+    currentRevision < 1
+  ) {
+    throw new TypeError("invalid cursor hybrid boundary");
+  }
+  return Object.freeze({
+    combinedScore,
+    currentRevision,
+    noteId: privateSearchNoteId(noteId),
+    updatedAt
+  });
+}
+
+function compactPrivateSearchContinuation(
+  continuation: PrivateSearchContinuation,
+  nonce: string
+): Readonly<Record<string, unknown>> {
+  const semantic = continuation.semantic;
+  return {
+    v: PRIVATE_SEARCH_CURSOR_VERSION,
+    n: nonce,
+    s:
+      semantic === null
+        ? null
+        : [
+            semantic.generationBindingDigest,
+            semantic.rankingVersion,
+            semantic.resultDigest,
+            semantic.boundary === null
+              ? null
+              : [
+                  semantic.boundary.score,
+                  semantic.boundary.noteId,
+                  semantic.boundary.indexedRevision
+                ]
+          ],
+    h: [
+      continuation.hybrid.combinedScore,
+      continuation.hybrid.updatedAt,
+      continuation.hybrid.noteId,
+      continuation.hybrid.currentRevision
+    ]
+  };
+}
+
 function encodePrivateSearchCursor(
-  offset: number,
+  continuation: PrivateSearchContinuation,
   scope: PrivateSearchCursorScope,
   key: Buffer
 ): string {
-  if (!Number.isSafeInteger(offset) || offset < 0 || offset > MAX_CURSOR_OFFSET) {
-    throw new TypeError("invalid cursor offset");
+  const nonceBytes = randomBytes(PRIVATE_SEARCH_CURSOR_NONCE_BYTES);
+  let payload: Buffer | undefined;
+  let tag: Buffer | undefined;
+  let combined: Buffer | undefined;
+  try {
+    const nonce = nonceBytes.toString("base64url");
+    payload = Buffer.from(
+      JSON.stringify(compactPrivateSearchContinuation(continuation, nonce)),
+      "utf8"
+    );
+    tag = privateSearchCursorTag(key, payload, scope);
+    combined = Buffer.concat([payload, tag]);
+    const encoded = combined.toString("base64url");
+    if (!PRIVATE_SEARCH_CURSOR_PATTERN.test(encoded)) {
+      throw new TypeError("invalid cursor size");
+    }
+    return encoded;
+  } finally {
+    nonceBytes.fill(0);
+    payload?.fill(0);
+    tag?.fill(0);
+    combined?.fill(0);
   }
-  const payload = Buffer.alloc(PRIVATE_SEARCH_CURSOR_PAYLOAD_BYTES);
-  payload[0] = 1;
-  payload.writeUInt32BE(offset, 1);
-  randomBytes(PRIVATE_SEARCH_CURSOR_NONCE_BYTES).copy(payload, 5);
-  const tag = privateSearchCursorTag(key, payload, scope);
-  const encoded = Buffer.concat([payload, tag]).toString("base64url");
-  payload.fill(0);
-  tag.fill(0);
-  return encoded;
 }
 
-function privateSearchCursorOffset(
+function privateSearchCursorContinuation(
   value: string | null,
   scope: PrivateSearchCursorScope,
   key: Buffer
-): number {
-  if (value === null) return 0;
+): PrivateSearchContinuation | null {
+  if (value === null) return null;
+  let decoded: Buffer | undefined;
+  let expectedTag: Buffer | undefined;
+  let nonceBytes: Buffer | undefined;
   try {
     if (!PRIVATE_SEARCH_CURSOR_PATTERN.test(value)) throw new TypeError("invalid cursor");
-    const decoded = Buffer.from(value, "base64url");
+    decoded = Buffer.from(value, "base64url");
     if (
-      decoded.byteLength !== PRIVATE_SEARCH_CURSOR_BYTES ||
-      decoded.toString("base64url") !== value
+      decoded.toString("base64url") !== value ||
+      decoded.byteLength <= PRIVATE_SEARCH_CURSOR_TAG_BYTES
     ) {
-      decoded.fill(0);
       throw new TypeError("invalid cursor");
     }
-    const payload = decoded.subarray(0, PRIVATE_SEARCH_CURSOR_PAYLOAD_BYTES);
-    const suppliedTag = decoded.subarray(PRIVATE_SEARCH_CURSOR_PAYLOAD_BYTES);
-    const expectedTag = privateSearchCursorTag(key, payload, scope);
-    const offset = payload.readUInt32BE(1);
-    const valid =
-      payload[0] === 1 &&
-      offset <= MAX_CURSOR_OFFSET &&
-      suppliedTag.byteLength === expectedTag.byteLength &&
-      timingSafeEqual(suppliedTag, expectedTag);
-    expectedTag.fill(0);
-    decoded.fill(0);
-    if (!valid) throw new TypeError("invalid cursor");
-    return offset;
+    const payloadLength = decoded.byteLength - PRIVATE_SEARCH_CURSOR_TAG_BYTES;
+    const payload = decoded.subarray(0, payloadLength);
+    const suppliedTag = decoded.subarray(payloadLength);
+    expectedTag = privateSearchCursorTag(key, payload, scope);
+    if (
+      suppliedTag.byteLength !== expectedTag.byteLength ||
+      !timingSafeEqual(suppliedTag, expectedTag)
+    ) {
+      throw new TypeError("invalid cursor");
+    }
+    const serialized = payload.toString("utf8");
+    const candidate: unknown = JSON.parse(serialized);
+    if (
+      candidate === null ||
+      typeof candidate !== "object" ||
+      Array.isArray(candidate) ||
+      JSON.stringify(candidate) !== serialized
+    ) {
+      throw new TypeError("invalid cursor");
+    }
+    const record = candidate as Readonly<Record<string, unknown>>;
+    const keys = Object.keys(record);
+    if (
+      keys.length !== 4 ||
+      keys[0] !== "v" ||
+      keys[1] !== "n" ||
+      keys[2] !== "s" ||
+      keys[3] !== "h" ||
+      record.v !== PRIVATE_SEARCH_CURSOR_VERSION ||
+      typeof record.n !== "string" ||
+      !/^[A-Za-z0-9_-]{22}$/u.test(record.n)
+    ) {
+      throw new TypeError("invalid cursor");
+    }
+    nonceBytes = Buffer.from(record.n, "base64url");
+    if (
+      nonceBytes.byteLength !== PRIVATE_SEARCH_CURSOR_NONCE_BYTES ||
+      nonceBytes.toString("base64url") !== record.n
+    ) {
+      throw new TypeError("invalid cursor");
+    }
+    const semantic = privateSearchSemanticContinuation(record.s);
+    if (scope.filters.privacy !== "ai_assisted" && semantic !== null) {
+      throw new TypeError("invalid cursor privacy");
+    }
+    return Object.freeze({
+      hybrid: privateSearchHybridBoundary(record.h),
+      semantic
+    });
   } catch {
     throw new HttpError(
       400,
       ApiErrorCode.VALIDATION_FAILED,
       "That page cursor is invalid or no longer matches this private search."
     );
+  } finally {
+    nonceBytes?.fill(0);
+    expectedTag?.fill(0);
+    decoded?.fill(0);
   }
 }
 
-function privateSearchPageWindow<T>(
-  values: readonly T[],
+function privateSearchBoundary(result: SearchResult): PrivateSearchHybridBoundary {
+  return Object.freeze({
+    combinedScore: result.score,
+    currentRevision: result.note.currentRevision,
+    noteId: result.note.id,
+    updatedAt: result.note.updatedAt
+  });
+}
+
+function privateSearchBoundaryMatches(
+  result: SearchResult,
+  boundary: PrivateSearchHybridBoundary
+): boolean {
+  return (
+    result.score === boundary.combinedScore &&
+    result.note.updatedAt === boundary.updatedAt &&
+    result.note.id === boundary.noteId &&
+    result.note.currentRevision === boundary.currentRevision
+  );
+}
+
+function samePrivateSearchSemanticContinuation(
+  left: PrivateSearchSemanticContinuation,
+  right: PrivateSearchSemanticContinuation
+): boolean {
+  const leftBoundary = left.boundary;
+  const rightBoundary = right.boundary;
+  return (
+    left.generationBindingDigest === right.generationBindingDigest &&
+    left.resultDigest === right.resultDigest &&
+    ((leftBoundary === null && rightBoundary === null) ||
+      (leftBoundary !== null &&
+        rightBoundary !== null &&
+        leftBoundary.score === rightBoundary.score &&
+        leftBoundary.noteId === rightBoundary.noteId &&
+        leftBoundary.indexedRevision === rightBoundary.indexedRevision))
+  );
+}
+
+function privateSearchPageWindow(
+  values: readonly SearchResult[],
   limit: number,
-  offset: number,
+  continuation: PrivateSearchContinuation | null,
+  semantic: PrivateSearchSemanticContinuation | null,
   scope: PrivateSearchCursorScope,
   key: Buffer
 ): Readonly<{
-  items: readonly T[];
+  results: readonly SearchResult[];
   pageInfo: Readonly<{ hasMore: boolean; nextCursor: string | null }>;
-}> {
-  const hasMore = values.length > limit;
+}> | null {
+  const boundaryIndex =
+    continuation === null
+      ? -1
+      : values.findIndex((result) => privateSearchBoundaryMatches(result, continuation.hybrid));
+  if (continuation !== null && boundaryIndex < 0) return null;
+  const start = boundaryIndex + 1;
+  const end = start + limit;
+  const hasMore = values.length > end;
+  const results = values.slice(start, end);
+  const last = results.at(-1);
   return {
-    items: values.slice(0, limit),
+    results,
     pageInfo: {
       hasMore,
-      nextCursor: hasMore ? encodePrivateSearchCursor(offset + limit, scope, key) : null
+      nextCursor:
+        hasMore && last !== undefined
+          ? encodePrivateSearchCursor({ hybrid: privateSearchBoundary(last), semantic }, scope, key)
+          : null
     }
   };
 }
@@ -421,6 +693,7 @@ export function createManualNotesHandlers(dependencies: ManualNotesDependencies)
     dependencies.getPrivateSearchCursorKey ??
     (() => process.env.UNFILED_PRIVATE_SEARCH_CURSOR_HMAC_KEY);
   const scheduleIndexDrain = dependencies.scheduleIndexDrain ?? scheduleProductionIndexDrain;
+  const semanticSearch = dependencies.semanticSearch;
 
   function noteMutationResponse(result: NoteMutationResult, status = 200): Response {
     try {
@@ -911,19 +1184,116 @@ export function createManualNotesHandlers(dependencies: ManualNotesDependencies)
     async search(request: Request) {
       const response = await run(request, async (repository, context) => {
         const input = await readPrivateSearchRequest(request);
-        const scope: PrivateSearchCursorScope = {
-          archive: input.archive,
-          ownerId: context.userId,
-          query: input.query
+        const space =
+          input.spaceId === undefined
+            ? ({ id: null, mode: "any" } as const)
+            : input.spaceId === null
+              ? ({ id: null, mode: "root" } as const)
+              : ({ id: input.spaceId, mode: "exact" } as const);
+        const sortedTagIds = Object.freeze([...(input.tagIds ?? [])].sort());
+        const normalizedQuery = normalizePrivateRagText(input.query);
+        const options = {
+          archived: input.archive,
+          ...(input.privacy === undefined ? {} : { privacy: input.privacy }),
+          ...(input.spaceId === undefined ? {} : { spaceId: input.spaceId }),
+          ...(sortedTagIds.length === 0 ? {} : { tagIds: sortedTagIds }),
+          ...(input.type === undefined ? {} : { type: input.type }),
+          ...(input.updatedFrom === undefined ? {} : { updatedFrom: input.updatedFrom }),
+          ...(input.updatedTo === undefined ? {} : { updatedTo: input.updatedTo })
         };
+        const scope: PrivateSearchCursorScope = {
+          filters: {
+            archive: input.archive,
+            limit: input.limit,
+            privacy: input.privacy ?? null,
+            space,
+            tagIds: sortedTagIds,
+            type: input.type ?? null,
+            updatedFrom: input.updatedFrom ?? null,
+            updatedTo: input.updatedTo ?? null
+          },
+          ownerId: context.userId,
+          query: normalizedQuery,
+          rankingVersion: USER_HYBRID_SEARCH_RANKING_VERSION,
+          requestVersion: ENCRYPTED_USER_SEARCH_REQUEST_VERSION
+        };
+        const admittedMaterial = encryptedUserSearchMaterialFromRequest({
+          ...input,
+          query: normalizedQuery
+        });
         const cursorKey = privateSearchCursorKey(getPrivateSearchCursorKey());
         try {
-          const offset = privateSearchCursorOffset(input.cursor ?? null, scope, cursorKey);
-          const result = await repository.search(context, input.query, input.archive, {
-            limit: input.limit + 1,
-            offset
+          const continuation = privateSearchCursorContinuation(
+            input.cursor ?? null,
+            scope,
+            cursorKey
+          );
+          const material =
+            admittedMaterial === null || (continuation !== null && continuation.semantic === null)
+              ? null
+              : {
+                  ...admittedMaterial,
+                  continuation: continuation?.semantic ?? null
+                };
+          const lexicalOnly = () =>
+            runHybridSearch({
+              context,
+              material: null,
+              options,
+              query: normalizedQuery,
+              repository,
+              signal: request.signal
+            });
+          let result = await runHybridSearch({
+            context,
+            material,
+            options,
+            query: normalizedQuery,
+            repository,
+            ...(semanticSearch === undefined
+              ? {}
+              : {
+                  semantic: () => semanticSearch(context, request.signal)
+                }),
+            signal: request.signal
           });
-          const items: SearchNoteResult[] = result.results.map(({ note, snippet }) => ({
+          let pageContinuation = continuation;
+          if (continuation !== null && material !== null) {
+            if (result.semanticStatus === "fallback") {
+              pageContinuation = null;
+            } else if (
+              continuation.semantic === null ||
+              result.semanticContinuation === null ||
+              !samePrivateSearchSemanticContinuation(
+                continuation.semantic,
+                result.semanticContinuation
+              )
+            ) {
+              result = await lexicalOnly();
+              pageContinuation = null;
+            }
+          }
+          let page = privateSearchPageWindow(
+            result.response.results,
+            input.limit,
+            pageContinuation,
+            result.semanticContinuation,
+            scope,
+            cursorKey
+          );
+          if (page === null) {
+            result = await lexicalOnly();
+            page = privateSearchPageWindow(
+              result.response.results,
+              input.limit,
+              null,
+              null,
+              scope,
+              cursorKey
+            );
+          }
+          if (page === null) throw new TypeError("invalid private search page");
+          const items: SearchNoteResult[] = page.results.map(({ note, snippet }) => ({
             noteId: note.id,
             title: note.title,
             type: note.type,
@@ -932,9 +1302,7 @@ export function createManualNotesHandlers(dependencies: ManualNotesDependencies)
             updatedAt: note.updatedAt,
             archivedAt: note.archivedAt
           }));
-          return jsonResponse(
-            privateSearchPageWindow(items, input.limit, offset, scope, cursorKey)
-          );
+          return jsonResponse({ items, pageInfo: page.pageInfo });
         } finally {
           cursorKey.fill(0);
         }
@@ -945,5 +1313,6 @@ export function createManualNotesHandlers(dependencies: ManualNotesDependencies)
 }
 
 export const manualNotesHandlers = createManualNotesHandlers({
-  repository: createProductionRepository
+  repository: createProductionRepository,
+  semanticSearch: createProductionSemanticSearchCoordinator
 });

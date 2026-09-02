@@ -1,17 +1,5 @@
 import SwiftUI
 
-struct SearchRequest: Hashable, Sendable {
-    let query: String
-    let includesArchived: Bool
-
-    init(query: String, includesArchived: Bool) {
-        self.query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.includesArchived = includesArchived
-    }
-
-    var hasQuery: Bool { !query.isEmpty }
-}
-
 @MainActor
 enum SearchQueryDebouncer {
     static let defaultDelay: Duration = .milliseconds(320)
@@ -37,36 +25,71 @@ enum SearchQueryDebouncer {
 struct SearchView: View {
     @State private var query: String
     @State private var includesArchived: Bool
+    @State private var scope: SearchScope
+    @State private var submittedRequest: SearchRequest
 
     let results: [SearchResultPresentation]
     let isLoading: Bool
-    let errorMessage: String?
+    let failure: SearchFailure?
+    let hasMore: Bool
+    let isLoadingMore: Bool
+    let loadMoreFailure: SearchFailure?
+    let paginationNotice: String?
+    let openingResultIDs: Set<String>
+    let deletedResultIDs: Set<String>
+    let resultFailures: [String: SearchFailure]
     let debounceDuration: Duration
-    let onSearch: @MainActor (String, Bool) -> Void
-    let onOpenNote: @MainActor (String) -> Void
+    let onSearch: @MainActor (SearchRequest) -> Void
+    let onLoadMore: @MainActor () async -> Void
+    let onOpenNote: @MainActor (String) async -> Void
 
     init(
         results: [SearchResultPresentation],
         isLoading: Bool,
-        errorMessage: String? = nil,
+        failure: SearchFailure? = nil,
+        hasMore: Bool = false,
+        isLoadingMore: Bool = false,
+        loadMoreFailure: SearchFailure? = nil,
+        paginationNotice: String? = nil,
+        openingResultIDs: Set<String> = [],
+        deletedResultIDs: Set<String> = [],
+        resultFailures: [String: SearchFailure] = [:],
         initialQuery: String = "",
         includesArchived: Bool = false,
+        initialScope: SearchScope = .all,
         debounceDuration: Duration = SearchQueryDebouncer.defaultDelay,
-        onSearch: @escaping @MainActor (String, Bool) -> Void,
-        onOpenNote: @escaping @MainActor (String) -> Void
+        onSearch: @escaping @MainActor (SearchRequest) -> Void,
+        onLoadMore: @escaping @MainActor () async -> Void = {},
+        onOpenNote: @escaping @MainActor (String) async -> Void
     ) {
         self.results = results
         self.isLoading = isLoading
-        self.errorMessage = errorMessage
+        self.failure = failure
+        self.hasMore = hasMore
+        self.isLoadingMore = isLoadingMore
+        self.loadMoreFailure = loadMoreFailure
+        self.paginationNotice = paginationNotice
+        self.openingResultIDs = openingResultIDs
+        self.deletedResultIDs = deletedResultIDs
+        self.resultFailures = resultFailures
         self.debounceDuration = debounceDuration
         self.onSearch = onSearch
+        self.onLoadMore = onLoadMore
         self.onOpenNote = onOpenNote
         _query = State(initialValue: initialQuery)
         _includesArchived = State(initialValue: includesArchived)
+        _scope = State(initialValue: initialScope)
+        _submittedRequest = State(
+            initialValue: SearchRequest(
+                query: initialQuery,
+                includesArchived: includesArchived,
+                scope: initialScope
+            )
+        )
     }
 
     private var request: SearchRequest {
-        SearchRequest(query: query, includesArchived: includesArchived)
+        SearchRequest(query: query, includesArchived: includesArchived, scope: scope)
     }
 
     var body: some View {
@@ -74,6 +97,7 @@ struct SearchView: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 header
                 searchField
+                scopeControl
                 archiveControl
                 resultsHeader
                 SectionRule()
@@ -88,7 +112,8 @@ struct SearchView: View {
                 request: request,
                 delay: debounceDuration
             ) { submittedRequest in
-                onSearch(submittedRequest.query, submittedRequest.includesArchived)
+                self.submittedRequest = submittedRequest
+                onSearch(submittedRequest)
             }
         }
         .unfiledScreen()
@@ -123,6 +148,9 @@ struct SearchView: View {
                 .autocorrectionDisabled()
                 .submitLabel(.search)
                 .foregroundStyle(UnfiledTheme.paper)
+                .onChange(of: query) { _, value in
+                    query = SearchInputRules.bounded(value)
+                }
                 .accessibilityLabel("Search your notes")
                 .accessibilityIdentifier("search.query")
 
@@ -152,6 +180,69 @@ struct SearchView: View {
         .padding(.top, 26)
     }
 
+    private var scopeControl: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("SEARCH SCOPE")
+                .font(.caption.weight(.medium).monospaced())
+                .tracking(1)
+                .foregroundStyle(UnfiledTheme.fog)
+                .accessibilityAddTraits(.isHeader)
+
+            ForEach(SearchScope.allCases, id: \.self) { option in
+                Button {
+                    scope = option
+                } label: {
+                    HStack(alignment: .top, spacing: 13) {
+                        Image(systemName: scope == option ? "checkmark.circle.fill" : "circle")
+                            .font(.title3)
+                            .foregroundStyle(
+                                scope == option ? UnfiledTheme.persimmon : UnfiledTheme.fog
+                            )
+                            .frame(width: 26, height: 26)
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(option.title)
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(UnfiledTheme.paper)
+                            Text(option.detail)
+                                .font(.caption)
+                                .foregroundStyle(
+                                    option == .aiAssisted && scope == option
+                                        ? UnfiledTheme.paper
+                                        : UnfiledTheme.fog
+                                )
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 6)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(scope == option ? UnfiledTheme.raised : .clear)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius)
+                            .stroke(
+                                scope == option
+                                    ? UnfiledTheme.persimmon.opacity(0.6)
+                                    : UnfiledTheme.border,
+                                lineWidth: 1
+                            )
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(option.title), \(option.detail)")
+                .accessibilityValue(scope == option ? "Selected" : "Not selected")
+                .accessibilityAddTraits(scope == option ? .isSelected : [])
+                .accessibilityIdentifier("search.scope.\(option.rawValue)")
+            }
+        }
+        .padding(.top, 22)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("search.scope")
+    }
+
     private var archiveControl: some View {
         Toggle(isOn: $includesArchived) {
             VStack(alignment: .leading, spacing: 3) {
@@ -176,7 +267,7 @@ struct SearchView: View {
                 .tracking(1)
                 .foregroundStyle(UnfiledTheme.fog)
             Spacer(minLength: 12)
-            if isLoading && request.hasQuery {
+            if searchIsPending {
                 ProgressView()
                     .controlSize(.small)
                     .tint(UnfiledTheme.persimmon)
@@ -190,11 +281,11 @@ struct SearchView: View {
 
     private var resultCountLabel: String {
         guard request.hasQuery else { return "Results" }
-        guard !isLoading else { return "Searching" }
-        switch results.count {
+        guard !searchIsPending else { return "Searching" }
+        switch visibleResults.count {
         case 0: return "No matches"
         case 1: return "1 match"
-        default: return "\(results.count) matches"
+        default: return "\(visibleResults.count) matches"
         }
     }
 
@@ -206,11 +297,11 @@ struct SearchView: View {
                 message: "Search by what you remember. Titles, note text, and destinations all work."
             )
             .accessibilityIdentifier("search.prompt")
-        } else if results.isEmpty {
-            if isLoading {
+        } else if visibleResults.isEmpty {
+            if searchIsPending {
                 SearchLoadingLedgerView()
-            } else if let error = normalizedError {
-                SearchErrorLedgerView(message: error, onRetry: retry)
+            } else if let failure = visibleFailure {
+                SearchErrorLedgerView(failure: failure, onRetry: retry)
             } else {
                 EmptyLedgerView(
                     title: "No match",
@@ -221,35 +312,112 @@ struct SearchView: View {
                 .accessibilityIdentifier("search.empty")
             }
         } else {
-            if let error = normalizedError {
-                SearchErrorLedgerView(message: error, onRetry: retry)
+            if let failure = visibleFailure {
+                SearchErrorLedgerView(failure: failure, onRetry: retry)
             }
 
-            ForEach(results) { result in
-                Button {
-                    onOpenNote(result.id)
-                } label: {
-                    SearchResultLedgerRow(result: result)
+            ForEach(visibleResults) { result in
+                if deletedResultIDs.contains(result.id) {
+                    SearchDeletedResultLedgerRow(result: result)
+                        .accessibilityIdentifier("search.result.\(result.id).deleted")
+                } else {
+                    Button {
+                        Task { await onOpenNote(result.id) }
+                    } label: {
+                        SearchResultLedgerRow(
+                            result: result,
+                            isOpening: openingResultIDs.contains(result.id)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(openingResultIDs.contains(result.id))
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(result.accessibilitySummary)
+                    .accessibilityValue(
+                        openingResultIDs.contains(result.id) ? "Opening" : "Available"
+                    )
+                    .accessibilityHint("Opens note")
+                    .accessibilityIdentifier("search.result.\(result.id)")
+
+                    if let resultFailure = resultFailures[result.id] {
+                        Label(resultFailure.message, systemImage: resultFailure.systemImage)
+                            .font(.footnote)
+                            .foregroundStyle(UnfiledTheme.persimmon)
+                            .padding(.vertical, 8)
+                            .accessibilityIdentifier("search.result.\(result.id).error")
+                    }
                 }
-                .buttonStyle(.plain)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(result.accessibilitySummary)
-                .accessibilityHint("Opens note")
-                .accessibilityIdentifier("search.result.\(result.id)")
                 SectionRule()
+            }
+
+            if request == submittedRequest {
+                searchPagination
             }
         }
     }
 
-    private var normalizedError: String? {
-        guard let errorMessage else { return nil }
-        let trimmed = errorMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+    private var visibleResults: [SearchResultPresentation] {
+        request == submittedRequest ? results : []
+    }
+
+    private var visibleFailure: SearchFailure? {
+        request == submittedRequest ? failure : nil
+    }
+
+    private var searchIsPending: Bool {
+        request.hasQuery && (request != submittedRequest || isLoading)
+    }
+
+    @ViewBuilder
+    private var searchPagination: some View {
+        if isLoadingMore {
+            HStack(spacing: 12) {
+                ProgressView().tint(UnfiledTheme.persimmon)
+                Text("Loading more results")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(UnfiledTheme.fog)
+            }
+            .frame(minHeight: UnfiledTheme.minimumTouchTarget)
+            .accessibilityIdentifier("search.loadMore.loading")
+        } else if let loadMoreFailure {
+            SearchErrorLedgerView(failure: loadMoreFailure) {
+                Task { await onLoadMore() }
+            }
+            .accessibilityIdentifier("search.loadMore.error")
+        } else if let paginationNotice {
+            Label(paginationNotice, systemImage: "line.3.horizontal.decrease.circle")
+                .font(.footnote)
+                .foregroundStyle(UnfiledTheme.fog)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, minHeight: UnfiledTheme.minimumTouchTarget, alignment: .leading)
+                .padding(.vertical, 12)
+                .accessibilityIdentifier("search.pagination.notice")
+        } else if hasMore {
+            Button {
+                Task { await onLoadMore() }
+            } label: {
+                Label("Load more results", systemImage: "arrow.down")
+                    .font(.body.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: 50)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(UnfiledTheme.paper)
+            .background(UnfiledTheme.graphite)
+            .overlay {
+                RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius)
+                    .stroke(UnfiledTheme.border, lineWidth: 1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
+            .padding(.vertical, 18)
+            .accessibilityHint("Loads the next private page without replacing current results")
+            .accessibilityIdentifier("search.loadMore")
+        }
     }
 
     @MainActor
     private func retry() {
-        onSearch(request.query, request.includesArchived)
+        onSearch(request)
     }
 }
 
@@ -263,6 +431,7 @@ private extension SearchResultPresentation {
 
 private struct SearchResultLedgerRow: View {
     let result: SearchResultPresentation
+    let isOpening: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -296,15 +465,43 @@ private struct SearchResultLedgerRow: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 12)
-                Label("Open note", systemImage: "arrow.right")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(UnfiledTheme.persimmon)
-                    .labelStyle(.titleAndIcon)
+                if isOpening {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(UnfiledTheme.persimmon)
+                } else {
+                    Label("Open note", systemImage: "arrow.right")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(UnfiledTheme.persimmon)
+                        .labelStyle(.titleAndIcon)
+                }
             }
         }
         .frame(maxWidth: .infinity, minHeight: 126, alignment: .leading)
         .padding(.vertical, 22)
         .contentShape(Rectangle())
+    }
+}
+
+private struct SearchDeletedResultLedgerRow: View {
+    let result: SearchResultPresentation
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Deleted note", systemImage: "trash")
+                .font(.headline)
+                .foregroundStyle(UnfiledTheme.fog)
+            Text(result.title)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(UnfiledTheme.fog)
+            Text("This result was deleted after the search. Run the search again to refresh the list.")
+                .font(.footnote)
+                .foregroundStyle(UnfiledTheme.fog)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, minHeight: 112, alignment: .leading)
+        .padding(.vertical, 16)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -329,15 +526,15 @@ private struct SearchLoadingLedgerView: View {
 }
 
 private struct SearchErrorLedgerView: View {
-    let message: String
+    let failure: SearchFailure
     let onRetry: @MainActor () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Search is unavailable", systemImage: "exclamationmark.circle")
+            Label(failure.title, systemImage: failure.systemImage)
                 .font(.headline)
                 .foregroundStyle(UnfiledTheme.paper)
-            Text(message)
+            Text(failure.message)
                 .font(.body)
                 .foregroundStyle(UnfiledTheme.fog)
                 .fixedSize(horizontal: false, vertical: true)

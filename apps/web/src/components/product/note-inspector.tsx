@@ -28,6 +28,7 @@ import { useLiveResource } from "@/lib/product/use-live-resource";
 import { usePagedResource } from "@/lib/product/use-paged-resource";
 
 import { MarkdownPreview } from "./markdown-preview";
+import { NoteContextSections } from "./note-context-sections";
 
 type InspectorProps = Readonly<{
   note: NoteDto;
@@ -296,10 +297,12 @@ export function NoteInspector({ note, onConflict, onMutation }: InspectorProps) 
         ) : null}
       </details>
 
+      <NoteContextSections noteId={note.id} />
+
       <details open className="inspector-section">
         <summary className="inspector-summary">
           <ArrowCounterClockwiseIcon size={16} aria-hidden="true" /> Revisions{" "}
-          <span>{revisions.data?.items.length ?? "–"}</span>
+          <span>{revisions.data?.items.length ?? "…"}</span>
         </summary>
         <div className="mt-4 border-t border-outline">
           {revisions.data?.items.map((revision) => (

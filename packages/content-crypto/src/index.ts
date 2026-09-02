@@ -363,7 +363,7 @@ function gcmParameters(nonce: Uint8Array, additionalData: Uint8Array): AesGcmPar
   };
 }
 
-function assertKeyEncryptionKey(value: KeyEncryptionKey): void {
+function assertKeyEncryptionKey(value: KeyEncryptionKey, requiredUsage: KeyUsage): void {
   assertIdentifier(value.keyId, "Key identifier");
   const algorithm = value.key.algorithm;
   if (
@@ -371,8 +371,7 @@ function assertKeyEncryptionKey(value: KeyEncryptionKey): void {
     !("length" in algorithm) ||
     algorithm.length !== AES_KEY_BITS ||
     value.key.extractable ||
-    !value.key.usages.includes("encrypt") ||
-    !value.key.usages.includes("decrypt")
+    !value.key.usages.includes(requiredUsage)
   ) {
     fail(ContentCryptoErrorCode.INVALID_KEY, "A non-extractable AES-256-GCM key is required");
   }
@@ -479,7 +478,7 @@ export async function sealBytes(
   cryptoImplementation?: Crypto
 ): Promise<ContentEnvelopeV1> {
   assertContext(context);
-  assertKeyEncryptionKey(keyEncryptionKey);
+  assertKeyEncryptionKey(keyEncryptionKey, "encrypt");
   if (plaintext.length > MAX_PLAINTEXT_BYTES) {
     fail(ContentCryptoErrorCode.PLAINTEXT_TOO_LARGE, "Content exceeds the encryption size limit");
   }
@@ -545,7 +544,7 @@ export async function openBytes(
   // Avoid scanning maximum-sized ciphertext a second time while constructing the envelope view.
   const envelope = parseEnvelopeValue(envelopeValue, false);
   assertContext(expectedContext);
-  assertKeyEncryptionKey(keyEncryptionKey);
+  assertKeyEncryptionKey(keyEncryptionKey, "decrypt");
   if (!sameContext(envelope.context, expectedContext)) {
     fail(
       ContentCryptoErrorCode.AUTHENTICATION_FAILED,
@@ -626,8 +625,8 @@ export async function rewrapEnvelope(
 ): Promise<ContentEnvelopeV1> {
   const envelope = parseEnvelopeValue(envelopeValue);
   assertContext(expectedContext);
-  assertKeyEncryptionKey(currentKey);
-  assertKeyEncryptionKey(replacementKey);
+  assertKeyEncryptionKey(currentKey, "decrypt");
+  assertKeyEncryptionKey(replacementKey, "encrypt");
   if (!sameContext(envelope.context, expectedContext)) {
     fail(
       ContentCryptoErrorCode.AUTHENTICATION_FAILED,

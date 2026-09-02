@@ -69,7 +69,8 @@ extension APIClient {
     ) async throws -> NoteSourcesResponse {
         try await get(
             "/notes/\(id.rawValue)/sources",
-            query: pageItems(cursor: query.cursor, limit: query.limit)
+            query: pageItems(cursor: query.cursor, limit: query.limit),
+            requirePrivateNoStore: true
         )
     }
 
@@ -79,7 +80,8 @@ extension APIClient {
     ) async throws -> NoteBacklinksResponse {
         try await get(
             "/notes/\(id.rawValue)/backlinks",
-            query: pageItems(cursor: query.cursor, limit: query.limit)
+            query: pageItems(cursor: query.cursor, limit: query.limit),
+            requirePrivateNoStore: true
         )
     }
 

@@ -71,17 +71,20 @@ jobs:
       - name: Organizer encrypted retrieval capacity gate
         run: pnpm test:retrieval-capacity
 
+      - name: Isolated search encrypted exact-scan capacity gate
+        run: pnpm test:search-capacity
+
       - name: Deterministic routing evaluation
         run: pnpm eval:routing
 
       - name: Production-pipeline deterministic routing evaluation
         run: pnpm eval:routing:pipeline
 
-      - name: Build web, worker, verifier, organizer, and shared packages
+      - name: Build web, worker, verifier, organizer, search, and shared packages
         run: pnpm build
 
       - name: Smoke built isolated servers
-        run: pnpm --filter @unfiled/worker --filter @unfiled/verifier --filter @unfiled/organizer test:built-server
+        run: pnpm --filter @unfiled/worker --filter @unfiled/verifier --filter @unfiled/organizer --filter @unfiled/search-service test:built-server
 
       - name: Install Supabase CLI
         id: supabase-cli
@@ -104,7 +107,10 @@ jobs:
       - name: Run organizer lock-order concurrency regression
         run: pnpm test:db:concurrency
 
-      - name: Run Milestones B–E4 local HTTP E2E
+      - name: Run Milestone F semantic trust-domain integration
+        run: pnpm test:search-trust-domain
+
+      - name: Run Milestones B–F local HTTP E2E
         run: pnpm test:http:e2e
 
       - name: Stop local Supabase
@@ -206,7 +212,7 @@ jobs:
         working-directory: infra/aws-kms
         run: terraform validate -no-color
 
-      - name: Test four-key and workload-isolation contracts
+      - name: Test key lifecycle and five-workload isolation contracts
         working-directory: infra/aws-kms
         run: terraform test -no-color
 

@@ -1,7 +1,13 @@
 import { normalizePrivateRagText, privateRagTrigrams, rankSearchResult } from "@unfiled/search";
 
-import type { NoteListFilters, NoteRecord, SearchResponse } from "@/lib/product/types";
+import type {
+  NoteListFilters,
+  NoteRecord,
+  NoteSearchOptions,
+  SearchResponse
+} from "@/lib/product/types";
 import type { RepositoryPage } from "@/server/product/repository";
+import { noteMatchesSearchOptions } from "@/server/product/search-filters";
 
 import type { EncryptedNoteAggregateRepository } from "./encrypted-note-aggregate-repository";
 import { ServiceRpcError, ServiceRpcErrorCode } from "./service-rpc-client";
@@ -36,7 +42,7 @@ function boundedPage(page: RepositoryPage | undefined): RepositoryPage {
   if (
     !Number.isSafeInteger(value.limit) ||
     value.limit < 1 ||
-    value.limit > 100 ||
+    value.limit > MAX_SEARCHABLE_NOTES ||
     !Number.isSafeInteger(value.offset) ||
     value.offset < 0 ||
     !Number.isSafeInteger(value.limit + value.offset) ||
@@ -131,23 +137,26 @@ export class EncryptedLexicalSearch {
     private readonly now: () => number = Date.now
   ) {}
 
-  public async search(
-    query: string,
-    archived: "exclude" | "include" | "only",
-    page?: RepositoryPage
-  ): Promise<SearchResponse> {
+  public async search(query: string, options: NoteSearchOptions): Promise<SearchResponse> {
     const normalized = normalizedQuery(query);
-    const window = boundedPage(page);
+    const window = boundedPage(
+      options.limit === undefined || options.offset === undefined
+        ? undefined
+        : { limit: options.limit, offset: options.offset }
+    );
     const filters: NoteListFilters = {
-      archived,
+      archived: options.archived,
       deleted: "exclude",
       limit: MAX_SEARCHABLE_NOTES,
-      offset: 0
+      offset: 0,
+      ...(options.spaceId === undefined ? {} : { spaceId: options.spaceId }),
+      ...(options.type === undefined ? {} : { type: options.type })
     };
     const summaries = await this.notes.listNotes(filters);
     const now = this.now();
     const candidates = summaries
       .flatMap((note) => {
+        if (!noteMatchesSearchOptions(note, options)) return [];
         const scored = scoreNote(note, normalized, now);
         return scored === null ? [] : [scored];
       })
@@ -164,7 +173,8 @@ export class EncryptedLexicalSearch {
       if (
         detail.currentRevision !== candidate.note.currentRevision ||
         detail.deletedAt !== null ||
-        !archiveMatches(detail, archived)
+        !archiveMatches(detail, options.archived) ||
+        !noteMatchesSearchOptions(detail, options)
       ) {
         continue;
       }
@@ -176,7 +186,9 @@ export class EncryptedLexicalSearch {
       query: query.trim(),
       results: current
         .slice(window.offset, window.offset + window.limit)
-        .map(({ note }) => Object.freeze({ note, snippet: snippet(note, normalized) }))
+        .map(({ note, score }) =>
+          Object.freeze({ note, score, snippet: snippet(note, normalized) })
+        )
     });
   }
 }

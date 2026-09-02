@@ -143,9 +143,17 @@ struct AppShellView: View {
             SearchView(
                 results: model.searchResults,
                 isLoading: model.isSearching,
-                errorMessage: model.searchError,
+                failure: model.searchFailure,
+                hasMore: model.searchHasMore,
+                isLoadingMore: model.isLoadingMoreSearch,
+                loadMoreFailure: model.searchLoadMoreFailure,
+                paginationNotice: model.searchPaginationNotice,
+                openingResultIDs: model.searchOpeningResultIDs,
+                deletedResultIDs: model.searchDeletedResultIDs,
+                resultFailures: model.searchResultFailures,
                 onSearch: model.search,
-                onOpenNote: model.openNote
+                onLoadMore: model.loadMoreSearch,
+                onOpenNote: model.openSearchResult
             )
         }
     }
@@ -204,12 +212,21 @@ struct AppShellView: View {
                 hasPendingProviderKeyRetry: model.hasPendingProviderKeyRetry,
                 aiSettingsError: model.aiSettingsError,
                 providerKeyError: model.providerKeyError,
+                accountExportArtifact: model.accountExportArtifact,
+                isPreparingAccountExport: model.isPreparingAccountExport,
+                accountExportError: model.accountExportError,
+                isDeletingAccount: model.isDeletingAccount,
+                hasPendingAccountDeletionReplay: model.hasPendingAccountDeletionReplay,
+                accountDeletionError: model.accountDeletionError,
                 onRefreshAISettings: model.loadAISettings,
                 onSaveAISettings: model.saveAISettings,
                 onDiscardAISettingsRetry: model.discardAISettingsRetry,
                 onSaveProviderKey: model.saveProviderKey,
                 onDiscardProviderKeyRetry: model.discardProviderKeyRetry,
                 onDeleteProviderKey: model.deleteProviderKey,
+                onPrepareAccountExport: model.prepareAccountExport,
+                onDiscardAccountExport: model.discardAccountExport,
+                onDeleteAccount: model.deleteAccount,
                 onOpenRoutingRules: { model.navigationPath.append(.routingRules) },
                 onSignOut: model.signOut
             )
@@ -355,6 +372,10 @@ private struct NoteDestinationView: View {
                     generatedBlocksPaginationNotice: model.generatedBlockPaginationNotices[noteID],
                     submittingInteractionIDs: model.submittingInteractionIDs,
                     interactionErrors: model.interactionErrors,
+                    noteContext: model.noteContext(
+                        noteID: noteID,
+                        revision: note.currentRevision
+                    ),
                     onEdit: {
                         Task { @MainActor in await model.presentEditor(noteID: noteID) }
                     },
@@ -378,6 +399,16 @@ private struct NoteDestinationView: View {
                     onDelete: {
                         try await model.deleteNote(noteID: noteID)
                     },
+                    onOpenSourceCapture: model.openCapture,
+                    onOpenBacklink: model.openNote,
+                    onUpdateLogField: { entryID, fieldPath, value in
+                        try await model.updateLogField(
+                            noteID: noteID,
+                            entryID: entryID,
+                            fieldPath: fieldPath,
+                            value: value
+                        )
+                    },
                     onRefreshGeneratedBlocks: {
                         await model.loadGeneratedBlocks(noteID: noteID, force: true)
                     },
@@ -391,15 +422,26 @@ private struct NoteDestinationView: View {
                                 resolution: resolution
                             )
                         }
+                    },
+                    onRefreshNoteContext: {
+                        await model.loadNoteContext(noteID: noteID, force: true)
+                    },
+                    onLoadMoreSources: {
+                        await model.loadMoreNoteSources(noteID: noteID)
+                    },
+                    onLoadMoreBacklinks: {
+                        await model.loadMoreNoteBacklinks(noteID: noteID)
                     }
                 )
             } else {
                 LoadingDestinationView(label: "Loading note")
             }
         }
-        .task(id: noteID) {
+        .task(id: "\(noteID):\(model.noteDetail(noteID)?.currentRevision ?? 0)") {
             _ = await model.loadNote(noteID)
-            await model.loadGeneratedBlocks(noteID: noteID)
+            async let generatedBlocks: Void = model.loadGeneratedBlocks(noteID: noteID)
+            async let noteContext: Void = model.loadNoteContext(noteID: noteID)
+            _ = await (generatedBlocks, noteContext)
         }
     }
 }

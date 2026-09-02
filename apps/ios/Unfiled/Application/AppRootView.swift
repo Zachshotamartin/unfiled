@@ -34,6 +34,18 @@ struct AppRootView: View {
             }
         }
         .animation(.easeOut(duration: 0.18), value: model.bannerMessage)
+        .sheet(item: accountDeletionReceiptBinding) { receipt in
+            ZStack {
+                AccountDeletionReceiptView(
+                    presentation: receipt,
+                    onDismiss: model.dismissAccountDeletionReceipt
+                )
+                if scenePhase != .active {
+                    PrivacyCurtainView()
+                        .zIndex(100)
+                }
+            }
+        }
         .onOpenURL { url in
             Task { @MainActor in await model.handleDeepLink(url) }
         }
@@ -47,6 +59,15 @@ struct AppRootView: View {
             }
         }
         .preferredColorScheme(.dark)
+    }
+
+    private var accountDeletionReceiptBinding: Binding<AccountDeletionReceiptPresentation?> {
+        Binding(
+            get: { model.accountDeletionReceipt },
+            set: { value in
+                if value == nil { model.dismissAccountDeletionReceipt() }
+            }
+        )
     }
 }
 

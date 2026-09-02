@@ -23,12 +23,14 @@ variables {
   aws_region = "us-west-2"
   key_administrator_arns = [
     "arn:aws:iam::123456789012:role/unfiled-kms-admin",
+    "arn:aws:iam::123456789012:role/unfiled-kms-recovery",
   ]
   vercel_team_slug       = "unfiled-team"
   web_project_name       = "unfiled-web"
   worker_project_name    = "unfiled-worker"
   verifier_project_name  = "unfiled-verifier"
   organizer_project_name = "unfiled-organizer"
+  search_project_name    = "unfiled-search"
 }
 
 run "reject_verifier_project_identity_reuse" {
@@ -49,6 +51,78 @@ run "reject_organizer_project_identity_reuse" {
   }
 
   expect_failures = [var.organizer_project_name]
+}
+
+run "reject_search_project_identity_reuse_with_web" {
+  command = plan
+
+  variables {
+    search_project_name = "unfiled-web"
+  }
+
+  expect_failures = [var.search_project_name]
+}
+
+run "reject_search_project_identity_reuse_with_worker" {
+  command = plan
+
+  variables {
+    search_project_name = "unfiled-worker"
+  }
+
+  expect_failures = [var.search_project_name]
+}
+
+run "reject_search_project_identity_reuse_with_verifier" {
+  command = plan
+
+  variables {
+    search_project_name = "unfiled-verifier"
+  }
+
+  expect_failures = [var.search_project_name]
+}
+
+run "reject_search_project_identity_reuse_with_organizer" {
+  command = plan
+
+  variables {
+    search_project_name = "unfiled-organizer"
+  }
+
+  expect_failures = [var.search_project_name]
+}
+
+run "reject_unsupported_deployment_environment" {
+  command = plan
+
+  variables {
+    deployment_environment = "development"
+  }
+
+  expect_failures = [var.deployment_environment]
+}
+
+run "reject_preview_reusing_production_resource_names" {
+  command = plan
+
+  variables {
+    deployment_environment = "preview"
+    kms_alias_namespace    = "unfiled-preview"
+  }
+
+  expect_failures = [aws_iam_openid_connect_provider.vercel]
+}
+
+run "reject_preview_reusing_production_alias_namespace" {
+  command = plan
+
+  variables {
+    deployment_environment = "preview"
+    resource_name_prefix   = "unfiled-preview"
+  }
+
+  expect_failures = [aws_iam_openid_connect_provider.vercel]
 }
 
 run "reject_second_active_generation" {
@@ -295,12 +369,38 @@ run "reject_twenty_first_retired_generation_for_pair" {
   expect_failures = [var.root_key_generations]
 }
 
+run "reject_single_key_recovery_principal" {
+  command = plan
+
+  variables {
+    key_administrator_arns = [
+      "arn:aws:iam::123456789012:role/unfiled-kms-admin",
+    ]
+  }
+
+  expect_failures = [var.key_administrator_arns]
+}
+
+run "reject_duplicate_key_recovery_principals" {
+  command = plan
+
+  variables {
+    key_administrator_arns = [
+      "arn:aws:iam::123456789012:role/unfiled-kms-admin",
+      "arn:aws:iam::123456789012:role/unfiled-kms-admin",
+    ]
+  }
+
+  expect_failures = [var.key_administrator_arns]
+}
+
 run "reject_cross_account_key_administrator" {
   command = plan
 
   variables {
     key_administrator_arns = [
       "arn:aws:iam::999999999999:role/unfiled-kms-admin",
+      "arn:aws:iam::123456789012:role/unfiled-kms-recovery",
     ]
   }
 
@@ -313,6 +413,7 @@ run "reject_runtime_role_as_key_administrator" {
   variables {
     key_administrator_arns = [
       "arn:aws:iam::123456789012:role/unfiled-production-worker",
+      "arn:aws:iam::123456789012:role/unfiled-kms-recovery",
     ]
   }
 
@@ -325,6 +426,20 @@ run "reject_organizer_role_as_key_administrator" {
   variables {
     key_administrator_arns = [
       "arn:aws:iam::123456789012:role/unfiled-production-organizer",
+      "arn:aws:iam::123456789012:role/unfiled-kms-recovery",
+    ]
+  }
+
+  expect_failures = [aws_iam_openid_connect_provider.vercel]
+}
+
+run "reject_search_role_as_key_administrator" {
+  command = plan
+
+  variables {
+    key_administrator_arns = [
+      "arn:aws:iam::123456789012:role/unfiled-production-search",
+      "arn:aws:iam::123456789012:role/unfiled-kms-recovery",
     ]
   }
 

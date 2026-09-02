@@ -11,7 +11,8 @@ declare
 begin
   foreach capability_role in array array[
     'unfiled_index_worker',
-    'unfiled_rag_verifier'
+    'unfiled_rag_verifier',
+    'unfiled_search_worker'
   ]
   loop
     if not exists (

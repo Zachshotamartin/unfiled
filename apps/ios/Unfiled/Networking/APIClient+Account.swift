@@ -8,12 +8,17 @@ extension APIClient {
     public func deleteAccount(
         _ request: AccountDeleteRequest
     ) async throws -> AccountDeletionReceipt {
-        try await deleteBodyOnly("/me", body: request)
+        try await deleteBodyOnly("/me", body: request, requirePrivateNoStore: true)
     }
 
     public func replayAccountDeletionReceipt(
         _ request: AccountDeletionReceiptReplayRequest
     ) async throws -> AccountDeletionReceipt {
-        try await post("/me/deletion-receipt", body: request, authenticated: false)
+        try await post(
+            "/me/deletion-receipt",
+            body: request,
+            authenticated: false,
+            requirePrivateNoStore: true
+        )
     }
 }

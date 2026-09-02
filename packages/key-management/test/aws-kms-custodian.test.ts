@@ -70,6 +70,27 @@ function transport(overrides: Partial<AwsKmsTransport> = {}): AwsKmsTransport &
 }
 
 describe("AWS KMS envelope custodian", () => {
+  it("gives search a decrypt-only object-wrap capability", async () => {
+    const kms = transport();
+    const custodian = createAwsKmsEnvelopeCustodian({
+      activeRoots: INDEX_ROOTS,
+      transport: kms,
+      workload: "search_worker"
+    });
+
+    expect("withGeneratedIntermediateKey" in custodian).toBe(false);
+    expect("rewrapIntermediateKey" in custodian).toBe(false);
+    await custodian.withUnwrappedIntermediateKey(managedRecord(), (bytes, record) => {
+      expect(bytes).toEqual(rawKey(7));
+      expect(record.keyClass).toBe("ai_assisted");
+      expect(record.purpose).toBe("object_wrap");
+      return Promise.resolve();
+    });
+    expect(kms.decryptDataKey).toHaveBeenCalledOnce();
+    expect(kms.generateDataKey).not.toHaveBeenCalled();
+    expect(kms.reEncryptDataKey).not.toHaveBeenCalled();
+  });
+
   it("generates a pending per-owner intermediate key with exact KMS context", async () => {
     const kms = transport();
     const custodian = createAwsKmsEnvelopeCustodian({

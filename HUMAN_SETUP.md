@@ -12,15 +12,16 @@ This file contains only steps that require a human account, physical device, pai
 
 ## Remaining release gates at a glance
 
-The Milestone D organizer, cipher, encrypted RAG path, and OpenAI adapters and the Milestone E1–E4 encrypted correction/Review/batch-Undo, routing-rule, generated-block, duplicate-suggestion, AI-settings, and Vault-only OpenAI BYOK slices are implemented in code. E2's credential-free aggregate/HTTP/PR-CI gate is green. E3's credential-free local aggregate and built-local B–E3 HTTP gates plus PR #16's required CI lanes are green; its deployed canary remains pending. E4's credential-free local aggregate and built-local B–E4 HTTP gates are green, its independent final audit is clear, and PR #17's required CI lanes are green. Milestones F–G remain pending. The following steps still require a human-controlled account, credential, environment, or device and remain release-blocking:
+The Milestone D organizer, cipher, encrypted RAG path, and OpenAI adapters; the Milestone E1–E4 encrypted correction/Review/batch-Undo, routing-rule, generated-block, duplicate-suggestion, AI-settings, and Vault-only OpenAI BYOK slices; and the Milestone F hybrid-search, note-context, structured-log, export, and account-deletion slices are implemented in code. E2's credential-free aggregate/HTTP/PR-CI gate is green. E3's credential-free local aggregate and built-local B–E3 HTTP gates plus PR #16's required CI lanes are green; its deployed canary remains pending. E4's credential-free local aggregate and built-local B–E4 HTTP gates are green, its independent final audit is clear, and PR #17's required CI lanes are green. F's credential-free local aggregate is green and its independent final audit is clear; no F PR has been opened, so no green-PR, merge, or deployment claim exists. Milestone G has not started. The following steps still require a human-controlled account, credential, environment, or device and remain release-blocking:
 
 1. Create the dedicated OpenAI Production project/service account, restrict its model/key authority, set rate/spend controls, decide and document its data-retention posture, and place the key only in the organizer Production secret store.
 2. Keep `pnpm eval:routing` as the deterministic mock safety gate and run `pnpm eval:routing:pipeline` for the deterministic production-component seam. Its report names the real components exercised and the database/runtime guarantees it excludes. The optional credentialed runner is checked in as `pnpm eval:routing:live`; it requires only `UNFILED_ROUTING_EVAL_OPENAI_API_KEY`, runs exactly three samples per eligible synthetic case, and emits safe content-free telemetry. No credentialed live run or stochastic provider report exists yet.
-3. Provision and prove the exact Vercel Trusted Sources, AWS OIDC/KMS roles, CloudTrail trail, and TLS-only PostgreSQL logins. None of the four required Vercel projects is provisioned or deployed yet. The organizer login now exposes exactly eleven RPCs: the ten Milestone D/E3 capabilities plus E4's sole lease-bound Vault credential resolver.
+3. Provision and prove the exact Vercel Trusted Sources, AWS OIDC/KMS roles, CloudTrail trail, and TLS-only PostgreSQL logins. None of the five required Vercel projects is provisioned or deployed yet. The organizer login exposes exactly eleven RPCs; the separately gated Milestone F `unfiled_search_worker` login must expose exactly five ticket-bound RPCs and no inherited existing-workload authority.
 4. Run the staged synthetic organizer canaries and outage/race/replay cases, verify ciphertext-only durable state, and record the disable/rollback decision points before admitting a small cohort.
 5. Complete the restore drill, apply the one-way C.5d production contract from a real database-owner session, verify the post-contract canary, and track every pre-contract backup until expiry.
 6. Complete Apple signing, signed archive inspection, SQLCipher/Keychain/App Group checks, and the Lock Screen widget matrix on a physical iPhone.
 7. Before enabling E1–E4 in Production, run the deployed owner-interaction, private-rule, generated-block, duplicate-suggestion, retention, and Vault-only BYOK account/canary gates below. The local E4 implementation is not permission to enable production BYOK. Anthropic remains unavailable until its adapter and provider-specific evaluation/release gates pass.
+8. Before enabling Milestone F semantic search, deploy and prove ADR-0013's checked-in fifth-project service, one-use capability tickets, exact search database/OIDC/KMS identity, fixed provider/model, explicit-AI-assisted privacy dispatch, lexical-only degradation, and query/content canary gates. Checked-in implementation and credential-free tests are not deployment evidence.
 
 The production storage promise is application encryption at rest with scoped server-side decryption. It is not end-to-end encryption or zero-knowledge storage.
 
@@ -49,22 +50,28 @@ Complete these human validation items before treating Milestone 0 as approved:
 
 1. Create separate preview and production projects at Supabase.
 2. Enable Vault and confirm the project plan supports the required backup and point-in-time recovery targets.
-3. Store each project URL, anonymous key, and service-role key only in the matching interactive web/API Vercel environment. Do **not** put the Supabase database password in any web or workload runtime; keep it in the approved operator secret manager for migrations and recovery only. The isolated `apps/worker`, `apps/verifier`, and `apps/organizer` projects must never receive a global Supabase service-role/secret key; their narrowly scoped C.5c database credentials are provisioned separately below.
+3. Store each project URL, anonymous key, and service-role key only in the matching interactive web/API Vercel environment. Do **not** put the Supabase database password in any web or workload runtime; keep it in the approved operator secret manager for migrations and recovery only. The isolated `apps/worker`, `apps/verifier`, `apps/organizer`, and `apps/search` projects must never receive a global Supabase service-role/secret key; their narrowly scoped database credentials are provisioned separately below.
 4. Link preview from a trusted shell: `pnpm supabase link --project-ref <preview-project-ref>`.
 5. Review migrations, then apply: `pnpm supabase db push --linked`.
 6. Never link a developer preview deployment to production data.
 
 ## Vercel
 
-No Vercel project has been created for this repository. The four-project procedure below is a required future account step, not deployment evidence.
+No Vercel project has been created for this repository. The release topology requires five projects: interactive `apps/web`; the three C.5/D workloads `apps/worker`, `apps/verifier`, and `apps/organizer`; and the separately gated Milestone F `apps/search` trust domain. The procedures below are future account steps, not deployment evidence. Create search only from the checked-in `apps/search` root and manifest; never clone another workload's configuration or use a generic repository root.
 
 1. Import `Zachshotamartin/unfiled` into Vercel and set the root directory to `apps/web`.
-2. In the `apps/web` project, set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and only the provider application keys owned by web in the appropriate environment scopes. Do not copy the service-role key into the separate worker, verifier, or organizer project, and do not place `UNFILED_ORGANIZER_OPENAI_API_KEY` in web.
+2. In the `apps/web` project, set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and only the provider application keys owned by web in the appropriate environment scopes. Do not copy the service-role key into the separate worker, verifier, organizer, or search project, and do not place an organizer or search provider key in web.
 3. Generate a separate OTP rate-limit pepper for each deployed environment with
    `openssl rand -hex 32`. Add it with `vercel env add AUTH_RATE_LIMIT_PEPPER preview` and
    `vercel env add AUTH_RATE_LIMIT_PEPPER production`; never reuse a provider, Supabase, or cron
    secret. Production OTP requests intentionally fail closed when either this pepper or the service
-   role key is absent. Separately generate a private-search cursor key for each environment with
+   role key is absent. Generate another independent value with `openssl rand -hex 32` for deletion-
+   receipt replay throttling in each environment, then add it with
+   `vercel env add ACCOUNT_DELETION_REPLAY_RATE_LIMIT_PEPPER preview` and
+   `vercel env add ACCOUNT_DELETION_REPLAY_RATE_LIMIT_PEPPER production`. Never reuse the auth
+   pepper, cursor key, content key, provider key, Supabase secret, or cron secret. Production-mode
+   unauthenticated deletion-receipt replay fails closed when this distinct value is absent or shorter
+   than 32 characters. Separately generate a private-search cursor key for each environment with
    `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`, then add it with
    `vercel env add UNFILED_PRIVATE_SEARCH_CURSOR_HMAC_KEY preview` and
    `vercel env add UNFILED_PRIVATE_SEARCH_CURSOR_HMAC_KEY production`. Never prefix it with
@@ -125,27 +132,29 @@ No Vercel project has been created for this repository. The four-project procedu
 6. The checked-in Vercel Hobby schedule calls `/api/internal/captures/drain` daily at 03:07 UTC. In Production, Preview, and development, `after()` and this recovery route make one content-free Trusted Sources call to the isolated organizer; they never run the organizer inside `apps/web` and never chain the organizer's 49-second budget to the index worker's 55-second budget. The encrypted organizer and index queues plus their separate authenticated recovery crons are authoritative. Deterministic organization exists only as an explicitly injected test fixture. On Vercel Pro or Enterprise, change only that capture schedule in `apps/web/vercel.json` to `* * * * *`, deploy, and confirm authenticated one-minute invocations. Hobby deployments reject schedules more frequent than daily.
 7. After deploying Preview, create one synthetic canary capture and inspect it only through the owner-authorized encrypted projection. Before the global contract, any temporary rollback column must contain only its fixed non-content sentinel; after the contract, prove that column no longer exists. In both states the canary must have an authenticated version-1 ciphertext envelope and keyed verification metadata and must have zero hits in rows, indexes, logs, traces, analytics, or URLs. Public API responses may return plaintext only after owner authorization and must never return an envelope, MAC/fingerprint, reservation, or key identifier.
 
-### Production managed KMS and four isolated workloads — C.5 account evidence pending
+### Production managed KMS and five workload trust domains — account evidence pending
 
-The checked-in module at `infra/aws-kms` defines the exact production identities for web, index worker, verifier, and organizer plus four independently controlled KMS roots. These steps create billable, account-bound cloud resources. They do **not** authorize real note traffic yet: the C.5d paths and contract are implemented locally, but the production account evidence, owner rollout, explicit contraction, and post-contract canary below must still pass.
+The checked-in module at `infra/aws-kms` defines exact environment identities for web, index worker, verifier, organizer, and owner search plus four independently controlled KMS roots. The search role is decrypt-only over active or registered-retired AI-assisted object-wrap roots and does not widen the other four identities. Applying this module creates billable, account-bound cloud resources; checked-in policy and Terraform tests do **not** authorize real note or query traffic or prove any deployed identity.
 
-1. Record twelve exact values: AWS region; a dedicated non-runtime KMS administrator role/user ARN;
+1. Record fifteen exact values: AWS region; two distinct, independently controlled non-runtime KMS administrator or recovery principal ARNs;
    Vercel team slug and `team_...` owner ID; and the distinct project **name** plus `prj_...` ID
-   for web, worker, verifier, and organizer. Project names—not IDs—appear in OIDC subjects.
-2. Create or select four Vercel projects from this repository. Set their Root Directories to
-   `apps/web`, `apps/worker`, `apps/verifier`, and `apps/organizer`. In all four projects, enable **Team Issuer** under
+   for web, worker, verifier, organizer, and search. Project names—not IDs—appear in OIDC subjects.
+2. Create or select these five Vercel projects from this repository. Set their Root Directories to
+   `apps/web`, `apps/worker`, `apps/verifier`, `apps/organizer`, and `apps/search`. In all five projects, enable **Team Issuer** under
    Settings → Security → Secure Backend Access (OIDC). Configure **Trusted Sources** separately on
-   the worker, verifier, and organizer projects: authorize only web Production → that project's Production
+   the worker, verifier, organizer, and search projects: authorize only web Production → that project's Production
    deployment. Do not authorize Preview, isolated-workload cross-calls, another project, or a team/project
    wildcard.
 3. From `infra/aws-kms`, copy `terraform.tfvars.example` to the ignored `terraform.tfvars`, replace every placeholder, and authenticate Terraform with an administrator identity. If the team's Vercel issuer already exists in that AWS account, use the import command in `infra/aws-kms/README.md` instead of creating a duplicate.
-4. Run `terraform init`, `terraform fmt -check -recursive`, `terraform validate`, `terraform test`, `terraform plan -out unfiled-kms.tfplan`, and finally `terraform apply unfiled-kms.tfplan`. Confirm the plan creates four exact-subject runtime roles and these four aliases:
+4. Run `terraform init`, `terraform fmt -check -recursive`, `terraform validate`, `terraform test`, `terraform plan -out unfiled-kms.tfplan`, and finally `terraform apply unfiled-kms.tfplan`. Confirm the plan creates five exact-subject runtime roles and these four aliases:
    - `alias/unfiled/ai-assisted/object-wrap`
    - `alias/unfiled/ai-assisted/content-mac`
    - `alias/unfiled/private-manual/object-wrap`
    - `alias/unfiled/private-manual/content-mac`
-5. Copy only Terraform's non-secret outputs into Vercel Production settings. All four projects
-   receive `UNFILED_AWS_REGION`; each receives its matching `UNFILED_AWS_ROLE_ARN`. Web receives
+5. Copy only Terraform's non-secret outputs into Vercel Production settings. All five projects
+   receive their workload-specific region and role values. Web, worker, verifier, and organizer use
+   `UNFILED_AWS_REGION` plus their matching `UNFILED_AWS_ROLE_ARN`; search uses only the exact
+   values from `search_cloud_environment` as described in its separate F gate. Web receives
    both active AI root ARNs. The worker and verifier receive only
    `UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN`: never give either isolated workload the AI content-MAC
    ARN or a broad AI registry. The organizer receives the active AI object-wrap and content-MAC
@@ -696,6 +705,115 @@ account canaries, rotation/restore evidence, and backup-expiry gates pass, the o
 implemented fail-closed routing system—not a production routing claim or proof that the complete
 note library is encrypted.
 
+### Dedicated user hybrid-search trust domain — implementation present; account evidence pending
+
+[ADR-0013](docs/decisions/ADR-0013-user-hybrid-search-trust-domain.md) accepts the fifth trust-domain
+design. The current branch supplies `apps/search`, the capability migration and exact login, the
+search IAM/KMS policy, web coordination, client surfaces, and credential-free tests. It does not
+supply a real provider key, cloud account, Vercel project, deployed identity, CloudTrail record, or
+canary evidence. Production user search remains lexical-only until the F required-PR gate
+and every applicable account step below are green. Do not create a generic Vercel project or copy an
+existing workload configuration.
+
+1. Using the reviewed `apps/search` service, capability migration, and exact infrastructure policy,
+   record the fifth Vercel Production project name and `prj_...` ID, its exact stable
+   Production origin, the Vercel team slug and `team_...` owner ID, exact web caller project
+   name/ID, AWS region, exact search OIDC subject and role ARN, Supabase project ref and canonical
+   TLS host, provider project/service-account ID, pinned embedding model/dimensions/version, and
+   deployment ID. Record no owner, ticket, claim secret, query, note content, ciphertext, key,
+   database password, token, or certificate bytes.
+2. Create the fifth Vercel project with Root Directory `apps/search`. Enable Team Issuer and allow
+   only the exact web Production project to call the exact search Production deployment through
+   Trusted Sources. Deny Preview, public/browser traffic, cookies, `Authorization`, user JWTs,
+   protection-bypass credentials, worker/verifier/organizer calls, project/team wildcards, and alias
+   drift. Web stores only the proved `UNFILED_SEARCH_ORIGIN`; search must independently verify
+   issuer, audience, subject, team slug/ID, web project name/ID, search project ID, and Production
+   environment on every request.
+3. Create one separately budgeted provider project/service account and key for search. Approve and
+   record its retention/data-control posture, rate/spend limits, allowed origin, and fixed embedding
+   model/dimensions/version. Enter the key only as `UNFILED_SEARCH_OPENAI_API_KEY` in the search
+   Production secret scope. Never copy the organizer, index-worker, web, personal, Preview, or BYOK
+   key. The runtime and deployment policy must reject `OPENAI_API_KEY`, generic provider variables,
+   Anthropic keys, base-URL/endpoint/model/dimension overrides, and any request- or ticket-selected
+   provider configuration.
+4. Apply the reviewed AWS policy with its fifth exact Vercel OIDC subject and independently named
+   search IAM role. Supply search only `UNFILED_AWS_REGION`, its exact role ARN, the active
+   AI-assisted object-wrap root, and a machine-generated exact registry of registered retired
+   AI-assisted object-wrap roots. With the real deployed identity, prove `kms:Decrypt` succeeds only
+   for those roots and the existing exact index-envelope context. Controlled probes must deny
+   `GenerateDataKey*`, `Encrypt`, `ReEncrypt*`, grants, aliases, administration, staged/unregistered
+   roots, both AI content-MAC roots, and every active/retired/staged private-manual root. Correlate
+   only content-free allow/deny evidence in CloudTrail.
+5. Provision the dedicated role `unfiled_search_worker` as a TLS-only `LOGIN`, `NOINHERIT`,
+   `NOBYPASSRLS` role with no inbound/outbound runtime membership. Store its independently generated
+   verified-TLS URI, expected host/project ref, canonical CA, and bounded connection/statement
+   timeouts only in search Production. Never give search a Supabase anon/service-role/secret key,
+   `authenticator`, database-owner password, another workload URI, PostgREST access, or broad/RLS-
+   bypassing credential. Prove `session_user = current_user = 'unfiled_search_worker'`; `SET ROLE`
+   evidence is invalid.
+6. Run the deployed privilege probe. Search must have EXECUTE on exactly these five names and no
+   other public/private function:
+
+   - `claim_encrypted_user_search(uuid,text,text)`
+   - `list_encrypted_user_search_rag_page(uuid,text,text,jsonb,jsonb,integer,integer)`
+   - `verify_encrypted_user_search_snapshot(uuid,text,text,jsonb,jsonb)`
+   - `complete_encrypted_user_search(uuid,text,text)`
+   - `fail_encrypted_user_search(uuid,text,text,public.safe_error_code)`
+
+   Prove zero direct table/sequence, `private`-schema, public-create, Vault/auth/extension,
+   owner-search/export/deletion, note/capture write, reservation/key/rewrap, index claim/repair/
+   publication, generation seed/drain/verify/activate, organizer lease/commit, settings/provider-key,
+   retention, and arbitrary SQL authority. Explicitly deny all six index-worker, two verifier,
+   eleven organizer, and owner-authorized web capabilities. Also prove `anon`, `authenticated`,
+   `service_role`, web, worker, verifier, and organizer cannot execute these five search-worker
+   functions. Separately prove only `service_role` can execute
+   `begin_encrypted_user_search(uuid,text,jsonb,text)` and that search cannot execute it.
+
+7. From an authenticated synthetic owner, submit an explicitly `ai_assisted` request through web.
+   Confirm web generates a random 32-byte claim secret and calls service-role-only
+   `begin_encrypted_user_search(uuid,text,jsonb,text)` with the verified server-derived owner, while
+   the database stores only that bound ticket, versioned digest of normalized query and
+   every filter/sort/limit/cursor field, exact normalized filter projection, active complete
+   generation identity/attestation, SHA-256 claim-secret hash, fixed 30-second expiry, and content-
+   free state. The web-to-search body must contain only ticket ID, raw claim secret, and the exact
+   normalized request—never an owner ID, user token, caller-selected generation, key, provider, or
+   model.
+8. Exercise two concurrent claims, response-loss replay, wrong secret, wrong digest, changed/omitted/
+   reordered filters, expiry at the boundary, terminal replay, wrong caller, and a second client-page
+   request. Exactly one claim may win; it must burn the claim-secret hash and return a fresh raw lease
+   token whose hash alone is stored. Page, verify, complete, and fail calls use that lease token plus
+   the same request digest, never the burned claim secret. Neither 30-second bound can be extended;
+   terminal state cannot reopen. Each client page uses a new one-use ticket. Its authenticated cursor
+   must bind query, every filter, privacy, sort, limit, ranking version, active generation/
+   attestation, and deterministic score/tie-break position.
+9. Prove the service derives owner/generation/privacy/filters only from the claimed ticket, embeds
+   only with the fixed provider, pages only bound active/current AI-assisted encrypted index rows,
+   decrypts/ranks in bounded request memory, revalidates selected IDs/revisions/privacy/archive/
+   generation/filters/cursor, and then completes or fails. Flip generation state/attestation, note
+   revision, privacy, archive, deletion, filter membership, ticket state, and cursor position at each
+   disclosure/result boundary. Missing, failed, draining, stale, incomplete, oversized, or changing
+   state must return semantic-unavailable and trigger a fresh owner-authorized lexical-only search;
+   no partial semantic result may be merged.
+10. Send the same canary query under omitted/default, `mixed`, `private_manual`, and exact
+    `ai_assisted` privacy filters. Only the exact AI-assisted request may reach search/provider, and
+    it may return only AI-assisted references. Require zero private-manual content or private-intent
+    query hits in search/provider traffic, tickets, Vercel logs, database parameters/logs, Sentry,
+    traces, analytics, KMS/CloudTrail context, errors, health output, or caches. Search must have no
+    cross-request plaintext/embedding cache and must release query, decrypted-document, embedding,
+    rank, claim-secret, and result buffers on success, failure, timeout, and cancellation.
+11. Prove search returns only bounded note IDs, indexed revisions, component scores, ranking version,
+    and an authenticated next cursor. Web must owner-authorize and hydrate current note DTOs and
+    reject stale references. Source-capture inspection, note links, backlinks, titles/bodies,
+    generated blocks, Reviews, receipts, revisions, and exports must remain in owner-authorized web/
+    native APIs and outside the five search RPCs and service response.
+12. Record capacity/relevance/latency evidence, provider/KMS/database/Vercel outage behavior,
+    database/provider credential rotation, active/retired root rotation, alias/project transfer,
+    CA/database restore, and deletion reconciliation for ticket metadata. Rehearse disable by removing
+    web → search Trusted Sources authorization and the search provider key while leaving lexical search
+    available. Any private query disclosure, cross-owner/generation row, reusable ticket, plaintext
+    cache/log hit, unexpected KMS/RPC authority, or endpoint/model override is an immediate disable
+    condition.
+
 ### Milestone E owner-interaction and Vault-only BYOK gates
 
 The accepted contracts are [ADR-0011](docs/decisions/ADR-0011-encrypted-owner-interactions-and-personal-rules.md)
@@ -848,10 +966,11 @@ E2EE.
     Enable one only after its production adapter, strict schema/cancellation behavior, provider data-
     control review, complete routing corpus, live stochastic evaluation, custody canary, and budget/
     rate gates pass for the exact pinned version. A database enum or settings mockup is not evidence.
-12. User-facing semantic search remains blocked after E4. Before Milestone F hybrid search, accept a
-    separate ADR and deploy a separate search trust domain. It must not reuse organizer/index-worker
-    database credentials, OIDC identities, provider API keys, runtime secrets, or plaintext caches;
-    explicitly decide and prove whether a new principal may unwrap the existing AI index envelopes.
+12. User-facing semantic search remains blocked in Production after the green local F gate.
+    The required-PR portion of F and the complete fifth-project gate above remain pending.
+    Search may decrypt only active/registered-retired AI-assisted index object-wrap
+    envelopes through its own exact identity; it must not reuse organizer/index-worker credentials,
+    OIDC roles, provider keys, content-MAC/private roots, service-role access, or plaintext caches.
 
 ### Global encrypted-storage contract — C.5d one-way production operation
 

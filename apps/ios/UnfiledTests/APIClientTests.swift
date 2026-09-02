@@ -37,7 +37,11 @@ final class APIClientTests: XCTestCase {
                                    json: #"{"code":"unauthorized","message":"no","requestId":"r1"}"#)
             }
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer new-token")
-            return apiResponse(for: request, json: #"{"items":[],"pageInfo":{"hasMore":false,"nextCursor":null}}"#)
+            return apiResponse(
+                for: request,
+                json: #"{"items":[],"pageInfo":{"hasMore":false,"nextCursor":null}}"#,
+                privateNoStore: true
+            )
         }
         let result = try await makeStubbedAPIClient(tokenProvider: provider).listNotes()
         XCTAssertTrue(result.items.isEmpty)
@@ -164,7 +168,11 @@ final class APIClientTests: XCTestCase {
             XCTAssertEqual(object["archive"] as? String, "include")
             XCTAssertEqual(object["cursor"] as? String, "next/cursor")
             XCTAssertEqual(object["limit"] as? Int, 17)
-            return apiResponse(for: request, json: #"{"items":[],"pageInfo":{"hasMore":false,"nextCursor":null}}"#)
+            return apiResponse(
+                for: request,
+                json: #"{"items":[],"pageInfo":{"hasMore":false,"nextCursor":null}}"#,
+                privateNoStore: true
+            )
         }
         _ = try await makeStubbedAPIClient(tokenProvider: provider).searchNotes(
             .init(query: "a & b", archive: .include, cursor: "next/cursor", limit: 17)
@@ -182,7 +190,8 @@ final class APIClientTests: XCTestCase {
             XCTAssertEqual(object["query"] as? String, valid)
             return apiResponse(
                 for: request,
-                json: #"{"items":[],"pageInfo":{"hasMore":false,"nextCursor":null}}"#
+                json: #"{"items":[],"pageInfo":{"hasMore":false,"nextCursor":null}}"#,
+                privateNoStore: true
             )
         }
         _ = try await makeStubbedAPIClient(tokenProvider: provider).searchNotes(.init(query: valid))
@@ -265,7 +274,8 @@ final class APIClientTests: XCTestCase {
             }
             return apiResponse(
                 for: request,
-                json: Self.accountDeletionReceiptJSON(replayed: count == 2)
+                json: Self.accountDeletionReceiptJSON(replayed: count == 2),
+                privateNoStore: true
             )
         }
 
@@ -375,7 +385,8 @@ final class APIClientTests: XCTestCase {
             apiResponse(
                 for: request,
                 json: Self.accountDeletionReceiptJSON(replayed: true)
-                    .replacingOccurrences(of: #""sessionsRevoked":true"#, with: #""sessionsRevoked":false"#)
+                    .replacingOccurrences(of: #""sessionsRevoked":true"#, with: #""sessionsRevoked":false"#),
+                privateNoStore: true
             )
         }
         let token = try AccountDeletionToken(

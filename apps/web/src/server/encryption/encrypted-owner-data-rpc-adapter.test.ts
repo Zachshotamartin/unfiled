@@ -43,6 +43,19 @@ describe("encrypted owner-data RPC adapter", () => {
     ).rejects.toMatchObject({ code: ServiceRpcErrorCode.PROVIDER_UNAVAILABLE });
   });
 
+  it("rejects duplicate capture IDs even when the database projection regresses", async () => {
+    const rpc = vi.fn<ServiceRpcClient["rpc"]>(() =>
+      Promise.resolve({
+        items: [{ noteId: NOTE, sourceCaptureIds: [CAPTURE, CAPTURE] }]
+      })
+    );
+    const adapter = createEncryptedOwnerDataRpcAdapter({ rpc });
+
+    await expect(
+      adapter.listNoteSources({ ownerId: OWNER, noteIds: [NOTE] })
+    ).rejects.toMatchObject({ code: ServiceRpcErrorCode.PROVIDER_UNAVAILABLE });
+  });
+
   it("hashes the bearer capability before both delete and replay RPC boundaries", async () => {
     const rpc = vi
       .fn<ServiceRpcClient["rpc"]>()

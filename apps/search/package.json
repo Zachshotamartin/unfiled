@@ -1,0 +1,36 @@
+{
+  "name": "@unfiled/search-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Isolated encrypted semantic-search service for Unfiled.",
+  "dependencies": {
+    "@unfiled/content-crypto": "workspace:*",
+    "@unfiled/contracts": "workspace:*",
+    "@unfiled/encrypted-aggregate": "workspace:*",
+    "@unfiled/key-management": "workspace:*",
+    "@unfiled/search": "workspace:*",
+    "@vercel/oidc": "3.8.5",
+    "pg": "8.23.0"
+  },
+  "devDependencies": {
+    "@types/pg": "8.23.1",
+    "esbuild": "0.28.2"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && esbuild src/server.ts --bundle --platform=node --format=esm --target=node22.18 --sourcemap --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" --outfile=dist/server.js --external:pg --external:@vercel/oidc",
+    "dev": "tsx src/server.ts",
+    "lint": "eslint api scripts src test --max-warnings=0",
+    "start": "node dist/server.js",
+    "test": "vitest run",
+    "test:built-server": "node dist/scripts/smoke-built-server.js",
+    "test:capacity": "vitest run --config vitest.capacity.config.ts --reporter=verbose",
+    "test:capability-concurrency": "tsx scripts/test-capability-concurrency.ts",
+    "test:trust-domain": "vitest run --config vitest.trust-domain.config.ts --reporter=verbose",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  }
+}

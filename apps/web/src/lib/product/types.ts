@@ -103,12 +103,25 @@ export type NoteListFilters = Readonly<{
   type?: NoteType;
 }>;
 
+export type NoteSearchOptions = Readonly<{
+  archived: "exclude" | "include" | "only";
+  limit?: number;
+  offset?: number;
+  privacy?: PrivacyMode;
+  spaceId?: EntityId<"spc"> | null;
+  tagIds?: readonly EntityId<"tag">[];
+  type?: NoteType;
+  updatedFrom?: string;
+  updatedTo?: string;
+}>;
+
 export type NoteListResponse = Readonly<{
   notes: readonly NoteRecord[];
 }>;
 
 export type SearchResult = Readonly<{
   note: NoteRecord;
+  score: number;
   snippet: string;
 }>;
 

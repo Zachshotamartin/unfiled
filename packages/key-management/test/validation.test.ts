@@ -183,9 +183,12 @@ describe("key-management validation", () => {
   it("requires only AI roots for workers and keeps private roots out of worker configuration", () => {
     expect(parseWorkloadRootKeySet(AI_ROOTS, "organization_worker")).toEqual(AI_ROOTS);
     expect(parseWorkloadRootKeySet(INDEX_ROOTS, "index_worker")).toEqual(INDEX_ROOTS);
+    expect(parseWorkloadRootKeySet(INDEX_ROOTS, "search_worker")).toEqual(INDEX_ROOTS);
     expect(() => parseWorkloadRootKeySet(ROOTS, "organization_worker")).toThrow(KeyManagementError);
     expect(() => parseWorkloadRootKeySet(AI_ROOTS, "index_worker")).toThrow(KeyManagementError);
     expect(() => parseWorkloadRootKeySet(ROOTS, "index_worker")).toThrow(KeyManagementError);
+    expect(() => parseWorkloadRootKeySet(AI_ROOTS, "search_worker")).toThrow(KeyManagementError);
+    expect(() => parseWorkloadRootKeySet(ROOTS, "search_worker")).toThrow(KeyManagementError);
     expect(() => parseWorkloadRootKeySet(AI_ROOTS, "interactive_api")).toThrow(KeyManagementError);
     expect(() =>
       parseRetiredRootKeySet(
@@ -245,12 +248,18 @@ describe("key-management validation", () => {
     expect(() =>
       assertWorkloadCanAccess("index_worker", "ai_assisted", "object_wrap")
     ).not.toThrow();
+    expect(() =>
+      assertWorkloadCanAccess("search_worker", "ai_assisted", "object_wrap")
+    ).not.toThrow();
     for (const [keyClass, purpose] of [
       ["ai_assisted", "content_mac"],
       ["private_manual", "object_wrap"],
       ["private_manual", "content_mac"]
     ] as const) {
       expect(() => assertWorkloadCanAccess("index_worker", keyClass, purpose)).toThrow(
+        KeyManagementError
+      );
+      expect(() => assertWorkloadCanAccess("search_worker", keyClass, purpose)).toThrow(
         KeyManagementError
       );
     }
