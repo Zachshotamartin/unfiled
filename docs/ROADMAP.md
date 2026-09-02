@@ -18,6 +18,18 @@ Deliver:
 
 Exit condition: the selected launch name and every public contact/channel used by the product have a dated owner and proof record. A resolving domain or working local configuration is insufficient.
 
+### G1b. Capture without unlocking the phone (owner request, 2026-09-02)
+
+The Lock Screen widget opens the capture screen through an App Intent with `openAppWhenRun`, so iOS
+unlocks the phone on the way in. Two platform limits shape the next step: WidgetKit exposes no text
+input in any widget family, and the Lock Screen rectangular family is fixed at half width. Deliver,
+in this order: (1) a Siri App Shortcut whose intent takes a dictation or text parameter, queues the
+capture in the App Group outbox without opening the app, and syncs on next launch; (2) an Action
+Button binding to that shortcut; (3) a full-width Home Screen widget (`systemMedium`) with one Capture
+button that opens the app with the field focused and the keyboard raised. Evidence: intent unit
+tests, snapshot tests for the new family, a device run from the Lock Screen with the phone locked,
+and the existing HTTP capture stages unchanged.
+
 ### G2. Prove the hosted topology
 
 Deliver:
