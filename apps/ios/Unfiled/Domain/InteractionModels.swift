@@ -56,11 +56,13 @@ public enum ReviewConflictReason: String, Codable, CaseIterable, Sendable {
 public enum ReviewProposal: Codable, Equatable, Sendable {
     case routeCapture(plan: OrganizationPlan)
     case generatedBlock(blockId: BlockID)
-    case duplicateNotes(notes: [ReviewProposalNote])
+    case duplicateNotes(notes: [ReviewProposalNote], explanation: String)
     case conflict(reason: ReviewConflictReason)
     case failedJob(errorCode: APIErrorCode)
 
-    private enum CodingKeys: String, CodingKey { case type, plan, blockId, notes, reason, errorCode }
+    private enum CodingKeys: String, CodingKey {
+        case type, plan, blockId, notes, explanation, reason, errorCode
+    }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -72,8 +74,10 @@ public enum ReviewProposal: Codable, Equatable, Sendable {
             try StrictJSONKey.requireExactKeys(["type", "blockId"], from: decoder)
             self = .generatedBlock(blockId: try container.decode(BlockID.self, forKey: .blockId))
         case "duplicate_notes":
-            try StrictJSONKey.requireExactKeys(["type", "notes"], from: decoder)
+            try StrictJSONKey.requireExactKeys(["type", "notes", "explanation"], from: decoder)
             let notes = try container.decode([ReviewProposalNote].self, forKey: .notes)
+            let explanation = try container.decode(String.self, forKey: .explanation)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             guard (2 ... 3).contains(notes.count), Set(notes.map(\.noteId)).count == notes.count else {
                 throw DecodingError.dataCorruptedError(
                     forKey: .notes,
@@ -81,7 +85,14 @@ public enum ReviewProposal: Codable, Equatable, Sendable {
                     debugDescription: "Duplicate-note proposal requires two or three distinct notes"
                 )
             }
-            self = .duplicateNotes(notes: notes)
+            guard (1 ... 600).contains(explanation.utf16.count) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .explanation,
+                    in: container,
+                    debugDescription: "Duplicate-note explanation must contain 1 to 600 UTF-16 units"
+                )
+            }
+            self = .duplicateNotes(notes: notes, explanation: explanation)
         case "conflict":
             try StrictJSONKey.requireExactKeys(["type", "reason"], from: decoder)
             self = .conflict(
@@ -109,9 +120,10 @@ public enum ReviewProposal: Codable, Equatable, Sendable {
         case let .generatedBlock(blockId):
             try container.encode("generated_block", forKey: .type)
             try container.encode(blockId, forKey: .blockId)
-        case let .duplicateNotes(notes):
+        case let .duplicateNotes(notes, explanation):
             try container.encode("duplicate_notes", forKey: .type)
             try container.encode(notes, forKey: .notes)
+            try container.encode(explanation, forKey: .explanation)
         case let .conflict(reason):
             try container.encode("conflict", forKey: .type)
             try container.encode(reason, forKey: .reason)
@@ -122,12 +134,15 @@ public enum ReviewProposal: Codable, Equatable, Sendable {
     }
 
     private func validateForEncoding() throws {
-        guard case let .duplicateNotes(notes) = self else { return }
+        guard case let .duplicateNotes(notes, explanation) = self else { return }
+        let normalizedExplanation = explanation.trimmingCharacters(in: .whitespacesAndNewlines)
         guard (2 ... 3).contains(notes.count),
               Set(notes.map(\.noteId)).count == notes.count,
-              notes.allSatisfy({ $0.revision > 0 }) else {
+              notes.allSatisfy({ $0.revision > 0 }),
+              normalizedExplanation == explanation,
+              (1 ... 600).contains(explanation.utf16.count) else {
             throw DomainValidationError.invalidValue(
-                "Duplicate-note proposal requires two or three distinct notes with positive revisions"
+                "Duplicate-note proposal requires two or three distinct notes and a bounded explanation"
             )
         }
     }
@@ -222,6 +237,17 @@ public enum ReviewResolution: Codable, Equatable, Sendable {
         _ = try normalizedForRequest()
     }
 
+    fileprivate func validateForGenericReviewRequest() throws {
+        switch self {
+        case .acceptExpansion, .rejectExpansion:
+            throw DomainValidationError.invalidValue(
+                "Generated expansions must use the generated-block resolution endpoint"
+            )
+        case .route, .create, .keepInbox, .dismiss, .keepBoth:
+            return
+        }
+    }
+
     fileprivate func normalizedForRequest() throws -> ReviewResolution {
         switch self {
         case let .route(noteID, expectedRevision):
@@ -277,6 +303,7 @@ public struct ReviewResolveRequest: Codable, Equatable, Sendable {
 
     public init(idempotencyKey: String, resolution: ReviewResolution) throws {
         let resolution = try resolution.normalizedForRequest()
+        try resolution.validateForGenericReviewRequest()
         guard IdempotencyKeyContract.isValid(idempotencyKey) else {
             throw DomainValidationError.invalidValue(
                 "Review resolution request violates the API contract"
@@ -305,6 +332,7 @@ public struct ReviewResolveRequest: Codable, Equatable, Sendable {
 
     public func encode(to encoder: Encoder) throws {
         let resolution = try resolution.normalizedForRequest()
+        try resolution.validateForGenericReviewRequest()
         guard IdempotencyKeyContract.isValid(idempotencyKey) else {
             throw EncodingError.invalidValue(
                 idempotencyKey,
@@ -1052,7 +1080,8 @@ public struct GeneratedBlock: Codable, Equatable, Sendable {
               (state == .proposed ? stateRevision == 1 : stateRevision >= 2),
               (1 ... 120).contains(modelId.utf16.count),
               (1 ... 120).contains(promptVersion.utf16.count),
-              (state == .proposed) == (resolvedAt == nil) else {
+              (state == .proposed) == (resolvedAt == nil),
+              resolvedAt.map({ $0 >= createdAt }) ?? true else {
             throw DecodingError.dataCorruptedError(
                 forKey: .state,
                 in: container,
@@ -1064,18 +1093,52 @@ public struct GeneratedBlock: Codable, Equatable, Sendable {
 
 public struct GeneratedBlockListResponse: Codable, Equatable, Sendable {
     public let items: [GeneratedBlock]
+    public let pageInfo: PageInfo
 
-    private enum CodingKeys: String, CodingKey, CaseIterable { case items }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case items, pageInfo }
 
     public init(from decoder: Decoder) throws {
         try StrictJSONKey.requireExactKeys(CodingKeys.allCases.map(\.rawValue), from: decoder)
         let container = try decoder.container(keyedBy: CodingKeys.self)
         items = try container.decode([GeneratedBlock].self, forKey: .items)
-        guard items.count <= 1_000 else {
+        pageInfo = try container.decode(PageInfo.self, forKey: .pageInfo)
+        let identifiers = items.map { $0.id.rawValue }
+        let isStrictlyOrdered = zip(identifiers, identifiers.dropFirst()).allSatisfy { pair in
+            pair.0 < pair.1
+        }
+        let cursorIsBound = !pageInfo.hasMore || (
+            items.count == 50 && pageInfo.nextCursor == identifiers.last
+        )
+        guard items.count <= 50,
+              items.allSatisfy({ $0.state != .rejected }),
+              Set(identifiers).count == identifiers.count,
+              isStrictlyOrdered,
+              pageInfo.hasMore == (pageInfo.nextCursor != nil),
+              pageInfo.nextCursor.map({ BlockID(rawValue: $0) != nil }) ?? true,
+              cursorIsBound else {
             throw DecodingError.dataCorruptedError(
                 forKey: .items,
                 in: container,
-                debugDescription: "Generated-block response is too large"
+                debugDescription: "Generated-block page violates the API contract"
+            )
+        }
+    }
+}
+
+public struct GeneratedBlockDetailResponse: Codable, Equatable, Sendable {
+    public let block: GeneratedBlock
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case block }
+
+    public init(from decoder: Decoder) throws {
+        try StrictJSONKey.requireExactKeys(CodingKeys.allCases.map(\.rawValue), from: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        block = try container.decode(GeneratedBlock.self, forKey: .block)
+        guard block.state != .rejected else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .block,
+                in: container,
+                debugDescription: "Generated-block detail cannot expose a rejected block"
             )
         }
     }
@@ -1090,17 +1153,65 @@ public struct GeneratedBlockResolveRequest: Codable, Equatable, Sendable {
     public let idempotencyKey: String
     public let resolution: GeneratedBlockResolution
 
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case expectedStateRevision, idempotencyKey, resolution
+    }
+
     public init(
         expectedStateRevision: Int,
         idempotencyKey: String,
         resolution: GeneratedBlockResolution
     ) throws {
-        guard expectedStateRevision > 0 else {
-            throw DomainValidationError.invalidValue("Expected state revision must be positive")
+        guard expectedStateRevision > 0,
+              IdempotencyKeyContract.isValid(idempotencyKey) else {
+            throw DomainValidationError.invalidValue(
+                "Generated-block resolution request violates the API contract"
+            )
         }
         self.expectedStateRevision = expectedStateRevision
         self.idempotencyKey = idempotencyKey
         self.resolution = resolution
+    }
+
+    public init(from decoder: Decoder) throws {
+        try StrictJSONKey.requireExactKeys(CodingKeys.allCases.map(\.rawValue), from: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        do {
+            try self.init(
+                expectedStateRevision: container.decode(
+                    Int.self,
+                    forKey: .expectedStateRevision
+                ),
+                idempotencyKey: container.decode(String.self, forKey: .idempotencyKey),
+                resolution: container.decode(
+                    GeneratedBlockResolution.self,
+                    forKey: .resolution
+                )
+            )
+        } catch {
+            throw DecodingError.dataCorruptedError(
+                forKey: .expectedStateRevision,
+                in: container,
+                debugDescription: "Generated-block resolution request violates the API contract"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        guard expectedStateRevision > 0,
+              IdempotencyKeyContract.isValid(idempotencyKey) else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(
+                    codingPath: encoder.codingPath,
+                    debugDescription: "Generated-block resolution request violates the API contract"
+                )
+            )
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(expectedStateRevision, forKey: .expectedStateRevision)
+        try container.encode(idempotencyKey, forKey: .idempotencyKey)
+        try container.encode(resolution, forKey: .resolution)
     }
 }
 

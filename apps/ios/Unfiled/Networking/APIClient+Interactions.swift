@@ -65,19 +65,56 @@ extension APIClient {
     }
 
     public func listGeneratedBlocks(
-        noteId: NoteID
+        noteId: NoteID,
+        after cursor: String? = nil
     ) async throws -> GeneratedBlockListResponse {
-        try await get("/notes/\(noteId.rawValue)/generated-blocks")
+        if let cursor, BlockID(rawValue: cursor) == nil { throw APIClientError.invalidRequest }
+        let response: GeneratedBlockListResponse = try await get(
+            "/notes/\(noteId.rawValue)/generated-blocks",
+            query: cursor.map { [URLQueryItem(name: "cursor", value: $0)] } ?? [],
+            maximumResponseBytes: 8_388_608
+        )
+        guard response.items.allSatisfy({ block in
+            block.noteId == noteId && (cursor.map { block.id.rawValue > $0 } ?? true)
+        }) else {
+            throw APIClientError.malformedResponse(status: 200)
+        }
+        return response
+    }
+
+    public func getGeneratedBlock(
+        _ id: BlockID,
+        expectedNoteId: NoteID
+    ) async throws -> GeneratedBlockDetailResponse {
+        let response: GeneratedBlockDetailResponse = try await get(
+            "/generated-blocks/\(id.rawValue)",
+            maximumResponseBytes: 8_388_608
+        )
+        guard response.block.id == id,
+              response.block.noteId == expectedNoteId else {
+            throw APIClientError.malformedResponse(status: 200)
+        }
+        return response
     }
 
     public func resolveGeneratedBlock(
         _ id: BlockID,
         request: GeneratedBlockResolveRequest
     ) async throws -> GeneratedBlockResolveResponse {
-        try await post(
+        let response: GeneratedBlockResolveResponse = try await post(
             "/generated-blocks/\(id.rawValue)/resolve",
             body: request,
-            idempotencyKey: request.idempotencyKey
+            idempotencyKey: request.idempotencyKey,
+            maximumResponseBytes: 8_388_608
         )
+        let expectedState: GeneratedBlockState = request.resolution == .accept
+            ? .accepted
+            : .rejected
+        guard response.block.id == id,
+              response.block.state == expectedState,
+              response.block.stateRevision == request.expectedStateRevision + 1 else {
+            throw APIClientError.malformedResponse(status: 200)
+        }
+        return response
     }
 }

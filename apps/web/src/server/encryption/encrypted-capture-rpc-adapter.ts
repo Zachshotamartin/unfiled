@@ -122,8 +122,10 @@ const GENERATED_BLOCK_KEYS = [
   "recordVersion",
   "noteId",
   "decisionId",
+  "reviewItemId",
   "kind",
   "state",
+  "stateRevision",
   "modelId",
   "promptVersion",
   "resolvedAt",
@@ -238,8 +240,10 @@ export type EncryptedGeneratedBlockRead = Readonly<{
   recordVersion: 1;
   noteId: EntityId<"note">;
   decisionId: EntityId<"dec">;
+  reviewItemId: EntityId<"rvw"> | null;
   kind: "summary" | "interpretation" | "suggestion" | "label";
   state: "proposed" | "accepted" | "rejected";
+  stateRevision: number;
   modelId: string;
   promptVersion: string;
   resolvedAt: string | null;
@@ -918,17 +922,31 @@ function parseGeneratedBlock(
     return failure();
   if (row.state !== "proposed" && row.state !== "accepted" && row.state !== "rejected")
     return failure();
+  const stateRevision = positiveInteger(row.stateRevision, MAX_DATABASE_INTEGER, failure);
+  const resolvedAt = nullableTimestamp(row.resolvedAt, failure);
+  const createdAt = timestamp(row.createdAt, failure);
+  if (
+    (row.state === "proposed" && (stateRevision !== 1 || resolvedAt !== null)) ||
+    (row.state !== "proposed" && (stateRevision < 2 || resolvedAt === null)) ||
+    (resolvedAt !== null &&
+      encryptedCaptureTimestampMicros(resolvedAt, failure) <
+        encryptedCaptureTimestampMicros(createdAt, failure))
+  ) {
+    return failure();
+  }
   return Object.freeze({
     blockId,
     recordVersion: 1,
     noteId: entityId(row.noteId, "note", failure),
     decisionId: entityId(row.decisionId, "dec", failure),
+    reviewItemId: nullableEntityId(row.reviewItemId, "rvw", failure),
     kind: row.kind,
     state: row.state,
-    modelId: boundedString(row.modelId, 1, 200, failure),
-    promptVersion: boundedString(row.promptVersion, 1, 100, failure),
-    resolvedAt: nullableTimestamp(row.resolvedAt, failure),
-    createdAt: timestamp(row.createdAt, failure),
+    stateRevision,
+    modelId: boundedString(row.modelId, 1, 120, failure),
+    promptVersion: boundedString(row.promptVersion, 1, 120, failure),
+    resolvedAt,
+    createdAt,
     contentCipher: parseStoredCipher(
       row.contentCipher,
       {

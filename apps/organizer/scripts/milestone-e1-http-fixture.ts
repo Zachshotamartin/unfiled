@@ -699,6 +699,7 @@ async function sealCommand(
       reasonCodes: plan.validatedPlan.reasonCodes,
       verificationMac: keyedMacForRpc(decisionMac)
     }),
+    generatedBlock: null,
     noteWrite: Object.freeze({
       mutation: Object.freeze({
         cipher: encryptedFieldForRpc(mutation),

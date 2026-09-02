@@ -417,6 +417,116 @@
     padding: 3rem 0;
   }
 
+  .generated-block-loading,
+  .generated-blocks-section {
+    width: min(100% - 2rem, 47rem);
+    margin: 0 auto 2.5rem;
+  }
+
+  .generated-block-loading {
+    color: var(--color-text-disabled);
+    font-family: var(--font-geist-mono), monospace;
+    font-size: 0.72rem;
+  }
+
+  .generated-blocks-section {
+    border-top: 1px solid var(--color-border);
+    padding-top: 1.5rem;
+  }
+
+  .generated-blocks-heading {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  .generated-blocks-heading h2 {
+    margin-top: 0.3rem;
+    font-size: 1.35rem;
+    font-weight: 610;
+    letter-spacing: -0.025em;
+  }
+
+  .generated-blocks-heading > p {
+    color: var(--color-text-disabled);
+    font-family: var(--font-geist-mono), monospace;
+    font-size: 0.68rem;
+  }
+
+  .generated-block-list {
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .generated-block-card {
+    border: 1px solid color-mix(in srgb, var(--color-accent) 32%, var(--color-border));
+    border-left: 3px solid var(--color-accent);
+    border-radius: var(--radius-card);
+    padding: 1.15rem;
+    background: color-mix(in srgb, var(--color-accent) 7%, var(--color-surface));
+  }
+
+  .generated-block-label,
+  .generated-block-terminal {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .generated-block-label {
+    color: var(--color-accent);
+    font-family: var(--font-geist-mono), monospace;
+    font-size: 0.68rem;
+    font-weight: 650;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .generated-block-content {
+    margin-top: 0.8rem;
+    color: var(--color-text-primary);
+    font-size: 0.98rem;
+    line-height: 1.7;
+    white-space: pre-wrap;
+  }
+
+  .generated-block-provenance {
+    margin-top: 0.75rem;
+    overflow-wrap: anywhere;
+    color: var(--color-text-disabled);
+    font-family: var(--font-geist-mono), monospace;
+    font-size: 0.66rem;
+  }
+
+  .generated-block-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin-top: 1rem;
+    border-top: 1px solid var(--color-border);
+    padding-top: 0.9rem;
+  }
+
+  .generated-block-actions button {
+    min-width: 7rem;
+    min-height: 2.75rem;
+  }
+
+  .generated-block-terminal {
+    margin-top: 0.9rem;
+    color: var(--color-text-secondary);
+    font-size: 0.75rem;
+  }
+
+  .generated-block-status {
+    min-height: 1.5rem;
+    padding-top: 0.6rem;
+    color: var(--color-text-secondary);
+    font-size: 0.75rem;
+  }
+
   .editor-title {
     display: block;
     width: 100%;

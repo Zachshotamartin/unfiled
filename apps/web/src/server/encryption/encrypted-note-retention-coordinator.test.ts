@@ -446,6 +446,67 @@ describe("encrypted note retention coordinator", () => {
     );
   });
 
+  it("accepts the bounded E3 pending-receipt sentinel before retention reconciliation", async () => {
+    const expansionPayload = CaptureReceiptPayloadSchema.parse({
+      schemaVersion: 2,
+      captureId: CAPTURE_ID,
+      jobId: JOB_ID,
+      decisionId: "dec_81000000000000000000000001",
+      reviewItemId: "rvw_81000000000000000000000001",
+      mutationId: "mut_81000000000000000000000001",
+      outcome: "added_to_note",
+      headline: "Added to a note",
+      destination: { noteId: NOTE_ID, title: "Shopping" },
+      insertedContentReferences: [
+        { type: "captured", itemId: REMOVED_ITEM_ID },
+        { type: "ai_generated", blockId: REMOVED_BLOCK_ID }
+      ],
+      actions: [
+        { type: "open", noteId: NOTE_ID },
+        {
+          type: "move",
+          noteId: NOTE_ID,
+          decisionId: "dec_81000000000000000000000001"
+        },
+        {
+          type: "undo",
+          mutationId: "mut_81000000000000000000000001",
+          expectedRevision: 2
+        }
+      ],
+      reasonCodes: ["semantic_match"],
+      createdAt: "2026-07-01T00:00:00.000Z",
+      undoTargets: [
+        {
+          noteId: NOTE_ID,
+          mutationId: "mut_81000000000000000000000001",
+          expectedRevision: 2
+        }
+      ]
+    });
+    const test = harness({
+      opened: expansionPayload,
+      loaded: receipt({
+        decisionId: expansionPayload.decisionId,
+        reviewItemId: expansionPayload.reviewItemId,
+        mutationId: expansionPayload.mutationId,
+        outcome: "added_to_note",
+        destinationNoteId: NOTE_ID,
+        reasonCodes: ["expansion_pending"]
+      })
+    });
+
+    await expect(
+      test.coordinator.processClaim({ runId: RUN_ID, leaseToken: LEASE_TOKEN, claim: claim() })
+    ).resolves.toMatchObject({ purged: true });
+    expect(test.sealedPayload()).toMatchObject({
+      outcome: "kept_in_inbox",
+      reviewItemId: null,
+      insertedContentReferences: [],
+      reasonCodes: ["semantic_match", "destination_expired"]
+    });
+  });
+
   it("does not commit after cancellation is observed", async () => {
     const test = harness();
     const signal = new AbortController();

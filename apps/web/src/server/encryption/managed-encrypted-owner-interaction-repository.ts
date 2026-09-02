@@ -1,9 +1,15 @@
 import {
   ApiErrorCode,
+  GeneratedBlockDetailResponseSchema,
   type ApiErrorCodeValue,
   type DecisionCorrectionRequest,
   type DecisionCorrectionResponse,
   type EntityId,
+  type GeneratedBlockDetailResponse,
+  type GeneratedBlockListQuery,
+  type GeneratedBlockListResponse,
+  type GeneratedBlockResolveRequest,
+  type GeneratedBlockResolveResponse,
   type MutationBatchUndoResponse,
   type MutationUndoRequest,
   type ReviewResolveRequest,
@@ -20,6 +26,7 @@ import {
 } from "@/server/owner-interactions/encrypted-owner-interaction-coordinator";
 import { EncryptedRoutingRuleCoordinator } from "@/server/routing-rules/encrypted-routing-rule-coordinator";
 import { EncryptedRoutingRuleReader } from "@/server/routing-rules/encrypted-routing-rule-reader";
+import { EncryptedGeneratedBlockReader } from "@/server/generated-blocks/encrypted-generated-block-reader";
 import type {
   OwnerInteractionRepository,
   OwnerInteractionRepositoryContext
@@ -63,6 +70,7 @@ export const managedEncryptedOwnerInteractionRpcFunctions = Object.freeze([
   ...encryptedAggregateRuntimeRpcFunctions,
   ...encryptedOwnerInteractionRpcFunctions,
   "get_encrypted_capture_detail",
+  "get_encrypted_generated_blocks",
   "list_encrypted_library_objects",
   ...encryptedRoutingRuleRpcFunctions
 ] as const);
@@ -197,7 +205,10 @@ export class ManagedEncryptedOwnerInteractionRepository implements OwnerInteract
 
   private async scoped<Result>(
     context: OwnerInteractionRepositoryContext,
-    use: (coordinator: EncryptedOwnerInteractionCoordinator) => Promise<Result>
+    use: (
+      coordinator: EncryptedOwnerInteractionCoordinator,
+      generatedBlocks: EncryptedGeneratedBlockReader
+    ) => Promise<Result>
   ): Promise<Result> {
     const ownerId = authenticatedOwner(context);
     const scope = scopedSignal(this.options.signalForOperation?.(context));
@@ -223,11 +234,12 @@ export class ManagedEncryptedOwnerInteractionRepository implements OwnerInteract
           { signal: scope.signal },
           async ({ access, createPreparedService, service }) => {
             const captureAdapter = createEncryptedCaptureRpcAdapter(client);
+            const libraryStore = createEncryptedLibraryRpcStore(client);
             const routingRuleReader = new EncryptedRoutingRuleReader({
               ownerId,
               access,
               aggregate: service,
-              store: createEncryptedLibraryRpcStore(client),
+              store: libraryStore,
               signal: scope.signal
             });
             const routingRuleCoordinator = new EncryptedRoutingRuleCoordinator({
@@ -279,7 +291,17 @@ export class ManagedEncryptedOwnerInteractionRepository implements OwnerInteract
               routingRuleObservationDeadlineAt: scope.routingRuleObservationDeadlineAt,
               signal: scope.signal
             };
-            return use(new EncryptedOwnerInteractionCoordinator(dependencies));
+            return use(
+              new EncryptedOwnerInteractionCoordinator(dependencies),
+              new EncryptedGeneratedBlockReader({
+                ownerId,
+                access,
+                aggregate: service,
+                captureAdapter,
+                store: libraryStore,
+                signal: scope.signal
+              })
+            );
           }
         );
       })();
@@ -309,6 +331,39 @@ export class ManagedEncryptedOwnerInteractionRepository implements OwnerInteract
     request: DecisionCorrectionRequest
   ): Promise<DecisionCorrectionResponse> {
     return this.scoped(context, (coordinator) => coordinator.correctDecision(decisionId, request));
+  }
+
+  public listGeneratedBlocks(
+    context: OwnerInteractionRepositoryContext,
+    noteId: EntityId<"note">,
+    query: GeneratedBlockListQuery
+  ): Promise<GeneratedBlockListResponse> {
+    return this.scoped(context, (_coordinator, generatedBlocks) =>
+      generatedBlocks.listForNote(noteId, query.cursor ?? null)
+    );
+  }
+
+  public getGeneratedBlock(
+    context: OwnerInteractionRepositoryContext,
+    blockId: EntityId<"blk">
+  ): Promise<GeneratedBlockDetailResponse> {
+    return this.scoped(context, async (_coordinator, generatedBlocks) => {
+      const source = await generatedBlocks.find(blockId);
+      if (source === null || source.block.state === "rejected") {
+        throw new HttpError(404, ApiErrorCode.NOT_FOUND, "That item was not found.");
+      }
+      return Object.freeze(GeneratedBlockDetailResponseSchema.parse({ block: source.block }));
+    });
+  }
+
+  public resolveGeneratedBlock(
+    context: OwnerInteractionRepositoryContext,
+    blockId: EntityId<"blk">,
+    request: GeneratedBlockResolveRequest
+  ): Promise<GeneratedBlockResolveResponse> {
+    return this.scoped(context, (coordinator, generatedBlocks) =>
+      coordinator.resolveGeneratedBlock(blockId, request, generatedBlocks)
+    );
   }
 
   public resolveReviewItem(

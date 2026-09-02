@@ -3,21 +3,62 @@
 import {
   ArrowRightIcon,
   BracketsCurlyIcon,
+  CheckIcon,
   GitDiffIcon,
-  WarningCircleIcon
+  SparkleIcon,
+  WarningCircleIcon,
+  XIcon
 } from "@phosphor-icons/react";
-import type { ReviewItemDto } from "@unfiled/contracts";
+import type {
+  EntityId,
+  GeneratedBlockDetailResponse,
+  GeneratedBlockResolveRequest,
+  PublicReviewResolution,
+  ReviewItemDto
+} from "@unfiled/contracts";
 import Link from "next/link";
+import { useCallback, useRef, useState } from "react";
 
+import {
+  browserApi,
+  isAmbiguousProductMutationFailure,
+  isStaleRevision,
+  productErrorMessage
+} from "@/lib/product/browser-api";
+import { announceProductChange, createIdempotencyKey } from "@/lib/product/client";
+import { useLiveResource } from "@/lib/product/use-live-resource";
 import { usePagedResource } from "@/lib/product/use-paged-resource";
 
+import {
+  GeneratedBlockCard,
+  generatedResolutionAttempt,
+  type GeneratedResolutionAttempt
+} from "./generated-blocks-surface";
 import { EmptyState, ResourceError, ResourceSkeleton } from "./resource-states";
+
+type GeneratedResolution = GeneratedBlockResolveRequest["resolution"];
+type ReviewResolution = Extract<PublicReviewResolution, { type: "dismiss" | "keep_both" }>;
+
+type ReviewAttempt = Readonly<{
+  idempotencyKey: string;
+  resolution: ReviewResolution;
+}>;
+
+export function reviewDecisionAttempt(
+  previous: ReviewAttempt | null | undefined,
+  resolution: ReviewResolution,
+  createKey: () => string = createIdempotencyKey
+): ReviewAttempt {
+  return previous?.resolution.type === resolution.type
+    ? previous
+    : { idempotencyKey: createKey(), resolution };
+}
 
 function reviewKey(item: ReviewItemDto): string {
   return item.id;
 }
 
-function reviewLabel(type: ReviewItemDto["type"]): string {
+export function reviewLabel(type: ReviewItemDto["type"]): string {
   switch (type) {
     case "structure_conflict":
       return "Structure conflict";
@@ -30,16 +71,25 @@ function reviewLabel(type: ReviewItemDto["type"]): string {
     case "low_confidence":
       return "Needs a destination";
     case "pending_expansion":
-      return "Expansion pending";
+      return "AI-generated proposal";
   }
 }
 
-function reviewCopy(item: ReviewItemDto): string {
+export function reviewCopy(item: ReviewItemDto): string {
   if (item.type === "structure_conflict") {
     return "The edit could not be reconciled without risking structured note data. The saved note was left unchanged.";
   }
   if (item.type === "revision_conflict") {
     return "A write targeted an older revision. The newer saved version won and no content was replaced.";
+  }
+  if (item.type === "duplicate_suggestion") {
+    return "Unfiled found notes that may overlap. This is a suggestion only; nothing has been merged or removed.";
+  }
+  if (item.type === "pending_expansion" && item.proposal.type === "generated_block") {
+    return "Generated text is waiting outside your editable note until you accept or reject it.";
+  }
+  if (item.type === "pending_expansion") {
+    return "This older expansion request is held for safety. Dismissing it does not change your note.";
   }
   return "This item needs a decision before Unfiled can continue safely.";
 }
@@ -47,13 +97,218 @@ function reviewCopy(item: ReviewItemDto): string {
 function ReviewIcon({ type }: Readonly<{ type: ReviewItemDto["type"] }>) {
   if (type === "structure_conflict") return <BracketsCurlyIcon size={19} aria-hidden="true" />;
   if (type === "revision_conflict") return <GitDiffIcon size={19} aria-hidden="true" />;
+  if (type === "pending_expansion") return <SparkleIcon size={19} aria-hidden="true" />;
   return <WarningCircleIcon size={19} aria-hidden="true" />;
+}
+
+export function DuplicateReviewProposal({ item }: Readonly<{ item: ReviewItemDto }>) {
+  if (item.proposal.type !== "duplicate_notes") return null;
+  return (
+    <div className="review-proposal" aria-label="Notes in this duplicate suggestion">
+      <p>{item.proposal.explanation}</p>
+      <ul className="review-note-links">
+        {item.proposal.notes.map((note, index) => (
+          <li key={note.noteId}>
+            <Link href={`/app/notes/${note.noteId}`}>
+              Open candidate {index + 1}
+              <span>revision {note.revision}</span>
+              <ArrowRightIcon size={14} aria-hidden="true" />
+            </Link>
+          </li>
+        ))}
+      </ul>
+      <p className="review-safety-copy">
+        Keep both and Dismiss are non-destructive. Neither action merges, deletes, archives, or
+        rewrites a note.
+      </p>
+    </div>
+  );
+}
+
+function GeneratedReviewDecision({
+  blockId,
+  noteId,
+  onResolved
+}: Readonly<{
+  blockId: EntityId<"blk">;
+  noteId: EntityId<"note">;
+  onResolved: (message: string) => void;
+}>) {
+  const load = useCallback(() => browserApi.getGeneratedBlock(blockId, noteId), [blockId, noteId]);
+  const resource = useLiveResource<GeneratedBlockDetailResponse>(
+    `/api/v1/generated-blocks/${blockId}`,
+    load
+  );
+  const attempt = useRef<GeneratedResolutionAttempt | null>(null);
+  const [pending, setPending] = useState<GeneratedResolution | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const block = resource.data?.block ?? null;
+
+  const resolve = useCallback(
+    async (resolution: GeneratedResolution): Promise<void> => {
+      if (pending !== null || block?.state !== "proposed") return;
+      const request = generatedResolutionAttempt(attempt.current, block, resolution);
+      attempt.current = request;
+      setPending(resolution);
+      setError(null);
+      try {
+        const result = await browserApi.resolveGeneratedBlock(block, request);
+        attempt.current = null;
+        const message =
+          result.block.state === "accepted"
+            ? "AI-generated block accepted separately. Your note text was not changed."
+            : "AI-generated block rejected. Your note text was not changed.";
+        announceProductChange(`generated-block:${block.id}`);
+        onResolved(message);
+      } catch (reason) {
+        if (isStaleRevision(reason)) {
+          attempt.current = null;
+          setError(productErrorMessage(reason, "This proposal changed elsewhere. Refreshed."));
+          await resource.refresh();
+        } else {
+          if (!isAmbiguousProductMutationFailure(reason)) attempt.current = null;
+          setError(
+            productErrorMessage(
+              reason,
+              "The decision could not be confirmed. Retry to safely check the same request."
+            )
+          );
+        }
+      } finally {
+        setPending(null);
+      }
+    },
+    [block, onResolved, pending, resource]
+  );
+
+  if (resource.loading && resource.data === null) {
+    return (
+      <p className="review-inline-status" role="status">
+        Loading the encrypted proposal…
+      </p>
+    );
+  }
+  if (resource.error !== null && resource.data === null) {
+    return (
+      <div className="review-proposal">
+        <p className="text-sm text-critical" role="alert">
+          {resource.error}
+        </p>
+        <button type="button" className="quiet-button mt-2" onClick={() => void resource.refresh()}>
+          Try again
+        </button>
+      </div>
+    );
+  }
+  if (block === null) {
+    return (
+      <div className="review-proposal">
+        <p className="review-inline-status" role="status">
+          This proposal is no longer available on the note. Refresh Review to reconcile its state.
+        </p>
+        <button type="button" className="quiet-button mt-2" onClick={() => void resource.refresh()}>
+          Check again
+        </button>
+      </div>
+    );
+  }
+  if (block.state !== "proposed") {
+    return (
+      <p className="review-inline-status" role="status">
+        This block is already {block.state}. Review will reconcile automatically.
+      </p>
+    );
+  }
+
+  return (
+    <div className="review-generated-decision">
+      <GeneratedBlockCard
+        block={block}
+        pending={pending}
+        onResolve={(value) => void resolve(value)}
+      />
+      <p className="review-inline-status text-critical" role="alert">
+        {error}
+      </p>
+    </div>
+  );
+}
+
+function MissingGeneratedBlockBinding() {
+  return (
+    <p className="review-inline-status text-critical" role="alert">
+      This proposal is missing its note binding, so Unfiled will not apply a decision.
+    </p>
+  );
 }
 
 export function ReviewView() {
   const resource = usePagedResource<ReviewItemDto>(
     "/api/v1/review-items?state=open&limit=30",
     reviewKey
+  );
+  const attempts = useRef(new Map<string, ReviewAttempt>());
+  const listRegion = useRef<HTMLDivElement>(null);
+  const [pending, setPending] = useState<Readonly<{
+    reviewItemId: string;
+    resolution: ReviewResolution["type"];
+  }> | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const removeResolvedItem = useCallback(
+    (reviewItemId: string, nextMessage: string): void => {
+      const current = resource.data;
+      if (current !== null) {
+        resource.setData({
+          ...current,
+          items: current.items.filter((item) => item.id !== reviewItemId)
+        });
+      }
+      setError(null);
+      setMessage(nextMessage);
+      announceProductChange(`review-item:${reviewItemId}`);
+      window.requestAnimationFrame(() => listRegion.current?.focus());
+    },
+    [resource]
+  );
+
+  const resolveReview = useCallback(
+    async (item: ReviewItemDto, resolution: ReviewResolution): Promise<void> => {
+      if (pending !== null) return;
+      const request = reviewDecisionAttempt(attempts.current.get(item.id), resolution);
+      attempts.current.set(item.id, request);
+      setPending({ reviewItemId: item.id, resolution: resolution.type });
+      setError(null);
+      setMessage(null);
+      try {
+        const result = await browserApi.resolveReviewItem(item.id, request);
+        attempts.current.delete(item.id);
+        const nextMessage =
+          result.reviewItem.resolution?.type === "keep_both"
+            ? "Both notes kept unchanged. Nothing was merged, removed, or rewritten."
+            : "Suggestion dismissed. No note was changed.";
+        removeResolvedItem(item.id, nextMessage);
+        if (result.replayed) await resource.refresh();
+      } catch (reason) {
+        if (isStaleRevision(reason)) {
+          attempts.current.delete(item.id);
+          setError(productErrorMessage(reason, "This review item changed elsewhere. Refreshed."));
+          await resource.refresh();
+        } else {
+          if (!isAmbiguousProductMutationFailure(reason)) attempts.current.delete(item.id);
+          setError(
+            productErrorMessage(
+              reason,
+              "The decision could not be confirmed. Retry to safely check the same request."
+            )
+          );
+        }
+      } finally {
+        setPending(null);
+      }
+    },
+    [pending, removeResolvedItem, resource]
   );
 
   if (resource.loading && resource.data === null) return <ResourceSkeleton rows={4} />;
@@ -66,44 +321,95 @@ export function ReviewView() {
       />
     );
   }
-  if (resource.data?.items.length === 0) {
+  if (resource.data?.items.length === 0 && message === null && error === null) {
     return (
       <EmptyState
         title="Nothing needs review."
-        body="Conflicting edits and structure questions will wait here without changing the saved note."
+        body="Generated proposals, possible duplicates, and conflicting edits will wait here without changing the saved note."
       />
     );
   }
 
   return (
-    <div>
+    <div ref={listRegion} tabIndex={-1} aria-label="Open review decisions">
+      <p
+        className="review-view-status"
+        aria-live="polite"
+        role={error === null ? "status" : "alert"}
+      >
+        {error ?? message}
+      </p>
       <div className="border-t border-outline">
-        {resource.data?.items.map((item) => (
-          <article key={item.id} className="review-row">
-            <div className="review-icon">
-              <ReviewIcon type={item.type} />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-baseline justify-between gap-3">
-                <h2 className="text-lg font-medium">{reviewLabel(item.type)}</h2>
-                <time
-                  className="font-mono text-[11px] text-disabled-content"
-                  dateTime={item.createdAt}
-                >
-                  {new Date(item.createdAt).toLocaleString()}
-                </time>
+        {resource.data?.items.map((item) => {
+          const duplicate = item.proposal.type === "duplicate_notes";
+          const generatedProposal = item.proposal.type === "generated_block" ? item.proposal : null;
+          const legacyExpansion =
+            item.type === "pending_expansion" &&
+            item.proposal.type === "conflict" &&
+            item.proposal.reason === "consent_controls";
+          const itemPending = pending?.reviewItemId === item.id ? pending.resolution : null;
+          return (
+            <article key={item.id} className="review-row">
+              <div className="review-icon">
+                <ReviewIcon type={item.type} />
               </div>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-content">
-                {reviewCopy(item)}
-              </p>
-            </div>
-            {item.noteId === null ? null : (
-              <Link className="quiet-button shrink-0" href={`/app/notes/${item.noteId}`}>
-                Open note <ArrowRightIcon size={15} aria-hidden="true" />
-              </Link>
-            )}
-          </article>
-        ))}
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-baseline justify-between gap-3">
+                  <h2 className="text-lg font-medium">{reviewLabel(item.type)}</h2>
+                  <time
+                    className="font-mono text-[11px] text-disabled-content"
+                    dateTime={item.createdAt}
+                  >
+                    {new Date(item.createdAt).toLocaleString()}
+                  </time>
+                </div>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-content">
+                  {reviewCopy(item)}
+                </p>
+                {duplicate ? <DuplicateReviewProposal item={item} /> : null}
+                {generatedProposal !== null && item.noteId !== null ? (
+                  <GeneratedReviewDecision
+                    blockId={generatedProposal.blockId}
+                    noteId={item.noteId}
+                    onResolved={(nextMessage) => removeResolvedItem(item.id, nextMessage)}
+                  />
+                ) : null}
+                {generatedProposal !== null && item.noteId === null ? (
+                  <MissingGeneratedBlockBinding />
+                ) : null}
+                {duplicate || legacyExpansion ? (
+                  <div className="review-actions" aria-label="Review decision">
+                    {duplicate ? (
+                      <button
+                        type="button"
+                        className="button-primary"
+                        disabled={pending !== null}
+                        onClick={() => void resolveReview(item, { type: "keep_both" })}
+                      >
+                        <CheckIcon size={16} weight="bold" aria-hidden="true" />
+                        {itemPending === "keep_both" ? "Keeping…" : "Keep both"}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="button-secondary"
+                      disabled={pending !== null}
+                      onClick={() => void resolveReview(item, { type: "dismiss" })}
+                    >
+                      <XIcon size={16} weight="bold" aria-hidden="true" />
+                      {itemPending === "dismiss" ? "Dismissing…" : "Dismiss"}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+              {item.noteId === null || generatedProposal !== null ? null : (
+                <Link className="quiet-button shrink-0" href={`/app/notes/${item.noteId}`}>
+                  Open note <ArrowRightIcon size={15} aria-hidden="true" />
+                </Link>
+              )}
+            </article>
+          );
+        })}
       </div>
       {resource.data?.pageInfo.hasMore ? (
         <div className="pagination-row">

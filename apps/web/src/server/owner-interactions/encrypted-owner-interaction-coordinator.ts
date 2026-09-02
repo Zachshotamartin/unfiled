@@ -1,6 +1,8 @@
 import {
   DecisionCorrectionRequestSchema,
   DecisionCorrectionResponseSchema,
+  GeneratedBlockResolveRequestSchema,
+  GeneratedBlockResolveResponseSchema,
   MutationBatchUndoResponseSchema,
   MutationUndoRequestSchema,
   NoteRevisionSchema,
@@ -16,6 +18,8 @@ import {
   type DecisionCorrectionRequest,
   type DecisionCorrectionResponse,
   type EntityId,
+  type GeneratedBlockResolveRequest,
+  type GeneratedBlockResolveResponse,
   type MutationBatchUndoMember,
   type MutationBatchUndoResponse,
   type NoteDto,
@@ -85,9 +89,12 @@ import type {
   OwnerInteractionPreparedSource,
   OwnerInteractionWriteCommand,
   PrepareDecisionCorrectionResult,
+  PrepareGeneratedBlockResolutionResult,
   PrepareMutationBatchUndoResult,
   PrepareReviewResolutionResult
 } from "@/server/encryption/encrypted-owner-interaction-rpc-adapter";
+import type { EncryptedGeneratedBlockReader } from "@/server/generated-blocks/encrypted-generated-block-reader";
+import { generatedExpansionReceiptProjectionMatches } from "@/server/encryption/encrypted-receipt-projection";
 import type {
   EncryptedNoteMutationRead,
   EncryptedNoteRead
@@ -117,6 +124,11 @@ type CorrectionLogicalPayload = z.infer<typeof CorrectionLogicalPayloadSchema>;
 
 const ReviewLogicalPayloadSchema = z.strictObject({ request: ReviewResolveRequestSchema });
 type ReviewLogicalPayload = z.infer<typeof ReviewLogicalPayloadSchema>;
+
+const GeneratedBlockLogicalPayloadSchema = z.strictObject({
+  request: GeneratedBlockResolveRequestSchema
+});
+type GeneratedBlockLogicalPayload = z.infer<typeof GeneratedBlockLogicalPayloadSchema>;
 
 const BatchLogicalPayloadSchema = z.strictObject({
   request: MutationUndoRequestSchema,
@@ -473,6 +485,19 @@ function sourceReceiptMatches(
     (row.outcome === "created_note" || row.outcome === "added_to_note") &&
     row.reasonCodes.length === 1 &&
     row.reasonCodes[0] === ENCRYPTED_ORGANIZER_REASON_SENTINEL;
+  const generatedExpansionProjectionMatches = generatedExpansionReceiptProjectionMatches(
+    payload,
+    {
+      recordVersion: row.recordVersion,
+      privacy: row.sourcePrivacy,
+      decisionId: row.decisionId,
+      reviewItemId: row.reviewItemId,
+      mutationId: row.mutationId,
+      outcome: row.outcome,
+      reasonCodes: row.reasonCodes
+    },
+    source.generatedBlock?.blockId
+  );
   return (
     payload.captureId === row.captureId &&
     payload.jobId === row.jobId &&
@@ -481,7 +506,7 @@ function sourceReceiptMatches(
     payload.mutationId === row.mutationId &&
     payload.outcome === row.outcome &&
     payload.destination?.noteId === (row.destinationNoteId ?? undefined) &&
-    (exactReasonsMatch || organizerReasonProjectionMatches)
+    (exactReasonsMatch || organizerReasonProjectionMatches || generatedExpansionProjectionMatches)
   );
 }
 
@@ -639,6 +664,39 @@ function restoredRouteReceipt(
     reasonCodes: ["user_undo"],
     createdAt: source.createdAt,
     undoTargets: []
+  });
+}
+
+function terminalGeneratedBlockReceipt(
+  source: CaptureReceiptPayload,
+  blockId: EntityId<"blk">,
+  resolution: GeneratedBlockResolveRequest["resolution"]
+): CaptureReceiptPayload {
+  if (source.schemaVersion !== 2 || source.reviewItemId === null) return unavailable();
+  const terminalReason = resolution === "accept" ? "expansion_accepted" : "expansion_rejected";
+  if (
+    source.reasonCodes.includes("expansion_accepted") ||
+    source.reasonCodes.includes("expansion_rejected")
+  ) {
+    return unavailable();
+  }
+  const generated = source.insertedContentReferences.filter(
+    (reference) => reference.type === "ai_generated"
+  );
+  if (generated.length !== 1 || generated[0]?.blockId !== blockId) return unavailable();
+  const withoutGeneratedReference = source.insertedContentReferences.filter(
+    (reference) => reference.type !== "ai_generated"
+  );
+  const insertedContentReferences =
+    resolution === "accept" ? source.insertedContentReferences : withoutGeneratedReference;
+  if (insertedContentReferences.length > 500) return unavailable();
+  const reasonCodes = [...new Set(source.reasonCodes), terminalReason];
+  if (reasonCodes.length > 20) return unavailable();
+  return CaptureReceiptPayloadSchema.parse({
+    ...source,
+    reviewItemId: null,
+    insertedContentReferences,
+    reasonCodes
   });
 }
 
@@ -801,6 +859,34 @@ function assertReviewResponseBinding(
         response.reviewItem.createdAt !== source.createdAt)) ||
     (authenticatedPayload !== null &&
       !isDeepStrictEqual(response.reviewItem.proposal, authenticatedPayload.proposal))
+  ) {
+    return unavailable();
+  }
+}
+
+function assertGeneratedBlockResponseBinding(
+  response: GeneratedBlockResolveResponse,
+  preparation: PrepareGeneratedBlockResolutionResult,
+  request: GeneratedBlockResolveRequest,
+  result: OwnerInteractionCommitResult
+): void {
+  const expectedState = request.resolution === "accept" ? "accepted" : "rejected";
+  if (
+    response.block.id !== preparation.ids.generatedBlockId ||
+    response.block.state !== expectedState ||
+    response.block.stateRevision !== request.expectedStateRevision + 1 ||
+    response.block.resolvedAt !== preparation.occurredAt ||
+    result.scope !== "encrypted_review_resolution" ||
+    result.outcome !== expectedState ||
+    result.reviewItemId !== preparation.ids.reviewItemId ||
+    result.members.length !== 0 ||
+    result.decisionId !== null ||
+    result.batchId !== null ||
+    result.feedbackEventId === null ||
+    !("generatedBlockId" in result) ||
+    result.generatedBlockId !== preparation.ids.generatedBlockId ||
+    !("stateRevision" in result) ||
+    result.stateRevision !== request.expectedStateRevision + 1
   ) {
     return unavailable();
   }
@@ -2153,6 +2239,7 @@ export class EncryptedOwnerInteractionCoordinator {
       reviewPayload.schemaVersion !== 2 ||
       reviewPayload.state !== sourceReview.state ||
       reviewPayload.resolution !== null ||
+      reviewPayload.proposal.type === "generated_block" ||
       !reviewProposalMatchesType(sourceReview.type, reviewPayload.proposal) ||
       !reviewResolutionMatchesSemantics(
         sourceReview.type,
@@ -2172,10 +2259,15 @@ export class EncryptedOwnerInteractionCoordinator {
     > = null;
     let writes: readonly PreparedWrite[] = Object.freeze([]);
     let receiptPayload: CaptureReceiptPayload | null = null;
+    const resolvesCaptureLinkedDuplicate =
+      sourceReview.type === "duplicate_suggestion" &&
+      (request.resolution.type === "keep_both" || request.resolution.type === "dismiss") &&
+      preparation.source.receipt !== null;
     const changesReceipt =
       request.resolution.type === "route" ||
       request.resolution.type === "create" ||
-      request.resolution.type === "keep_inbox";
+      request.resolution.type === "keep_inbox" ||
+      resolvesCaptureLinkedDuplicate;
     const receipt = changesReceipt ? await this.openReceipt(preparation.source) : null;
     if (request.resolution.type === "route" || request.resolution.type === "create") {
       const member = preparation.members[0] ?? unavailable();
@@ -2212,7 +2304,7 @@ export class EncryptedOwnerInteractionCoordinator {
         ["review_resolved"]
       );
     } else if (
-      request.resolution.type === "keep_inbox" &&
+      (request.resolution.type === "keep_inbox" || resolvesCaptureLinkedDuplicate) &&
       receipt !== null &&
       reservationIfPresent(preparation.reservations, "receipt") !== null
     ) {
@@ -2265,6 +2357,159 @@ export class EncryptedOwnerInteractionCoordinator {
     });
     const parsedResponse = ReviewResolveResponseSchema.parse(opened);
     assertReviewResponseBinding(parsedResponse, preparation, request, result, terminalPayload);
+    return parsedResponse;
+  }
+
+  public async resolveGeneratedBlock(
+    blockId: EntityId<"blk">,
+    requestValue: GeneratedBlockResolveRequest,
+    reader: EncryptedGeneratedBlockReader
+  ): Promise<GeneratedBlockResolveResponse> {
+    const request = parsed(GeneratedBlockResolveRequestSchema, requestValue);
+    const located = await reader.get(blockId);
+    const reviewItemId = located.source.reviewItemId;
+    if (reviewItemId === null) return invalidInput();
+    const preparation = await this.dependencies.adapter.prepareGeneratedBlockResolution({
+      ownerId: this.ownerId,
+      blockId,
+      reviewItemId,
+      request
+    });
+    const payload: GeneratedBlockLogicalPayload = Object.freeze({ request });
+    const logical = logicalRequest(
+      "resolve_generated_block",
+      blockId,
+      request.expectedStateRevision,
+      payload
+    );
+    if (preparation.completed) {
+      const replayed = await this.replay({
+        idempotencyKey: request.idempotencyKey,
+        logicalRequest: logical,
+        requestCodec: GeneratedBlockLogicalPayloadSchema,
+        responseCodec: GeneratedBlockResolveResponseSchema,
+        requestMacKey: preparation.requestMacKey,
+        encryptedResponse: preparation.encryptedResponse,
+        encryptedResponseVerificationMac: preparation.encryptedResponseVerificationMac,
+        commit: (requestMac) =>
+          this.dependencies.adapter.commitGeneratedBlockResolution({
+            ownerId: this.ownerId,
+            blockId,
+            request,
+            preparation,
+            command: { requestMac }
+          })
+      });
+      const response = GeneratedBlockResolveResponseSchema.parse(replayed.response);
+      assertGeneratedBlockResponseBinding(response, preparation, request, replayed.result);
+      return response;
+    }
+
+    const sourceBlock = preparation.source.generatedBlock;
+    const sourceReview = preparation.source.review;
+    if (
+      sourceBlock === null ||
+      sourceBlock === undefined ||
+      sourceReview === null ||
+      sourceBlock.blockId !== blockId ||
+      sourceBlock.reviewItemId !== reviewItemId ||
+      sourceBlock.noteId !== sourceReview.noteId
+    ) {
+      return unavailable();
+    }
+    const [blockPayload, openedReview, openedReceipt] = await Promise.all([
+      this.dependencies.aggregate.openGeneratedBlock(
+        this.dependencies.access,
+        sourceBlock.contentCipher,
+        { blockId }
+      ),
+      this.dependencies.aggregate.openReview(this.dependencies.access, sourceReview.contentCipher, {
+        reviewId: reviewItemId,
+        recordVersion: sourceReview.recordVersion,
+        sourcePrivacy: sourceReview.contentCipher.keyClass
+      }),
+      this.openReceipt(preparation.source)
+    ]);
+    this.active();
+    const reviewPayload = ReviewPayloadSchema.parse(openedReview);
+    if (
+      reviewPayload.schemaVersion !== 2 ||
+      reviewPayload.state !== "open" ||
+      reviewPayload.resolution !== null ||
+      reviewPayload.proposal.type !== "generated_block" ||
+      reviewPayload.proposal.blockId !== blockId ||
+      openedReceipt?.reviewItemId !== reviewItemId
+    ) {
+      return invalidInput();
+    }
+    const internalResolution =
+      request.resolution === "accept"
+        ? ({ type: "accept_expansion" } as const)
+        : ({ type: "reject_expansion" } as const);
+    const terminalReviewPayload = ReviewPayloadSchema.parse({
+      ...reviewPayload,
+      state: "resolved",
+      resolution: internalResolution
+    }) as ReviewPayloadV2;
+    const receiptPayload = terminalGeneratedBlockReceipt(
+      openedReceipt,
+      blockId,
+      request.resolution
+    );
+    const response = GeneratedBlockResolveResponseSchema.parse({
+      block: {
+        id: blockId,
+        noteId: sourceBlock.noteId,
+        decisionId: sourceBlock.decisionId,
+        kind: sourceBlock.kind,
+        content: blockPayload.content,
+        state: request.resolution === "accept" ? "accepted" : "rejected",
+        stateRevision: request.expectedStateRevision + 1,
+        modelId: sourceBlock.modelId,
+        promptVersion: sourceBlock.promptVersion,
+        createdAt: sourceBlock.createdAt,
+        resolvedAt: preparation.occurredAt
+      },
+      replayed: false
+    });
+    const review: ReviewEffect = Object.freeze({
+      id: reviewItemId,
+      recordVersion: sourceReview.recordVersion + 1,
+      type: "pending_expansion",
+      payload: terminalReviewPayload
+    });
+    const sealed = await this.sealCommand({
+      idempotencyKey: request.idempotencyKey,
+      logicalRequest: logical,
+      requestCodec: GeneratedBlockLogicalPayloadSchema,
+      response,
+      responseCodec: GeneratedBlockResolveResponseSchema,
+      requestMacKey: preparation.requestMacKey,
+      reservations: preparation.reservations,
+      source: preparation.source,
+      cryptoMembers: preparation.members,
+      writes: Object.freeze([]),
+      review,
+      receipt: receiptPayload
+    });
+    const result = await this.dependencies.adapter.commitGeneratedBlockResolution({
+      ownerId: this.ownerId,
+      blockId,
+      request,
+      preparation,
+      command: sealed.command
+    });
+    const opened = await this.openCommittedResponse({
+      result,
+      requestMac: sealed.requestMac,
+      idempotencyKey: request.idempotencyKey,
+      logicalRequest: logical,
+      requestCodec: GeneratedBlockLogicalPayloadSchema,
+      responseCodec: GeneratedBlockResolveResponseSchema,
+      expectedResponse: response
+    });
+    const parsedResponse = GeneratedBlockResolveResponseSchema.parse(opened);
+    assertGeneratedBlockResponseBinding(parsedResponse, preparation, request, result);
     return parsedResponse;
   }
 

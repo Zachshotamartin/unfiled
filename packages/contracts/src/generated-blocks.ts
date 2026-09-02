@@ -2,6 +2,11 @@ import { z } from "zod";
 
 import { entityIdSchema } from "./ids.js";
 import { ExpectedRevisionSchema, IdempotencyKeySchema } from "./idempotency.js";
+import { PageInfoSchema } from "./pagination.js";
+
+/** A fixed, bounded page keeps encrypted reads responsive as accepted blocks accumulate. */
+export const GENERATED_BLOCK_PAGE_SIZE = 50;
+export const MAX_GENERATED_BLOCK_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 export const GeneratedBlockKindSchema = z.enum([
   "summary",
@@ -47,13 +52,67 @@ export const GeneratedBlockDtoSchema = z
         path: ["stateRevision"]
       });
     }
+    if (block.resolvedAt !== null && Date.parse(block.resolvedAt) < Date.parse(block.createdAt)) {
+      context.addIssue({
+        code: "custom",
+        message: "A generated block cannot resolve before it was created",
+        path: ["resolvedAt"]
+      });
+    }
   });
 export type GeneratedBlockDto = z.infer<typeof GeneratedBlockDtoSchema>;
 
-export const GeneratedBlockListResponseSchema = z.strictObject({
-  items: z.array(GeneratedBlockDtoSchema).max(1_000)
+/** Public reads never disclose rejected content during its encrypted retention window. */
+export const VisibleGeneratedBlockDtoSchema = GeneratedBlockDtoSchema.safeExtend({
+  state: z.enum(["proposed", "accepted"])
 });
+export type VisibleGeneratedBlockDto = z.infer<typeof VisibleGeneratedBlockDtoSchema>;
+
+export const GeneratedBlockListQuerySchema = z.strictObject({
+  cursor: entityIdSchema("blk").optional()
+});
+export type GeneratedBlockListQuery = z.infer<typeof GeneratedBlockListQuerySchema>;
+
+export const GeneratedBlockListResponseSchema = z
+  .strictObject({
+    items: z.array(VisibleGeneratedBlockDtoSchema).max(GENERATED_BLOCK_PAGE_SIZE),
+    pageInfo: PageInfoSchema
+  })
+  .superRefine(({ items, pageInfo }, context) => {
+    for (const [index, block] of items.entries()) {
+      const previous = items[index - 1];
+      if (previous !== undefined && block.id <= previous.id) {
+        context.addIssue({
+          code: "custom",
+          message: "Generated-block pages must be strictly ordered by block identifier",
+          path: ["items", index, "id"]
+        });
+      }
+    }
+    if (pageInfo.hasMore !== (pageInfo.nextCursor !== null)) {
+      context.addIssue({
+        code: "custom",
+        message: "Generated-block pagination state is inconsistent",
+        path: ["pageInfo"]
+      });
+    }
+    if (
+      pageInfo.hasMore &&
+      (items.length !== GENERATED_BLOCK_PAGE_SIZE || pageInfo.nextCursor !== items.at(-1)?.id)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "A continuing generated-block page must be full and cursor-bound",
+        path: ["pageInfo", "nextCursor"]
+      });
+    }
+  });
 export type GeneratedBlockListResponse = z.infer<typeof GeneratedBlockListResponseSchema>;
+
+export const GeneratedBlockDetailResponseSchema = z.strictObject({
+  block: VisibleGeneratedBlockDtoSchema
+});
+export type GeneratedBlockDetailResponse = z.infer<typeof GeneratedBlockDetailResponseSchema>;
 
 export const GeneratedBlockResolveRequestSchema = z.strictObject({
   expectedStateRevision: ExpectedRevisionSchema,

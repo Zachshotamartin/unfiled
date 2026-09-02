@@ -1,15 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { manualNoteFixtures } from "@unfiled/contracts";
+import {
+  GeneratedBlockDtoSchema,
+  manualNoteFixtures,
+  type GeneratedBlockDto
+} from "@unfiled/contracts";
 
 import { ApiClientMalformedResponseError, createApiClient } from "../src/index.js";
 
 const NOTE_A = "note_01J6M9Q7G4BMKB33GSG3NJ6D1X";
 const NOTE_B = "note_01J6M9Q7G4BMKB33GSG3NJ6D1Y";
 const DECISION_ID = "dec_01J6M9Q7G4BMKB33GSG3NJ6D1X";
+const DECISION_OTHER = "dec_01J6M9Q7G4BMKB33GSG3NJ6D1Y";
 const REVIEW_ID = "rvw_01J6M9Q7G4BMKB33GSG3NJ6D1X";
 const RULE_ID = "rule_01J6M9Q7G4BMKB33GSG3NJ6D1X";
 const BLOCK_ID = "blk_01J6M9Q7G4BMKB33GSG3NJ6D1X";
+const BLOCK_OTHER = "blk_01J6M9Q7G4BMKB33GSG3NJ6D1Y";
 const MUTATION_A = "mut_01J6M9Q7G4BMKB33GSG3NJ6D1X";
 const MUTATION_B = "mut_01J6M9Q7G4BMKB33GSG3NJ6D1Y";
 const NOW = "2026-09-01T18:30:00.000Z";
@@ -51,6 +57,23 @@ function oversizedStreamResponse(status: number, onCancel: () => void): Response
     }),
     { status }
   );
+}
+
+function generatedBlock(overrides: Readonly<Partial<GeneratedBlockDto>> = {}): GeneratedBlockDto {
+  return GeneratedBlockDtoSchema.parse({
+    id: BLOCK_ID,
+    noteId: NOTE_A,
+    decisionId: DECISION_ID,
+    kind: "suggestion",
+    content: "A useful expansion",
+    state: "proposed",
+    stateRevision: 1,
+    modelId: "gpt-test",
+    promptVersion: "organizer-v1",
+    createdAt: NOW,
+    resolvedAt: null,
+    ...overrides
+  });
 }
 
 async function expectRoutingRuleMutationsToBoundStreamedResponse(status: number): Promise<void> {
@@ -283,7 +306,8 @@ describe("Milestone E/F API client", () => {
       .mockResolvedValueOnce(jsonResponse({ ruleId: RULE_ID, deleted: true, replayed: false }))
       .mockResolvedValueOnce(
         jsonResponse({
-          items: [{ ...block, state: "proposed", stateRevision: 1, resolvedAt: null }]
+          items: [{ ...block, state: "proposed", stateRevision: 1, resolvedAt: null }],
+          pageInfo: { hasMore: false, nextCursor: null }
         })
       )
       .mockResolvedValueOnce(jsonResponse({ block, replayed: false }));
@@ -308,7 +332,7 @@ describe("Milestone E/F API client", () => {
       idempotencyKey: "rule-delete-01"
     });
     await client.listGeneratedBlocks(NOTE_A);
-    await client.resolveGeneratedBlock(BLOCK_ID, {
+    await client.resolveGeneratedBlock(generatedBlock({ modelId: block.modelId }), {
       expectedStateRevision: 1,
       idempotencyKey: "block-resolve-01",
       resolution: "accept"
@@ -323,6 +347,200 @@ describe("Milestone E/F API client", () => {
       [`https://example.test/api/v1/generated-blocks/${BLOCK_ID}/resolve`, "POST"]
     ]);
     expect(fetcher.mock.calls.every(([, init]) => init?.cache === "no-store")).toBe(true);
+  });
+
+  it("retries an ambiguous generated-block resolution with the exact body and key", async () => {
+    const input = {
+      expectedStateRevision: 1,
+      idempotencyKey: "block-retry-01",
+      resolution: "accept" as const
+    };
+    const accepted = generatedBlock({ state: "accepted", stateRevision: 2, resolvedAt: NOW });
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            code: "provider_unavailable",
+            message: "Unfiled could not complete that request. Try again.",
+            requestId: "request-block-retry"
+          },
+          503
+        )
+      )
+      .mockResolvedValueOnce(jsonResponse({ block: accepted, replayed: true }));
+    const client = makeClient(fetcher);
+
+    await expect(client.resolveGeneratedBlock(generatedBlock(), input)).rejects.toMatchObject({
+      status: 503
+    });
+    await expect(client.resolveGeneratedBlock(generatedBlock(), input)).resolves.toEqual({
+      block: accepted,
+      replayed: true
+    });
+    expect(requestJsonBody(fetcher, 0)).toEqual(input);
+    expect(requestJsonBody(fetcher, 1)).toEqual(input);
+    expect(fetcher.mock.calls.map(([, init]) => init?.headers)).toEqual([
+      expect.objectContaining({ "idempotency-key": input.idempotencyKey }),
+      expect.objectContaining({ "idempotency-key": input.idempotencyKey })
+    ]);
+  });
+
+  it("rejects duplicate, cross-note, and mismatched generated-block responses", async () => {
+    const otherNoteBlock = generatedBlock({ noteId: NOTE_B });
+    const proposed = generatedBlock();
+    const wrongTerminal = generatedBlock({
+      state: "accepted",
+      stateRevision: 3,
+      resolvedAt: NOW
+    });
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ items: [otherNoteBlock], pageInfo: { hasMore: false, nextCursor: null } })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [proposed, proposed],
+          pageInfo: { hasMore: false, nextCursor: null }
+        })
+      )
+      .mockResolvedValueOnce(jsonResponse({ block: wrongTerminal, replayed: false }));
+    const client = makeClient(fetcher);
+
+    await expect(client.listGeneratedBlocks(NOTE_A)).rejects.toBeInstanceOf(
+      ApiClientMalformedResponseError
+    );
+    await expect(client.listGeneratedBlocks(NOTE_A)).rejects.toBeInstanceOf(
+      ApiClientMalformedResponseError
+    );
+    await expect(
+      client.resolveGeneratedBlock(proposed, {
+        expectedStateRevision: 1,
+        idempotencyKey: "block-mismatch-01",
+        resolution: "accept"
+      })
+    ).rejects.toBeInstanceOf(ApiClientMalformedResponseError);
+  });
+
+  it("threads generated-block cursors and binds exact reads to both block and note", async () => {
+    const next = generatedBlock({ id: BLOCK_OTHER });
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ items: [next], pageInfo: { hasMore: false, nextCursor: null } })
+      )
+      .mockResolvedValueOnce(jsonResponse({ block: next }))
+      .mockResolvedValueOnce(jsonResponse({ block: generatedBlock({ noteId: NOTE_B }) }))
+      .mockResolvedValueOnce(jsonResponse({ block: next }));
+    const client = makeClient(fetcher);
+
+    await expect(client.listGeneratedBlocks(NOTE_A, { cursor: BLOCK_ID })).resolves.toEqual({
+      items: [next],
+      pageInfo: { hasMore: false, nextCursor: null }
+    });
+    await expect(client.getGeneratedBlock(BLOCK_OTHER, NOTE_A)).resolves.toEqual({ block: next });
+    await expect(client.getGeneratedBlock(BLOCK_ID, NOTE_A)).rejects.toBeInstanceOf(
+      ApiClientMalformedResponseError
+    );
+    await expect(client.getGeneratedBlock(BLOCK_ID, NOTE_A)).rejects.toBeInstanceOf(
+      ApiClientMalformedResponseError
+    );
+
+    expect(requestUrl(fetcher.mock.calls[0]?.[0] ?? "")).toBe(
+      `https://example.test/api/v1/notes/${NOTE_A}/generated-blocks?cursor=${BLOCK_ID}`
+    );
+    expect(requestUrl(fetcher.mock.calls[1]?.[0] ?? "")).toBe(
+      `https://example.test/api/v1/generated-blocks/${BLOCK_OTHER}`
+    );
+  });
+
+  it("rejects retained rejected content from public generated-block reads", async () => {
+    const rejected = generatedBlock({
+      state: "rejected",
+      stateRevision: 2,
+      resolvedAt: NOW
+    });
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ items: [rejected], pageInfo: { hasMore: false, nextCursor: null } })
+      )
+      .mockResolvedValueOnce(jsonResponse({ block: rejected }))
+      .mockResolvedValueOnce(jsonResponse({ block: rejected, replayed: true }));
+    const client = makeClient(fetcher);
+
+    await expect(client.listGeneratedBlocks(NOTE_A)).rejects.toBeInstanceOf(
+      ApiClientMalformedResponseError
+    );
+    await expect(client.getGeneratedBlock(BLOCK_ID, NOTE_A)).rejects.toBeInstanceOf(
+      ApiClientMalformedResponseError
+    );
+    await expect(
+      client.resolveGeneratedBlock(generatedBlock(), {
+        expectedStateRevision: 1,
+        idempotencyKey: "block-rejected-replay-01",
+        resolution: "reject"
+      })
+    ).resolves.toEqual({ block: rejected, replayed: true });
+  });
+
+  it("binds every immutable generated-block field before trusting a resolution", async () => {
+    const source = generatedBlock();
+    const substitutions: readonly Readonly<Partial<GeneratedBlockDto>>[] = [
+      { id: BLOCK_OTHER },
+      { noteId: NOTE_B },
+      { decisionId: DECISION_OTHER },
+      { kind: "summary" },
+      { content: "Substituted generated content" },
+      { modelId: "substituted-model" },
+      { promptVersion: "substituted-prompt" },
+      { createdAt: "2026-09-01T18:29:00.000Z" }
+    ];
+
+    for (const [index, substitution] of substitutions.entries()) {
+      const responseBlock = generatedBlock({
+        state: "accepted",
+        stateRevision: 2,
+        resolvedAt: NOW,
+        ...substitution
+      });
+      const fetcher = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(jsonResponse({ block: responseBlock, replayed: false }));
+      const client = makeClient(fetcher);
+
+      await expect(
+        client.resolveGeneratedBlock(source, {
+          expectedStateRevision: 1,
+          idempotencyKey: `block-substitution-${index}`,
+          resolution: "accept"
+        })
+      ).rejects.toBeInstanceOf(ApiClientMalformedResponseError);
+    }
+  });
+
+  it("cancels oversized generated-block list and resolution responses", async () => {
+    const listCancellation = vi.fn();
+    const resolutionCancellation = vi.fn();
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(oversizedStreamResponse(200, listCancellation))
+      .mockResolvedValueOnce(oversizedStreamResponse(200, resolutionCancellation));
+    const client = makeClient(fetcher);
+
+    await expect(client.listGeneratedBlocks(NOTE_A)).rejects.toBeInstanceOf(
+      ApiClientMalformedResponseError
+    );
+    await expect(
+      client.resolveGeneratedBlock(generatedBlock(), {
+        expectedStateRevision: 1,
+        idempotencyKey: "block-bound-01",
+        resolution: "reject"
+      })
+    ).rejects.toBeInstanceOf(ApiClientMalformedResponseError);
+    expect(listCancellation).toHaveBeenCalledOnce();
+    expect(resolutionCancellation).toHaveBeenCalledOnce();
   });
 
   it("aggregates every bounded routing-rule page without losing retained rules", async () => {

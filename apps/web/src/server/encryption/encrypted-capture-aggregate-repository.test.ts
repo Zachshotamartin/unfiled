@@ -1,6 +1,7 @@
 import { createEntityId, type RoutingRuleMatchSnapshot } from "@unfiled/contracts";
 import type { ContentEnvelopeV1 } from "@unfiled/content-crypto";
 import {
+  CaptureReceiptPayloadSchema,
   authorizeAggregateOwner,
   type AggregateContentKind,
   type CaptureReceiptPayload,
@@ -615,8 +616,10 @@ describe("encrypted capture aggregate repository", () => {
       recordVersion: 1,
       noteId: NOTE,
       decisionId: DECISION,
+      reviewItemId: null,
       kind: "summary",
       state: "accepted",
+      stateRevision: 2,
       modelId: "model",
       promptVersion: "routing-v1",
       resolvedAt: RECEIVED_AT,
@@ -685,6 +688,65 @@ describe("encrypted capture aggregate repository", () => {
     expect(result.capture.receipt).toMatchObject({
       outcome: "added_to_note",
       reasonCodes: ["explicit_shopping_intent", "type_match"]
+    });
+  });
+
+  it("opens an E3 pending receipt behind its exact relational lifecycle sentinel", async () => {
+    const expansionPayload = CaptureReceiptPayloadSchema.parse({
+      schemaVersion: 2,
+      captureId: CAPTURE,
+      jobId: JOB,
+      decisionId: DECISION,
+      reviewItemId: REVIEW,
+      mutationId: MUTATION,
+      outcome: "added_to_note",
+      headline: "Added to Shopping",
+      destination: { noteId: NOTE, title: "Shopping" },
+      insertedContentReferences: [{ type: "ai_generated", blockId: BLOCK }],
+      actions: [
+        { type: "open", noteId: NOTE },
+        { type: "move", noteId: NOTE, decisionId: DECISION },
+        { type: "undo", mutationId: MUTATION, expectedRevision: 2 }
+      ],
+      reasonCodes: ["semantic_match"],
+      createdAt: RECEIVED_AT,
+      undoTargets: [{ noteId: NOTE, mutationId: MUTATION, expectedRevision: 2 }]
+    });
+    const expansionReceipt = receiptRow("ai_assisted", {
+      decisionId: DECISION,
+      reviewItemId: REVIEW,
+      mutationId: MUTATION,
+      outcome: "added_to_note",
+      destinationNoteId: NOTE,
+      reasonCodes: ["expansion_pending"]
+    });
+    const generated: EncryptedGeneratedBlockRead = Object.freeze({
+      blockId: BLOCK,
+      recordVersion: 1,
+      noteId: NOTE,
+      decisionId: DECISION,
+      reviewItemId: REVIEW,
+      kind: "suggestion",
+      state: "proposed",
+      stateRevision: 1,
+      modelId: "model",
+      promptVersion: "routing-v1",
+      resolvedAt: null,
+      createdAt: RECEIVED_AT,
+      contentCipher: encrypted("generated_block", BLOCK, "ai_assisted")
+    });
+    const result = await repository(
+      aggregateMocks({ receiptPayload: expansionPayload }).aggregate,
+      adapter({
+        getCaptureReceipt: vi.fn(() => Promise.resolve(expansionReceipt)),
+        getGeneratedBlocks: vi.fn(() => Promise.resolve([generated]))
+      })
+    ).getReceipt(context, CAPTURE);
+
+    expect(result.receipt).toMatchObject({
+      reviewItemId: REVIEW,
+      reasonCodes: ["semantic_match"],
+      insertedContent: [{ type: "ai_generated", blockId: BLOCK, content: AI_TEXT }]
     });
   });
 

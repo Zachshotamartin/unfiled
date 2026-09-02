@@ -1,5 +1,6 @@
 import {
   DecisionCorrectionRequestSchema,
+  GeneratedBlockResolveRequestSchema,
   MutationBatchUndoResponseSchema,
   MutationUndoRequestSchema,
   NoteSnapshotSchema,
@@ -31,10 +32,12 @@ import type {
   OwnerInteractionPreparedReservation,
   OwnerInteractionPreparedSource,
   PrepareDecisionCorrectionResult,
+  PrepareGeneratedBlockResolutionResult,
   PrepareMutationBatchUndoResult,
   PrepareReviewResolutionResult
 } from "@/server/encryption/encrypted-owner-interaction-rpc-adapter";
 import { ServiceRpcErrorCode } from "@/server/encryption/service-rpc-client";
+import type { EncryptedGeneratedBlockReader } from "@/server/generated-blocks/encrypted-generated-block-reader";
 
 import { EncryptedOwnerInteractionCoordinator } from "./encrypted-owner-interaction-coordinator";
 
@@ -54,6 +57,7 @@ const CAPTURE = `cap_${"9".repeat(26)}` as const;
 const JOB = `job_${"A".repeat(26)}` as const;
 const DECISION = `dec_${"B".repeat(26)}` as const;
 const REVIEW = `rvw_${"C".repeat(26)}` as const;
+const BLOCK = `blk_${"M".repeat(26)}` as const;
 const FEEDBACK = `fbk_${"D".repeat(26)}` as const;
 const SOURCE_REMOVAL_MUTATION = `mut_${"E".repeat(26)}` as const;
 const SOURCE_BEFORE_REVISION = `rev_${"F".repeat(26)}` as const;
@@ -476,6 +480,9 @@ function cryptoHarness(): CryptoHarness {
     openOrganizationDecision: vi.fn((_access: unknown, record: TestCipher) =>
       Promise.resolve(opened(record))
     ),
+    openGeneratedBlock: vi.fn((_access: unknown, record: TestCipher) =>
+      Promise.resolve(opened(record))
+    ),
     sealIdempotencyResponse: vi.fn(
       (
         _access: unknown,
@@ -602,6 +609,8 @@ function adapterStub(overrides: Partial<EncryptedOwnerInteractionRpcAdapter>) {
     commitDecisionCorrection: vi.fn(rejected),
     prepareReviewResolution: vi.fn(rejected),
     commitReviewResolution: vi.fn(rejected),
+    prepareGeneratedBlockResolution: vi.fn(rejected),
+    commitGeneratedBlockResolution: vi.fn(rejected),
     getMutationBatch: vi.fn(rejected),
     undoMutationBatch: vi.fn(rejected),
     ...overrides
@@ -1697,6 +1706,76 @@ describe("encrypted owner-interaction coordinator", () => {
     expect(crypto.service.sealCaptureReceipt).not.toHaveBeenCalled();
   });
 
+  it("continues an incomplete replayed duplicate preparation with the same reservations", async () => {
+    const crypto = cryptoHarness();
+    const first = reviewPreparation();
+    if (first.completed || first.source.review === null) {
+      throw new TypeError("invalid_test_preparation");
+    }
+    const preparation: PrepareReviewResolutionResult = Object.freeze({
+      ...first,
+      action: "keep_both" as const,
+      replayed: true,
+      source: Object.freeze({
+        ...first.source,
+        review: Object.freeze({
+          ...first.source.review,
+          type: "duplicate_suggestion" as const
+        })
+      })
+    });
+    crypto.sourcePayloads.set(`review_item:${REVIEW}:1`, {
+      schemaVersion: 2,
+      proposal: {
+        type: "duplicate_notes",
+        explanation: "These notes may overlap.",
+        notes: [
+          { noteId: NOTE_A, revision: 2 },
+          { noteId: NOTE_B, revision: 1 }
+        ]
+      },
+      state: "open",
+      resolution: null
+    });
+    const commit = vi.fn(
+      (input: Parameters<EncryptedOwnerInteractionRpcAdapter["commitReviewResolution"]>[0]) => {
+        expect(input.preparation.replayed).toBe(true);
+        expect(input.preparation.reservations).toEqual(first.reservations);
+        return Promise.resolve(
+          commitResult("encrypted_review_resolution", "resolved", crypto.responseCipher(), {
+            reviewItemId: REVIEW
+          })
+        );
+      }
+    );
+    const adapter = adapterStub({
+      prepareReviewResolution: vi.fn(() => Promise.resolve(preparation)),
+      commitReviewResolution: commit
+    });
+
+    await expect(
+      coordinator(adapter, crypto).resolveReviewItem(
+        REVIEW,
+        ReviewResolveRequestSchema.parse({
+          idempotencyKey: IDEMPOTENCY,
+          resolution: { type: "keep_both" }
+        })
+      )
+    ).resolves.toMatchObject({
+      reviewItem: {
+        id: REVIEW,
+        type: "duplicate_suggestion",
+        state: "resolved",
+        resolution: { type: "keep_both" }
+      },
+      replayed: false
+    });
+    expect(commit).toHaveBeenCalledOnce();
+    expect(crypto.service.sealNoteContent).not.toHaveBeenCalled();
+    expect(crypto.service.sealNoteRevision).not.toHaveBeenCalled();
+    expect(crypto.service.sealNoteMutation).not.toHaveBeenCalled();
+  });
+
   it("keeps a decision-free batch-conflict receipt in Inbox without reviving route lineage", async () => {
     const crypto = cryptoHarness();
     const base = reviewPreparation(true);
@@ -2074,6 +2153,186 @@ describe("encrypted owner-interaction coordinator", () => {
     expect(crypto.createPreparedService).not.toHaveBeenCalled();
   });
 
+  it.each(["accept", "reject"] as const)(
+    "%ss a generated block without rewriting user-authored note content",
+    async (resolution) => {
+      const crypto = cryptoHarness();
+      const firstPreparation = generatedBlockPreparation(resolution);
+      const preparation: PrepareGeneratedBlockResolutionResult = Object.freeze({
+        ...firstPreparation,
+        replayed: true
+      });
+      if (preparation.completed || preparation.source.generatedBlock === undefined) {
+        throw new TypeError("invalid_generated_block_preparation");
+      }
+      const sourceBlock = preparation.source.generatedBlock;
+      crypto.sourcePayloads.set(`generated_block:${BLOCK}:1`, {
+        schemaVersion: 1,
+        content: "A separately encrypted expansion"
+      });
+      crypto.sourcePayloads.set(`review_item:${REVIEW}:1`, {
+        schemaVersion: 2,
+        proposal: { type: "generated_block", blockId: BLOCK },
+        state: "open",
+        resolution: null
+      });
+      crypto.sourcePayloads.set(
+        `capture_receipt:${CAPTURE}:1`,
+        CaptureReceiptPayloadSchema.parse({
+          schemaVersion: 2,
+          captureId: CAPTURE,
+          jobId: JOB,
+          decisionId: DECISION,
+          reviewItemId: REVIEW,
+          mutationId: MUTATION,
+          outcome: "added_to_note",
+          headline: "Added to a note",
+          destination: { noteId: NOTE_A, title: "After" },
+          insertedContentReferences: [
+            { type: "captured", itemId: null },
+            { type: "ai_generated", blockId: BLOCK }
+          ],
+          actions: [
+            { type: "open", noteId: NOTE_A },
+            { type: "move", noteId: NOTE_A, decisionId: DECISION },
+            { type: "undo", mutationId: MUTATION, expectedRevision: 2 }
+          ],
+          reasonCodes: ["semantic_match"],
+          createdAt: NOW,
+          undoTargets: [{ noteId: NOTE_A, mutationId: MUTATION, expectedRevision: 2 }]
+        })
+      );
+      const commit = vi.fn(
+        (
+          input: Parameters<
+            EncryptedOwnerInteractionRpcAdapter["commitGeneratedBlockResolution"]
+          >[0]
+        ) => {
+          expect(input.preparation.replayed).toBe(true);
+          expect(input.preparation.reservations).toEqual(firstPreparation.reservations);
+          expect(input.command).toMatchObject({ writes: [] });
+          return Promise.resolve({
+            scope: "encrypted_review_resolution" as const,
+            outcome: resolution === "accept" ? ("accepted" as const) : ("rejected" as const),
+            decisionId: null,
+            reviewItemId: REVIEW,
+            feedbackEventId: FEEDBACK,
+            batchId: null,
+            members: Object.freeze([]),
+            encryptedResponse: crypto.responseCipher(),
+            responseVerificationMac: mac(),
+            replayed: false,
+            generatedBlockId: BLOCK,
+            stateRevision: 2
+          });
+        }
+      );
+      const adapter = adapterStub({
+        prepareGeneratedBlockResolution: vi.fn(() => Promise.resolve(preparation)),
+        commitGeneratedBlockResolution: commit
+      });
+      const blockReader = {
+        get: vi.fn(() =>
+          Promise.resolve({
+            source: sourceBlock,
+            payload: { schemaVersion: 1, content: "A separately encrypted expansion" },
+            block: {
+              id: BLOCK,
+              noteId: NOTE_A,
+              decisionId: DECISION,
+              kind: "suggestion",
+              content: "A separately encrypted expansion",
+              state: "proposed",
+              stateRevision: 1,
+              modelId: "gpt-test",
+              promptVersion: "organizer-v1",
+              createdAt: NOW,
+              resolvedAt: null
+            }
+          })
+        )
+      } as unknown as EncryptedGeneratedBlockReader;
+
+      await expect(
+        coordinator(adapter, crypto).resolveGeneratedBlock(
+          BLOCK,
+          GeneratedBlockResolveRequestSchema.parse({
+            expectedStateRevision: 1,
+            idempotencyKey: IDEMPOTENCY,
+            resolution
+          }),
+          blockReader
+        )
+      ).resolves.toMatchObject({
+        block: {
+          id: BLOCK,
+          state: resolution === "accept" ? "accepted" : "rejected",
+          stateRevision: 2,
+          content: "A separately encrypted expansion"
+        },
+        replayed: false
+      });
+      expect(commit).toHaveBeenCalledOnce();
+      expect(crypto.service.sealNoteContent).not.toHaveBeenCalled();
+      expect(crypto.service.sealNoteRevision).not.toHaveBeenCalled();
+      expect(crypto.service.sealNoteMutation).not.toHaveBeenCalled();
+      const sealedReceipt = vi.mocked(crypto.service.sealCaptureReceipt).mock.calls[0]?.[1]
+        .payload as {
+        insertedContentReferences: readonly { type: string }[];
+        reasonCodes: string[];
+      };
+      expect(sealedReceipt.reasonCodes).toContain(
+        resolution === "accept" ? "expansion_accepted" : "expansion_rejected"
+      );
+      expect(
+        sealedReceipt.insertedContentReferences.some(
+          (reference) => reference.type === "ai_generated"
+        )
+      ).toBe(resolution === "accept");
+    }
+  );
+
+  it("refuses generic Review dismissal for a persisted generated block", async () => {
+    const crypto = cryptoHarness();
+    const base = reviewPreparation();
+    if (base.completed || base.source.review === null) throw new TypeError("invalid_preparation");
+    const preparation: PrepareReviewResolutionResult = Object.freeze({
+      ...base,
+      source: Object.freeze({
+        ...base.source,
+        review: Object.freeze({
+          ...base.source.review,
+          noteId: NOTE_A,
+          type: "pending_expansion" as const
+        })
+      })
+    });
+    crypto.sourcePayloads.set(`review_item:${REVIEW}:1`, {
+      schemaVersion: 2,
+      proposal: { type: "generated_block", blockId: BLOCK },
+      state: "open",
+      resolution: null
+    });
+    const commit = vi.fn();
+    const adapter = adapterStub({
+      prepareReviewResolution: vi.fn(() => Promise.resolve(preparation)),
+      commitReviewResolution: commit
+    });
+
+    await expectServiceError(
+      coordinator(adapter, crypto).resolveReviewItem(
+        REVIEW,
+        ReviewResolveRequestSchema.parse({
+          idempotencyKey: IDEMPOTENCY,
+          resolution: { type: "dismiss" }
+        })
+      ),
+      ServiceRpcErrorCode.VALIDATION_FAILED
+    );
+    expect(commit).not.toHaveBeenCalled();
+    expect(crypto.createPreparedService).not.toHaveBeenCalled();
+  });
+
   it("rejects a ciphertext-valid fresh Review response with a substituted note and proposal", async () => {
     const crypto = cryptoHarness();
     const pending = reviewPreparation();
@@ -2095,6 +2354,7 @@ describe("encrypted owner-interaction coordinator", () => {
       schemaVersion: 2,
       proposal: {
         type: "duplicate_notes",
+        explanation: "These notes overlap.",
         notes: [
           { noteId: NOTE_A, revision: 2 },
           { noteId: NOTE_B, revision: 1 }
@@ -2112,6 +2372,7 @@ describe("encrypted owner-interaction coordinator", () => {
           type: "duplicate_suggestion",
           proposal: {
             type: "duplicate_notes",
+            explanation: "These notes overlap.",
             notes: [
               { noteId: NOTE_A, revision: 3 },
               { noteId: NOTE_B, revision: 1 }
@@ -2466,6 +2727,86 @@ function reviewPreparation(withReceipt = false): PrepareReviewResolutionResult {
     reservations: Object.freeze([
       reservation("review", "review_item", REVIEW, 2, 30),
       reservation("response", "idempotency_response", `idempotency:${IDEMPOTENCY}`, 1, 32)
+    ]),
+    encryptedResponse: null,
+    encryptedResponseVerificationMac: null
+  });
+}
+
+function generatedBlockPreparation(
+  resolution: "accept" | "reject"
+): PrepareGeneratedBlockResolutionResult {
+  return Object.freeze({
+    scope: "encrypted_review_resolution" as const,
+    action: resolution === "accept" ? ("accept_expansion" as const) : ("reject_expansion" as const),
+    occurredAt: NOW,
+    completed: false,
+    replayed: false,
+    requestMacKey: key("content_mac"),
+    ids: Object.freeze({
+      reviewItemId: REVIEW,
+      destinationNoteId: null,
+      destinationRevisionId: null,
+      destinationMutationId: null,
+      generatedBlockId: BLOCK,
+      stateRevision: 1
+    }),
+    source: Object.freeze({
+      decision: null,
+      review: Object.freeze({
+        reviewItemId: REVIEW,
+        captureId: CAPTURE,
+        noteId: NOTE_A,
+        type: "pending_expansion" as const,
+        state: "open" as const,
+        recordVersion: 1,
+        createdAt: NOW,
+        resolvedAt: null,
+        contentCipher: stored("review_item", REVIEW, 1)
+      }),
+      receipt: Object.freeze({
+        captureId: CAPTURE,
+        jobId: JOB,
+        decisionId: DECISION,
+        reviewItemId: REVIEW,
+        mutationId: MUTATION,
+        outcome: "added_to_note" as const,
+        destinationNoteId: NOTE_A,
+        reasonCodes: Object.freeze(["expansion_pending"]),
+        recordVersion: 1,
+        sourcePrivacy: "ai_assisted" as const,
+        receiptCipher: stored("capture_receipt", CAPTURE, 1)
+      }),
+      capture: Object.freeze({
+        captureId: CAPTURE,
+        recordVersion: 1 as const,
+        privacy: "ai_assisted" as const,
+        status: "needs_review" as const,
+        contentLength: 7,
+        contentCipher: stored("capture", CAPTURE, 1),
+        contentMac: mac()
+      }),
+      generatedBlock: Object.freeze({
+        blockId: BLOCK,
+        recordVersion: 1 as const,
+        noteId: NOTE_A,
+        decisionId: DECISION,
+        reviewItemId: REVIEW,
+        kind: "suggestion" as const,
+        state: "proposed" as const,
+        stateRevision: 1,
+        modelId: "gpt-test",
+        promptVersion: "organizer-v1",
+        resolvedAt: null,
+        createdAt: NOW,
+        contentCipher: stored("generated_block", BLOCK, 1)
+      })
+    }),
+    members: Object.freeze([]),
+    reservations: Object.freeze([
+      reservation("review", "review_item", REVIEW, 2, 50),
+      reservation("receipt", "capture_receipt", CAPTURE, 2, 51),
+      reservation("response", "idempotency_response", `idempotency:${IDEMPOTENCY}`, 1, 52)
     ]),
     encryptedResponse: null,
     encryptedResponseVerificationMac: null

@@ -3,8 +3,13 @@ import { describe, expect, it } from "vitest";
 import {
   DecisionCorrectionRequestSchema,
   DecisionCorrectionResponseSchema,
+  GENERATED_BLOCK_PAGE_SIZE,
+  GeneratedBlockDetailResponseSchema,
   GeneratedBlockDtoSchema,
+  GeneratedBlockListQuerySchema,
+  GeneratedBlockListResponseSchema,
   GeneratedBlockResolveRequestSchema,
+  GeneratedBlockResolveResponseSchema,
   InteractiveOperationsRequestSchema,
   MutationBatchUndoResponseSchema,
   NoteBacklinksResponseSchema,
@@ -19,6 +24,7 @@ import {
   SearchNotesRequestSchema,
   UserSettingsDtoSchema,
   UserSettingsUpdateRequestSchema,
+  VisibleGeneratedBlockDtoSchema,
   manualNoteFixtures,
   openApiDocument,
   reviewResolutionMatchesSemantics
@@ -169,6 +175,7 @@ describe("Milestone E public contracts", () => {
     expect(
       ReviewProposalSchema.parse({
         type: "duplicate_notes",
+        explanation: "These notes describe the same idea from different angles.",
         notes: [
           { noteId: NOTE_A, revision: 4 },
           { noteId: NOTE_B, revision: 2 }
@@ -181,6 +188,7 @@ describe("Milestone E public contracts", () => {
     expect(
       ReviewProposalSchema.safeParse({
         type: "duplicate_notes",
+        explanation: "These notes overlap.",
         notes: [
           { noteId: NOTE_A, revision: 4 },
           { noteId: NOTE_A, revision: 4 }
@@ -193,9 +201,7 @@ describe("Milestone E public contracts", () => {
       { type: "create", title: "New destination", noteType: "generic", spaceId: null },
       { type: "keep_inbox" },
       { type: "dismiss" },
-      { type: "keep_both" },
-      { type: "accept_expansion" },
-      { type: "reject_expansion" }
+      { type: "keep_both" }
     ] as const;
     for (const [index, resolution] of resolutions.entries()) {
       expect(
@@ -204,6 +210,14 @@ describe("Milestone E public contracts", () => {
           resolution
         }).success
       ).toBe(true);
+    }
+    for (const type of ["accept_expansion", "reject_expansion"] as const) {
+      expect(
+        ReviewResolveRequestSchema.safeParse({
+          idempotencyKey: `review-resolution-${type}`,
+          resolution: { type }
+        }).success
+      ).toBe(false);
     }
     expect(
       ReviewResolveRequestSchema.safeParse({
@@ -255,6 +269,7 @@ describe("Milestone E public contracts", () => {
         type: "duplicate_suggestion",
         proposal: {
           type: "duplicate_notes",
+          explanation: "These notes overlap.",
           notes: [
             { noteId: NOTE_A, revision: 4 },
             { noteId: NOTE_B, revision: 2 }
@@ -265,6 +280,21 @@ describe("Milestone E public contracts", () => {
         resolvedAt: NOW
       }).success
     ).toBe(false);
+
+    expect(
+      reviewResolutionMatchesSemantics(
+        "pending_expansion",
+        { type: "generated_block", blockId: "blk_01J6M9Q7G4BMKB33GSG3NJ6D1X" },
+        { type: "dismiss" }
+      )
+    ).toBe(false);
+    expect(
+      reviewResolutionMatchesSemantics(
+        "pending_expansion",
+        { type: "conflict", reason: "consent_controls" },
+        { type: "dismiss" }
+      )
+    ).toBe(true);
 
     const failedProposal = {
       type: "failed_job",
@@ -375,11 +405,72 @@ describe("Milestone E public contracts", () => {
     ).toBe(false);
     expect(GeneratedBlockDtoSchema.safeParse({ ...block, stateRevision: 2 }).success).toBe(false);
     expect(
+      GeneratedBlockDtoSchema.safeParse({
+        ...block,
+        state: "accepted",
+        stateRevision: 2,
+        resolvedAt: "2026-08-31T18:30:00.000Z"
+      }).success
+    ).toBe(false);
+    const terminalPage = { items: [block], pageInfo: { hasMore: false, nextCursor: null } };
+    expect(GeneratedBlockListResponseSchema.parse(terminalPage)).toEqual(terminalPage);
+    expect(
+      GeneratedBlockListResponseSchema.safeParse({
+        items: [block, block],
+        pageInfo: { hasMore: false, nextCursor: null }
+      }).success
+    ).toBe(false);
+    expect(GeneratedBlockDetailResponseSchema.parse({ block })).toEqual({ block });
+    expect(GeneratedBlockListQuerySchema.parse({ cursor: block.id })).toEqual({ cursor: block.id });
+    expect(GeneratedBlockListQuerySchema.safeParse({ cursor: NOTE_A }).success).toBe(false);
+
+    const fullPage = Array.from({ length: GENERATED_BLOCK_PAGE_SIZE }, (_, index) => ({
+      ...block,
+      id: `blk_${String(index).padStart(26, "0")}`
+    }));
+    expect(
+      GeneratedBlockListResponseSchema.safeParse({
+        items: fullPage,
+        pageInfo: { hasMore: true, nextCursor: fullPage.at(-1)?.id }
+      }).success
+    ).toBe(true);
+    expect(
+      GeneratedBlockListResponseSchema.safeParse({
+        items: fullPage.slice(0, -1),
+        pageInfo: { hasMore: true, nextCursor: fullPage.at(-2)?.id }
+      }).success
+    ).toBe(false);
+    expect(
+      GeneratedBlockListResponseSchema.safeParse({
+        items: fullPage,
+        pageInfo: { hasMore: true, nextCursor: fullPage[0]?.id }
+      }).success
+    ).toBe(false);
+    expect(
       GeneratedBlockResolveRequestSchema.safeParse({
         expectedStateRevision: 1,
         idempotencyKey: "block-resolve-01",
         resolution: "accept"
       }).success
+    ).toBe(true);
+
+    const rejected = {
+      ...block,
+      state: "rejected",
+      stateRevision: 2,
+      resolvedAt: NOW
+    } as const;
+    expect(GeneratedBlockDtoSchema.safeParse(rejected).success).toBe(true);
+    expect(VisibleGeneratedBlockDtoSchema.safeParse(rejected).success).toBe(false);
+    expect(
+      GeneratedBlockListResponseSchema.safeParse({
+        items: [rejected],
+        pageInfo: { hasMore: false, nextCursor: null }
+      }).success
+    ).toBe(false);
+    expect(GeneratedBlockDetailResponseSchema.safeParse({ block: rejected }).success).toBe(false);
+    expect(
+      GeneratedBlockResolveResponseSchema.safeParse({ block: rejected, replayed: false }).success
     ).toBe(true);
 
     const settings = {
@@ -511,6 +602,7 @@ describe("Milestone E public contracts", () => {
       "/routing-rules",
       "/routing-rules/{routingRuleId}",
       "/notes/{noteId}/generated-blocks",
+      "/generated-blocks/{blockId}",
       "/generated-blocks/{blockId}/resolve",
       "/me/settings",
       "/me/provider-key",
@@ -527,6 +619,10 @@ describe("Milestone E public contracts", () => {
       "ReviewResolution",
       "RoutingRuleDto",
       "GeneratedBlockDto",
+      "VisibleGeneratedBlockDto",
+      "GeneratedBlockListQuery",
+      "GeneratedBlockListResponse",
+      "GeneratedBlockDetailResponse",
       "UserSettingsDto",
       "ProviderKeyMetadata",
       "NoteSourcesResponse",
@@ -539,6 +635,47 @@ describe("Milestone E public contracts", () => {
     );
     expect(openApiDocument.components.schemas).toHaveProperty("MutationBatchUndoMember");
     expect(openApiDocument.components.schemas).toHaveProperty("MutationBatchUndoResponse");
+    expect(
+      openApiDocument.paths["/notes/{noteId}/generated-blocks"].get.parameters.find(
+        (parameter) => parameter.name === "cursor"
+      )?.schema
+    ).toEqual({ type: "string", pattern: "^blk_[0-9A-HJKMNP-TV-Z]{26}$" });
+    expect(openApiDocument.components.schemas.VisibleGeneratedBlockDto).toMatchObject({
+      properties: { state: { enum: ["proposed", "accepted"] } }
+    });
+    const generatedBlockReadStatuses = [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "429",
+      "500",
+      "503"
+    ];
+    expect(
+      Object.keys(openApiDocument.paths["/notes/{noteId}/generated-blocks"].get.responses).sort()
+    ).toEqual(generatedBlockReadStatuses);
+    expect(
+      Object.keys(openApiDocument.paths["/generated-blocks/{blockId}"].get.responses).sort()
+    ).toEqual(generatedBlockReadStatuses);
+    expect(
+      Object.keys(
+        openApiDocument.paths["/generated-blocks/{blockId}/resolve"].post.responses
+      ).sort()
+    ).toEqual([...generatedBlockReadStatuses, "413"].sort());
+    for (const headers of [
+      openApiDocument.paths["/notes/{noteId}/generated-blocks"].get.responses["503"].headers,
+      openApiDocument.paths["/generated-blocks/{blockId}"].get.responses["500"].headers,
+      openApiDocument.paths["/generated-blocks/{blockId}/resolve"].post.responses["413"].headers
+    ]) {
+      expect(headers["Cache-Control"].schema).toEqual({
+        type: "string",
+        const: "private, no-store"
+      });
+      expect(headers.Pragma.schema).toEqual({ type: "string", const: "no-cache" });
+    }
     for (const headers of [
       openApiDocument.paths["/decisions/{decisionId}/correct"].post.responses["200"].headers,
       openApiDocument.paths["/review-items/{reviewItemId}/resolve"].post.responses["200"].headers,

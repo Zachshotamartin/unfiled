@@ -155,7 +155,8 @@ describe("authorized organization plan materialization", () => {
       manifest,
       stableIds: stableIds({
         createdNoteId: IDS.createdNote,
-        generatedBlockId: IDS.block
+        generatedBlockId: IDS.block,
+        reviewItemId: IDS.review
       })
     });
 

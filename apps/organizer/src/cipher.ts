@@ -1,7 +1,6 @@
 import {
   applyMaterializedOrganizationCommand,
-  type AppliedOrganizationCommand,
-  type MaterializedOrganizationCommand
+  type AppliedOrganizationCommand
 } from "@unfiled/ai-routing";
 import { NoteSchema, type EntityId, type EntityKind } from "@unfiled/contracts";
 import { parseContentEnvelope, serializeContentEnvelope } from "@unfiled/content-crypto";
@@ -11,6 +10,7 @@ import {
   CaptureReceiptPayloadSchema,
   createEncryptedAggregateService,
   encryptedFieldForRpc,
+  GeneratedBlockPayloadSchema,
   jsonPayloadCodec,
   keyedMacForRpc,
   NoteContentPayloadSchema,
@@ -435,6 +435,10 @@ function publicNoteState(
 function decisionPayload(
   input: Parameters<OrganizerCipher["sealCommand"]>[0]
 ): OrganizationDecisionPayload {
+  const validatedPlan = Object.freeze({
+    ...input.plan.validatedPlan,
+    generatedExpansion: null
+  });
   return OrganizationDecisionPayloadSchema.parse({
     band: input.routingDecision?.band ?? (input.plan.kind === "review" ? "review" : "auto"),
     candidateManifest: {
@@ -459,11 +463,13 @@ function decisionPayload(
       policyMargin: input.routingDecision?.margin ?? null,
       policyReasons: input.routingDecision?.reasons ?? [],
       policyScore: input.routingDecision?.score ?? null,
+      generatedBlockId: input.plan.generatedBlock?.blockId ?? null,
+      modelId: input.job.modelId,
       promptVersion: input.job.promptVersion,
       routingMode: input.job.routingMode,
       schemaVersion: input.job.schemaVersion
     },
-    validatedPlan: input.plan.validatedPlan
+    validatedPlan
   });
 }
 
@@ -530,24 +536,43 @@ function assertCandidateEvidenceBinding(
 }
 
 function reviewType(reason: OrganizerReviewReason): string {
+  if (reason === "duplicate_suggestion") return "duplicate_suggestion";
   if (reason === "planner_ambiguity") return "low_confidence";
   if (reason === "revision_conflict") return "revision_conflict";
   if (reason === "explicit_destination_unavailable") return "structure_conflict";
   return "pending_expansion";
 }
 
-function reviewPayload(
-  plan: MaterializedOrganizationCommand,
-  reason: OrganizerReviewReason
-): ReviewPayload {
+function reviewPayload(input: Parameters<OrganizerCipher["sealCommand"]>[0]): ReviewPayload {
+  const { plan, reviewReason: reason } = input;
+  if (reason === null) unavailable();
+  const duplicateNotes = plan.validatedPlan.alternatives.map((candidateId) => {
+    const candidate = input.candidates.find(
+      ({ decrypted }) => decrypted.candidateId === candidateId
+    );
+    if (candidate === undefined) return unavailable();
+    return Object.freeze({
+      noteId: candidate.encrypted.noteId,
+      revision: candidate.encrypted.revision
+    });
+  });
   const proposal =
-    reason === "revision_conflict"
-      ? { type: "conflict" as const, reason: "revision" as const }
-      : reason === "explicit_destination_unavailable"
-        ? { type: "conflict" as const, reason: "candidate_eligibility" as const }
-        : reason === "expansion_pending"
-          ? { type: "conflict" as const, reason: "consent_controls" as const }
-          : { type: "route_capture" as const, plan: plan.validatedPlan };
+    reason === "duplicate_suggestion"
+      ? {
+          type: "duplicate_notes" as const,
+          explanation:
+            "This capture may overlap with these notes. Keep both leaves every note unchanged.",
+          notes: duplicateNotes
+        }
+      : reason === "revision_conflict"
+        ? { type: "conflict" as const, reason: "revision" as const }
+        : reason === "explicit_destination_unavailable"
+          ? { type: "conflict" as const, reason: "candidate_eligibility" as const }
+          : reason === "expansion_pending"
+            ? plan.generatedBlock === null
+              ? { type: "conflict" as const, reason: "consent_controls" as const }
+              : { type: "generated_block" as const, blockId: plan.generatedBlock.blockId }
+            : { type: "route_capture" as const, plan: plan.validatedPlan };
   return ReviewPayloadSchema.parse({
     proposal,
     resolution: null,
@@ -560,10 +585,16 @@ function routedReceipt(
   input: Parameters<OrganizerCipher["sealCommand"]>[0],
   applied: AppliedOrganizationCommand
 ): CaptureReceiptPayload {
-  const insertedContentReferences =
+  const capturedContentReferences =
     applied.insertedItemIds.length === 0
       ? [{ itemId: null, type: "captured" as const }]
       : applied.insertedItemIds.map((itemId) => ({ itemId, type: "captured" as const }));
+  const insertedContentReferences = [
+    ...capturedContentReferences,
+    ...(input.plan.generatedBlock === null
+      ? []
+      : [{ blockId: input.plan.generatedBlock.blockId, type: "ai_generated" as const }])
+  ];
   return CaptureReceiptPayloadSchema.parse({
     actions: [
       { noteId: applied.note.id, type: "open" },
@@ -584,7 +615,7 @@ function routedReceipt(
     mutationId: input.preparation.ids.mutationId,
     outcome: input.plan.kind === "create" ? "created_note" : "added_to_note",
     reasonCodes: input.plan.validatedPlan.reasonCodes,
-    reviewItemId: null,
+    reviewItemId: input.plan.generatedBlock === null ? null : input.preparation.ids.reviewItemId,
     schemaVersion: 2,
     undoTargets: [
       {
@@ -678,6 +709,8 @@ function assertPreparationBinding(input: Parameters<OrganizerCipher["sealCommand
     stableIds.decisionId !== preparation.ids.decisionId ||
     stableIds.decisionId !== plan.decisionId ||
     stableIds.generatedBlockId !== (plan.generatedBlock?.blockId ?? null) ||
+    (plan.generatedBlock !== null &&
+      stableIds.generatedBlockId !== preparation.ids.generatedBlockId) ||
     !sameOrganizerCaptureControls(input.controls, input.capture.controls) ||
     !sameOrganizerCaptureControls(input.controls, input.job.controls)
   ) {
@@ -710,7 +743,8 @@ function assertPreparationBinding(input: Parameters<OrganizerCipher["sealCommand
     preparation.ids.mutationId !== plan.mutationId ||
     stableIds.revisionId !== plan.revisionId ||
     stableIds.mutationId !== plan.mutationId ||
-    stableIds.reviewItemId !== null ||
+    stableIds.reviewItemId !==
+      (plan.generatedBlock === null ? null : preparation.ids.reviewItemId) ||
     stableIds.createdNoteId !== (plan.kind === "create" ? plan.noteId : null)
   ) {
     unavailable();
@@ -733,7 +767,7 @@ async function sealReviewCommand(
     resourceOwnerId: input.job.ownerId
   });
   const decisionValue = decisionPayload(input);
-  const reviewValue = reviewPayload(input.plan, input.reviewReason);
+  const reviewValue = reviewPayload(input);
   const receiptValue = deferredReceipt(input);
   const decision = await runtime.aggregate.sealOrganizationDecision(access, {
     decisionId: input.preparation.ids.decisionId,
@@ -807,6 +841,7 @@ async function sealReviewCommand(
       reasonCodes: input.plan.validatedPlan.reasonCodes,
       verificationMac: keyedMacForRpc(decisionMac)
     }),
+    generatedBlock: null,
     noteWrite: null,
     outcome: "review",
     receipt: Object.freeze({
@@ -825,9 +860,10 @@ async function sealReviewCommand(
 async function sealRoutedCommand(
   input: Parameters<OrganizerCipher["sealCommand"]>[0]
 ): Promise<AtomicOrganizerCommand> {
+  const hasGeneratedBlock = input.plan.kind !== "review" && input.plan.generatedBlock !== null;
   if (
-    input.reviewReason !== null ||
     input.plan.kind === "review" ||
+    hasGeneratedBlock !== (input.reviewReason === "expansion_pending") ||
     (input.plan.kind === "append" && input.destination === null) ||
     (input.plan.kind === "create" && input.destination !== null)
   ) {
@@ -866,6 +902,14 @@ async function sealRoutedCommand(
   const noteContentPayload = NoteContentPayloadSchema.parse(applied.noteContentPayload);
   const noteRevisionPayload = NoteRevisionPayloadSchema.parse(applied.noteRevisionPayload);
   const noteMutationPayload = NoteMutationPayloadSchema.parse(applied.noteMutationPayload);
+  const generatedBlockValue =
+    input.plan.generatedBlock === null
+      ? null
+      : GeneratedBlockPayloadSchema.parse({
+          content: input.plan.generatedBlock.text,
+          schemaVersion: 1
+        });
+  const reviewValue = generatedBlockValue === null ? null : reviewPayload(input);
 
   const runtime = writeAggregate(input.authority, input.preparation, [
     groupedReservation(input.preparation, 0),
@@ -873,7 +917,13 @@ async function sealRoutedCommand(
     groupedReservation(input.preparation, 2),
     groupedReservation(input.preparation, 3),
     singleReservation(input.preparation.reservations.decision.reservationId),
-    singleReservation(input.preparation.reservations.receipt.reservationId)
+    singleReservation(input.preparation.reservations.receipt.reservationId),
+    ...(generatedBlockValue === null
+      ? []
+      : [
+          singleReservation(input.preparation.reservations.generatedBlock.reservationId),
+          singleReservation(input.preparation.reservations.review.reservationId)
+        ])
   ]);
   const access = authorizeAggregateOwner({
     authenticatedOwnerId: input.job.ownerId,
@@ -936,6 +986,22 @@ async function sealRoutedCommand(
     recordVersion: 1,
     sourcePrivacy: "ai_assisted"
   });
+  const generatedBlock =
+    generatedBlockValue === null || input.plan.generatedBlock === null
+      ? null
+      : await runtime.aggregate.sealGeneratedBlock(access, {
+          blockId: input.plan.generatedBlock.blockId,
+          payload: generatedBlockValue
+        });
+  const review =
+    reviewValue === null
+      ? null
+      : await runtime.aggregate.sealReview(access, {
+          payload: reviewValue,
+          recordVersion: 1,
+          reviewId: input.preparation.ids.reviewItemId,
+          sourcePrivacy: "ai_assisted"
+        });
   runtime.assertConsumed();
 
   const [noteMac, mutationMac, responseMac, decisionMac, receiptMac] = await Promise.all([
@@ -972,6 +1038,24 @@ async function sealRoutedCommand(
       surface: "capture_receipt"
     })
   ]);
+  const generatedBlockMac =
+    generatedBlockValue === null || input.plan.generatedBlock === null
+      ? null
+      : await runtime.aggregate.createAggregateVerificationMac(access, {
+          blockId: input.plan.generatedBlock.blockId,
+          payload: generatedBlockValue,
+          surface: "generated_block"
+        });
+  const reviewMac =
+    reviewValue === null
+      ? null
+      : await runtime.aggregate.createAggregateVerificationMac(access, {
+          payload: reviewValue,
+          recordVersion: 1,
+          reviewId: input.preparation.ids.reviewItemId,
+          sourcePrivacy: "ai_assisted",
+          surface: "review_item"
+        });
 
   const idempotencyRecord = Object.freeze({
     idempotencyKey,
@@ -1056,6 +1140,30 @@ async function sealRoutedCommand(
       })
     )
   ]);
+  if (
+    generatedBlockValue !== null &&
+    input.plan.generatedBlock !== null &&
+    generatedBlockMac !== null
+  ) {
+    await assertVerification(
+      runtime.aggregate.verifyAggregateVerificationMac(access, generatedBlockMac, {
+        blockId: input.plan.generatedBlock.blockId,
+        payload: generatedBlockValue,
+        surface: "generated_block"
+      })
+    );
+  }
+  if (reviewValue !== null && reviewMac !== null) {
+    await assertVerification(
+      runtime.aggregate.verifyAggregateVerificationMac(access, reviewMac, {
+        payload: reviewValue,
+        recordVersion: 1,
+        reviewId: input.preparation.ids.reviewItemId,
+        sourcePrivacy: "ai_assisted",
+        surface: "review_item"
+      })
+    );
+  }
 
   const mutationProjection =
     input.preparation.mode === "create"
@@ -1078,6 +1186,16 @@ async function sealRoutedCommand(
       reasonCodes: input.plan.validatedPlan.reasonCodes,
       verificationMac: keyedMacForRpc(decisionMac)
     }),
+    generatedBlock:
+      generatedBlock === null || generatedBlockMac === null || input.plan.generatedBlock === null
+        ? null
+        : Object.freeze({
+            cipher: encryptedFieldForRpc(generatedBlock),
+            kind: input.plan.generatedBlock.kind,
+            modelId: input.job.modelId,
+            promptVersion: input.job.promptVersion,
+            verificationMac: keyedMacForRpc(generatedBlockMac)
+          }),
     noteWrite: Object.freeze({
       mutation: Object.freeze({
         cipher: encryptedFieldForRpc(mutation),
@@ -1110,8 +1228,15 @@ async function sealRoutedCommand(
       cipher: encryptedFieldForRpc(receipt),
       verificationMac: keyedMacForRpc(receiptMac)
     }),
-    review: null,
-    reviewReason: null
+    review:
+      review === null || reviewMac === null
+        ? null
+        : Object.freeze({
+            cipher: encryptedFieldForRpc(review),
+            type: "pending_expansion",
+            verificationMac: keyedMacForRpc(reviewMac)
+          }),
+    reviewReason: hasGeneratedBlock ? "expansion_pending" : null
   });
 }
 

@@ -42,10 +42,13 @@ import {
 } from "./corrections.js";
 import { ApiErrorSchema } from "./errors.js";
 import {
+  GeneratedBlockDetailResponseSchema,
   GeneratedBlockDtoSchema,
+  GeneratedBlockListQuerySchema,
   GeneratedBlockListResponseSchema,
   GeneratedBlockResolveRequestSchema,
-  GeneratedBlockResolveResponseSchema
+  GeneratedBlockResolveResponseSchema,
+  VisibleGeneratedBlockDtoSchema
 } from "./generated-blocks.js";
 import {
   MutationBatchUndoMemberSchema,
@@ -338,6 +341,13 @@ const routingRuleCursorQuery = {
   description: "The last routing-rule ID returned by the previous fixed 50-item page.",
   schema: { type: "string", pattern: "^rule_[0-9A-HJKMNP-TV-Z]{26}$" }
 } as const;
+const generatedBlockCursorQuery = {
+  name: "cursor",
+  in: "query",
+  required: false,
+  description: "The last block ID returned by the previous fixed 50-item note page.",
+  schema: { type: "string", pattern: "^blk_[0-9A-HJKMNP-TV-Z]{26}$" }
+} as const;
 const limitQuery = {
   name: "limit",
   in: "query",
@@ -443,6 +453,19 @@ const privateRoutingRuleListErrors = {
   "429": privateErrorResponse,
   "500": privateErrorResponse,
   "503": privateErrorResponse
+} as const;
+
+const privateGeneratedBlockReadErrors = {
+  ...privateCommonErrors,
+  "403": privateErrorResponse,
+  "429": privateErrorResponse,
+  "500": privateErrorResponse,
+  "503": privateErrorResponse
+} as const;
+
+const privateGeneratedBlockResolveErrors = {
+  ...privateGeneratedBlockReadErrors,
+  "413": privateErrorResponse
 } as const;
 
 export const openApiDocument = {
@@ -753,13 +776,13 @@ export const openApiDocument = {
         operationId: "listGeneratedBlocks",
         summary: "List AI-generated blocks for a note",
         security: authenticated,
-        parameters: [noteId],
+        parameters: [noteId, generatedBlockCursorQuery],
         responses: {
           "200": privateJsonResponse(
             "AI-generated blocks for the note",
             "GeneratedBlockListResponse"
           ),
-          ...commonErrors
+          ...privateGeneratedBlockReadErrors
         }
       }
     },
@@ -966,7 +989,19 @@ export const openApiDocument = {
             "Resolved AI-generated block",
             "GeneratedBlockResolveResponse"
           ),
-          ...commonErrors
+          ...privateGeneratedBlockResolveErrors
+        }
+      }
+    },
+    "/generated-blocks/{blockId}": {
+      get: {
+        operationId: "getGeneratedBlock",
+        summary: "Get one owner-scoped AI-generated block",
+        security: authenticated,
+        parameters: [generatedBlockId],
+        responses: {
+          "200": privateJsonResponse("AI-generated block", "GeneratedBlockDetailResponse"),
+          ...privateGeneratedBlockReadErrors
         }
       }
     },
@@ -1268,7 +1303,10 @@ export const openApiDocument = {
       RoutingRuleDeleteResponse: openApiSchema(RoutingRuleDeleteResponseSchema),
       RoutingRuleMatchSnapshot: openApiSchema(RoutingRuleMatchSnapshotSchema),
       GeneratedBlockDto: openApiSchema(GeneratedBlockDtoSchema),
+      VisibleGeneratedBlockDto: openApiSchema(VisibleGeneratedBlockDtoSchema),
+      GeneratedBlockListQuery: openApiSchema(GeneratedBlockListQuerySchema),
       GeneratedBlockListResponse: openApiSchema(GeneratedBlockListResponseSchema),
+      GeneratedBlockDetailResponse: openApiSchema(GeneratedBlockDetailResponseSchema),
       GeneratedBlockResolveRequest: openApiSchema(GeneratedBlockResolveRequestSchema),
       GeneratedBlockResolveResponse: openApiSchema(GeneratedBlockResolveResponseSchema),
       UserSettingsDto: openApiSchema(UserSettingsDtoSchema),

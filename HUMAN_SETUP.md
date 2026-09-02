@@ -12,7 +12,7 @@ This file contains only steps that require a human account, physical device, pai
 
 ## Remaining release gates at a glance
 
-The Milestone D organizer, cipher, encrypted RAG path, and OpenAI adapters and the Milestone E1/E2 encrypted correction/Review/batch-Undo and routing-rule slices are implemented in code. E2's final aggregate/HTTP/PR-CI evidence remains pending; E3–E4 and Milestones F–G remain pending. The following steps still require a human-controlled account, credential, environment, or device and remain release-blocking:
+The Milestone D organizer, cipher, encrypted RAG path, and OpenAI adapters and the Milestone E1–E3 encrypted correction/Review/batch-Undo, routing-rule, generated-block, and duplicate-suggestion slices are implemented in code. E2's credential-free aggregate/HTTP/PR-CI gate is green. E3's credential-free local aggregate and built-local B–E3 HTTP gates plus PR #16's required CI lanes are green; its deployed canary remains pending. E4 and Milestones F–G remain pending. The following steps still require a human-controlled account, credential, environment, or device and remain release-blocking:
 
 1. Create the dedicated OpenAI Production project/service account, restrict its model/key authority, set rate/spend controls, decide and document its data-retention posture, and place the key only in the organizer Production secret store.
 2. Keep `pnpm eval:routing` as the deterministic mock safety gate and run `pnpm eval:routing:pipeline` for the deterministic production-component seam. Its report names the real components exercised and the database/runtime guarantees it excludes. The optional credentialed runner is checked in as `pnpm eval:routing:live`; it requires only `UNFILED_ROUTING_EVAL_OPENAI_API_KEY`, runs exactly three samples per eligible synthetic case, and emits safe content-free telemetry. No credentialed live run or stochastic provider report exists yet.
@@ -20,7 +20,7 @@ The Milestone D organizer, cipher, encrypted RAG path, and OpenAI adapters and t
 4. Run the staged synthetic organizer canaries and outage/race/replay cases, verify ciphertext-only durable state, and record the disable/rollback decision points before admitting a small cohort.
 5. Complete the restore drill, apply the one-way C.5d production contract from a real database-owner session, verify the post-contract canary, and track every pre-contract backup until expiry.
 6. Complete Apple signing, signed archive inspection, SQLCipher/Keychain/App Group checks, and the Lock Screen widget matrix on a physical iPhone.
-7. Before enabling E1/E2 in Production, run the deployed owner-interaction and private-rule account/canary gates below. Extend that evidence after E3–E4 through generated blocks/duplicates and Vault-only BYOK. No user BYOK or Anthropic control may be enabled from the current E2 code state.
+7. Before enabling E1–E3 in Production, run the deployed owner-interaction, private-rule, generated-block, duplicate-suggestion, and retention account/canary gates below. Extend that evidence after E4 through Vault-only BYOK. No user BYOK or Anthropic control may be enabled from the current E3 code state.
 
 The production storage promise is application encryption at rest with scoped server-side decryption. It is not end-to-end encryption or zero-knowledge storage.
 
@@ -705,8 +705,12 @@ lifecycle without adding E1–E4 public RPCs. E1 migration
 the owner-authorized web/native interactions. E2 migration
 `20260901000003_encrypted_routing_rules_and_personalization.sql` implements its exact five
 service-only capabilities, encrypted explicit/learned rule lifecycle, and content-free organizer
-snapshot. E3 and E4 retain assigned migrations `20260901000004`–`00005`. The final E2 aggregate,
-built-local HTTP, and PR-CI evidence is not yet recorded. The credential-free E1 gate is green: the full built-local HTTP B–E1
+snapshot. E3 migration `20260901000004_encrypted_generated_blocks_and_duplicate_suggestions.sql`
+implements separately encrypted generated blocks, non-destructive duplicate suggestions, and the sole
+new public generated-block resolver without expanding the organizer's ten-RPC allowlist. E4 retains
+assigned migration `20260901000005`. The E2 credential-free aggregate/HTTP/PR-CI gate is green;
+E3's credential-free local aggregate and built-local B–E3 HTTP gates plus PR #16's required CI lanes
+are green, while its deployed canary remains pending. The credential-free E1 gate is green: the full built-local HTTP B–E1
 suite passed; web passed 78 files / 651 tests; organizer, worker, and verifier passed 18 / 281,
 18 / 159, and 11 / 168 respectively; a clean database reset plus strict private/public schema lint
 passed with zero warnings, followed by 36 pgTAP files / 1,671 assertions and the database
@@ -715,12 +719,20 @@ The workspace format/lint/typecheck/coverage gate passed 26/26 tasks, the build 
 all three built-server smokes passed, deterministic routing passed 175/175 cases, the production
 component seam passed 15/15 cases, verifier capacity passed 1/1, and the 1,000-note organizer
 retrieval gate recorded cold p95 407.03 ms and warm p95 18.07 ms. Dependency audit reported no
-known vulnerabilities; boundaries and OpenAPI were green. None of this replaces the
-human-controlled deployment/account checks below. Milestone D still discards returned
-generated-expansion text, and user BYOK remains disabled.
+known vulnerabilities; boundaries and OpenAPI were green. The current E3 local gate passed 38
+pgTAP files / 1,836 assertions, focused `091` at 67/67, zero database lint findings, database
+concurrency, and the built-local B–E3 HTTP suite; its E3 slice executed 36 requests and scanned 17
+unique plaintext canaries without disclosure. Web passed 92 files / 787 tests; organizer 18 / 302;
+API client 4 / 36; encrypted aggregate 8 / 144; contracts 7 / 55; AI routing 11 / 79; and Swift
+165/165. Workspace quality passed 26/26 and build passed 16/16; all three built-server smokes,
+boundaries, and OpenAPI were green. Routing passed 175/175, the production-component seam passed 15/15 with
+`liveProviderEvidence=false`, verifier capacity passed 1/1, retrieval recorded cold p95 381.58 ms
+and warm p95 11.98 ms, the dependency audit found no known vulnerabilities, and the independent final security/hygiene audit was clear. None of this
+replaces the human-controlled deployment/account checks below. E3 closes Milestone D's
+generated-expansion discard gap in code, while user BYOK remains disabled.
 
-1. From the current E2 release candidate, verify the database applied the shared E0, E1, and E2
-   migrations in order. When E3–E4 land, the complete release candidate must apply exactly these
+1. From the current E3 release candidate, verify the database applied the shared E0, E1, E2, and E3
+   migrations in order. When E4 lands, the complete release candidate must apply exactly these
    feature migrations in order:
    `20260901000001_milestone_e0_interaction_contracts.sql`,
    `20260901000002_encrypted_decision_corrections.sql`,
@@ -752,11 +764,21 @@ generated-expansion text, and user BYOK remains disabled.
    lowercase, Unicode `White_Space`, U+0085, U+FEFF, punctuation-only rejection, and both 500-UTF-16
    bounds. Route list/log daily notes and generic/principle/project prose; closed, private, archived,
    deleted, stale, incompatible, ambiguous, and over-2,000-character targets must enter Review.
-4. Return a unique synthetic generated expansion from the provider fixture. Before E3 the marker
-   must be discarded and absent from product UI/durable stores. After E3, prove it is a separately
-   encrypted `proposed` generated block, remains stable across response-loss replay, and accept/reject
-   never modifies user-authored body or structured data. Seed a duplicate suggestion and prove no
-   organizer/model action merges, deletes, archives, rewrites, or redirects either note.
+4. Return a unique synthetic generated expansion from the provider fixture. Prove it is a separately
+   encrypted `proposed` generated block with an encrypted pending-expansion Review, remains stable
+   across response-loss replay, and accept/reject never modifies the note body, structured data, or
+   revision. Verify the web and native note views render pending and accepted blocks outside editable
+   user text, hide rejected blocks, preserve AI provenance, and use the exact same idempotent request
+   after an ambiguous response. Seed enough blocks to cross several pages and prove owner-and-note
+   isolation, ascending block-ID keyset order, exact 50-item pages from the 51-row lookahead, and that
+   rejected rows are removed before pagination. Confirm Review hydrates its proposal through the exact
+   block read and that public list/detail responses cannot carry a rejected block. Seed a duplicate
+   suggestion with two or three current revision-bound note choices and an encrypted explanation;
+   prove `Keep both` and `Dismiss` are non-destructive and that no organizer/model action merges,
+   deletes, archives, rewrites, or redirects a note. Exercise the
+   existing encrypted-retention capability in dry-run and execute modes: an eligible rejected block
+   remains before seven days, is hard-deleted at or after seven days, and a replayed retention run
+   cannot consume a second block batch.
 5. In the Production Supabase project, confirm Vault is enabled and included in the approved backup,
    restore, audit, and retention posture. E4 must remove or permanently constrain the legacy
    `user_provider_keys.key_ciphertext` fallback. If Vault or these controls are unavailable, leave

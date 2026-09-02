@@ -1,6 +1,8 @@
 import {
   ApiErrorCode,
   DecisionCorrectionRequestSchema,
+  GeneratedBlockListQuerySchema,
+  GeneratedBlockResolveRequestSchema,
   MutationUndoRequestSchema,
   ReviewResolveRequestSchema,
   entityIdSchema,
@@ -53,7 +55,10 @@ function parse<T>(schema: Schema<T>, value: unknown): T {
   return result.data;
 }
 
-function parseId<K extends "dec" | "mut" | "rvw">(kind: K, value: string | undefined): EntityId<K> {
+function parseId<K extends "blk" | "dec" | "mut" | "note" | "rvw">(
+  kind: K,
+  value: string | undefined
+): EntityId<K> {
   return parse(entityIdSchema(kind), value);
 }
 
@@ -120,6 +125,55 @@ export function createOwnerInteractionHandlers(dependencies: OwnerInteractionHan
           input
         );
         scheduleCommittedIndexWork();
+        return jsonResponse(response);
+      });
+    },
+
+    listGeneratedBlocks(request: Request, parameters: RouteParameters) {
+      return run(request, async (repository, context) => {
+        const url = new URL(request.url);
+        if (
+          [...url.searchParams.keys()].some((key) => key !== "cursor") ||
+          url.searchParams.getAll("cursor").length > 1
+        ) {
+          throw new HttpError(
+            400,
+            ApiErrorCode.VALIDATION_FAILED,
+            "That generated-block page cursor is invalid."
+          );
+        }
+        const query = parse(GeneratedBlockListQuerySchema, {
+          ...(url.searchParams.has("cursor") ? { cursor: url.searchParams.get("cursor") } : {})
+        });
+        const response = await repository.listGeneratedBlocks(
+          context,
+          parseId("note", parameters.noteId),
+          query
+        );
+        return jsonResponse(response);
+      });
+    },
+
+    getGeneratedBlock(request: Request, parameters: RouteParameters) {
+      return run(request, async (repository, context) => {
+        const response = await repository.getGeneratedBlock(
+          context,
+          parseId("blk", parameters.blockId)
+        );
+        return jsonResponse(response);
+      });
+    },
+
+    resolveGeneratedBlock(request: Request, parameters: RouteParameters) {
+      return run(request, async (repository, context) => {
+        const body = await readJsonObject(request);
+        const input = parse(GeneratedBlockResolveRequestSchema, body);
+        requireIdempotencyKey(request, body);
+        const response = await repository.resolveGeneratedBlock(
+          context,
+          parseId("blk", parameters.blockId),
+          input
+        );
         return jsonResponse(response);
       });
     },

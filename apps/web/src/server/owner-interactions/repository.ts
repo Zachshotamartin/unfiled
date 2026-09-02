@@ -2,6 +2,11 @@ import type {
   DecisionCorrectionRequest,
   DecisionCorrectionResponse,
   EntityId,
+  GeneratedBlockDetailResponse,
+  GeneratedBlockListQuery,
+  GeneratedBlockListResponse,
+  GeneratedBlockResolveRequest,
+  GeneratedBlockResolveResponse,
   MutationBatchUndoResponse,
   MutationUndoRequest,
   ReviewResolveRequest,
@@ -24,6 +29,23 @@ export type OwnerInteractionRepositoryContext = Readonly<{
  * have no plaintext legacy implementation or fallback path.
  */
 export interface OwnerInteractionRepository {
+  listGeneratedBlocks(
+    context: OwnerInteractionRepositoryContext,
+    noteId: EntityId<"note">,
+    query: GeneratedBlockListQuery
+  ): Promise<GeneratedBlockListResponse>;
+
+  getGeneratedBlock(
+    context: OwnerInteractionRepositoryContext,
+    blockId: EntityId<"blk">
+  ): Promise<GeneratedBlockDetailResponse>;
+
+  resolveGeneratedBlock(
+    context: OwnerInteractionRepositoryContext,
+    blockId: EntityId<"blk">,
+    request: GeneratedBlockResolveRequest
+  ): Promise<GeneratedBlockResolveResponse>;
+
   correctDecision(
     context: OwnerInteractionRepositoryContext,
     decisionId: EntityId<"dec">,

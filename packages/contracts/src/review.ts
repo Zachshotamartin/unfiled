@@ -13,6 +13,8 @@ export const ReviewProposalNoteSchema = z.strictObject({
 });
 export type ReviewProposalNote = z.infer<typeof ReviewProposalNoteSchema>;
 
+export const DuplicateSuggestionExplanationSchema = z.string().trim().min(1).max(600);
+
 const DuplicateReviewNotesSchema = z
   .array(ReviewProposalNoteSchema)
   .min(2)
@@ -42,7 +44,8 @@ export const ReviewProposalSchema = z.discriminatedUnion("type", [
   }),
   z.strictObject({
     type: z.literal("duplicate_notes"),
-    notes: DuplicateReviewNotesSchema
+    notes: DuplicateReviewNotesSchema,
+    explanation: DuplicateSuggestionExplanationSchema
   }),
   z.strictObject({
     type: z.literal("conflict"),
@@ -76,6 +79,29 @@ export const ReviewResolutionSchema = z.discriminatedUnion("type", [
 export type ReviewResolution = z.infer<typeof ReviewResolutionSchema>;
 
 /**
+ * Owner actions accepted by the generic Review endpoint. Generated-block
+ * acceptance and rejection intentionally remain absent: the block-specific
+ * endpoint owns their state-revision CAS and atomic Review transition.
+ */
+export const PublicReviewResolutionSchema = z.discriminatedUnion("type", [
+  z.strictObject({
+    type: z.literal("route"),
+    noteId: entityIdSchema("note"),
+    expectedRevision: ExpectedRevisionSchema
+  }),
+  z.strictObject({
+    type: z.literal("create"),
+    title: z.string().trim().min(1).max(200),
+    noteType: NoteTypeSchema,
+    spaceId: entityIdSchema("spc").nullable()
+  }),
+  z.strictObject({ type: z.literal("keep_inbox") }),
+  z.strictObject({ type: z.literal("dismiss") }),
+  z.strictObject({ type: z.literal("keep_both") })
+]);
+export type PublicReviewResolution = z.infer<typeof PublicReviewResolutionSchema>;
+
+/**
  * Frozen Review semantics. The public Review type is operational metadata, so
  * it must agree with the authenticated proposal before the pair is trusted:
  *
@@ -86,7 +112,8 @@ export type ReviewResolution = z.infer<typeof ReviewResolutionSchema>;
  * - pending expansion -> generated block, or D's temporary consent hold
  * - structure conflict -> candidate-eligibility or structure conflict
  *
- * Dismiss is the only resolution shared by every type. Routing, revision, and
+ * Dismiss is shared by every type except a persisted generated-block Review.
+ * Routing, revision, and
  * structure items otherwise permit route/create/keep-inbox; failed jobs permit
  * keep-inbox only; duplicates permit keep-both; persisted expansions permit
  * accept/reject. Operational route/create availability additionally requires
@@ -128,7 +155,10 @@ export function reviewResolutionMatchesSemantics(
   resolution: ReviewResolution | null
 ): boolean {
   if (!reviewProposalMatchesType(type, proposal)) return false;
-  if (resolution === null || resolution.type === "dismiss") return true;
+  if (resolution === null) return true;
+  if (resolution.type === "dismiss") {
+    return !(type === "pending_expansion" && proposal.type === "generated_block");
+  }
 
   switch (type) {
     case "duplicate_suggestion":
@@ -222,7 +252,7 @@ export type ListReviewItemsResponse = z.infer<typeof ListReviewItemsResponseSche
 
 export const ReviewResolveRequestSchema = z.strictObject({
   idempotencyKey: IdempotencyKeySchema,
-  resolution: ReviewResolutionSchema
+  resolution: PublicReviewResolutionSchema
 });
 export type ReviewResolveRequest = z.infer<typeof ReviewResolveRequestSchema>;
 

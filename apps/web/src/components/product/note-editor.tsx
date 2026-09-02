@@ -26,6 +26,7 @@ import { draftSaveAttempt, type DraftSaveAttempt } from "@/lib/product/draft-sav
 import { useLiveResource } from "@/lib/product/use-live-resource";
 
 import { ChecklistSurface } from "./checklist-surface";
+import { GeneratedBlocksSurface } from "./generated-blocks-surface";
 import { MarkdownPreview } from "./markdown-preview";
 import { NoteInspector } from "./note-inspector";
 import { ResourceError, ResourceSkeleton } from "./resource-states";
@@ -445,6 +446,8 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
           disabled={pending || conflict !== null}
           onToggle={(itemId, checked) => void toggleItem(itemId, checked)}
         />
+
+        <GeneratedBlocksSurface noteId={note.id} />
 
         <div className="editor-status" aria-live="polite">
           <span className={error === null ? "text-muted-content" : "text-critical"}>

@@ -66,6 +66,7 @@ const job: ClaimedOrganizerJob = Object.freeze({
   jobId: "job_01ARZ3NDEKTSV4RRFFQ69G5FAV",
   leaseExpiresAt: "2026-08-31T20:00:00.000Z",
   leaseToken: "11111111-1111-4111-8111-111111111111",
+  modelId: "gpt-5.4-mini-2026-03-17",
   occurredAt: "2026-08-31T19:58:00.000Z",
   ownerId: "22222222-2222-4222-8222-222222222222",
   promptVersion: "routing-v1",
@@ -117,6 +118,7 @@ function prepared(mode: "append" | "create", revision: number | null): Organizer
     expectedRevision: revision,
     ids: {
       decisionId: "dec_01ARZ3NDEKTSV4RRFFQ69G5FAC",
+      generatedBlockId: "blk_01ARZ3NDEKTSV4RRFFQ69G5FAJ",
       mutationId: "mut_01ARZ3NDEKTSV4RRFFQ69G5FAD",
       reviewItemId: "rvw_01ARZ3NDEKTSV4RRFFQ69G5FAE",
       revisionId: "rev_01ARZ3NDEKTSV4RRFFQ69G5FAF"
@@ -129,6 +131,10 @@ function prepared(mode: "append" | "create", revision: number | null): Organizer
     replayed: false,
     reservations: {
       decision: { operationCount: 1, reservationId: "22222222-2222-4222-8222-222222222221" },
+      generatedBlock: {
+        operationCount: 1,
+        reservationId: "22222222-2222-4222-8222-222222222225"
+      },
       noteWrite: { operationCount: 4, reservationId: "22222222-2222-4222-8222-222222222222" },
       receipt: { operationCount: 1, reservationId: "22222222-2222-4222-8222-222222222223" },
       review: { operationCount: 1, reservationId: "22222222-2222-4222-8222-222222222224" }
@@ -197,11 +203,12 @@ function cipher(): OrganizerCipher {
       .mockImplementation(({ plan, reviewReason }: Parameters<OrganizerCipher["sealCommand"]>[0]) =>
         Promise.resolve({
           decision: { sealed: true },
+          generatedBlock: plan.generatedBlock === null ? null : { sealed: true },
           noteWrite: plan.kind === "review" ? null : { sealed: true },
           outcome:
             plan.kind === "append" ? "appended" : plan.kind === "create" ? "created" : "review",
           receipt: { sealed: true },
-          review: { sealed: true },
+          review: plan.kind === "review" || plan.generatedBlock !== null ? { sealed: true } : null,
           reviewReason
         })
       )
@@ -1307,33 +1314,20 @@ describe("organizer drain", () => {
     });
   });
 
-  it.each([
-    ["malformed", { unexpected: true }, "planner_ambiguity"],
-    [
-      "enabled expansion",
-      { ...appendPlan, generatedExpansion: { kind: "suggestion", text: "Try oat milk" } },
-      "expansion_pending"
-    ],
-    [
-      "disabled expansion",
-      { ...appendPlan, generatedExpansion: { kind: "suggestion", text: "Try oat milk" } },
-      "planner_ambiguity"
-    ]
-  ])("routes %s planner output to encrypted Review", async (_label, planned, expectedReason) => {
-    const selectedControls =
-      _label === "disabled expansion"
-        ? Object.freeze({
-            expansionDisabled: true,
-            explicitDestinationNoteId: null,
-            ruleMatch: null
-          })
-        : controls;
+  it("publishes duplicate suspicion only as a two-note non-destructive Review", async () => {
+    const second = candidateAt(5, {
+      candidateId: "note_01ARZ3NDEKTSV4RRFFQ69G5FAK",
+      noteId: "note_01ARZ3NDEKTSV4RRFFQ69G5FAM"
+    });
+    const planned = {
+      ...appendPlan,
+      alternatives: [second.candidateId],
+      reasonCodes: [...appendPlan.reasonCodes, "duplicate_suspected"]
+    };
     const crypto = cipher();
     const repo = repository({
-      candidates: vi
-        .fn()
-        .mockResolvedValue({ candidates: [candidate], controls: selectedControls }),
-      heartbeat: vi.fn().mockResolvedValue(authorized()),
+      candidates: vi.fn().mockResolvedValue({ candidates: [candidate, second], controls }),
+      heartbeat: vi.fn().mockResolvedValue(authorized(2)),
       commit: vi.fn().mockResolvedValue({
         jobId: job.jobId,
         noteId: null,
@@ -1344,22 +1338,104 @@ describe("organizer drain", () => {
       })
     });
     const planner: OrganizerPlanner = { plan: vi.fn().mockResolvedValue(planned) };
-    expect(
-      (
-        await drain(repo, planner, crypto).drain({
-          authority,
-          requestId: "r",
-          signal,
-          trigger: "manual"
-        })
-      ).completed
-    ).toBe(1);
-    expect(vi.mocked(crypto.sealCommand).mock.calls.at(-1)?.[0]).toMatchObject({
-      plan: { kind: "review" },
-      reviewReason: expectedReason
-    });
+
+    await expect(
+      drain(repo, planner, crypto).drain({
+        authority,
+        requestId: "duplicate-review",
+        signal,
+        trigger: "manual"
+      })
+    ).resolves.toEqual({ claimed: 1, completed: 1, failed: 0, retryScheduled: 0 });
     expect(repo.prepareAppend).not.toHaveBeenCalled();
+    expect(repo.prepareCreate).toHaveBeenCalledOnce();
+    expect(vi.mocked(crypto.sealCommand).mock.calls[0]?.[0]).toMatchObject({
+      plan: {
+        kind: "review",
+        validatedPlan: {
+          alternatives: [candidate.candidateId, second.candidateId]
+        }
+      },
+      reviewReason: "duplicate_suggestion"
+    });
+    expect(vi.mocked(repo.commit).mock.calls[0]?.[0].command).toMatchObject({
+      generatedBlock: null,
+      noteWrite: null,
+      outcome: "review",
+      reviewReason: "duplicate_suggestion"
+    });
   });
+
+  it.each([
+    ["malformed", { unexpected: true }, "planner_ambiguity", "review"],
+    [
+      "enabled expansion",
+      { ...appendPlan, generatedExpansion: { kind: "suggestion", text: "Try oat milk" } },
+      "expansion_pending",
+      "append"
+    ],
+    [
+      "disabled expansion",
+      { ...appendPlan, generatedExpansion: { kind: "suggestion", text: "Try oat milk" } },
+      "planner_ambiguity",
+      "review"
+    ]
+  ])(
+    "publishes %s planner output with the required encrypted boundary",
+    async (_label, planned, expectedReason, expectedKind) => {
+      const selectedControls =
+        _label === "disabled expansion"
+          ? Object.freeze({
+              expansionDisabled: true,
+              explicitDestinationNoteId: null,
+              ruleMatch: null
+            })
+          : controls;
+      const crypto = cipher();
+      const repo = repository({
+        candidates: vi
+          .fn()
+          .mockResolvedValue({ candidates: [candidate], controls: selectedControls }),
+        heartbeat: vi.fn().mockResolvedValue(authorized()),
+        commit: vi.fn().mockResolvedValue(
+          expectedKind === "append"
+            ? {
+                jobId: job.jobId,
+                noteId: candidate.noteId,
+                outcome: "appended",
+                replayed: false,
+                revision: candidate.revision + 1,
+                replanCount: 0
+              }
+            : {
+                jobId: job.jobId,
+                noteId: null,
+                outcome: "review",
+                replayed: false,
+                revision: null,
+                replanCount: 0
+              }
+        )
+      });
+      const planner: OrganizerPlanner = { plan: vi.fn().mockResolvedValue(planned) };
+      expect(
+        (
+          await drain(repo, planner, crypto).drain({
+            authority,
+            requestId: "r",
+            signal,
+            trigger: "manual"
+          })
+        ).completed
+      ).toBe(1);
+      expect(vi.mocked(crypto.sealCommand).mock.calls.at(-1)?.[0]).toMatchObject({
+        plan: { kind: expectedKind },
+        reviewReason: expectedReason
+      });
+      if (expectedKind === "append") expect(repo.prepareAppend).toHaveBeenCalledOnce();
+      else expect(repo.prepareAppend).not.toHaveBeenCalled();
+    }
+  );
 
   it("derives a fresh reservation after a durable retry attempt", async () => {
     const reservations: string[] = [];

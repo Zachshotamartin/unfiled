@@ -25,6 +25,9 @@ import {
   CaptureRetryResponseSchema,
   DecisionCorrectionRequestSchema,
   DecisionCorrectionResponseSchema,
+  GeneratedBlockDetailResponseSchema,
+  GeneratedBlockDtoSchema,
+  GeneratedBlockListQuerySchema,
   GeneratedBlockListResponseSchema,
   GeneratedBlockResolveRequestSchema,
   GeneratedBlockResolveResponseSchema,
@@ -32,6 +35,7 @@ import {
   MutationBatchUndoResponseSchema,
   MutationResultSchema,
   MutationUndoRequestSchema,
+  MAX_GENERATED_BLOCK_RESPONSE_BYTES,
   MAX_RETAINED_ROUTING_RULES,
   MAX_ROUTING_RULE_PAGE_BYTES,
   NoteArchiveRequestSchema,
@@ -104,6 +108,8 @@ import {
   type CaptureListQuery,
   type CaptureRetryRequest,
   type DecisionCorrectionRequest,
+  type GeneratedBlockListQuery,
+  type GeneratedBlockDto,
   type GeneratedBlockResolveRequest,
   type InteractiveOperationsRequest,
   type MutationUndoRequest,
@@ -553,13 +559,40 @@ export function createApiClient(options: ApiClientOptions) {
       );
     },
 
-    listGeneratedBlocks(noteId: string) {
+    listGeneratedBlocks(noteId: string, input: Partial<GeneratedBlockListQuery> = {}) {
       const id = entityIdSchema("note").parse(noteId);
+      const query = GeneratedBlockListQuerySchema.parse(input);
+      const suffix = queryString([["cursor", query.cursor]]);
       return request(
-        `/notes/${id}/generated-blocks`,
-        { cache: "no-store" },
+        `/notes/${id}/generated-blocks${suffix}`,
+        { cache: "no-store", maximumResponseBytes: MAX_GENERATED_BLOCK_RESPONSE_BYTES },
         GeneratedBlockListResponseSchema
-      );
+      ).then((response) => {
+        if (
+          response.items.some(
+            (block) =>
+              block.noteId !== id || (query.cursor !== undefined && block.id <= query.cursor)
+          )
+        ) {
+          throw new ApiClientMalformedResponseError(200);
+        }
+        return response;
+      });
+    },
+
+    getGeneratedBlock(blockId: string, expectedNoteId: string) {
+      const id = entityIdSchema("blk").parse(blockId);
+      const noteId = entityIdSchema("note").parse(expectedNoteId);
+      return request(
+        `/generated-blocks/${id}`,
+        { cache: "no-store", maximumResponseBytes: MAX_GENERATED_BLOCK_RESPONSE_BYTES },
+        GeneratedBlockDetailResponseSchema
+      ).then((response) => {
+        if (response.block.id !== id || response.block.noteId !== noteId) {
+          throw new ApiClientMalformedResponseError(200);
+        }
+        return response;
+      });
     },
 
     linkNoteTag(noteId: string, input: NoteTagLinkRequest) {
@@ -798,14 +831,39 @@ export function createApiClient(options: ApiClientOptions) {
       );
     },
 
-    resolveGeneratedBlock(blockId: string, input: GeneratedBlockResolveRequest) {
-      const id = entityIdSchema("blk").parse(blockId);
+    resolveGeneratedBlock(blockValue: GeneratedBlockDto, input: GeneratedBlockResolveRequest) {
+      const source = GeneratedBlockDtoSchema.parse(blockValue);
+      const id = entityIdSchema("blk").parse(source.id);
       const body = GeneratedBlockResolveRequestSchema.parse(input);
       return request(
         `/generated-blocks/${id}/resolve`,
-        { body, cache: "no-store", idempotencyKey: body.idempotencyKey, method: "POST" },
+        {
+          body,
+          cache: "no-store",
+          idempotencyKey: body.idempotencyKey,
+          maximumResponseBytes: MAX_GENERATED_BLOCK_RESPONSE_BYTES,
+          method: "POST"
+        },
         GeneratedBlockResolveResponseSchema
-      );
+      ).then((response) => {
+        const expectedState = body.resolution === "accept" ? "accepted" : "rejected";
+        if (
+          response.block.id !== id ||
+          response.block.noteId !== source.noteId ||
+          response.block.decisionId !== source.decisionId ||
+          response.block.kind !== source.kind ||
+          response.block.content !== source.content ||
+          response.block.modelId !== source.modelId ||
+          response.block.promptVersion !== source.promptVersion ||
+          response.block.createdAt !== source.createdAt ||
+          response.block.state !== expectedState ||
+          response.block.stateRevision !== body.expectedStateRevision + 1 ||
+          response.block.stateRevision !== source.stateRevision + 1
+        ) {
+          throw new ApiClientMalformedResponseError(200);
+        }
+        return response;
+      });
     },
 
     listRoutingRules,

@@ -204,6 +204,7 @@ function replayMacMessage<Payload>(
 type AggregateVerificationCoordinates = Readonly<{
   surface:
     | "capture_receipt"
+    | "generated_block"
     | "note_content"
     | "note_mutation"
     | "organization_decision"
@@ -810,6 +811,16 @@ export function createEncryptedAggregateService(
         recordVersion: 1,
         keyClass: "ai_assisted",
         payload: parsePayload(OrganizationDecisionPayloadSchema, input.payload)
+      });
+    }
+    if (input.surface === "generated_block") {
+      assertEntityId(input.blockId, "blk");
+      return Object.freeze({
+        surface: input.surface,
+        resourceId: input.blockId,
+        recordVersion: 1,
+        keyClass: "ai_assisted",
+        payload: parsePayload(GeneratedBlockPayloadSchema, input.payload)
       });
     }
     if (input.surface === "review_item") {

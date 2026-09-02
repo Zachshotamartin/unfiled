@@ -25,6 +25,7 @@ const SOURCE_REVISION = `rev_${"C".repeat(26)}` as const;
 const SOURCE_MUTATION = `mut_${"D".repeat(26)}` as const;
 const DECISION = `dec_${"2".repeat(26)}` as const;
 const REVIEW = `rvw_${"3".repeat(26)}` as const;
+const BLOCK = `blk_${"E".repeat(26)}` as const;
 const CAPTURE = `cap_${"7".repeat(26)}` as const;
 const FEEDBACK = `fbk_${"8".repeat(26)}` as const;
 const JOB = `job_${"9".repeat(26)}` as const;
@@ -219,6 +220,107 @@ function pendingPrivateReviewCreateRow(
     ],
     encryptedResponse: null,
     encryptedResponseVerificationMac: null
+  };
+}
+
+function pendingGeneratedBlockResolutionRow(): Record<string, unknown> {
+  return {
+    scope: "encrypted_review_resolution",
+    action: "accept_expansion",
+    occurredAt: POSTGREST_OCCURRED_AT,
+    completed: false,
+    replayed: false,
+    requestMacKey: key("content_mac"),
+    ids: {
+      reviewItemId: REVIEW,
+      destinationNoteId: null,
+      destinationRevisionId: null,
+      destinationMutationId: null,
+      generatedBlockId: BLOCK,
+      stateRevision: 1
+    },
+    source: {
+      decision: null,
+      review: {
+        reviewItemId: REVIEW,
+        captureId: CAPTURE,
+        noteId: NOTE,
+        type: "pending_expansion",
+        state: "open",
+        recordVersion: 1,
+        contentCipher: storedCipher("review_item", REVIEW, 1),
+        createdAt: POSTGREST_OCCURRED_AT,
+        resolvedAt: null
+      },
+      receipt: {
+        captureId: CAPTURE,
+        jobId: JOB,
+        decisionId: DECISION,
+        reviewItemId: REVIEW,
+        mutationId: MUTATION,
+        outcome: "added_to_note",
+        destinationNoteId: NOTE,
+        reasonCodes: ["expansion_pending"],
+        recordVersion: 1,
+        sourcePrivacy: "ai_assisted",
+        receiptCipher: storedCipher("capture_receipt", CAPTURE, 1)
+      },
+      capture: {
+        captureId: CAPTURE,
+        recordVersion: 1,
+        privacy: "ai_assisted",
+        status: "needs_review",
+        contentLength: 7,
+        contentCipher: storedCipher("capture", CAPTURE, 1),
+        contentMac: requestMac()
+      },
+      generatedBlock: {
+        blockId: BLOCK,
+        noteId: NOTE,
+        decisionId: DECISION,
+        reviewItemId: REVIEW,
+        kind: "suggestion",
+        state: "proposed",
+        stateRevision: 1,
+        modelId: "gpt-test",
+        promptVersion: "organizer-v1",
+        resolvedAt: null,
+        createdAt: POSTGREST_OCCURRED_AT,
+        contentCipher: storedCipher("generated_block", BLOCK, 1)
+      }
+    },
+    members: [],
+    reservations: [
+      reservation("response", "idempotency_response", `idempotency:${IDEMPOTENCY}`, 1, 21),
+      reservation("review", "review_item", REVIEW, 2, 22),
+      reservation("receipt", "capture_receipt", CAPTURE, 2, 23)
+    ],
+    encryptedResponse: null,
+    encryptedResponseVerificationMac: null
+  };
+}
+
+function completedGeneratedBlockResolutionRow(): Record<string, unknown> {
+  return {
+    scope: "encrypted_review_resolution",
+    action: "accept_expansion",
+    occurredAt: POSTGREST_OCCURRED_AT,
+    completed: true,
+    replayed: true,
+    requestMacKey: retiredKey("content_mac"),
+    ids: {
+      reviewItemId: REVIEW,
+      destinationNoteId: null,
+      destinationRevisionId: null,
+      destinationMutationId: null,
+      generatedBlockId: BLOCK,
+      stateRevision: 1
+    },
+    source: null,
+    members: [],
+    reservations: [],
+    encryptedResponse: storedCipher("idempotency_response", `idempotency:${IDEMPOTENCY}`, 1),
+    encryptedResponseVerificationMac: requestMac()
   };
 }
 
@@ -731,12 +833,13 @@ function requestMac(keyClass: KeyClass = "ai_assisted"): KeyedMacRpcValue {
 }
 
 describe("encrypted owner-interaction RPC adapter", () => {
-  it("publishes only the six frozen owner-interaction RPC capabilities", () => {
+  it("publishes the six E1 capabilities plus the sole E3 block resolver", () => {
     expect(encryptedOwnerInteractionRpcFunctions).toEqual([
       "prepare_encrypted_decision_correction",
       "commit_encrypted_decision_correction",
       "prepare_encrypted_review_resolution",
       "commit_encrypted_review_resolution",
+      "resolve_encrypted_generated_block",
       "get_encrypted_mutation_batch",
       "undo_encrypted_mutation_batch"
     ]);
@@ -852,6 +955,171 @@ describe("encrypted owner-interaction RPC adapter", () => {
         client(() => Promise.resolve(pendingReviewPreparationRow(retiredKey("content_mac"))))
       ).prepareReviewResolution(request)
     ).rejects.toMatchObject({ code: ServiceRpcErrorCode.PROVIDER_UNAVAILABLE });
+  });
+
+  it("preserves replayed incomplete E3 preparations and their stable reservations", async () => {
+    const duplicateRequest = {
+      ownerId: OWNER,
+      reviewItemId: REVIEW,
+      request: {
+        idempotencyKey: IDEMPOTENCY,
+        resolution: { type: "keep_both" as const }
+      }
+    };
+    const duplicateFirst = await createEncryptedOwnerInteractionRpcAdapter(
+      client(() => Promise.resolve(pendingReviewPreparationRow(key("content_mac"))))
+    ).prepareReviewResolution(duplicateRequest);
+    const duplicateReplayRow = pendingReviewPreparationRow(key("content_mac"));
+    duplicateReplayRow.replayed = true;
+    const duplicateReplay = await createEncryptedOwnerInteractionRpcAdapter(
+      client(() => Promise.resolve(duplicateReplayRow))
+    ).prepareReviewResolution(duplicateRequest);
+
+    expect(duplicateReplay).toMatchObject({ completed: false, replayed: true });
+    expect(duplicateReplay.reservations).toEqual(duplicateFirst.reservations);
+
+    const generatedRequest = {
+      ownerId: OWNER,
+      blockId: BLOCK,
+      reviewItemId: REVIEW,
+      request: {
+        expectedStateRevision: 1,
+        idempotencyKey: IDEMPOTENCY,
+        resolution: "accept" as const
+      }
+    };
+    const generatedFirst = await createEncryptedOwnerInteractionRpcAdapter(
+      client(() => Promise.resolve(pendingGeneratedBlockResolutionRow()))
+    ).prepareGeneratedBlockResolution(generatedRequest);
+    const generatedReplayRow = pendingGeneratedBlockResolutionRow();
+    generatedReplayRow.replayed = true;
+    const generatedReplay = await createEncryptedOwnerInteractionRpcAdapter(
+      client(() => Promise.resolve(generatedReplayRow))
+    ).prepareGeneratedBlockResolution(generatedRequest);
+
+    expect(generatedReplay).toMatchObject({ completed: false, replayed: true });
+    expect(generatedReplay.reservations).toEqual(generatedFirst.reservations);
+  });
+
+  it("binds a pending generated-block resolution to its block, Review, and state revision", async () => {
+    const rpc = vi.fn<ServiceRpcClient["rpc"]>(() =>
+      Promise.resolve(pendingGeneratedBlockResolutionRow())
+    );
+    const adapter = createEncryptedOwnerInteractionRpcAdapter(client(rpc));
+    const request = {
+      expectedStateRevision: 1,
+      idempotencyKey: IDEMPOTENCY,
+      resolution: "accept" as const
+    };
+
+    await expect(
+      adapter.prepareGeneratedBlockResolution({
+        ownerId: OWNER,
+        blockId: BLOCK,
+        reviewItemId: REVIEW,
+        request
+      })
+    ).resolves.toMatchObject({
+      action: "accept_expansion",
+      completed: false,
+      ids: { generatedBlockId: BLOCK, reviewItemId: REVIEW, stateRevision: 1 },
+      members: [],
+      source: {
+        generatedBlock: {
+          blockId: BLOCK,
+          noteId: NOTE,
+          reviewItemId: REVIEW,
+          state: "proposed",
+          stateRevision: 1
+        },
+        review: { reviewItemId: REVIEW, noteId: NOTE, type: "pending_expansion" }
+      }
+    });
+    expect(rpc).toHaveBeenCalledWith("prepare_encrypted_review_resolution", {
+      p_owner_id: OWNER,
+      p_review_item_id: REVIEW,
+      p_idempotency_key: IDEMPOTENCY,
+      p_resolution: {
+        type: "accept_expansion",
+        generatedBlockId: BLOCK,
+        expectedStateRevision: 1
+      }
+    });
+
+    const substituted = pendingGeneratedBlockResolutionRow();
+    substituted.ids = { ...(substituted.ids as object), stateRevision: 2 };
+    await expect(
+      createEncryptedOwnerInteractionRpcAdapter(
+        client(() => Promise.resolve(substituted))
+      ).prepareGeneratedBlockResolution({
+        ownerId: OWNER,
+        blockId: BLOCK,
+        reviewItemId: REVIEW,
+        request
+      })
+    ).rejects.toMatchObject({ code: ServiceRpcErrorCode.PROVIDER_UNAVAILABLE });
+  });
+
+  it("replays the exact generated-block resolution through the sole atomic resolver", async () => {
+    const rpc = vi.fn<ServiceRpcClient["rpc"]>((functionName) => {
+      if (functionName === "prepare_encrypted_review_resolution") {
+        return Promise.resolve(completedGeneratedBlockResolutionRow());
+      }
+      if (functionName === "resolve_encrypted_generated_block") {
+        return Promise.resolve({
+          scope: "encrypted_review_resolution",
+          outcome: "accepted",
+          decisionId: null,
+          reviewItemId: REVIEW,
+          feedbackEventId: FEEDBACK,
+          batchId: null,
+          members: [],
+          encryptedResponse: storedCipher("idempotency_response", `idempotency:${IDEMPOTENCY}`, 1),
+          responseVerificationMac: requestMac(),
+          replayed: true,
+          generatedBlockId: BLOCK,
+          stateRevision: 2
+        });
+      }
+      return Promise.reject(new Error("unexpected RPC"));
+    });
+    const adapter = createEncryptedOwnerInteractionRpcAdapter(client(rpc));
+    const request = {
+      expectedStateRevision: 1,
+      idempotencyKey: IDEMPOTENCY,
+      resolution: "accept" as const
+    };
+    const preparation = await adapter.prepareGeneratedBlockResolution({
+      ownerId: OWNER,
+      blockId: BLOCK,
+      reviewItemId: REVIEW,
+      request
+    });
+    const result = await adapter.commitGeneratedBlockResolution({
+      ownerId: OWNER,
+      blockId: BLOCK,
+      request,
+      preparation,
+      command: { requestMac: requestMac() }
+    });
+
+    expect(result).toMatchObject({
+      outcome: "accepted",
+      generatedBlockId: BLOCK,
+      reviewItemId: REVIEW,
+      stateRevision: 2,
+      replayed: true
+    });
+    expect(rpc.mock.calls[1]).toEqual([
+      "resolve_encrypted_generated_block",
+      {
+        p_owner_id: OWNER,
+        p_generated_block_id: BLOCK,
+        p_expected_state_revision: 1,
+        p_idempotency_key: IDEMPOTENCY,
+        p_command: { requestMac: requestMac() }
+      }
+    ]);
   });
 
   it("accepts a private-manual Review create and rejects a missing or substituted receipt link", async () => {

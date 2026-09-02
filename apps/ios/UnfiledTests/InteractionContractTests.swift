@@ -42,6 +42,28 @@ final class InteractionContractTests: XCTestCase {
         XCTAssertTrue(generation.accepts(postMutationRefresh))
     }
 
+    func testReviewGeneratedBlockHydrationCannotCommitOutOfOrder() {
+        var generation = ReviewQueueGeneration()
+        let olderRefresh = generation.beginRequest()
+        let newerRefresh = generation.beginRequest()
+        var committedBlocks = ["block": "initial"]
+
+        if let newerBlocks = generation.accepted(
+            ["block": "newer"],
+            for: newerRefresh
+        ) {
+            committedBlocks = newerBlocks
+        }
+        if let staleBlocks = generation.accepted(
+            ["block": "stale"],
+            for: olderRefresh
+        ) {
+            committedBlocks = staleBlocks
+        }
+
+        XCTAssertEqual(committedBlocks, ["block": "newer"])
+    }
+
     func testBatchUndoFocusesReviewOnlyForPersistedConflict() {
         XCTAssertTrue(
             AppModel.shouldFocusReviewAfterUndo(
@@ -182,7 +204,7 @@ final class InteractionContractTests: XCTestCase {
         let fixtures = [
             #"{"type":"route_capture","plan":\#(plan)}"#,
             #"{"type":"generated_block","blockId":"blk_00000000000000000000000000"}"#,
-            #"{"type":"duplicate_notes","notes":[{"noteId":"\#(noteA)","revision":1},{"noteId":"\#(noteB)","revision":2}]}"#,
+            #"{"type":"duplicate_notes","notes":[{"noteId":"\#(noteA)","revision":1},{"noteId":"\#(noteB)","revision":2}],"explanation":"These notes describe the same weekly plan."}"#,
             #"{"type":"conflict","reason":"candidate_eligibility"}"#,
             #"{"type":"failed_job","errorCode":"provider_unavailable"}"#
         ]
@@ -194,16 +216,45 @@ final class InteractionContractTests: XCTestCase {
             )
         }
 
-        let duplicateID = #"{"type":"duplicate_notes","notes":[{"noteId":"\#(noteA)","revision":1},{"noteId":"\#(noteA)","revision":2}]}"#
-        let oneNote = #"{"type":"duplicate_notes","notes":[{"noteId":"\#(noteA)","revision":1}]}"#
-        let zeroRevision = #"{"type":"duplicate_notes","notes":[{"noteId":"\#(noteA)","revision":0},{"noteId":"\#(noteB)","revision":2}]}"#
+        let duplicate = try decoder.decode(ReviewProposal.self, from: Data(fixtures[2].utf8))
+        guard case let .duplicateNotes(notes, explanation) = duplicate else {
+            return XCTFail("Expected duplicate-note proposal")
+        }
+        XCTAssertEqual(notes.count, 2)
+        XCTAssertEqual(explanation, "These notes describe the same weekly plan.")
+        XCTAssertEqual(
+            try decoder.decode(
+                ReviewProposal.self,
+                from: APIJSON.makeEncoder().encode(duplicate)
+            ),
+            duplicate
+        )
+
+        let duplicateID = #"{"type":"duplicate_notes","notes":[{"noteId":"\#(noteA)","revision":1},{"noteId":"\#(noteA)","revision":2}],"explanation":"Same note twice."}"#
+        let oneNote = #"{"type":"duplicate_notes","notes":[{"noteId":"\#(noteA)","revision":1}],"explanation":"Only one note."}"#
+        let zeroRevision = #"{"type":"duplicate_notes","notes":[{"noteId":"\#(noteA)","revision":0},{"noteId":"\#(noteB)","revision":2}],"explanation":"Invalid revision."}"#
+        let missingExplanation = #"{"type":"duplicate_notes","notes":[{"noteId":"\#(noteA)","revision":1},{"noteId":"\#(noteB)","revision":2}]}"#
+        let blankExplanation = #"{"type":"duplicate_notes","notes":[{"noteId":"\#(noteA)","revision":1},{"noteId":"\#(noteB)","revision":2}],"explanation":"   "}"#
         let unknownKey = #"{"type":"conflict","reason":"structure","rawModelOutput":"secret"}"#
-        for invalid in [duplicateID, oneNote, zeroRevision, unknownKey] {
+        for invalid in [
+            duplicateID,
+            oneNote,
+            zeroRevision,
+            missingExplanation,
+            blankExplanation,
+            unknownKey
+        ] {
             XCTAssertThrowsError(
                 try decoder.decode(ReviewProposal.self, from: Data(invalid.utf8)),
                 invalid
             )
         }
+
+        let longExplanation = String(repeating: "x", count: 601)
+        let overlong = #"{"type":"duplicate_notes","notes":[{"noteId":"\#(noteA)","revision":1},{"noteId":"\#(noteB)","revision":2}],"explanation":"\#(longExplanation)"}"#
+        XCTAssertThrowsError(
+            try decoder.decode(ReviewProposal.self, from: Data(overlong.utf8))
+        )
     }
 
     func testReviewResolutionVariantsRoundTripAndRejectLooseShapes() throws {
@@ -305,6 +356,18 @@ final class InteractionContractTests: XCTestCase {
             )
         )
 
+        for expansionResolution in [
+            ReviewResolution.acceptExpansion,
+            ReviewResolution.rejectExpansion
+        ] {
+            XCTAssertThrowsError(
+                try ReviewResolveRequest(
+                    idempotencyKey: "review-expansion-must-use-block-endpoint",
+                    resolution: expansionResolution
+                )
+            )
+        }
+
         let normalizedRequest = try ReviewResolveRequest(
             idempotencyKey: "review-create-trimmed",
             resolution: .create(title: "  Training Log  ", noteType: .log, spaceId: nil)
@@ -325,7 +388,9 @@ final class InteractionContractTests: XCTestCase {
         let decoder = APIJSON.makeDecoder()
         for invalid in [
             #"{"idempotencyKey":"bad key","resolution":{"type":"dismiss"}}"#,
-            #"{"idempotencyKey":"review-dismiss","resolution":{"type":"dismiss"},"extra":true}"#
+            #"{"idempotencyKey":"review-dismiss","resolution":{"type":"dismiss"},"extra":true}"#,
+            #"{"idempotencyKey":"review-expansion","resolution":{"type":"accept_expansion"}}"#,
+            #"{"idempotencyKey":"review-expansion","resolution":{"type":"reject_expansion"}}"#
         ] {
             XCTAssertThrowsError(
                 try decoder.decode(ReviewResolveRequest.self, from: Data(invalid.utf8)),
@@ -336,7 +401,7 @@ final class InteractionContractTests: XCTestCase {
         let proposalNote = try ReviewProposalNote(noteId: note, revision: 1)
         XCTAssertThrowsError(
             try APIJSON.makeEncoder().encode(
-                ReviewProposal.duplicateNotes(notes: [proposalNote])
+                ReviewProposal.duplicateNotes(notes: [proposalNote], explanation: "Possible match")
             )
         )
     }
@@ -480,7 +545,7 @@ final class InteractionContractTests: XCTestCase {
         let route = #"{"type":"route_capture","plan":\#(plan)}"#
         let revisionConflict = #"{"type":"conflict","reason":"revision"}"#
         let failed = #"{"type":"failed_job","errorCode":"provider_unavailable"}"#
-        let duplicates = #"{"type":"duplicate_notes","notes":[{"noteId":"note_00000000000000000000000000","revision":1},{"noteId":"note_11111111111111111111111111","revision":2}]}"#
+        let duplicates = #"{"type":"duplicate_notes","notes":[{"noteId":"note_00000000000000000000000000","revision":1},{"noteId":"note_11111111111111111111111111","revision":2}],"explanation":"These notes describe the same weekly plan."}"#
         let generated = #"{"type":"generated_block","blockId":"blk_00000000000000000000000000"}"#
         let consentHold = #"{"type":"conflict","reason":"consent_controls"}"#
         let structure = #"{"type":"conflict","reason":"structure"}"#
@@ -543,6 +608,13 @@ final class InteractionContractTests: XCTestCase {
                 proposal: consentHold,
                 state: "resolved",
                 resolution: #"{"type":"accept_expansion"}"#,
+                resolvedAt: #""2026-09-01T12:01:00Z""#
+            ),
+            fixture(
+                type: "pending_expansion",
+                proposal: generated,
+                state: "dismissed",
+                resolution: #"{"type":"dismiss"}"#,
                 resolvedAt: #""2026-09-01T12:01:00Z""#
             ),
             fixture(
@@ -749,6 +821,527 @@ final class InteractionContractTests: XCTestCase {
                 )
             )
         )
+        XCTAssertThrowsError(
+            try decoder.decode(
+                GeneratedBlock.self,
+                from: Data(
+                    Self.generatedBlockJSON(
+                        state: "accepted",
+                        stateRevision: 2,
+                        resolvedAt: #""2026-09-01T11:59:59Z""#
+                    ).utf8
+                )
+            )
+        )
+
+        let duplicateList = #"{"items":[\#(proposed),\#(proposed)],"pageInfo":{"hasMore":false,"nextCursor":null}}"#
+        XCTAssertThrowsError(
+            try decoder.decode(
+                GeneratedBlockListResponse.self,
+                from: Data(duplicateList.utf8)
+            )
+        )
+        for key in ["", " bad key", String(repeating: "a", count: 81)] {
+            XCTAssertThrowsError(
+                try GeneratedBlockResolveRequest(
+                    expectedStateRevision: 1,
+                    idempotencyKey: key,
+                    resolution: .accept
+                )
+            )
+        }
+    }
+
+    func testGeneratedBlockReadResponsesRejectHiddenLifecycleState() throws {
+        let decoder = APIJSON.makeDecoder()
+        let rejected = Self.generatedBlockJSON(
+            state: "rejected",
+            stateRevision: 2,
+            resolvedAt: #""2026-09-01T12:01:00Z""#
+        )
+
+        XCTAssertThrowsError(
+            try decoder.decode(
+                GeneratedBlockListResponse.self,
+                from: Data(
+                    #"{"items":[\#(rejected)],"pageInfo":{"hasMore":false,"nextCursor":null}}"#.utf8
+                )
+            )
+        )
+        XCTAssertThrowsError(
+            try decoder.decode(
+                GeneratedBlockDetailResponse.self,
+                from: Data(#"{"block":\#(rejected)}"#.utf8)
+            )
+        )
+
+        let resolve = try decoder.decode(
+            GeneratedBlockResolveResponse.self,
+            from: Data(#"{"block":\#(rejected),"replayed":true}"#.utf8)
+        )
+        XCTAssertEqual(resolve.block.state, .rejected)
+        XCTAssertTrue(resolve.replayed)
+    }
+
+    func testGeneratedBlockClientRejectsCrossNoteListsAndSubstitutedResolveResults() async throws {
+        let provider = APITokenProviderStub()
+        let client = try makeStubbedAPIClient(tokenProvider: provider)
+        let noteID = try NoteID(validating: "note_00000000000000000000000000")
+        let otherNoteID = "note_11111111111111111111111111"
+        let proposed = Self.generatedBlockJSON(
+            state: "proposed",
+            stateRevision: 1,
+            resolvedAt: "null"
+        )
+        let crossNote = proposed.replacingOccurrences(
+            of: noteID.rawValue,
+            with: otherNoteID
+        )
+        APIURLProtocolStub.install { request in
+            XCTAssertEqual(
+                request.url?.path,
+                "/api/v1/notes/\(noteID.rawValue)/generated-blocks"
+            )
+            return apiResponse(
+                for: request,
+                json: #"{"items":[\#(crossNote)],"pageInfo":{"hasMore":false,"nextCursor":null}}"#
+            )
+        }
+        do {
+            _ = try await client.listGeneratedBlocks(noteId: noteID)
+            XCTFail("Expected the client to reject a cross-note block list")
+        } catch {
+            XCTAssertEqual(error as? APIClientError, .malformedResponse(status: 200))
+        }
+
+        let blockID = try BlockID(validating: "blk_00000000000000000000000000")
+        let request = try GeneratedBlockResolveRequest(
+            expectedStateRevision: 1,
+            idempotencyKey: "block-binding-1",
+            resolution: .accept
+        )
+        APIURLProtocolStub.install { urlRequest in
+            let rejected = Self.generatedBlockJSON(
+                state: "rejected",
+                stateRevision: 2,
+                resolvedAt: #""2026-09-01T12:01:00Z""#
+            )
+            return apiResponse(
+                for: urlRequest,
+                json: #"{"block":\#(rejected),"replayed":false}"#
+            )
+        }
+        do {
+            _ = try await client.resolveGeneratedBlock(blockID, request: request)
+            XCTFail("Expected the client to reject the wrong terminal state")
+        } catch {
+            XCTAssertEqual(error as? APIClientError, .malformedResponse(status: 200))
+        }
+    }
+
+    func testGeneratedBlockPagesRequireExactBoundedCursorContract() throws {
+        let decoder = APIJSON.makeDecoder()
+        let firstPageJSON = Self.generatedBlockPageJSON(range: 0 ..< 50, hasMore: true)
+        let firstPage = try decoder.decode(
+            GeneratedBlockListResponse.self,
+            from: Data(firstPageJSON.utf8)
+        )
+        XCTAssertEqual(firstPage.items.count, 50)
+        XCTAssertEqual(firstPage.pageInfo.nextCursor, Self.generatedBlockID(49))
+
+        let shortContinuingPage = Self.generatedBlockPageJSON(range: 0 ..< 1, hasMore: true)
+        XCTAssertThrowsError(
+            try decoder.decode(
+                GeneratedBlockListResponse.self,
+                from: Data(shortContinuingPage.utf8)
+            )
+        )
+
+        let descendingItems = [
+            Self.generatedBlockJSON(
+                id: Self.generatedBlockID(2),
+                state: "proposed",
+                stateRevision: 1,
+                resolvedAt: "null"
+            ),
+            Self.generatedBlockJSON(
+                id: Self.generatedBlockID(1),
+                state: "proposed",
+                stateRevision: 1,
+                resolvedAt: "null"
+            )
+        ].joined(separator: ",")
+        XCTAssertThrowsError(
+            try decoder.decode(
+                GeneratedBlockListResponse.self,
+                from: Data(
+                    #"{"items":[\#(descendingItems)],"pageInfo":{"hasMore":false,"nextCursor":null}}"#.utf8
+                )
+            )
+        )
+
+        let wrongCursor = firstPageJSON.replacingOccurrences(
+            of: Self.generatedBlockID(49),
+            with: Self.generatedBlockID(48),
+            options: [],
+            range: firstPageJSON.range(of: Self.generatedBlockID(49), options: .backwards)
+        )
+        XCTAssertThrowsError(
+            try decoder.decode(
+                GeneratedBlockListResponse.self,
+                from: Data(wrongCursor.utf8)
+            )
+        )
+
+        let block = Self.generatedBlockJSON(
+            state: "proposed",
+            stateRevision: 1,
+            resolvedAt: "null"
+        )
+        XCTAssertNoThrow(
+            try decoder.decode(
+                GeneratedBlockDetailResponse.self,
+                from: Data(#"{"block":\#(block)}"#.utf8)
+            )
+        )
+        XCTAssertThrowsError(
+            try decoder.decode(
+                GeneratedBlockDetailResponse.self,
+                from: Data(#"{"block":\#(block),"unexpected":true}"#.utf8)
+            )
+        )
+    }
+
+    func testGeneratedBlockClientBuildsCursorQueryAndBindsExactReviewLookup() async throws {
+        let provider = APITokenProviderStub()
+        let client = try makeStubbedAPIClient(tokenProvider: provider)
+        let noteID = try NoteID(validating: "note_00000000000000000000000000")
+        let cursor = Self.generatedBlockID(49)
+        let nextBlockID = try BlockID(validating: Self.generatedBlockID(50))
+        let nextBlock = Self.generatedBlockJSON(
+            id: nextBlockID.rawValue,
+            state: "proposed",
+            stateRevision: 1,
+            resolvedAt: "null"
+        )
+
+        APIURLProtocolStub.install { request in
+            XCTAssertEqual(
+                request.url?.path,
+                "/api/v1/notes/\(noteID.rawValue)/generated-blocks"
+            )
+            XCTAssertEqual(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?
+                    .queryItems,
+                [URLQueryItem(name: "cursor", value: cursor)]
+            )
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Cache-Control"), "no-store")
+            return apiResponse(
+                for: request,
+                json: #"{"items":[\#(nextBlock)],"pageInfo":{"hasMore":false,"nextCursor":null}}"#
+            )
+        }
+        let page = try await client.listGeneratedBlocks(noteId: noteID, after: cursor)
+        XCTAssertEqual(page.items.map(\.id), [nextBlockID])
+
+        let reviewBlockID = try BlockID(validating: Self.generatedBlockID(1_001))
+        let reviewBlock = Self.generatedBlockJSON(
+            id: reviewBlockID.rawValue,
+            state: "proposed",
+            stateRevision: 1,
+            resolvedAt: "null"
+        )
+        APIURLProtocolStub.install { request in
+            XCTAssertEqual(
+                request.url?.path,
+                "/api/v1/generated-blocks/\(reviewBlockID.rawValue)"
+            )
+            XCTAssertEqual(request.url?.query, nil)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Cache-Control"), "no-store")
+            return apiResponse(for: request, json: #"{"block":\#(reviewBlock)}"#)
+        }
+        let detail = try await client.getGeneratedBlock(
+            reviewBlockID,
+            expectedNoteId: noteID
+        )
+        XCTAssertEqual(detail.block.id, reviewBlockID)
+
+        APIURLProtocolStub.install { request in
+            let rejected = Self.generatedBlockJSON(
+                id: reviewBlockID.rawValue,
+                state: "rejected",
+                stateRevision: 2,
+                resolvedAt: #""2026-09-01T12:01:00Z""#
+            )
+            return apiResponse(for: request, json: #"{"block":\#(rejected)}"#)
+        }
+        do {
+            _ = try await client.getGeneratedBlock(reviewBlockID, expectedNoteId: noteID)
+            XCTFail("Expected exact read to reject a hidden lifecycle state")
+        } catch {
+            XCTAssertEqual(error as? APIClientError, .malformedResponse(status: 200))
+        }
+
+        let otherNoteID = "note_11111111111111111111111111"
+        APIURLProtocolStub.install { request in
+            let substituted = reviewBlock.replacingOccurrences(
+                of: noteID.rawValue,
+                with: otherNoteID
+            )
+            return apiResponse(for: request, json: #"{"block":\#(substituted)}"#)
+        }
+        do {
+            _ = try await client.getGeneratedBlock(reviewBlockID, expectedNoteId: noteID)
+            XCTFail("Expected the exact lookup to reject a cross-note block")
+        } catch {
+            XCTAssertEqual(error as? APIClientError, .malformedResponse(status: 200))
+        }
+
+        APIURLProtocolStub.install { request in
+            let substituted = reviewBlock.replacingOccurrences(
+                of: reviewBlockID.rawValue,
+                with: Self.generatedBlockID(1_002)
+            )
+            return apiResponse(for: request, json: #"{"block":\#(substituted)}"#)
+        }
+        do {
+            _ = try await client.getGeneratedBlock(reviewBlockID, expectedNoteId: noteID)
+            XCTFail("Expected the exact lookup to reject a substituted block ID")
+        } catch {
+            XCTAssertEqual(error as? APIClientError, .malformedResponse(status: 200))
+        }
+
+        do {
+            _ = try await client.listGeneratedBlocks(noteId: noteID, after: "blk_invalid")
+            XCTFail("Expected an invalid cursor to fail before transport")
+        } catch {
+            XCTAssertEqual(error as? APIClientError, .invalidRequest)
+        }
+    }
+
+    func testGeneratedBlockAppModelPaginationMergesPagesAndRejectsReplay() throws {
+        let decoder = APIJSON.makeDecoder()
+        let first = try decoder.decode(
+            GeneratedBlockListResponse.self,
+            from: Data(Self.generatedBlockPageJSON(range: 0 ..< 50, hasMore: true).utf8)
+        )
+        let second = try decoder.decode(
+            GeneratedBlockListResponse.self,
+            from: Data(Self.generatedBlockPageJSON(range: 50 ..< 52, hasMore: false).utf8)
+        )
+        var state = try GeneratedBlockPaginationState(first: first)
+        try state.append(second, after: Self.generatedBlockID(49))
+        XCTAssertEqual(state.items.count, 52)
+        XCTAssertEqual(state.pageCount, 2)
+        XCTAssertNil(state.nextCursor)
+        XCTAssertEqual(GeneratedBlockPaginationState.maximumItemCount, 1_000)
+        XCTAssertEqual(GeneratedBlockPaginationState.maximumPageCount, 20)
+
+        var replayState = try GeneratedBlockPaginationState(first: first)
+        XCTAssertThrowsError(
+            try replayState.append(first, after: Self.generatedBlockID(49))
+        )
+        XCTAssertEqual(replayState.items.count, 50)
+        XCTAssertEqual(replayState.pageCount, 1)
+        XCTAssertEqual(replayState.nextCursor, Self.generatedBlockID(49))
+    }
+
+    func testGeneratedBlockDisplayLimitRetainsOneThousandAndStillAppliesResolution() throws {
+        let decoder = APIJSON.makeDecoder()
+        let first = try decoder.decode(
+            GeneratedBlockListResponse.self,
+            from: Data(Self.generatedBlockPageJSON(range: 0 ..< 50, hasMore: true).utf8)
+        )
+        var state = try GeneratedBlockPaginationState(first: first)
+        for pageIndex in 1 ..< GeneratedBlockPaginationState.maximumPageCount {
+            let start = pageIndex * 50
+            let page = try decoder.decode(
+                GeneratedBlockListResponse.self,
+                from: Data(
+                    Self.generatedBlockPageJSON(
+                        range: start ..< (start + 50),
+                        hasMore: true
+                    ).utf8
+                )
+            )
+            try state.append(page, after: state.nextCursor)
+        }
+
+        XCTAssertEqual(state.items.count, 1_000)
+        XCTAssertEqual(state.pageCount, 20)
+        XCTAssertFalse(state.canLoadMore)
+        XCTAssertTrue(state.reachedDisplayLimit)
+
+        let pageTwentyOne = try decoder.decode(
+            GeneratedBlockListResponse.self,
+            from: Data(
+                Self.generatedBlockPageJSON(range: 1_000 ..< 1_050, hasMore: false).utf8
+            )
+        )
+        XCTAssertThrowsError(try state.append(pageTwentyOne, after: state.nextCursor))
+        XCTAssertEqual(state.items.count, 1_000)
+
+        let accepted = try decoder.decode(
+            GeneratedBlock.self,
+            from: Data(
+                Self.generatedBlockJSON(
+                    id: Self.generatedBlockID(999),
+                    state: "accepted",
+                    stateRevision: 2,
+                    resolvedAt: #""2026-09-01T12:01:00Z""#
+                ).utf8
+            )
+        )
+        state.replace(accepted)
+        XCTAssertEqual(state.items.count, 1_000)
+        XCTAssertEqual(state.items.last?.state, .accepted)
+        XCTAssertTrue(state.reachedDisplayLimit)
+    }
+
+    func testGeneratedBlockResolutionValidationPreservesImmutableContentAndLineage() throws {
+        let decoder = APIJSON.makeDecoder()
+        let current = try decoder.decode(
+            GeneratedBlock.self,
+            from: Data(
+                Self.generatedBlockJSON(
+                    state: "proposed",
+                    stateRevision: 1,
+                    resolvedAt: "null"
+                ).utf8
+            )
+        )
+        let request = try GeneratedBlockResolveRequest(
+            expectedStateRevision: 1,
+            idempotencyKey: "block-validation-1",
+            resolution: .accept
+        )
+        let acceptedJSON = Self.generatedBlockJSON(
+            state: "accepted",
+            stateRevision: 2,
+            resolvedAt: #""2026-09-01T12:01:00Z""#
+        )
+        let response = try decoder.decode(
+            GeneratedBlockResolveResponse.self,
+            from: Data(#"{"block":\#(acceptedJSON),"replayed":false}"#.utf8)
+        )
+        XCTAssertTrue(
+            AppModel.generatedBlockResolutionResponse(
+                response,
+                matches: current,
+                request: request
+            )
+        )
+
+        let changedContent = acceptedJSON.replacingOccurrences(
+            of: "A safe summary",
+            with: "Different server content"
+        )
+        let substituted = try decoder.decode(
+            GeneratedBlockResolveResponse.self,
+            from: Data(#"{"block":\#(changedContent),"replayed":false}"#.utf8)
+        )
+        XCTAssertFalse(
+            AppModel.generatedBlockResolutionResponse(
+                substituted,
+                matches: current,
+                request: request
+            )
+        )
+    }
+
+    func testReplayedGeneratedBlockRejectAppliesTerminalResponseAndHidesProposal() throws {
+        let decoder = APIJSON.makeDecoder()
+        let current = try decoder.decode(
+            GeneratedBlock.self,
+            from: Data(
+                Self.generatedBlockJSON(
+                    state: "proposed",
+                    stateRevision: 1,
+                    resolvedAt: "null"
+                ).utf8
+            )
+        )
+        let request = try GeneratedBlockResolveRequest(
+            expectedStateRevision: 1,
+            idempotencyKey: "block-replayed-reject-1",
+            resolution: .reject
+        )
+        let rejectedJSON = Self.generatedBlockJSON(
+            state: "rejected",
+            stateRevision: 2,
+            resolvedAt: #""2026-09-01T12:01:00Z""#
+        )
+        let response = try decoder.decode(
+            GeneratedBlockResolveResponse.self,
+            from: Data(#"{"block":\#(rejectedJSON),"replayed":true}"#.utf8)
+        )
+
+        XCTAssertTrue(response.replayed)
+        let resolved = try XCTUnwrap(
+            AppModel.generatedBlockResolutionResult(
+                response,
+                matches: current,
+                request: request
+            )
+        )
+        XCTAssertEqual(resolved.state, .rejected)
+        XCTAssertEqual(resolved.stateRevision, 2)
+
+        let first = try decoder.decode(
+            GeneratedBlockListResponse.self,
+            from: Data(
+                #"{"items":[\#(Self.generatedBlockJSON(state: "proposed", stateRevision: 1, resolvedAt: "null"))],"pageInfo":{"hasMore":false,"nextCursor":null}}"#.utf8
+            )
+        )
+        var state = try GeneratedBlockPaginationState(first: first)
+        state.replace(resolved)
+
+        XCTAssertEqual(state.items.count, 1)
+        XCTAssertEqual(state.items.first?.state, .rejected)
+        XCTAssertTrue(
+            GeneratedBlockVisibility.visible(
+                state.items.map(PresentationMapping.generatedBlock)
+            ).isEmpty
+        )
+    }
+
+    func testStaleGeneratedBlockExact404RemovesThePendingLocalAction() throws {
+        let notFound = APIClientError.http(
+            status: 404,
+            code: .notFound,
+            requestId: "req-block-hidden",
+            retryAfterSeconds: nil
+        )
+        XCTAssertTrue(AppModel.isGeneratedBlockVisibilityNotFound(notFound))
+        XCTAssertFalse(
+            AppModel.isGeneratedBlockVisibilityNotFound(
+                APIClientError.http(
+                    status: 403,
+                    code: .forbidden,
+                    requestId: "req-block-forbidden",
+                    retryAfterSeconds: nil
+                )
+            )
+        )
+
+        let decoder = APIJSON.makeDecoder()
+        let page = try decoder.decode(
+            GeneratedBlockListResponse.self,
+            from: Data(
+                #"{"items":[\#(Self.generatedBlockJSON(state: "proposed", stateRevision: 1, resolvedAt: "null"))],"pageInfo":{"hasMore":false,"nextCursor":null}}"#.utf8
+            )
+        )
+        var state = try GeneratedBlockPaginationState(first: page)
+        let blockID = try XCTUnwrap(state.items.first?.id)
+
+        XCTAssertTrue(state.remove(blockID))
+        XCTAssertTrue(state.items.isEmpty)
+        XCTAssertFalse(state.remove(blockID))
+        XCTAssertTrue(
+            GeneratedBlockVisibility.visible(
+                state.items.map(PresentationMapping.generatedBlock)
+            ).isEmpty
+        )
     }
 
     func testCorrectionRoutingAndGeneratedBlockAPIRoutesCarryAuthAndIdempotency() async throws {
@@ -844,10 +1437,34 @@ final class InteractionContractTests: XCTestCase {
     }
 
     private static func generatedBlockJSON(
+        id: String = "blk_00000000000000000000000000",
+        noteID: String = "note_00000000000000000000000000",
         state: String,
         stateRevision: Int,
         resolvedAt: String
     ) -> String {
-        #"{"id":"blk_00000000000000000000000000","noteId":"note_00000000000000000000000000","decisionId":"dec_00000000000000000000000000","kind":"summary","content":"A safe summary","state":"\#(state)","stateRevision":\#(stateRevision),"modelId":"gpt-test","promptVersion":"v1","createdAt":"2026-09-01T12:00:00Z","resolvedAt":\#(resolvedAt)}"#
+        #"{"id":"\#(id)","noteId":"\#(noteID)","decisionId":"dec_00000000000000000000000000","kind":"summary","content":"A safe summary","state":"\#(state)","stateRevision":\#(stateRevision),"modelId":"gpt-test","promptVersion":"v1","createdAt":"2026-09-01T12:00:00Z","resolvedAt":\#(resolvedAt)}"#
+    }
+
+    private static func generatedBlockID(_ value: Int) -> String {
+        "blk_\(String(format: "%026d", value))"
+    }
+
+    private static func generatedBlockPageJSON(
+        range: Range<Int>,
+        hasMore: Bool
+    ) -> String {
+        let items = range.map { value in
+            generatedBlockJSON(
+                id: generatedBlockID(value),
+                state: "proposed",
+                stateRevision: 1,
+                resolvedAt: "null"
+            )
+        }.joined(separator: ",")
+        let nextCursor = hasMore
+            ? #""\#(generatedBlockID(range.last ?? 0))""#
+            : "null"
+        return #"{"items":[\#(items)],"pageInfo":{"hasMore":\#(hasMore),"nextCursor":\#(nextCursor)}}"#
     }
 }

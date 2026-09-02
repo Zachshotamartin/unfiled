@@ -96,10 +96,12 @@ public final class APIClient: Sendable {
 
     func post<Response: Decodable, Body: Encodable>(_ path: String, body: Body?, idempotencyKey: String? = nil,
                                                      authenticated: Bool = true, explicitToken: String? = nil,
+                                                     maximumResponseBytes: Int? = nil,
                                                      as: Response.Type = Response.self) async throws -> Response {
         let auth: Authentication = explicitToken.map(Authentication.explicit) ?? (authenticated ? .required : .none)
         return try await send("POST", path: path, body: body, idempotencyKey: idempotencyKey,
-                              authentication: auth, response: Response.self)
+                              authentication: auth, maximumResponseBytes: maximumResponseBytes,
+                              response: Response.self)
     }
 
     func put<Response: Decodable, Body: Encodable>(_ path: String, body: Body,

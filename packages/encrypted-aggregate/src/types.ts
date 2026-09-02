@@ -298,6 +298,7 @@ export type OpenIdempotencyResponseForVerificationInput<ResponsePayload> = Reado
 
 export type AggregateVerificationSurface =
   | "capture_receipt"
+  | "generated_block"
   | "note_content"
   | "note_mutation"
   | "organization_decision"
@@ -332,6 +333,11 @@ export type OrganizationDecisionVerificationMacInput = Readonly<{
   decisionId: EntityId<"dec">;
   payload: OrganizationDecisionPayload;
 }>;
+
+export type GeneratedBlockVerificationMacInput = Readonly<{
+  surface: "generated_block";
+}> &
+  SealGeneratedBlockInput;
 
 export type ReviewVerificationMacInput = Readonly<{
   surface: "review_item";
@@ -369,6 +375,7 @@ export type AggregateVerificationMacInput<Payload = never> =
   | NoteContentVerificationMacInput
   | NoteMutationVerificationMacInput
   | OrganizationDecisionVerificationMacInput
+  | GeneratedBlockVerificationMacInput
   | ReviewVerificationMacInput
   | RoutingRuleVerificationMacInput
   | SpaceDisplayVerificationMacInput

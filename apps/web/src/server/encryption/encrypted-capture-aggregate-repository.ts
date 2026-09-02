@@ -89,6 +89,7 @@ import {
   encryptedOnlyMutationProjection,
   encryptedOnlyNoteState
 } from "./encrypted-note-command-projection";
+import { generatedExpansionReceiptProjectionMatches } from "./encrypted-receipt-projection";
 import {
   ServiceRpcError,
   ServiceRpcErrorCode,
@@ -385,7 +386,9 @@ function receiptMatchesProjection(
     payload.mutationId === row.mutationId &&
     payload.outcome === row.outcome &&
     payload.destination?.noteId === (row.destinationNoteId ?? undefined) &&
-    (exactReasonsMatch || organizerReasonProjectionMatches) &&
+    (exactReasonsMatch ||
+      organizerReasonProjectionMatches ||
+      generatedExpansionReceiptProjectionMatches(payload, row)) &&
     sameInstant(payload.createdAt, row.createdAt)
   );
 }

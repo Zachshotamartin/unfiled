@@ -328,6 +328,17 @@ private struct NoteDestinationView: View {
                 NoteDetailView(
                     note: note,
                     isArchived: model.isArchived(noteID),
+                    generatedBlocks: model.generatedBlocksByNoteID[noteID] ?? [],
+                    isLoadingGeneratedBlocks: model.generatedBlockLoadingNoteIDs.contains(noteID),
+                    generatedBlocksError: model.generatedBlockErrors[noteID],
+                    hasMoreGeneratedBlocks: model.generatedBlockHasMoreNoteIDs.contains(noteID),
+                    isLoadingMoreGeneratedBlocks: model.generatedBlockLoadingMoreNoteIDs.contains(
+                        noteID
+                    ),
+                    generatedBlocksLoadMoreError: model.generatedBlockLoadMoreErrors[noteID],
+                    generatedBlocksPaginationNotice: model.generatedBlockPaginationNotices[noteID],
+                    submittingInteractionIDs: model.submittingInteractionIDs,
+                    interactionErrors: model.interactionErrors,
                     onEdit: {
                         Task { @MainActor in await model.presentEditor(noteID: noteID) }
                     },
@@ -350,13 +361,30 @@ private struct NoteDestinationView: View {
                     },
                     onDelete: {
                         try await model.deleteNote(noteID: noteID)
+                    },
+                    onRefreshGeneratedBlocks: {
+                        await model.loadGeneratedBlocks(noteID: noteID, force: true)
+                    },
+                    onLoadMoreGeneratedBlocks: {
+                        await model.loadMoreGeneratedBlocks(noteID: noteID)
+                    },
+                    onResolveGeneratedBlock: { blockID, resolution in
+                        Task { @MainActor in
+                            await model.resolveGeneratedBlock(
+                                blockID: blockID,
+                                resolution: resolution
+                            )
+                        }
                     }
                 )
             } else {
                 LoadingDestinationView(label: "Loading note")
             }
         }
-        .task(id: noteID) { _ = await model.loadNote(noteID) }
+        .task(id: noteID) {
+            _ = await model.loadNote(noteID)
+            await model.loadGeneratedBlocks(noteID: noteID)
+        }
     }
 }
 

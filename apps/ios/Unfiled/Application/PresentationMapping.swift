@@ -88,9 +88,18 @@ enum PresentationMapping {
     static func review(
         _ value: ReviewItem,
         notesByID: [String: Note] = [:],
-        capturesByID: [String: CaptureDetail] = [:]
+        capturesByID: [String: CaptureDetail] = [:],
+        generatedBlocksByID: [String: GeneratedBlock] = [:]
     ) -> ReviewPresentation {
         let capture = value.captureId.flatMap { capturesByID[$0.rawValue] }
+        let generatedBlock: GeneratedBlock? = {
+            guard case let .generatedBlock(blockID) = value.proposal,
+                  let noteID = value.noteId,
+                  let block = generatedBlocksByID[blockID.rawValue],
+                  block.id == blockID,
+                  block.noteId == noteID else { return nil }
+            return block
+        }()
         let summary = reviewProposalSummary(
             value.proposal,
             capture: capture,
@@ -109,10 +118,29 @@ enum PresentationMapping {
             actionSummary: reviewTypeLabel(value.type),
             captureID: value.captureId?.rawValue,
             noteID: value.noteId?.rawValue,
+            duplicateExplanation: reviewDuplicateExplanation(value.proposal),
+            generatedBlock: generatedBlock.map(PresentationMapping.generatedBlock),
             suggestedDestinations: suggestedDestinations,
             suggestedNewNote: reviewSuggestedNewNote(value.proposal),
             relatedNotes: relatedNotes,
-            allowedActions: reviewAllowedActions(for: value, capture: capture)
+            allowedActions: reviewAllowedActions(
+                for: value,
+                capture: capture,
+                generatedBlock: generatedBlock
+            )
+        )
+    }
+
+    static func generatedBlock(_ value: GeneratedBlock) -> GeneratedBlockPresentation {
+        GeneratedBlockPresentation(
+            id: value.id.rawValue,
+            noteID: value.noteId.rawValue,
+            kind: value.kind,
+            content: value.content,
+            state: value.state,
+            stateRevision: value.stateRevision,
+            modelID: value.modelId,
+            promptVersion: value.promptVersion
         )
     }
 
@@ -271,11 +299,14 @@ enum PresentationMapping {
             return (capturedText ?? "A capture needs a destination decision.", destination)
         case .generatedBlock:
             return (
-                capturedText ?? "A proposed expansion is waiting safely for a later review step.",
-                "Proposed expansion"
+                capturedText ?? "An AI-generated proposal is waiting for your decision.",
+                "AI-generated proposal"
             )
-        case let .duplicateNotes(notes):
-            return ("These notes may describe the same thing.", "Compare \(notes.count) notes")
+        case let .duplicateNotes(notes, _):
+            return (
+                "These notes may overlap. Unfiled will not merge, delete, archive, or rewrite either note.",
+                "Compare \(notes.count) notes without changing them"
+            )
         case let .conflict(reason):
             return (
                 capturedText ?? "A safe automatic change could not be completed.",
@@ -327,7 +358,7 @@ enum PresentationMapping {
         _ proposal: ReviewProposal,
         notesByID: [String: Note]
     ) -> [ReviewDestinationPresentation] {
-        guard case let .duplicateNotes(notes) = proposal else { return [] }
+        guard case let .duplicateNotes(notes, _) = proposal else { return [] }
         return notes.map { reference in
             ReviewDestinationPresentation(
                 id: reference.noteId.rawValue,
@@ -337,9 +368,15 @@ enum PresentationMapping {
         }
     }
 
+    private static func reviewDuplicateExplanation(_ proposal: ReviewProposal) -> String? {
+        guard case let .duplicateNotes(_, explanation) = proposal else { return nil }
+        return explanation
+    }
+
     static func reviewAllowedActions(
         for item: ReviewItem,
-        capture: CaptureDetail?
+        capture: CaptureDetail?,
+        generatedBlock: GeneratedBlock? = nil
     ) -> [ReviewActionKind] {
         guard item.state == .open else { return [] }
         let boundReceipt: CaptureReceipt? = {
@@ -356,7 +393,9 @@ enum PresentationMapping {
             proposal: item.proposal,
             hasBoundReceipt: boundReceipt != nil,
             hasBoundDecision: boundReceipt?.decisionId != nil,
-            receiptReasonCodes: boundReceipt?.reasonCodes ?? []
+            receiptReasonCodes: boundReceipt?.reasonCodes ?? [],
+            generatedBlock: generatedBlock,
+            expectedNoteID: item.noteId
         )
     }
 
@@ -365,7 +404,9 @@ enum PresentationMapping {
         proposal: ReviewProposal,
         hasBoundReceipt: Bool,
         hasBoundDecision: Bool,
-        receiptReasonCodes: [String] = []
+        receiptReasonCodes: [String] = [],
+        generatedBlock: GeneratedBlock? = nil,
+        expectedNoteID: NoteID? = nil
     ) -> [ReviewActionKind] {
         switch (type, proposal) {
         case (.lowConfidence, .routeCapture):
@@ -393,9 +434,14 @@ enum PresentationMapping {
             return hasBoundReceipt ? [.keepInbox, .dismiss] : [.dismiss]
         case (.duplicateSuggestion, .duplicateNotes):
             return [.keepBoth, .dismiss]
-        case (.pendingExpansion, .generatedBlock),
-             (.pendingExpansion, .conflict(reason: .consentControls)):
-            // Generated-block acceptance remains an E3 capability. E1 can only clear the hold.
+        case let (.pendingExpansion, .generatedBlock(blockID)):
+            guard let generatedBlock,
+                  generatedBlock.id == blockID,
+                  expectedNoteID == generatedBlock.noteId,
+                  generatedBlock.state == .proposed else { return [] }
+            return [.acceptExpansion, .rejectExpansion]
+        case (.pendingExpansion, .conflict(reason: .consentControls)):
+            // Preserve the legacy consent hold: it has no persisted generated block to resolve.
             return [.dismiss]
         default:
             return []
