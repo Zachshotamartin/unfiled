@@ -62,6 +62,35 @@ enum AuthFormRules {
         !isSubmitting && isValidEmail(email) && isValidPassword(password)
     }
 
+    /// Maps the content-free service codes to sign-in guidance. Server message text is never
+    /// shown; only the code decides the copy, so upstream detail cannot reach the screen.
+    static func credentialsMessage(for error: Error, mode: AuthMode) -> String {
+        let fallback = mode == .signUp
+            ? "The account could not be created. Try again."
+            : "Sign-in failed. Check your email and password."
+        guard case let APIClientError.http(status, code, _, _) = error else {
+            return displayMessage(for: error, fallback: fallback)
+        }
+        switch code {
+        case .accountExists:
+            return "An account with this email already exists. Sign in instead."
+        case .unauthorized:
+            return "Wrong email or password."
+        case .validationFailed:
+            return mode == .signUp
+                ? "Check the email address and use a password of 8 to 72 characters."
+                : "Check your email and password."
+        case .rateLimited:
+            return "Too many attempts. Wait a few minutes and try again."
+        case .providerUnavailable:
+            return "Unfiled is temporarily unavailable. Try again shortly."
+        default:
+            return (500 ... 599).contains(status)
+                ? "Unfiled is temporarily unavailable. Try again shortly."
+                : fallback
+        }
+    }
+
     static func displayMessage(for error: Error, fallback: String) -> String {
         guard let localizedError = error as? LocalizedError,
               let description = localizedError.errorDescription?

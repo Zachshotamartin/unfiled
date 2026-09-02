@@ -180,12 +180,7 @@ struct PasswordSignInView: View {
                 return
             } catch {
                 guard !Task.isCancelled else { return }
-                errorMessage = AuthFormRules.displayMessage(
-                    for: error,
-                    fallback: submittedMode == .signUp
-                        ? "The account could not be created. Try again."
-                        : "Sign-in failed. Check your email and password."
-                )
+                errorMessage = AuthFormRules.credentialsMessage(for: error, mode: submittedMode)
             }
         }
     }

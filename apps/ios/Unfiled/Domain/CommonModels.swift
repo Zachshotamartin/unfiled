@@ -27,6 +27,7 @@ public enum LinkType: String, Codable, CaseIterable, Sendable {
 
 public enum APIErrorCode: String, Codable, CaseIterable, Sendable {
     case accountDeletionFailed = "account_deletion_failed"
+    case accountExists = "account_exists"
     case budgetExhausted = "budget_exhausted"
     case captureTooLong = "capture_too_long"
     case conflictRequiresReview = "conflict_requires_review"
