@@ -1,12 +1,16 @@
 import { z } from "zod";
 
-import {
-  AiProviderSchema,
-  ExpansionStyleSchema,
-  OrganizationModeSchema,
-  RoutingEffortSchema
-} from "./enums.js";
+import { ExpansionStyleSchema, OrganizationModeSchema, RoutingEffortSchema } from "./enums.js";
 import { ExpectedRevisionSchema, IdempotencyKeySchema } from "./idempotency.js";
+
+export const MAX_AI_SETTINGS_REQUEST_BYTES = 4 * 1024;
+export const MAX_AI_SETTINGS_RESPONSE_BYTES = 32 * 1024;
+export const MAX_PROVIDER_KEY_REQUEST_BYTES = 4 * 1024;
+export const MAX_PROVIDER_KEY_RESPONSE_BYTES = 16 * 1024;
+
+/** Providers that have passed the public adapter and evaluation gate. */
+export const PublicByokProviderSchema = z.literal("openai");
+export type PublicByokProvider = z.infer<typeof PublicByokProviderSchema>;
 
 export const ProviderModeSchema = z.enum(["app_default", "byok"]);
 export type ProviderMode = z.infer<typeof ProviderModeSchema>;
@@ -27,7 +31,7 @@ export const UserSettingsDtoSchema = z
     settingsRevision: ExpectedRevisionSchema,
     organizationMode: OrganizationModeSchema,
     providerMode: ProviderModeSchema,
-    byokProvider: AiProviderSchema.nullable(),
+    byokProvider: PublicByokProviderSchema.nullable(),
     byokFallbackToApp: z.boolean(),
     routingEffort: RoutingEffortSchema,
     expansionStyle: ExpansionStyleSchema,
@@ -69,33 +73,68 @@ export const UserSettingsUpdateRequestSchema = z
     idempotencyKey: IdempotencyKeySchema,
     organizationMode: OrganizationModeSchema.optional(),
     providerMode: ProviderModeSchema.optional(),
-    byokProvider: AiProviderSchema.nullable().optional(),
+    byokProvider: PublicByokProviderSchema.nullable().optional(),
     byokFallbackToApp: z.boolean().optional(),
     routingEffort: RoutingEffortSchema.optional(),
     expansionStyle: ExpansionStyleSchema.optional(),
     timezone: timezoneSchema.optional(),
     locale: localeSchema.optional()
   })
-  .refine(
-    ({
-      organizationMode,
-      providerMode,
-      byokProvider,
-      byokFallbackToApp,
-      routingEffort,
-      expansionStyle,
-      timezone,
-      locale
-    }) =>
-      organizationMode !== undefined ||
-      providerMode !== undefined ||
-      byokProvider !== undefined ||
-      byokFallbackToApp !== undefined ||
-      routingEffort !== undefined ||
-      expansionStyle !== undefined ||
-      timezone !== undefined ||
-      locale !== undefined,
-    "At least one settings field is required"
+  .superRefine(
+    (
+      {
+        organizationMode,
+        providerMode,
+        byokProvider,
+        byokFallbackToApp,
+        routingEffort,
+        expansionStyle,
+        timezone,
+        locale
+      },
+      context
+    ) => {
+      if (
+        organizationMode === undefined &&
+        providerMode === undefined &&
+        byokProvider === undefined &&
+        byokFallbackToApp === undefined &&
+        routingEffort === undefined &&
+        expansionStyle === undefined &&
+        timezone === undefined &&
+        locale === undefined
+      ) {
+        context.addIssue({ code: "custom", message: "At least one settings field is required" });
+      }
+      if (providerMode === "app_default" && byokProvider !== undefined && byokProvider !== null) {
+        context.addIssue({
+          code: "custom",
+          message: "The app-default mode cannot select a BYOK provider",
+          path: ["byokProvider"]
+        });
+      }
+      if (providerMode === "app_default" && byokFallbackToApp === true) {
+        context.addIssue({
+          code: "custom",
+          message: "Fallback is meaningful only while BYOK mode is active",
+          path: ["byokFallbackToApp"]
+        });
+      }
+      if (providerMode === "byok" && byokProvider === null) {
+        context.addIssue({
+          code: "custom",
+          message: "BYOK mode requires a provider",
+          path: ["byokProvider"]
+        });
+      }
+      if (byokProvider === null && byokFallbackToApp === true) {
+        context.addIssue({
+          code: "custom",
+          message: "Fallback requires an active BYOK provider selection",
+          path: ["byokFallbackToApp"]
+        });
+      }
+    }
   );
 export type UserSettingsUpdateRequest = z.infer<typeof UserSettingsUpdateRequestSchema>;
 
@@ -105,14 +144,24 @@ export const UserSettingsUpdateResponseSchema = z.strictObject({
 });
 export type UserSettingsUpdateResponse = z.infer<typeof UserSettingsUpdateResponseSchema>;
 
-export const ProviderKeyMetadataSchema = z.strictObject({
-  provider: AiProviderSchema,
-  lastFour: z.string().length(4),
-  status: ProviderKeyStatusSchema,
-  credentialRevision: ExpectedRevisionSchema,
-  validatedAt: z.iso.datetime({ offset: true }).nullable(),
-  updatedAt: z.iso.datetime({ offset: true })
-});
+export const ProviderKeyMetadataSchema = z
+  .strictObject({
+    provider: PublicByokProviderSchema,
+    lastFour: z.string().regex(/^[!-~]{4}$/u, "Expected exactly four visible ASCII characters"),
+    status: ProviderKeyStatusSchema,
+    credentialRevision: ExpectedRevisionSchema,
+    validatedAt: z.iso.datetime({ offset: true }).nullable(),
+    updatedAt: z.iso.datetime({ offset: true })
+  })
+  .superRefine((metadata, context) => {
+    if (metadata.status === "active" && metadata.validatedAt === null) {
+      context.addIssue({
+        code: "custom",
+        message: "An active provider key must have a validation timestamp",
+        path: ["validatedAt"]
+      });
+    }
+  });
 export type ProviderKeyMetadata = z.infer<typeof ProviderKeyMetadataSchema>;
 
 export const ProviderKeyResponseSchema = z.strictObject({
@@ -122,8 +171,13 @@ export type ProviderKeyResponse = z.infer<typeof ProviderKeyResponseSchema>;
 
 export const ProviderKeyPutRequestSchema = z.strictObject({
   idempotencyKey: IdempotencyKeySchema,
-  provider: AiProviderSchema,
-  apiKey: z.string().min(20).max(500)
+  provider: PublicByokProviderSchema,
+  expectedCredentialRevision: ExpectedRevisionSchema.nullable(),
+  apiKey: z
+    .string()
+    .min(20)
+    .max(500)
+    .regex(/^[!-~]+$/u, "Provider keys must use visible ASCII without spaces")
 });
 export type ProviderKeyPutRequest = z.infer<typeof ProviderKeyPutRequestSchema>;
 
@@ -135,13 +189,15 @@ export type ProviderKeyPutResponse = z.infer<typeof ProviderKeyPutResponseSchema
 
 export const ProviderKeyDeleteRequestSchema = z.strictObject({
   idempotencyKey: IdempotencyKeySchema,
-  provider: AiProviderSchema
+  provider: PublicByokProviderSchema,
+  expectedCredentialRevision: ExpectedRevisionSchema
 });
 export type ProviderKeyDeleteRequest = z.infer<typeof ProviderKeyDeleteRequestSchema>;
 
 export const ProviderKeyDeleteResponseSchema = z.strictObject({
-  provider: AiProviderSchema,
+  provider: PublicByokProviderSchema,
   deleted: z.literal(true),
+  deletedCredentialRevision: ExpectedRevisionSchema,
   replayed: z.boolean()
 });
 export type ProviderKeyDeleteResponse = z.infer<typeof ProviderKeyDeleteResponseSchema>;

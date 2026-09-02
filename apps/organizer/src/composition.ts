@@ -53,20 +53,19 @@ export function createOrganizerComposition(
   const planner =
     overrides.planner ??
     (config.planner.kind === "openai-responses"
-      ? createDeterministicFirstOrganizerPlanner(
-          createOpenAIOrganizerPlanner({ apiKey: config.planner.apiKey })
-        )
+      ? createDeterministicFirstOrganizerPlanner(createOpenAIOrganizerPlanner({}))
       : unavailableProductionPlanner);
   const retrieval =
     config.planner.kind === "openai-responses"
       ? createOrganizerCandidateRetrieval({
-          embeddingProvider: createOpenAIOrganizerEmbeddingProvider({
-            apiKey: config.planner.apiKey
-          }),
+          embeddingProvider: createOpenAIOrganizerEmbeddingProvider({}),
           repository
         })
       : undefined;
   const drain = createOrganizerDrain({
+    ...(config.planner.kind === "openai-responses"
+      ? { appDefaultProviderApiKey: config.planner.apiKey }
+      : {}),
     cipher: overrides.cipher ?? createProductionOrganizerCipher(),
     claimLimit: config.pipeline.claimLimit,
     concurrency: config.pipeline.concurrency,

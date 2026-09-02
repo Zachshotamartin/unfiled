@@ -4433,30 +4433,144 @@
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/UserSettingsResponse" }
               }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           },
           "400": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           },
           "401": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "403": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           },
           "404": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           },
-          "409": {
+          "429": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "500": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "503": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           }
         }
@@ -4494,30 +4608,180 @@
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/UserSettingsUpdateResponse" }
               }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           },
           "400": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           },
           "401": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "403": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           },
           "404": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           },
           "409": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "413": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "429": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "500": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "503": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           }
         }
@@ -4553,24 +4817,126 @@
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           },
           "401": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "403": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           },
           "404": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           },
-          "409": {
+          "429": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "500": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "503": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           }
         }
@@ -4626,24 +4992,162 @@
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           },
           "401": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "403": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           },
           "404": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           },
           "409": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "413": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "429": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "500": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "503": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           }
         }
@@ -4699,24 +5203,162 @@
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           },
           "401": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "403": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           },
           "404": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           },
           "409": {
             "description": "Stable API error",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "413": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "429": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "500": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "503": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
             }
           }
         }
@@ -13032,7 +13674,7 @@
           "organizationMode": { "type": "string", "enum": ["cautious", "balanced", "automatic"] },
           "providerMode": { "type": "string", "enum": ["app_default", "byok"] },
           "byokProvider": {
-            "anyOf": [{ "type": "string", "enum": ["openai", "anthropic"] }, { "type": "null" }]
+            "anyOf": [{ "type": "string", "const": "openai" }, { "type": "null" }]
           },
           "byokFallbackToApp": { "type": "boolean" },
           "routingEffort": { "type": "string", "enum": ["economical", "standard", "thorough"] },
@@ -13081,7 +13723,7 @@
               },
               "providerMode": { "type": "string", "enum": ["app_default", "byok"] },
               "byokProvider": {
-                "anyOf": [{ "type": "string", "enum": ["openai", "anthropic"] }, { "type": "null" }]
+                "anyOf": [{ "type": "string", "const": "openai" }, { "type": "null" }]
               },
               "byokFallbackToApp": { "type": "boolean" },
               "routingEffort": { "type": "string", "enum": ["economical", "standard", "thorough"] },
@@ -13134,7 +13776,7 @@
           "organizationMode": { "type": "string", "enum": ["cautious", "balanced", "automatic"] },
           "providerMode": { "type": "string", "enum": ["app_default", "byok"] },
           "byokProvider": {
-            "anyOf": [{ "type": "string", "enum": ["openai", "anthropic"] }, { "type": "null" }]
+            "anyOf": [{ "type": "string", "const": "openai" }, { "type": "null" }]
           },
           "byokFallbackToApp": { "type": "boolean" },
           "routingEffort": { "type": "string", "enum": ["economical", "standard", "thorough"] },
@@ -13167,7 +13809,7 @@
               },
               "providerMode": { "type": "string", "enum": ["app_default", "byok"] },
               "byokProvider": {
-                "anyOf": [{ "type": "string", "enum": ["openai", "anthropic"] }, { "type": "null" }]
+                "anyOf": [{ "type": "string", "const": "openai" }, { "type": "null" }]
               },
               "byokFallbackToApp": { "type": "boolean" },
               "routingEffort": { "type": "string", "enum": ["economical", "standard", "thorough"] },
@@ -13207,8 +13849,8 @@
       "ProviderKeyMetadata": {
         "type": "object",
         "properties": {
-          "provider": { "type": "string", "enum": ["openai", "anthropic"] },
-          "lastFour": { "type": "string", "minLength": 4, "maxLength": 4 },
+          "provider": { "type": "string", "const": "openai" },
+          "lastFour": { "type": "string", "pattern": "^[!-~]{4}$" },
           "status": { "type": "string", "enum": ["active", "invalid", "revoked"] },
           "credentialRevision": {
             "type": "integer",
@@ -13249,8 +13891,8 @@
               {
                 "type": "object",
                 "properties": {
-                  "provider": { "type": "string", "enum": ["openai", "anthropic"] },
-                  "lastFour": { "type": "string", "minLength": 4, "maxLength": 4 },
+                  "provider": { "type": "string", "const": "openai" },
+                  "lastFour": { "type": "string", "pattern": "^[!-~]{4}$" },
                   "status": { "type": "string", "enum": ["active", "invalid", "revoked"] },
                   "credentialRevision": {
                     "type": "integer",
@@ -13299,10 +13941,16 @@
             "maxLength": 80,
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
-          "provider": { "type": "string", "enum": ["openai", "anthropic"] },
-          "apiKey": { "type": "string", "minLength": 20, "maxLength": 500 }
+          "provider": { "type": "string", "const": "openai" },
+          "expectedCredentialRevision": {
+            "anyOf": [
+              { "type": "integer", "exclusiveMinimum": 0, "maximum": 9007199254740991 },
+              { "type": "null" }
+            ]
+          },
+          "apiKey": { "type": "string", "minLength": 20, "maxLength": 500, "pattern": "^[!-~]+$" }
         },
-        "required": ["idempotencyKey", "provider", "apiKey"],
+        "required": ["idempotencyKey", "provider", "expectedCredentialRevision", "apiKey"],
         "additionalProperties": false
       },
       "ProviderKeyPutResponse": {
@@ -13311,8 +13959,8 @@
           "providerKey": {
             "type": "object",
             "properties": {
-              "provider": { "type": "string", "enum": ["openai", "anthropic"] },
-              "lastFour": { "type": "string", "minLength": 4, "maxLength": 4 },
+              "provider": { "type": "string", "const": "openai" },
+              "lastFour": { "type": "string", "pattern": "^[!-~]{4}$" },
               "status": { "type": "string", "enum": ["active", "invalid", "revoked"] },
               "credentialRevision": {
                 "type": "integer",
@@ -13359,19 +14007,29 @@
             "maxLength": 80,
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
-          "provider": { "type": "string", "enum": ["openai", "anthropic"] }
+          "provider": { "type": "string", "const": "openai" },
+          "expectedCredentialRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          }
         },
-        "required": ["idempotencyKey", "provider"],
+        "required": ["idempotencyKey", "provider", "expectedCredentialRevision"],
         "additionalProperties": false
       },
       "ProviderKeyDeleteResponse": {
         "type": "object",
         "properties": {
-          "provider": { "type": "string", "enum": ["openai", "anthropic"] },
+          "provider": { "type": "string", "const": "openai" },
           "deleted": { "type": "boolean", "const": true },
+          "deletedCredentialRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
           "replayed": { "type": "boolean" }
         },
-        "required": ["provider", "deleted", "replayed"],
+        "required": ["provider", "deleted", "deletedCredentialRevision", "replayed"],
         "additionalProperties": false
       },
       "SearchNotesRequest": {

@@ -81,7 +81,7 @@ The `OrganizationModel` port supports a provider registry target. A provider is 
 - **OpenAI — implemented in Milestone D, live/account gate pending:** Responses API, strict Structured Outputs, `store: false`.
 - **Anthropic — planned, not implemented or selectable:** Messages API with a single forced tool call whose `input_schema` is the organization schema (§5.2), yielding schema-constrained JSON.
 
-The current D runtime uses only its dedicated application-owned OpenAI key and rejects user BYOK. After E4, credential resolution is the user's Vault-held key for the selected provider or the application key selected by the immutable job settings snapshot. The key is disclosed only through `get_lease_bound_organizer_provider_credential` for that live job lease; no job stores a key or Vault ID. Model IDs come from server config keyed by `(provider, effort tier)`; selection is justified by eval runs only. Timeout 20 s, one retry on transient error, then fail to Inbox with `provider_unavailable` (or `provider_key_invalid` on auth failure of a user key). See [ADR-0012](./decisions/ADR-0012-vault-only-lease-bound-byok-credentials.md).
+The current E4 runtime resolves either the user's Vault-held OpenAI key or the application OpenAI key selected by the immutable job settings snapshot. The key is disclosed only through `get_lease_bound_organizer_provider_credential` for that live job lease; no job stores a key or Vault ID. All three visible effort settings currently use the same code-pinned, evaluated OpenAI model snapshot and vary only bounded candidate, reasoning, and output-token budgets. A different model or provider tier cannot become selectable until its own adapter and evaluation gate pass. Timeout 20 s, one retry on transient error, then fail to Inbox with `provider_unavailable` (or `provider_key_invalid` on auth failure of a user key). See [ADR-0012](./decisions/ADR-0012-vault-only-lease-bound-byok-credentials.md).
 
 ### 5.1 Prompt template
 
@@ -294,20 +294,20 @@ The optional credentialed stage is `pnpm eval:routing:live`. It requires the ded
 
 ## 13. Provider and effort settings (BYOK)
 
-These are the target user-facing settings after E4. The current D runtime exposes only its pinned application OpenAI configuration; BYOK, Anthropic, and unqualified provider/tier choices remain hidden.
+These are the E4 user-facing settings. OpenAI is the only selectable provider. Anthropic and unqualified provider/model-tier choices remain hidden.
 
 | Setting             | Values                                    | Effect                                                                                                                            |
 | ------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | Provider mode       | `app_default`, `byok` (+ chosen provider) | which registry adapter and credential §5 uses                                                                                     |
-| Routing effort      | `economical`                              | smallest structured-output tier for the provider; candidate cap 6; no fallback model; no low-margin resampling                    |
-|                     | `standard` (default)                      | default tier; candidate cap 8                                                                                                     |
-|                     | `thorough`                                | default tier, plus stronger-model fallback for `review`-band margins and n=2 sampling on low margin; BYOK-recommended (user pays) |
+| Routing effort      | `economical`                              | pinned evaluated model; candidate cap 6; 8,192 output-token ceiling; no reasoning budget or resampling                            |
+|                     | `standard` (default)                      | pinned evaluated model; candidate cap 8; 12,288 output-token ceiling; no reasoning budget or resampling                           |
+|                     | `thorough`                                | pinned evaluated model; candidate cap 8; 16,384 output-token ceiling and low reasoning budget; BYOK copy warns that the user pays |
 | Expansion style     | `off`                                     | `generatedExpansion` must be null; validation rejects otherwise                                                                   |
 |                     | `brief` (default)                         | expansion ≤ 200 chars                                                                                                             |
 |                     | `detailed`                                | expansion ≤ 600 chars                                                                                                             |
 | Fallback to app key | off (default) / on                        | behavior on BYOK auth failure (§10)                                                                                               |
 
-Rules: effort changes model tier and sampling, never the schema, validation, or scoring bands — trust behavior is identical at every effort level. Settings are copied into an immutable non-secret snapshot when the next capture is accepted; later changes do not rewrite queued jobs. BYOK keys stay only in Supabase Vault and are resolved from a live lease, never copied into the snapshot. Settings copy states the cost implication in one line when BYOK is active. Each `(provider, tier)` pair must meet the §12.3 thresholds on the evaluation corpus before it is selectable; a tier that fails stays hidden. `brief`/`detailed` can request expansion, but E3 must land before the returned text is preserved or shown.
+Rules: effort changes bounded request budgets, never the schema, validation, or scoring bands — trust behavior is identical at every effort level. Settings are copied into an immutable non-secret snapshot when the next capture is accepted; later changes do not rewrite queued jobs. BYOK keys stay only in Supabase Vault and are resolved from a live lease, never copied into the snapshot. Settings copy states the cost implication in one line when BYOK is active. Each distinct `(provider, model tier)` pair must meet the §12.3 thresholds before it becomes selectable; until then, every effort profile remains on the single evaluated pinned model. E3 is implemented, so an authorized `brief` or `detailed` expansion is preserved as a separate generated block and never merged into user-authored note text.
 
 ## 14. Telemetry
 

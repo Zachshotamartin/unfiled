@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   GeneratedBlockDtoSchema,
+  MAX_PROVIDER_KEY_RESPONSE_BYTES,
   manualNoteFixtures,
   type GeneratedBlockDto
 } from "@unfiled/contracts";
@@ -22,7 +23,11 @@ const NOW = "2026-09-01T18:30:00.000Z";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
-    headers: { "content-type": "application/json" },
+    headers: {
+      "cache-control": "private, no-store",
+      "content-type": "application/json",
+      pragma: "no-cache"
+    },
     status
   });
 }
@@ -665,11 +670,21 @@ describe("Milestone E/F API client", () => {
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse({ settings }))
       .mockResolvedValueOnce(
-        jsonResponse({ settings: { ...settings, settingsRevision: 4 }, replayed: false })
+        jsonResponse({
+          settings: { ...settings, settingsRevision: 4, routingEffort: "thorough" },
+          replayed: false
+        })
       )
       .mockResolvedValueOnce(jsonResponse({ providerKey: null }))
       .mockResolvedValueOnce(jsonResponse({ providerKey, replayed: false }))
-      .mockResolvedValueOnce(jsonResponse({ provider: "openai", deleted: true, replayed: false }));
+      .mockResolvedValueOnce(
+        jsonResponse({
+          provider: "openai",
+          deleted: true,
+          deletedCredentialRevision: 1,
+          replayed: false
+        })
+      );
     const client = makeClient(fetcher);
 
     await client.getUserSettings();
@@ -683,10 +698,15 @@ describe("Milestone E/F API client", () => {
       client.putProviderKey({
         idempotencyKey: "provider-put-01",
         provider: "openai",
+        expectedCredentialRevision: null,
         apiKey: "sk-example-not-a-real-key-1234"
       })
     ).resolves.toEqual({ providerKey, replayed: false });
-    await client.deleteProviderKey({ idempotencyKey: "provider-delete-01", provider: "openai" });
+    await client.deleteProviderKey({
+      idempotencyKey: "provider-delete-01",
+      provider: "openai",
+      expectedCredentialRevision: 1
+    });
 
     expect(fetcher.mock.calls.map(([url, init]) => [requestUrl(url), init?.method])).toEqual([
       ["https://example.test/api/v1/me/settings", "GET"],
@@ -697,6 +717,71 @@ describe("Milestone E/F API client", () => {
     ]);
     expect(requestJsonBody(fetcher, 3)).toHaveProperty("apiKey");
     expect(providerKey).not.toHaveProperty("apiKey");
+    expect(fetcher.mock.calls.every(([, init]) => init?.cache === "no-store")).toBe(true);
+    expect(
+      fetcher.mock.calls.every(([, init]) => {
+        const headers = new Headers(init?.headers);
+        return headers.get("cache-control") === "no-store" && headers.get("pragma") === "no-cache";
+      })
+    ).toBe(true);
+  });
+
+  it("rejects hidden providers and response substitution before settings or key state is trusted", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          providerKey: {
+            provider: "openai",
+            lastFour: "1234",
+            status: "active",
+            credentialRevision: 8,
+            validatedAt: NOW,
+            updatedAt: NOW
+          },
+          replayed: false
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          providerKey: {
+            provider: "openai",
+            lastFour: "0000",
+            status: "active",
+            credentialRevision: 6,
+            validatedAt: NOW,
+            updatedAt: NOW
+          },
+          replayed: true
+        })
+      );
+    const client = makeClient(fetcher);
+
+    await expect(
+      client.putProviderKey({
+        idempotencyKey: "provider-hidden-01",
+        // @ts-expect-error The runtime boundary must reject unsupported callers too.
+        provider: "anthropic",
+        expectedCredentialRevision: null,
+        apiKey: "sk-ant-example-not-a-real-key-1234"
+      })
+    ).rejects.toThrow();
+    await expect(
+      client.putProviderKey({
+        idempotencyKey: "provider-stale-response-01",
+        provider: "openai",
+        expectedCredentialRevision: 5,
+        apiKey: "sk-example-not-a-real-key-1234"
+      })
+    ).rejects.toBeInstanceOf(ApiClientMalformedResponseError);
+    await expect(
+      client.putProviderKey({
+        idempotencyKey: "provider-secret-substitution-01",
+        provider: "openai",
+        expectedCredentialRevision: 5,
+        apiKey: "sk-example-not-a-real-key-1234"
+      })
+    ).rejects.toBeInstanceOf(ApiClientMalformedResponseError);
   });
 
   it("serializes note-context pagination and sends search filters only in JSON", async () => {
@@ -759,5 +844,37 @@ describe("Milestone E/F API client", () => {
     expect(() => client.listGeneratedBlocks("note_bad")).toThrow();
     await expect(client.getProviderKeyMetadata()).rejects.toThrow();
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires private transport headers and caps provider metadata responses", async () => {
+    const missingPrivateHeaders = makeClient(
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(JSON.stringify({ providerKey: null }), {
+          headers: { "content-type": "application/json" }
+        })
+      )
+    );
+    await expect(missingPrivateHeaders.getProviderKeyMetadata()).rejects.toBeInstanceOf(
+      ApiClientMalformedResponseError
+    );
+
+    const cancellation = vi.fn();
+    const oversized = makeClient(
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            cancel: cancellation,
+            start(controller) {
+              controller.enqueue(new Uint8Array(MAX_PROVIDER_KEY_RESPONSE_BYTES + 1));
+            }
+          }),
+          { headers: { "cache-control": "private, no-store", pragma: "no-cache" } }
+        )
+      )
+    );
+    await expect(oversized.getProviderKeyMetadata()).rejects.toBeInstanceOf(
+      ApiClientMalformedResponseError
+    );
+    expect(cancellation).toHaveBeenCalledOnce();
   });
 });

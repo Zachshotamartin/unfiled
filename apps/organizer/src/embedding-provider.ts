@@ -1,4 +1,5 @@
 import { OrganizerProviderError } from "./errors.js";
+import type { OrganizerProviderCredentialAccess } from "./provider-credential.js";
 
 const ENDPOINT = "https://api.openai.com/v1/embeddings";
 const MAX_INPUT_BYTES = 4_096;
@@ -11,6 +12,7 @@ export type OrganizerEmbeddingProvider = Readonly<{
     input: Readonly<{
       dimensions: number;
       modelId: string;
+      providerCredential?: OrganizerProviderCredentialAccess;
       signal: AbortSignal;
       text: string;
     }>
@@ -18,7 +20,7 @@ export type OrganizerEmbeddingProvider = Readonly<{
 }>;
 
 export type OpenAIOrganizerEmbeddingProviderOptions = Readonly<{
-  apiKey: string;
+  apiKey?: string;
   fetchImplementation?: typeof fetch;
 }>;
 
@@ -278,8 +280,37 @@ export function createOpenAIOrganizerEmbeddingProvider(
   options: OpenAIOrganizerEmbeddingProviderOptions
 ): OrganizerEmbeddingProvider {
   const apiKey = options.apiKey;
-  assertApiKey(apiKey);
+  if (apiKey !== undefined) assertApiKey(apiKey);
   const fetchImplementation = options.fetchImplementation ?? fetch;
+  async function embedWithApiKey(
+    input: Parameters<OrganizerEmbeddingProvider["embed"]>[0],
+    selectedApiKey: string,
+    request: Readonly<{ body: string; signal: AbortSignal }>
+  ): Promise<Float32Array> {
+    assertApiKey(selectedApiKey);
+    const response = await fetchWithAbort(
+      fetchImplementation,
+      request.body,
+      selectedApiKey,
+      request.signal
+    );
+    if (!response.ok) {
+      await discardResponse(response);
+      throw providerFailure(response.status);
+    }
+    const parsed = await readJson(response, request.signal);
+    let output: Float32Array;
+    try {
+      output = parseEmbedding(parsed, input);
+    } finally {
+      zeroParsedEmbedding(parsed);
+    }
+    if (request.signal.aborted) {
+      output.fill(0);
+      throw new OrganizerProviderError("provider_unavailable", true);
+    }
+    return output;
+  }
   return Object.freeze({
     async embed(input): Promise<Float32Array> {
       if (input.signal.aborted) throw new OrganizerProviderError("provider_unavailable", true);
@@ -294,40 +325,33 @@ export function createOpenAIOrganizerEmbeddingProvider(
         new TextEncoder().encode(input.text).byteLength > MAX_INPUT_BYTES
       )
         throw new OrganizerProviderError("validation_failed", false);
-      const body = JSON.stringify({
-        dimensions: input.dimensions,
-        encoding_format: "float",
-        input: input.text,
-        model: input.modelId
+      const request = Object.freeze({
+        body: JSON.stringify({
+          dimensions: input.dimensions,
+          encoding_format: "float",
+          input: input.text,
+          model: input.modelId
+        }),
+        signal: AbortSignal.any([input.signal, AbortSignal.timeout(20_000)])
       });
-      const deadline = AbortSignal.timeout(20_000);
-      const signal = AbortSignal.any([input.signal, deadline]);
       let attempt = 0;
       for (;;) {
         try {
-          const response = await fetchWithAbort(fetchImplementation, body, apiKey, signal);
-          if (!response.ok) {
-            await discardResponse(response);
-            throw providerFailure(response.status);
+          if (input.providerCredential !== undefined) {
+            return await input.providerCredential.use((credential) => {
+              return credential.withApiKey((selectedApiKey) =>
+                embedWithApiKey(input, selectedApiKey, request)
+              );
+            });
           }
-          const parsed = await readJson(response, signal);
-          let output: Float32Array;
-          try {
-            output = parseEmbedding(parsed, input);
-          } finally {
-            zeroParsedEmbedding(parsed);
-          }
-          if (signal.aborted) {
-            output.fill(0);
-            throw new OrganizerProviderError("provider_unavailable", true);
-          }
-          return output;
+          if (apiKey === undefined) throw new OrganizerProviderError("provider_unavailable", true);
+          return await embedWithApiKey(input, apiKey, request);
         } catch (error: unknown) {
           const failure =
             error instanceof OrganizerProviderError
               ? error
               : new OrganizerProviderError("provider_unavailable", true);
-          if (attempt >= 1 || !failure.retryable || signal.aborted) throw failure;
+          if (attempt >= 1 || !failure.retryable || request.signal.aborted) throw failure;
           attempt += 1;
         }
       }

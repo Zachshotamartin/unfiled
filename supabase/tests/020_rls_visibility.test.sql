@@ -6,7 +6,8 @@ set local search_path = public, extensions;
 -- Complete the synthetic second-user graph inside this transaction so every
 -- user-owned table has an owned row and a cross-user row to probe.
 insert into public.user_provider_keys (
-  id, user_id, provider, vault_secret_id, key_last4, created_at, updated_at
+  id, user_id, provider, vault_secret_id, key_last4, validated_at,
+  created_at, updated_at
 )
 values
   (
@@ -16,6 +17,7 @@ values
     '70000000-0000-4000-8000-000000000001',
     '0001',
     '2026-08-30 22:00:00+00',
+    '2026-08-30 22:00:00+00',
     '2026-08-30 22:00:00+00'
   ),
   (
@@ -24,6 +26,7 @@ values
     'openai',
     '70000000-0000-4000-8000-000000000009',
     '0009',
+    '2026-08-30 22:00:00+00',
     '2026-08-30 22:00:00+00',
     '2026-08-30 22:00:00+00'
   );

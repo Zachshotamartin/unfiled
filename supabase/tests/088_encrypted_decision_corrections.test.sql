@@ -457,8 +457,8 @@ select is(
       and grantee = 'unfiled_organizer_worker'
       and privilege_type = 'EXECUTE'
   ),
-  10::bigint,
-  'the organizer worker allowlist remains exactly ten functions'
+  11::bigint,
+  'the organizer worker allowlist is exactly eleven functions after E4'
 );
 select ok(
   (
@@ -652,7 +652,7 @@ select ok(
       'private.enforce_encrypted_idempotency_namespace()'
     )
   ) and (
-    select count(*) = 5
+    select count(*) = 6
     from pg_catalog.pg_trigger as trigger
     where trigger.tgfoid = to_regprocedure(
         'private.enforce_encrypted_idempotency_namespace()'
@@ -660,7 +660,7 @@ select ok(
       and not trigger.tgisinternal
       and pg_catalog.pg_get_triggerdef(trigger.oid) like '%BEFORE INSERT%'
   ),
-  'the shared encrypted idempotency namespace is fail-closed on every claim surface'
+  'the shared encrypted idempotency namespace is fail-closed on every claim and receipt surface'
 );
 select ok(
   not exists (

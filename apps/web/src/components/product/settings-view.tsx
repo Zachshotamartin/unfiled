@@ -7,6 +7,7 @@ import type { SessionUser } from "@/lib/product/types";
 import { useLiveResource } from "@/lib/product/use-live-resource";
 
 import { ResourceError, ResourceSkeleton } from "./resource-states";
+import { AiSettings } from "./ai-settings";
 import { RoutingRulesSettings } from "./routing-rules-settings";
 
 export function SettingsView() {
@@ -37,6 +38,7 @@ export function SettingsView() {
           <SignOutIcon size={17} /> Sign out
         </button>
       </section>
+      <AiSettings />
       <RoutingRulesSettings />
       <section className="settings-row">
         <div>

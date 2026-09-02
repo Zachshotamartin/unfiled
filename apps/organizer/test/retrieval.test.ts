@@ -39,6 +39,7 @@ const job: ClaimedOrganizerJob = Object.freeze({
   ownerId: OWNER_ID,
   promptVersion: "routing-v1",
   replanCount: 0,
+  routingEffort: "standard",
   routingMode: "balanced",
   schemaVersion: 1,
   source: {
@@ -47,6 +48,7 @@ const job: ClaimedOrganizerJob = Object.freeze({
     recordVersion: 1,
     resourceId: "cap_01ARZ3NDEKTSV4RRFFQ69G5FAV"
   },
+  expansionStyle: "brief",
   commandProjection: "encrypted_only"
 });
 const candidate: EncryptedCandidate = Object.freeze({
@@ -120,6 +122,7 @@ function repository(overrides: Partial<OrganizerRepository> = {}): OrganizerRepo
   return {
     candidates: vi.fn().mockResolvedValue({ candidates: [candidate], controls }),
     claim: vi.fn().mockResolvedValue([]),
+    providerRoute: vi.fn().mockRejectedValue(new Error("not used")),
     commit: vi.fn().mockRejectedValue(new Error("not used")),
     fail: vi.fn().mockRejectedValue(new Error("not used")),
     heartbeat: vi.fn().mockRejectedValue(new Error("not used")),
@@ -202,9 +205,27 @@ describe("organizer encrypted RAG retrieval", () => {
 
     expect(embed).not.toHaveBeenCalled();
     expect(repo.candidates).toHaveBeenCalledTimes(1);
+    expect(repo.candidates).toHaveBeenCalledWith(expect.objectContaining({ limit: 8 }));
     expect(repo.selectCandidates).not.toHaveBeenCalled();
     expect(result.routingPolicyContext.retrievalAutoEligible).toBe(false);
     expect(result.routingPolicyContext.deterministicRuleMatch).toBe(false);
+
+    const economicalRepository = repository({
+      ragPage: vi.fn().mockResolvedValue({ status: "no_active_generation" })
+    });
+    await createOrganizerCandidateRetrieval({
+      embeddingProvider: { embed },
+      payloadsForAuthority: () => payloads(),
+      repository: economicalRepository
+    }).retrieve({
+      authority,
+      capture,
+      job: Object.freeze({ ...job, routingEffort: "economical" }),
+      signal
+    });
+    expect(economicalRepository.candidates).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 6 })
+    );
   });
 
   it("bypasses RAG, embeddings, and payload decryption for a frozen rule snapshot", async () => {
@@ -355,6 +376,23 @@ describe("organizer encrypted RAG retrieval", () => {
     expect(repo.candidates).toHaveBeenCalledTimes(1);
     expect(repo.selectCandidates).not.toHaveBeenCalled();
     expect(result.routingPolicyContext.retrievalAutoEligible).toBe(false);
+  });
+
+  it("surfaces an invalid provider credential instead of hiding the exact-revision failure", async () => {
+    const repo = repository();
+    await expect(
+      createOrganizerCandidateRetrieval({
+        embeddingProvider: {
+          embed: vi
+            .fn()
+            .mockRejectedValue(new OrganizerProviderError("provider_key_invalid", false, 401))
+        },
+        payloadsForAuthority: () => payloads(),
+        repository: repo
+      }).retrieve({ authority, capture, job, signal })
+    ).rejects.toMatchObject({ safeCode: "provider_key_invalid", retryable: false });
+    expect(repo.candidates).not.toHaveBeenCalled();
+    expect(repo.selectCandidates).not.toHaveBeenCalled();
   });
 
   it("rejects a changed terminal snapshot, wipes the vector, and falls back", async () => {

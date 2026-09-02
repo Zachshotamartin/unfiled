@@ -45,7 +45,13 @@ describe("allowlisted encrypted service RPC client", () => {
     expect(request).toHaveBeenCalledOnce();
     const [url, init] = request.mock.calls[0] ?? [];
     expect(url).toBe("https://project.supabase.co/rest/v1/rpc/get_content_encryption_rollout");
-    expect(init).toMatchObject({ cache: "no-store", method: "POST", redirect: "error" });
+    expect(init).toMatchObject({
+      cache: "no-store",
+      credentials: "omit",
+      method: "POST",
+      redirect: "error",
+      referrerPolicy: "no-referrer"
+    });
     expect(new Headers(init?.headers).get("authorization")).toBe(
       "Bearer service-role-test-value-with-safe-length"
     );
@@ -90,6 +96,32 @@ describe("allowlisted encrypted service RPC client", () => {
     expect(error).toMatchObject({ code: ServiceRpcErrorCode.STALE_REVISION });
     expect(String(error)).not.toContain(canary);
     expect(JSON.stringify(error)).not.toContain(canary);
+  });
+
+  it("cuts off capability responses above an explicit per-client ceiling", async () => {
+    const cancelled = vi.fn();
+    const client = createServiceRpcClient({
+      allowedFunctions: ["get_owner_ai_settings"],
+      environment,
+      fetch: vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              cancel: cancelled,
+              start(controller) {
+                controller.enqueue(new Uint8Array(17));
+              }
+            })
+          )
+        )
+      ),
+      maximumResponseBytes: 16
+    });
+
+    await expect(client.rpc("get_owner_ai_settings", {})).rejects.toMatchObject({
+      code: ServiceRpcErrorCode.PROVIDER_UNAVAILABLE
+    });
+    expect(cancelled).toHaveBeenCalledOnce();
   });
 
   it.each([

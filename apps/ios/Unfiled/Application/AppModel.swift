@@ -158,6 +158,23 @@ final class AppModel: ObservableObject {
         let request: GeneratedBlockResolveRequest
     }
 
+    private struct AISettingsAttempt: Sendable {
+        let draft: AISettingsDraft
+        let baseRevision: Int
+        let request: UserSettingsUpdateRequest
+    }
+
+    private struct ProviderKeyDeleteAttempt: Sendable {
+        let credentialRevision: Int
+        let request: ProviderKeyDeleteRequest
+    }
+
+    /// Retry coordinates are safe to retain because they contain no key-derived material.
+    private struct ProviderKeyPutAttempt: Sendable {
+        let expectedCredentialRevision: Int?
+        let idempotencyKey: String
+    }
+
     @Published private(set) var phase: AppPhase = .booting
     @Published var authStep: AuthStep = .email
     @Published private(set) var currentUser: AuthUser?
@@ -175,6 +192,16 @@ final class AppModel: ObservableObject {
     @Published private(set) var generatedBlockHasMoreNoteIDs: Set<String> = []
     @Published private(set) var generatedBlockPaginationNotices: [String: String] = [:]
     @Published private(set) var routingRules: [RoutingRule] = []
+    @Published private(set) var aiSettings: UserSettings?
+    @Published private(set) var providerKeyMetadata: ProviderKeyMetadata?
+    @Published private(set) var isLoadingAISettings = false
+    @Published private(set) var hasLoadedAISettings = false
+    @Published private(set) var isSavingAISettings = false
+    @Published private(set) var hasPendingAISettingsRetry = false
+    @Published private(set) var isMutatingProviderKey = false
+    @Published private(set) var hasPendingProviderKeyRetry = false
+    @Published private(set) var aiSettingsError: String?
+    @Published private(set) var providerKeyError: String?
     @Published private(set) var searchResults: [SearchResultPresentation] = []
     @Published private(set) var archiveNotes: [NotePresentation] = []
     @Published private(set) var deletedNotes: [NotePresentation] = []
@@ -221,6 +248,10 @@ final class AppModel: ObservableObject {
     private var undoAttempts: [String: MutationUndoRequest] = [:]
     private var routingRuleAttempts: [String: RoutingRuleAttempt] = [:]
     private var generatedBlockAttempts: [String: GeneratedBlockAttempt] = [:]
+    private var aiSettingsAttempt: AISettingsAttempt?
+    private var providerKeyPutAttempt: ProviderKeyPutAttempt?
+    private var providerKeyDeleteAttempt: ProviderKeyDeleteAttempt?
+    private var aiSettingsEpoch: UInt64 = 0
     private var didBootstrap = false
     private var accountEpoch: UInt64 = 0
     private var refreshEpoch: UInt64 = 0
@@ -758,6 +789,454 @@ final class AppModel: ObservableObject {
         navigationPath = []
         selectedTab = .review
         requestedReviewFocusID = reviewID
+    }
+
+    func loadAISettings() async {
+        guard let runtime,
+              let user = currentUser,
+              !isLoadingAISettings,
+              !isSavingAISettings,
+              !hasPendingAISettingsRetry,
+              !isMutatingProviderKey else { return }
+        let context = currentAccountContext(for: user)
+        aiSettingsEpoch &+= 1
+        let operationEpoch = aiSettingsEpoch
+        isLoadingAISettings = true
+        aiSettingsError = nil
+        providerKeyError = nil
+        defer {
+            if isCurrent(context), aiSettingsEpoch == operationEpoch {
+                isLoadingAISettings = false
+                hasLoadedAISettings = true
+            }
+        }
+
+        async let settingsResult = Self.attempt {
+            try await runtime.authenticatedAPI.getUserSettings()
+        }
+        async let providerKeyResult = Self.attempt {
+            try await runtime.authenticatedAPI.getProviderKeyMetadata()
+        }
+        let (settings, providerKey) = await (settingsResult, providerKeyResult)
+        guard isCurrent(context), aiSettingsEpoch == operationEpoch else { return }
+
+        switch settings {
+        case let .value(response):
+            applyAISettings(response.settings)
+        case .unavailable:
+            aiSettingsError = "AI settings could not be loaded. Pull down to try again."
+        }
+        switch providerKey {
+        case let .value(response):
+            providerKeyMetadata = response.providerKey
+            if hasPendingProviderKeyRetry {
+                providerKeyError = "The storage result is unknown. Paste the exact same key to retry this request, or start over."
+            } else {
+                switch response.providerKey?.status {
+                case .invalid:
+                    providerKeyError = "OpenAI rejected this saved key. Replace it before using BYOK."
+                case .revoked:
+                    providerKeyError = "This saved OpenAI key was revoked. Replace it before using BYOK."
+                case .active, nil:
+                    break
+                }
+            }
+        case .unavailable:
+            providerKeyError = "OpenAI key status could not be loaded. Pull down to try again."
+        }
+    }
+
+    func saveAISettings(_ draft: AISettingsDraft) async -> Bool {
+        guard let runtime,
+              let user = currentUser,
+              let current = aiSettings,
+              !isLoadingAISettings,
+              !isSavingAISettings,
+              !isMutatingProviderKey,
+              AISettingsRetryContract.permitsSave(
+                  hasPendingRetry: hasPendingAISettingsRetry,
+                  pendingDraft: aiSettingsAttempt?.draft,
+                  submittedDraft: draft
+              ) else { return false }
+        let context = currentAccountContext(for: user)
+
+        let request: UserSettingsUpdateRequest
+        do {
+            guard let prepared = try aiSettingsUpdateRequest(draft: draft, current: current)
+            else {
+                hasPendingAISettingsRetry = false
+                aiSettingsError = nil
+                return true
+            }
+            request = prepared
+        } catch {
+            aiSettingsError = draft.validationMessage ?? "Review the settings and try again."
+            return false
+        }
+
+        aiSettingsEpoch &+= 1
+        let operationEpoch = aiSettingsEpoch
+        isSavingAISettings = true
+        aiSettingsError = nil
+        defer {
+            if isCurrent(context), aiSettingsEpoch == operationEpoch {
+                isSavingAISettings = false
+            }
+        }
+
+        do {
+            let response = try await runtime.authenticatedAPI.updateUserSettings(request)
+            guard isCurrent(context), aiSettingsEpoch == operationEpoch,
+                  AISettingsMutationContract.accepts(
+                      response,
+                      replacing: current,
+                      with: draft
+                  ) else {
+                throw APIClientError.malformedResponse(status: 200)
+            }
+            aiSettingsAttempt = nil
+            hasPendingAISettingsRetry = false
+            applyAISettings(response.settings)
+            if response.replayed {
+                do {
+                    try await refreshAISettingsSnapshot(
+                        api: runtime.authenticatedAPI,
+                        context: context,
+                        operationEpoch: operationEpoch
+                    )
+                } catch {
+                    guard isCurrent(context), aiSettingsEpoch == operationEpoch else { return false }
+                    aiSettingsError = "Settings were saved, but the latest copy could not be refreshed."
+                }
+            }
+            guard isCurrent(context), aiSettingsEpoch == operationEpoch else { return false }
+            announce("AI settings saved. New captures will use them.")
+            return true
+        } catch {
+            guard isCurrent(context), aiSettingsEpoch == operationEpoch else { return false }
+            if Self.isStaleRevisionFailure(error) {
+                aiSettingsAttempt = nil
+                hasPendingAISettingsRetry = false
+                try? await refreshAISettingsSnapshot(
+                    api: runtime.authenticatedAPI,
+                    context: context,
+                    operationEpoch: operationEpoch
+                )
+            } else if Self.isAmbiguousInteractionFailure(error) {
+                hasPendingAISettingsRetry = true
+            } else {
+                aiSettingsAttempt = nil
+                hasPendingAISettingsRetry = false
+            }
+            aiSettingsError = Self.aiSettingsFailureMessage(error)
+            announce("AI settings were not saved.")
+            return false
+        }
+    }
+
+    func discardAISettingsRetry() async -> UserSettings? {
+        guard let runtime,
+              let user = currentUser,
+              let current = aiSettings,
+              hasPendingAISettingsRetry,
+              !isLoadingAISettings,
+              !isSavingAISettings,
+              !isMutatingProviderKey else { return nil }
+        let context = currentAccountContext(for: user)
+        aiSettingsEpoch &+= 1
+        let operationEpoch = aiSettingsEpoch
+        isLoadingAISettings = true
+        aiSettingsError = nil
+        defer {
+            if isCurrent(context), aiSettingsEpoch == operationEpoch {
+                isLoadingAISettings = false
+                hasLoadedAISettings = true
+            }
+        }
+
+        let reconciliation = await AISettingsRetryContract.reconcile(current: current) {
+            try await runtime.authenticatedAPI.getUserSettings()
+        }
+        guard isCurrent(context), aiSettingsEpoch == operationEpoch else { return nil }
+        guard let authoritative = reconciliation.authoritativeSettings else {
+            aiSettingsError = "The latest saved settings could not be confirmed. Your draft is still locked; check your connection and try again."
+            return nil
+        }
+
+        aiSettings = authoritative
+        aiSettingsAttempt = nil
+        hasPendingAISettingsRetry = false
+        aiSettingsError = nil
+        announce("Latest AI settings loaded. The unresolved draft was discarded.")
+        return authoritative
+    }
+
+    /// The submitted credential is never retained in AppModel state. Only non-secret CAS and
+    /// idempotency coordinates survive an ambiguous result; the user must paste the same key again.
+    func saveProviderKey(_ submittedKey: String) async -> Bool {
+        guard let runtime,
+              let user = currentUser,
+              !isLoadingAISettings,
+              !isSavingAISettings,
+              !isMutatingProviderKey else { return false }
+        let context = currentAccountContext(for: user)
+        let attempt = providerKeyPutAttempt ?? ProviderKeyPutAttempt(
+            expectedCredentialRevision: providerKeyMetadata?.credentialRevision,
+            idempotencyKey: UUID().uuidString.lowercased()
+        )
+        let request: ProviderKeyPutRequest
+        do {
+            request = try ProviderKeyPutRequest(
+                idempotencyKey: attempt.idempotencyKey,
+                provider: .openai,
+                expectedCredentialRevision: attempt.expectedCredentialRevision,
+                apiKey: submittedKey
+            )
+        } catch {
+            providerKeyError = "Paste a complete OpenAI API key using visible ASCII characters only."
+            return false
+        }
+        providerKeyPutAttempt = attempt
+
+        aiSettingsEpoch &+= 1
+        let operationEpoch = aiSettingsEpoch
+        isMutatingProviderKey = true
+        providerKeyError = nil
+        defer {
+            if isCurrent(context), aiSettingsEpoch == operationEpoch {
+                isMutatingProviderKey = false
+            }
+        }
+
+        do {
+            let response = try await runtime.authenticatedAPI.putProviderKey(request)
+            guard isCurrent(context), aiSettingsEpoch == operationEpoch,
+                  AISettingsMutationContract.accepts(
+                      response,
+                      expectedCredentialRevision: attempt.expectedCredentialRevision,
+                      submittedKey: submittedKey
+                  ) else {
+                throw APIClientError.malformedResponse(status: 200)
+            }
+            providerKeyMetadata = response.providerKey
+            if response.replayed {
+                do {
+                    try await refreshProviderKeySnapshot(
+                        api: runtime.authenticatedAPI,
+                        context: context,
+                        operationEpoch: operationEpoch
+                    )
+                } catch {
+                    guard isCurrent(context), aiSettingsEpoch == operationEpoch else { return false }
+                    hasPendingProviderKeyRetry = true
+                    providerKeyError = "The saved receipt was replayed, but current key status could not be refreshed. Paste the exact same key to reconcile it."
+                    announce("The latest OpenAI key status could not be confirmed.")
+                    return false
+                }
+                guard providerKeyMetadata == response.providerKey else {
+                    providerKeyPutAttempt = nil
+                    hasPendingProviderKeyRetry = false
+                    providerKeyError = "The replayed save is no longer the current OpenAI key. Review the latest status before saving again."
+                    announce("The OpenAI key changed after the saved receipt.")
+                    return false
+                }
+            }
+            guard isCurrent(context), aiSettingsEpoch == operationEpoch else { return false }
+            providerKeyPutAttempt = nil
+            providerKeyDeleteAttempt = nil
+            hasPendingProviderKeyRetry = false
+            announce("OpenAI key validated and saved in protected server storage.")
+            return true
+        } catch {
+            guard isCurrent(context), aiSettingsEpoch == operationEpoch else { return false }
+            if Self.isStaleRevisionFailure(error) {
+                providerKeyPutAttempt = nil
+                hasPendingProviderKeyRetry = false
+                try? await refreshProviderKeySnapshot(
+                    api: runtime.authenticatedAPI,
+                    context: context,
+                    operationEpoch: operationEpoch
+                )
+            } else if Self.isAmbiguousInteractionFailure(error) {
+                try? await refreshProviderKeySnapshot(
+                    api: runtime.authenticatedAPI,
+                    context: context,
+                    operationEpoch: operationEpoch
+                )
+                hasPendingProviderKeyRetry = true
+                providerKeyError = "The storage result is unknown. Paste the exact same key to retry this request, or start over."
+                announce("The OpenAI key save needs reconciliation.")
+                return false
+            } else {
+                providerKeyPutAttempt = nil
+                hasPendingProviderKeyRetry = false
+            }
+            providerKeyError = Self.providerKeyFailureMessage(error, action: .save)
+            announce("The OpenAI key was not saved.")
+            return false
+        }
+    }
+
+    func discardProviderKeyRetry() {
+        guard !isMutatingProviderKey else { return }
+        providerKeyPutAttempt = nil
+        hasPendingProviderKeyRetry = false
+        providerKeyError = nil
+    }
+
+    func deleteProviderKey() async -> Bool {
+        guard let runtime,
+              let user = currentUser,
+              let current = providerKeyMetadata,
+              !isLoadingAISettings,
+              !isSavingAISettings,
+              !isMutatingProviderKey,
+              providerKeyPutAttempt == nil else { return false }
+        let context = currentAccountContext(for: user)
+        let request: ProviderKeyDeleteRequest
+        do {
+            if let existing = providerKeyDeleteAttempt,
+               existing.credentialRevision == current.credentialRevision {
+                request = existing.request
+            } else {
+                request = try ProviderKeyDeleteRequest(
+                    idempotencyKey: UUID().uuidString.lowercased(),
+                    provider: .openai,
+                    expectedCredentialRevision: current.credentialRevision
+                )
+                providerKeyDeleteAttempt = ProviderKeyDeleteAttempt(
+                    credentialRevision: current.credentialRevision,
+                    request: request
+                )
+            }
+        } catch {
+            providerKeyError = "The saved key state is invalid. Refresh and try again."
+            return false
+        }
+
+        aiSettingsEpoch &+= 1
+        let operationEpoch = aiSettingsEpoch
+        isMutatingProviderKey = true
+        providerKeyError = nil
+        defer {
+            if isCurrent(context), aiSettingsEpoch == operationEpoch {
+                isMutatingProviderKey = false
+            }
+        }
+
+        do {
+            let response = try await runtime.authenticatedAPI.deleteProviderKey(request)
+            guard isCurrent(context), aiSettingsEpoch == operationEpoch,
+                  AISettingsMutationContract.accepts(
+                      response,
+                      expectedCredentialRevision: current.credentialRevision
+                  ) else {
+                throw APIClientError.malformedResponse(status: 200)
+            }
+            if response.replayed {
+                do {
+                    try await refreshProviderKeySnapshot(
+                        api: runtime.authenticatedAPI,
+                        context: context,
+                        operationEpoch: operationEpoch
+                    )
+                } catch {
+                    guard isCurrent(context), aiSettingsEpoch == operationEpoch else { return false }
+                    providerKeyError = "The deletion receipt was replayed, but current key status could not be refreshed. Retry the exact deletion."
+                    announce("The latest OpenAI key status could not be confirmed.")
+                    return false
+                }
+                guard providerKeyMetadata == nil else {
+                    providerKeyDeleteAttempt = nil
+                    providerKeyError = "A newer OpenAI key now exists. Review it before deleting again."
+                    announce("A newer OpenAI key was not deleted.")
+                    return false
+                }
+            } else {
+                providerKeyMetadata = nil
+            }
+            guard isCurrent(context), aiSettingsEpoch == operationEpoch else { return false }
+            providerKeyDeleteAttempt = nil
+            announce("OpenAI key deleted. It can no longer be resolved for new provider calls.")
+            return true
+        } catch {
+            guard isCurrent(context), aiSettingsEpoch == operationEpoch else { return false }
+            if Self.isStaleRevisionFailure(error) {
+                providerKeyDeleteAttempt = nil
+                try? await refreshProviderKeySnapshot(
+                    api: runtime.authenticatedAPI,
+                    context: context,
+                    operationEpoch: operationEpoch
+                )
+            } else if Self.isAmbiguousInteractionFailure(error) {
+                try? await refreshProviderKeySnapshot(
+                    api: runtime.authenticatedAPI,
+                    context: context,
+                    operationEpoch: operationEpoch
+                )
+                if providerKeyMetadata == nil {
+                    providerKeyDeleteAttempt = nil
+                    announce("OpenAI key deleted. It can no longer be resolved for new provider calls.")
+                    return true
+                }
+            } else {
+                providerKeyDeleteAttempt = nil
+            }
+            providerKeyError = Self.providerKeyFailureMessage(error, action: .delete)
+            announce("The OpenAI key deletion could not be confirmed.")
+            return false
+        }
+    }
+
+    private func aiSettingsUpdateRequest(
+        draft: AISettingsDraft,
+        current: UserSettings
+    ) throws -> UserSettingsUpdateRequest? {
+        if let existing = aiSettingsAttempt,
+           existing.baseRevision == current.settingsRevision,
+           existing.draft == draft {
+            return existing.request
+        }
+        guard let request = try draft.makeUpdateRequest(
+            comparedTo: current,
+            idempotencyKey: UUID().uuidString.lowercased()
+        ) else {
+            aiSettingsAttempt = nil
+            return nil
+        }
+        aiSettingsAttempt = AISettingsAttempt(
+            draft: draft,
+            baseRevision: current.settingsRevision,
+            request: request
+        )
+        return request
+    }
+
+    private func applyAISettings(_ value: UserSettings) {
+        guard aiSettings.map({ value.settingsRevision >= $0.settingsRevision }) ?? true else {
+            return
+        }
+        aiSettings = value
+    }
+
+    private func refreshAISettingsSnapshot(
+        api: APIClient,
+        context: AccountContext,
+        operationEpoch: UInt64
+    ) async throws {
+        let response = try await api.getUserSettings()
+        guard isCurrent(context), aiSettingsEpoch == operationEpoch else { return }
+        applyAISettings(response.settings)
+    }
+
+    private func refreshProviderKeySnapshot(
+        api: APIClient,
+        context: AccountContext,
+        operationEpoch: UInt64
+    ) async throws {
+        let response = try await api.getProviderKeyMetadata()
+        guard isCurrent(context), aiSettingsEpoch == operationEpoch else { return }
+        providerKeyMetadata = response.providerKey
     }
 
     func loadRoutingRules() async {
@@ -2642,6 +3121,64 @@ final class AppModel: ObservableObject {
         isStaleRevisionFailure(error)
     }
 
+    private enum ProviderKeyAction {
+        case save, delete
+    }
+
+    nonisolated static func aiSettingsFailureMessage(_ error: Error) -> String {
+        guard let error = error as? APIClientError else {
+            return "AI settings were not saved. Review them and try again."
+        }
+        return switch error {
+        case .transportFailure, .invalidHTTPResponse:
+            "Unfiled could not confirm the change. Try Save again to safely retry it."
+        case .authenticationRequired:
+            "Sign in again before changing AI settings."
+        case .http(status: _, code: .staleRevision, requestId: _, retryAfterSeconds: _):
+            "Settings changed on another device. The latest copy is shown; review it before saving."
+        case .http(status: 429, code: _, requestId: _, retryAfterSeconds: _):
+            "Too many settings changes at once. Wait a moment and try again."
+        case .http(status: 503, code: _, requestId: _, retryAfterSeconds: _):
+            "Protected settings storage is temporarily unavailable. Try again shortly."
+        case .malformedResponse, .responseBodyTooLarge:
+            "Unfiled could not confirm the saved settings. Try Save again to reconcile them."
+        case .invalidConfiguration, .invalidRequest, .requestBodyTooLarge:
+            "AI settings were not saved. Review them and try again."
+        case .http:
+            "AI settings were not saved. Review them and try again."
+        }
+    }
+
+    private static func providerKeyFailureMessage(
+        _ error: Error,
+        action: ProviderKeyAction
+    ) -> String {
+        let fallback = action == .save
+            ? "The OpenAI key was not saved. Paste it again and retry."
+            : "The OpenAI key was not deleted. Refresh its status and try again."
+        guard let error = error as? APIClientError else { return fallback }
+        return switch error {
+        case .transportFailure, .invalidHTTPResponse, .malformedResponse, .responseBodyTooLarge:
+            action == .save
+                ? "The save could not be confirmed. Key status was refreshed; paste the key again only if needed."
+                : "The deletion could not be confirmed. Refresh key status and retry the same action."
+        case .authenticationRequired:
+            "Sign in again before changing the OpenAI key."
+        case .http(status: _, code: .staleRevision, requestId: _, retryAfterSeconds: _):
+            "The OpenAI key changed on another device. Its latest status is shown."
+        case .http(status: _, code: .providerKeyInvalid, requestId: _, retryAfterSeconds: _),
+             .http(status: 422, code: .validationFailed, requestId: _, retryAfterSeconds: _):
+            "OpenAI did not accept that key. Nothing was stored; check the key and try again."
+        case .http(status: 429, code: _, requestId: _, retryAfterSeconds: _):
+            "Too many key changes at once. Wait a moment and try again."
+        case .http(status: 503, code: _, requestId: _, retryAfterSeconds: _),
+             .http(status: _, code: .providerUnavailable, requestId: _, retryAfterSeconds: _):
+            "Protected key storage or OpenAI validation is temporarily unavailable. Nothing new was stored."
+        case .invalidConfiguration, .invalidRequest, .requestBodyTooLarge, .http:
+            fallback
+        }
+    }
+
     private nonisolated static func shouldFocusReviewAfterUndo(for error: Error) -> Bool {
         guard case let APIClientError.http(status, code, _, _) = error else { return false }
         return shouldFocusReviewAfterUndo(status: status, code: code)
@@ -2825,6 +3362,16 @@ final class AppModel: ObservableObject {
         generatedBlockHasMoreNoteIDs = []
         generatedBlockPaginationNotices = [:]
         routingRules = []
+        aiSettings = nil
+        providerKeyMetadata = nil
+        isLoadingAISettings = false
+        hasLoadedAISettings = false
+        isSavingAISettings = false
+        hasPendingAISettingsRetry = false
+        isMutatingProviderKey = false
+        hasPendingProviderKeyRetry = false
+        aiSettingsError = nil
+        providerKeyError = nil
         searchResults = []
         archiveNotes = []
         deletedNotes = []
@@ -2850,6 +3397,10 @@ final class AppModel: ObservableObject {
         undoAttempts = [:]
         routingRuleAttempts = [:]
         generatedBlockAttempts = [:]
+        aiSettingsAttempt = nil
+        providerKeyPutAttempt = nil
+        providerKeyDeleteAttempt = nil
+        aiSettingsEpoch &+= 1
         navigationPath = []
         captureSheet = nil
         editorSheet = nil

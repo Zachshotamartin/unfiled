@@ -13,6 +13,10 @@ import {
 import { OrganizerUnavailableError } from "./errors.js";
 import { organizerLocalDate } from "./local-date.js";
 import { ORGANIZER_PROMPT_VERSION, ORGANIZER_SCHEMA_VERSION } from "./prompt.js";
+import type {
+  OrganizerExpansionStyle,
+  OrganizerProviderCredentialAccess
+} from "./provider-credential.js";
 
 const JOB_ID_PATTERN = /^job_([0-9A-HJKMNP-TV-Z]{26})$/u;
 const CAPTURE_ID_PATTERN = /^cap_[0-9A-HJKMNP-TV-Z]{26}$/u;
@@ -54,7 +58,10 @@ export type PlannerInput = Readonly<{
   candidates: readonly DecryptedCandidate[];
   captureId: `cap_${string}`;
   controls: OrganizerCaptureControls;
+  expansionStyle?: OrganizerExpansionStyle;
   promptVersion: string;
+  providerCredential?: OrganizerProviderCredentialAccess;
+  routingEffort?: "economical" | "standard" | "thorough";
   schemaVersion: number;
   signal: AbortSignal;
 }>;

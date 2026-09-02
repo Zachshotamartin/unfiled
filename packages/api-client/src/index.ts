@@ -35,7 +35,9 @@ import {
   MutationBatchUndoResponseSchema,
   MutationResultSchema,
   MutationUndoRequestSchema,
+  MAX_AI_SETTINGS_RESPONSE_BYTES,
   MAX_GENERATED_BLOCK_RESPONSE_BYTES,
+  MAX_PROVIDER_KEY_RESPONSE_BYTES,
   MAX_RETAINED_ROUTING_RULES,
   MAX_ROUTING_RULE_PAGE_BYTES,
   NoteArchiveRequestSchema,
@@ -300,6 +302,7 @@ export function createApiClient(options: ApiClientOptions) {
       idempotencyKey?: string;
       authenticated?: boolean;
       maximumResponseBytes?: number;
+      requirePrivateNoStore?: boolean;
     }>,
     responseSchema: ZodType<T>
   ): Promise<T> {
@@ -311,10 +314,23 @@ export function createApiClient(options: ApiClientOptions) {
       headers: {
         ...(init.body === undefined ? {} : { "content-type": "application/json" }),
         ...(init.idempotencyKey === undefined ? {} : { "idempotency-key": init.idempotencyKey }),
+        ...(init.cache === "no-store" ? { "cache-control": "no-store", pragma: "no-cache" } : {}),
         ...(token ? { authorization: `Bearer ${token}` } : {})
       },
       ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) })
     });
+    if (
+      init.requirePrivateNoStore === true &&
+      (response.headers.get("cache-control") !== "private, no-store" ||
+        response.headers.get("pragma") !== "no-cache")
+    ) {
+      try {
+        await response.body?.cancel();
+      } catch {
+        // The sanitized transport failure remains authoritative if cancellation races.
+      }
+      throw new ApiClientMalformedResponseError(response.status);
+    }
     return decode(response, responseSchema, init.maximumResponseBytes);
   }
 
@@ -927,38 +943,107 @@ export function createApiClient(options: ApiClientOptions) {
     },
 
     getUserSettings() {
-      return request("/me/settings", {}, UserSettingsResponseSchema);
-    },
-
-    updateUserSettings(input: UserSettingsUpdateRequest) {
-      const body = UserSettingsUpdateRequestSchema.parse(input);
       return request(
         "/me/settings",
-        { body, idempotencyKey: body.idempotencyKey, method: "PATCH" },
+        {
+          cache: "no-store",
+          maximumResponseBytes: MAX_AI_SETTINGS_RESPONSE_BYTES,
+          requirePrivateNoStore: true
+        },
+        UserSettingsResponseSchema
+      );
+    },
+
+    async updateUserSettings(input: UserSettingsUpdateRequest) {
+      const body = UserSettingsUpdateRequestSchema.parse(input);
+      const response = await request(
+        "/me/settings",
+        {
+          body,
+          cache: "no-store",
+          idempotencyKey: body.idempotencyKey,
+          maximumResponseBytes: MAX_AI_SETTINGS_RESPONSE_BYTES,
+          method: "PATCH",
+          requirePrivateNoStore: true
+        },
         UserSettingsUpdateResponseSchema
       );
+      if (response.settings.settingsRevision !== body.expectedSettingsRevision + 1) {
+        throw new ApiClientMalformedResponseError(200);
+      }
+      for (const field of [
+        "organizationMode",
+        "providerMode",
+        "byokProvider",
+        "byokFallbackToApp",
+        "routingEffort",
+        "expansionStyle",
+        "timezone",
+        "locale"
+      ] as const) {
+        if (body[field] !== undefined && response.settings[field] !== body[field]) {
+          throw new ApiClientMalformedResponseError(200);
+        }
+      }
+      return response;
     },
 
     getProviderKeyMetadata() {
-      return request("/me/provider-key", { cache: "no-store" }, ProviderKeyResponseSchema);
-    },
-
-    putProviderKey(input: ProviderKeyPutRequest) {
-      const body = ProviderKeyPutRequestSchema.parse(input);
       return request(
         "/me/provider-key",
-        { body, cache: "no-store", idempotencyKey: body.idempotencyKey, method: "PUT" },
+        {
+          cache: "no-store",
+          maximumResponseBytes: MAX_PROVIDER_KEY_RESPONSE_BYTES,
+          requirePrivateNoStore: true
+        },
+        ProviderKeyResponseSchema
+      );
+    },
+
+    async putProviderKey(input: ProviderKeyPutRequest) {
+      const body = ProviderKeyPutRequestSchema.parse(input);
+      const response = await request(
+        "/me/provider-key",
+        {
+          body,
+          cache: "no-store",
+          idempotencyKey: body.idempotencyKey,
+          maximumResponseBytes: MAX_PROVIDER_KEY_RESPONSE_BYTES,
+          method: "PUT",
+          requirePrivateNoStore: true
+        },
         ProviderKeyPutResponseSchema
       );
+      if (
+        body.expectedCredentialRevision !== null &&
+        response.providerKey.credentialRevision !== body.expectedCredentialRevision + 1
+      ) {
+        throw new ApiClientMalformedResponseError(200);
+      }
+      if (response.providerKey.lastFour !== body.apiKey.slice(-4)) {
+        throw new ApiClientMalformedResponseError(200);
+      }
+      return response;
     },
 
-    deleteProviderKey(input: ProviderKeyDeleteRequest) {
+    async deleteProviderKey(input: ProviderKeyDeleteRequest) {
       const body = ProviderKeyDeleteRequestSchema.parse(input);
-      return request(
+      const response = await request(
         "/me/provider-key",
-        { body, cache: "no-store", idempotencyKey: body.idempotencyKey, method: "DELETE" },
+        {
+          body,
+          cache: "no-store",
+          idempotencyKey: body.idempotencyKey,
+          maximumResponseBytes: MAX_PROVIDER_KEY_RESPONSE_BYTES,
+          method: "DELETE",
+          requirePrivateNoStore: true
+        },
         ProviderKeyDeleteResponseSchema
       );
+      if (response.deletedCredentialRevision !== body.expectedCredentialRevision) {
+        throw new ApiClientMalformedResponseError(200);
+      }
+      return response;
     },
 
     /** Returns the unbuffered archive response so callers can stream it to their chosen sink. */

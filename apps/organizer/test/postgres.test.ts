@@ -20,7 +20,7 @@ function pool(
 }
 
 describe("organizer Postgres executor", () => {
-  it("allows only identity preflight and the exact ten RPC SQL statements", async () => {
+  it("allows only identity preflight and the exact eleven RPC SQL statements", async () => {
     const selectedPool = pool(vi.fn().mockResolvedValue({ rows: [{ result: {} }] }));
     const database = createOrganizerDatabaseExecutor(selectedPool);
     await database.executor.query({
@@ -31,7 +31,7 @@ describe("organizer Postgres executor", () => {
     for (const text of Object.values(ORGANIZER_RPC_SQL)) {
       await database.executor.query({ signal: new AbortController().signal, text, values: [] });
     }
-    expect(Object.values(ORGANIZER_RPC_SQL)).toHaveLength(10);
+    expect(Object.values(ORGANIZER_RPC_SQL)).toHaveLength(11);
     expect(selectedPool.client.release).toHaveBeenCalledTimes(
       Object.values(ORGANIZER_RPC_SQL).length + 1
     );

@@ -10,7 +10,7 @@ import {
   type OrganizerDatabaseExecutor,
   type OrganizerDatabaseQuery
 } from "../src/database.js";
-import { OrganizerUnavailableError } from "../src/errors.js";
+import { OrganizerProviderError, OrganizerUnavailableError } from "../src/errors.js";
 
 const ULID = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const SECOND_ULID = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
@@ -134,9 +134,11 @@ function claim(overrides: Record<string, unknown> = {}) {
         ownerId: OWNER_ID,
         promptVersion: "organization-v1",
         replanCount: 0,
+        routingEffort: "standard",
         routingMode: "balanced",
         schemaVersion: 1,
         source: sourceProjection,
+        expansionStyle: "brief",
         commandProjection: "encrypted_only",
         ...overrides
       }
@@ -344,9 +346,8 @@ function executor(
       if (next instanceof Error || (typeof next === "object" && next !== null && "throw" in next)) {
         if (next instanceof Error) return Promise.reject(next);
         const injected = new Error("injected database failure");
-        if (typeof next.throw === "object" && next.throw !== null && "code" in next.throw) {
-          Object.assign(injected, { code: next.throw.code });
-        }
+        if (typeof next.throw === "object" && next.throw !== null)
+          Object.assign(injected, next.throw);
         return Promise.reject(injected);
       }
       return Promise.resolve(next as { rows: readonly unknown[] });
@@ -366,6 +367,77 @@ const command = Object.freeze({
 });
 
 describe("organizer database adapter", () => {
+  it("strictly parses the lease-bound OpenAI provider route without widening the secret", async () => {
+    const byok = {
+      credential: "sk-byok-abcdefghijklmnopqrstuvwxyz0123456789",
+      credentialRevision: 9,
+      expansionStyle: "detailed",
+      provider: "openai",
+      routingEffort: "thorough",
+      source: "byok"
+    } as const;
+    const db = executor([rpc(claim()), rpc(byok)]);
+    const repository = createOrganizerRepository(db);
+    await repository.claim({ leaseSeconds: 120, limit: 1, signal, workerId: "worker-1" });
+    await expect(
+      repository.providerRoute({ jobId: JOB_ID, leaseToken: LEASE, signal })
+    ).resolves.toEqual(byok);
+    expect(db.queries.at(-1)).toMatchObject({
+      text: ORGANIZER_RPC_SQL.providerRoute,
+      values: [JOB_ID, LEASE]
+    });
+
+    for (const malformed of [
+      { ...byok, provider: "anthropic" },
+      { ...byok, credentialRevision: null },
+      { ...byok, credential: `${byok.credential}\n` },
+      { ...byok, expansionStyle: "verbose" },
+      { ...byok, routingEffort: "unsafe" },
+      { ...byok, extra: true },
+      {
+        ...byok,
+        credential: byok.credential,
+        credentialRevision: 9,
+        source: "app_default"
+      }
+    ]) {
+      const malformedRepository = createOrganizerRepository(
+        executor([rpc(claim()), rpc(malformed)])
+      );
+      await malformedRepository.claim({
+        leaseSeconds: 120,
+        limit: 1,
+        signal,
+        workerId: "worker-1"
+      });
+      await expect(
+        malformedRepository.providerRoute({ jobId: JOB_ID, leaseToken: LEASE, signal })
+      ).rejects.toBeInstanceOf(OrganizerDatabaseContractError);
+    }
+
+    for (const [message, safeCode, retryable] of [
+      ["provider_key_invalid", "provider_key_invalid", false],
+      ["provider_unavailable", "provider_unavailable", true]
+    ] as const) {
+      const failedRepository = createOrganizerRepository(
+        executor([rpc(claim()), { throw: { code: "P0001", message } }])
+      );
+      await failedRepository.claim({
+        leaseSeconds: 120,
+        limit: 1,
+        signal,
+        workerId: "worker-1"
+      });
+      await failedRepository.providerRoute({ jobId: JOB_ID, leaseToken: LEASE, signal }).then(
+        () => Promise.reject(new Error("Expected provider route failure.")),
+        (error: unknown) => {
+          expect(error).toBeInstanceOf(OrganizerProviderError);
+          expect(error).toMatchObject({ retryable, safeCode });
+        }
+      );
+    }
+  });
+
   it("strictly decodes content-free note and space rule snapshots", async () => {
     const noteRuleMatch = {
       destinationId: NOTE_ID,
@@ -885,6 +957,8 @@ describe("organizer database adapter", () => {
         errorCode: "provider_unavailable",
         jobId: JOB_ID,
         leaseToken: LEASE,
+        providerCredentialRevision: null,
+        providerSource: null,
         retryable: true,
         signal
       })

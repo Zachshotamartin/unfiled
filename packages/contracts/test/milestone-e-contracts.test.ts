@@ -14,7 +14,10 @@ import {
   MutationBatchUndoResponseSchema,
   NoteBacklinksResponseSchema,
   NoteSourcesResponseSchema,
+  ProviderKeyDeleteRequestSchema,
+  ProviderKeyDeleteResponseSchema,
   ProviderKeyMetadataSchema,
+  ProviderKeyPutRequestSchema,
   ReviewItemDtoSchema,
   ReviewProposalSchema,
   ReviewResolveRequestSchema,
@@ -507,6 +510,33 @@ describe("Milestone E public contracts", () => {
         idempotencyKey: "settings-empty"
       }).success
     ).toBe(false);
+    expect(
+      UserSettingsDtoSchema.safeParse({ ...settings, byokProvider: "anthropic" }).success
+    ).toBe(false);
+    expect(
+      UserSettingsUpdateRequestSchema.safeParse({
+        expectedSettingsRevision: 3,
+        idempotencyKey: "settings-invalid-provider",
+        byokProvider: "anthropic"
+      }).success
+    ).toBe(false);
+    expect(
+      UserSettingsUpdateRequestSchema.safeParse({
+        expectedSettingsRevision: 3,
+        idempotencyKey: "settings-invalid-mode",
+        providerMode: "app_default",
+        byokProvider: "openai"
+      }).success
+    ).toBe(false);
+    for (const routingEffort of ["economical", "standard", "thorough"] as const) {
+      expect(
+        UserSettingsUpdateRequestSchema.safeParse({
+          expectedSettingsRevision: 3,
+          idempotencyKey: `settings-${routingEffort}`,
+          routingEffort
+        }).success
+      ).toBe(true);
+    }
   });
 
   it("never accepts secret material as provider-key metadata", () => {
@@ -525,6 +555,70 @@ describe("Milestone E public contracts", () => {
     expect(
       ProviderKeyMetadataSchema.safeParse({ ...metadata, apiKey: "sk-secret-must-not-return" })
         .success
+    ).toBe(false);
+    expect(
+      ProviderKeyMetadataSchema.safeParse({ ...metadata, provider: "anthropic" }).success
+    ).toBe(false);
+    expect(ProviderKeyMetadataSchema.safeParse({ ...metadata, lastFour: "é234" }).success).toBe(
+      false
+    );
+    expect(ProviderKeyMetadataSchema.safeParse({ ...metadata, lastFour: "12 4" }).success).toBe(
+      false
+    );
+    expect(ProviderKeyMetadataSchema.safeParse({ ...metadata, validatedAt: null }).success).toBe(
+      false
+    );
+    expect(
+      ProviderKeyMetadataSchema.safeParse({ ...metadata, status: "invalid", validatedAt: null })
+        .success
+    ).toBe(true);
+    expect(
+      ProviderKeyPutRequestSchema.safeParse({
+        idempotencyKey: "provider-put-01",
+        provider: "openai",
+        expectedCredentialRevision: null,
+        apiKey: "sk-example-not-a-real-key-1234"
+      }).success
+    ).toBe(true);
+    expect(
+      ProviderKeyPutRequestSchema.safeParse({
+        idempotencyKey: "provider-put-spaces",
+        provider: "openai",
+        expectedCredentialRevision: null,
+        apiKey: " sk-example-not-a-real-key-1234 "
+      }).success
+    ).toBe(false);
+    expect(
+      ProviderKeyPutRequestSchema.safeParse({
+        idempotencyKey: "provider-put-unicode",
+        provider: "openai",
+        expectedCredentialRevision: null,
+        apiKey: "sk-example-not-a-real-key-🔐"
+      }).success
+    ).toBe(false);
+    expect(
+      ProviderKeyPutRequestSchema.safeParse({
+        idempotencyKey: "provider-put-anthropic",
+        provider: "anthropic",
+        expectedCredentialRevision: null,
+        apiKey: "sk-ant-example-not-a-real-key-1234"
+      }).success
+    ).toBe(false);
+    expect(
+      ProviderKeyDeleteRequestSchema.safeParse({
+        idempotencyKey: "provider-delete-01",
+        provider: "openai",
+        expectedCredentialRevision: 1
+      }).success
+    ).toBe(true);
+    expect(
+      ProviderKeyDeleteResponseSchema.safeParse({
+        provider: "openai",
+        deleted: true,
+        deletedCredentialRevision: 1,
+        replayed: false,
+        vaultSecretId: "forbidden"
+      }).success
     ).toBe(false);
   });
 
@@ -633,6 +727,40 @@ describe("Milestone E public contracts", () => {
     expect(openApiDocument.components.schemas.ProviderKeyMetadata).not.toHaveProperty(
       "properties.apiKey"
     );
+    expect(openApiDocument.components.schemas.ProviderKeyMetadata).toMatchObject({
+      properties: { provider: { const: "openai" } }
+    });
+    expect(Object.keys(openApiDocument.paths["/me/settings"].get.responses).sort()).toEqual([
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "429",
+      "500",
+      "503"
+    ]);
+    const ownerSettingsWriteStatuses = [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "413",
+      "429",
+      "500",
+      "503"
+    ];
+    expect(Object.keys(openApiDocument.paths["/me/settings"].patch.responses).sort()).toEqual(
+      ownerSettingsWriteStatuses
+    );
+    expect(Object.keys(openApiDocument.paths["/me/provider-key"].put.responses).sort()).toEqual(
+      ownerSettingsWriteStatuses
+    );
+    expect(Object.keys(openApiDocument.paths["/me/provider-key"].delete.responses).sort()).toEqual(
+      ownerSettingsWriteStatuses
+    );
     expect(openApiDocument.components.schemas).toHaveProperty("MutationBatchUndoMember");
     expect(openApiDocument.components.schemas).toHaveProperty("MutationBatchUndoResponse");
     expect(
@@ -669,6 +797,18 @@ describe("Milestone E public contracts", () => {
       openApiDocument.paths["/notes/{noteId}/generated-blocks"].get.responses["503"].headers,
       openApiDocument.paths["/generated-blocks/{blockId}"].get.responses["500"].headers,
       openApiDocument.paths["/generated-blocks/{blockId}/resolve"].post.responses["413"].headers
+    ]) {
+      expect(headers["Cache-Control"].schema).toEqual({
+        type: "string",
+        const: "private, no-store"
+      });
+      expect(headers.Pragma.schema).toEqual({ type: "string", const: "no-cache" });
+    }
+    for (const headers of [
+      openApiDocument.paths["/me/settings"].get.responses["200"].headers,
+      openApiDocument.paths["/me/settings"].patch.responses["413"].headers,
+      openApiDocument.paths["/me/provider-key"].put.responses["200"].headers,
+      openApiDocument.paths["/me/provider-key"].delete.responses["503"].headers
     ]) {
       expect(headers["Cache-Control"].schema).toEqual({
         type: "string",
