@@ -12,7 +12,7 @@ This file contains only steps that require a human account, physical device, pai
 
 ## Remaining release gates at a glance
 
-The Milestone D organizer, cipher, encrypted RAG path, and OpenAI adapters and the Milestone E1–E3 encrypted correction/Review/batch-Undo, routing-rule, generated-block, and duplicate-suggestion slices are implemented in code. E2's credential-free aggregate/HTTP/PR-CI gate is green. E3's credential-free local aggregate and built-local B–E3 HTTP gates are green; its PR/CI and deployed canary remain pending. E4 and Milestones F–G remain pending. The following steps still require a human-controlled account, credential, environment, or device and remain release-blocking:
+The Milestone D organizer, cipher, encrypted RAG path, and OpenAI adapters and the Milestone E1–E3 encrypted correction/Review/batch-Undo, routing-rule, generated-block, and duplicate-suggestion slices are implemented in code. E2's credential-free aggregate/HTTP/PR-CI gate is green. E3's credential-free local aggregate and built-local B–E3 HTTP gates plus PR #16's required CI lanes are green; its deployed canary remains pending. E4 and Milestones F–G remain pending. The following steps still require a human-controlled account, credential, environment, or device and remain release-blocking:
 
 1. Create the dedicated OpenAI Production project/service account, restrict its model/key authority, set rate/spend controls, decide and document its data-retention posture, and place the key only in the organizer Production secret store.
 2. Keep `pnpm eval:routing` as the deterministic mock safety gate and run `pnpm eval:routing:pipeline` for the deterministic production-component seam. Its report names the real components exercised and the database/runtime guarantees it excludes. The optional credentialed runner is checked in as `pnpm eval:routing:live`; it requires only `UNFILED_ROUTING_EVAL_OPENAI_API_KEY`, runs exactly three samples per eligible synthetic case, and emits safe content-free telemetry. No credentialed live run or stochastic provider report exists yet.
@@ -709,8 +709,8 @@ snapshot. E3 migration `20260901000004_encrypted_generated_blocks_and_duplicate_
 implements separately encrypted generated blocks, non-destructive duplicate suggestions, and the sole
 new public generated-block resolver without expanding the organizer's ten-RPC allowlist. E4 retains
 assigned migration `20260901000005`. The E2 credential-free aggregate/HTTP/PR-CI gate is green;
-E3's credential-free local aggregate and built-local B–E3 HTTP gates are green, while its PR/CI and
-deployed canary remain pending. The credential-free E1 gate is green: the full built-local HTTP B–E1
+E3's credential-free local aggregate and built-local B–E3 HTTP gates plus PR #16's required CI lanes
+are green, while its deployed canary remains pending. The credential-free E1 gate is green: the full built-local HTTP B–E1
 suite passed; web passed 78 files / 651 tests; organizer, worker, and verifier passed 18 / 281,
 18 / 159, and 11 / 168 respectively; a clean database reset plus strict private/public schema lint
 passed with zero warnings, followed by 36 pgTAP files / 1,671 assertions and the database
