@@ -12,7 +12,7 @@ This file contains only steps that require a human account, physical device, pai
 
 ## Remaining release gates at a glance
 
-The Milestone D organizer, cipher, encrypted RAG path, and OpenAI adapters and the Milestone E1–E4 encrypted correction/Review/batch-Undo, routing-rule, generated-block, duplicate-suggestion, AI-settings, and Vault-only OpenAI BYOK slices are implemented in code. E2's credential-free aggregate/HTTP/PR-CI gate is green. E3's credential-free local aggregate and built-local B–E3 HTTP gates plus PR #16's required CI lanes are green; its deployed canary remains pending. E4's credential-free local aggregate and built-local B–E4 HTTP gates are green, and its independent final audit is clear; E4 PR/CI remains pending. Milestones F–G remain pending. The following steps still require a human-controlled account, credential, environment, or device and remain release-blocking:
+The Milestone D organizer, cipher, encrypted RAG path, and OpenAI adapters and the Milestone E1–E4 encrypted correction/Review/batch-Undo, routing-rule, generated-block, duplicate-suggestion, AI-settings, and Vault-only OpenAI BYOK slices are implemented in code. E2's credential-free aggregate/HTTP/PR-CI gate is green. E3's credential-free local aggregate and built-local B–E3 HTTP gates plus PR #16's required CI lanes are green; its deployed canary remains pending. E4's credential-free local aggregate and built-local B–E4 HTTP gates are green, its independent final audit is clear, and PR #17's required CI lanes are green. Milestones F–G remain pending. The following steps still require a human-controlled account, credential, environment, or device and remain release-blocking:
 
 1. Create the dedicated OpenAI Production project/service account, restrict its model/key authority, set rate/spend controls, decide and document its data-retention posture, and place the key only in the organizer Production secret store.
 2. Keep `pnpm eval:routing` as the deterministic mock safety gate and run `pnpm eval:routing:pipeline` for the deterministic production-component seam. Its report names the real components exercised and the database/runtime guarantees it excludes. The optional credentialed runner is checked in as `pnpm eval:routing:live`; it requires only `UNFILED_ROUTING_EVAL_OPENAI_API_KEY`, runs exactly three samples per eligible synthetic case, and emits safe content-free telemetry. No credentialed live run or stochastic provider report exists yet.
@@ -744,7 +744,7 @@ API client 4 / 38; contracts 7 / 55; encrypted aggregate 8 / 144; AI routing 11 
 smokes and focused configuration 35/35 passed, and boundaries/OpenAPI were green. Routing passed
 175/175, the production-component seam passed 15/15 with `liveProviderEvidence=false`, verifier
 capacity passed 1/1, retrieval recorded cold p95 392.80 ms and warm p95 12.98 ms, and the dependency
-audit found no known vulnerabilities, and E4's independent final audit is clear. E4 PR/CI remains pending.
+audit found no known vulnerabilities, E4's independent final audit is clear, and PR #17's required CI lanes are green.
 Production BYOK remains disabled until the account-controlled Vault/provider/canary/backup steps
 below pass; the local gate does not prove deployment, provider-account behavior, Apple hardware, or
 E2EE.
