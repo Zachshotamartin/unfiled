@@ -1,4 +1,4 @@
-import { handleVerifierRequest } from "../src/entrypoint.js";
+import { handleVerifierRequest } from "../dist/entrypoint.js";
 
 export default {
   fetch(request: Request): Promise<Response> {

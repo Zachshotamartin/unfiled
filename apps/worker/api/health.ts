@@ -1,4 +1,4 @@
-import { handleWorkerRequest } from "../src/entrypoint.js";
+import { handleWorkerRequest } from "../dist/entrypoint.js";
 
 export default {
   fetch(request: Request): Promise<Response> {
