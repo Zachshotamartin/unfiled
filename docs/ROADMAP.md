@@ -23,7 +23,7 @@ Exit condition: the selected launch name and every public contact/channel used b
 Deliver:
 
 - record deployment-to-commit and alias provenance for the five existing Vercel projects (`unfiled-web`, `unfiled-organizer`, `unfiled-worker`, `unfiled-verifier`, `unfiled-search`) without recording credentials;
-- change each project's Deployment Protection so Vercel Authentication protects Preview deployments only, and confirm the Ignored Build Step keeps Preview unbuilt;
+- turn Vercel Authentication off on each project (Hobby offers only "Standard Protection", which would also gate the production aliases) and confirm the Ignored Build Step keeps Preview unbuilt;
 - exercise the app-level OIDC verifier, the four dedicated database roles on the shared beta database, the Vercel Sensitive root-ring subsets, and provider-key entry through the product UI;
 - record the remote application of migrations `20260902000000` and `20260902000001`, live canaries for both providers, root-ring rotation, restore, backup, and deletion evidence; and
 - keep paid PITR, the irreversible storage contraction, and AWS KMS hardening explicitly deferred rather than implied.

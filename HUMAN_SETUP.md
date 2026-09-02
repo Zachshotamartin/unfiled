@@ -178,19 +178,33 @@ or commit; record the authenticated dashboard/API mapping in `FINAL_REPORT.md`.
 
 Automatic System Environment Variables are enabled in all five projects. Managed startup requires
 Vercel's exact `VERCEL=1`, `VERCEL_ENV`, `VERCEL_DEPLOYMENT_ID`, `VERCEL_GIT_COMMIT_SHA`, and
-`VERCEL_PROJECT_ID`; never set or copy them manually. Each `/health` response must be `no-store` and
+`VERCEL_PROJECT_ID`; never set or copy them into the project environment. Git-triggered Production
+deployments from `main` receive all of them from the platform.
+
+**CLI deployments (pre-merge verification only).** `vercel deploy --prod` uploads the working tree
+and has no Git source, so Vercel does not derive `VERCEL_GIT_COMMIT_SHA` at runtime and every
+service fails closed with `configuration_error (VERCEL_GIT_COMMIT_SHA)`. To verify a pushed branch
+before merging, deploy from a clean tree whose HEAD is pushed, from inside the app directory with the
+repository-level link (`vercel link --repo` at the monorepo root; per-app `.vercel/` links upload
+only that directory and break the Root Directory setting), and pass the real HEAD as a
+deployment-scoped variable: `vercel deploy --prod --force -e VERCEL_GIT_COMMIT_SHA=$(git rev-parse HEAD)`.
+The commit author email must belong to the GitHub account connected to Vercel or the deployment is
+blocked. The four isolated services expose their handlers through `api/*.js` shims that import the
+esbuild bundle `dist/entrypoint.js` produced by `pnpm build`; do not point them back at TypeScript
+sources, which the function tracer cannot resolve across workspace packages. Each `/health` response must be `no-store` and
 expose `x-unfiled-deployment=sha256:<lowercase-hex>`, `x-unfiled-commit=<exact-lowercase-full-SHA>`,
 and `x-unfiled-environment=production`. The release probe exact-matches these three non-secret
 values across all five services.
 
-### Required dashboard action: Deployment Protection
+### Deployment Protection (done 2026-09-02)
 
-For **each** of the five projects: Settings → Deployment Protection → Vercel Authentication → set to
-protect **Preview deployments only**. The projects currently protect all deployments, which returns
-Vercel's authentication page instead of the public web app and blocks the app-level OIDC calls from
-web to the four isolated services. This is a release gate; record the resulting setting for each
-project in `FINAL_REPORT.md`. Vercel Hobby cannot add Trusted Sources, password, or IP protection;
-the isolated services rely on the checked-in OIDC verifier described below.
+Vercel Authentication is **off** on all five projects. Vercel Hobby offers only "Standard
+Protection", which also covers the `*.vercel.app` production aliases and would return Vercel's
+sign-in page instead of the public web app while blocking the app-level OIDC calls from web to the
+four isolated services; "Preview only" is not available on this plan. Preview deployments are never
+built (next section), so nothing unprotected exists besides Production. Vercel Hobby cannot add
+Trusted Sources, password, or IP protection; the isolated services rely on the checked-in OIDC
+verifier described below. Record the setting per project in `FINAL_REPORT.md` whenever it changes.
 
 ### Ignored Build Step
 
