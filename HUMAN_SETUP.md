@@ -144,6 +144,30 @@ Complete these human validation items before treating Milestone 0 as approved:
    `sslmode=verify-full`, and that CA base64-encoded into the workload's `*_DATABASE_CA_PEM_BASE64`
    variable. PostgreSQL must still report `session_user` and `current_user` as the unsuffixed role.
 
+### Sign-in email delivery (required before inviting anyone)
+
+The web and iPhone sign-in screens accept a **six-digit code**, not a magic link. On 2026-09-02
+the remote project was found with an eight-digit OTP length and the default magic-link template;
+the OTP length was corrected to **6** through the dashboard (verified through the management
+API). The template could not be corrected: with Supabase's built-in SMTP the dashboard refuses
+template edits ("Set up custom SMTP to edit templates"), and the built-in service allows only two
+authentication emails per hour for the whole project. Until custom SMTP exists, real users
+receive a link without a code and cannot sign in; synthetic canaries still work because the
+operator mints codes through the Auth admin API.
+
+Required owner action:
+
+1. Create a sender at an SMTP provider you control (free tiers of Resend, Postmark, or Brevo are
+   sufficient for a private beta) and verify its sending domain.
+2. **Authentication → Emails → SMTP Settings**: enable custom SMTP with that host, port, sender
+   address, and credentials. Keep the credentials in the provider's console, never in this
+   repository.
+3. **Authentication → Emails → Magic link or OTP**: set the subject to a content-free line such as
+   "Your Unfiled sign-in code" and a body that includes the code, for example:
+   `Your Unfiled sign-in code is {{ .Token }}. It expires shortly and works once.`
+4. **Authentication → Sign In / Providers → Email → Email OTP length**: confirm **6**.
+5. Send yourself a code from the deployed sign-in page and confirm the email contains six digits.
+
 ## Vercel — five projects, Production scope only
 
 The five projects exist (see "Completed during bootstrap"). Expected production aliases are
