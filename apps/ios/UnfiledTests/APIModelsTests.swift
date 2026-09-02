@@ -138,6 +138,27 @@ final class APIModelsTests: XCTestCase {
                                                        with: #""rawContentPreview":"   ""#).utf8)
             )
         )
+        // A failed job records its error code without an organization receipt.
+        let failedWithoutReceipt = valid
+            .replacingOccurrences(of: #""status":"done""#, with: #""status":"failed""#)
+            .replacingOccurrences(of: #""lastErrorCode":null"#,
+                                  with: #""lastErrorCode":"provider_unavailable""#)
+            .replacingOccurrences(of: #""receiptAvailable":true"#, with: #""receiptAvailable":false"#)
+        XCTAssertNoThrow(try decoder.decode(CaptureSummary.self, from: Data(failedWithoutReceipt.utf8)))
+    }
+
+    func testCaptureDetailAcceptsFailedCaptureWithoutReceipt() throws {
+        let decoder = APIJSON.makeDecoder()
+        let failed = #"{"capture":{"id":"cap_00000000000000000000000000","rawContent":"buy oat milk","source":"mobile","deviceId":"","privacy":"ai_assisted","explicitDestinationNoteId":null,"expansionDisabled":false,"clientCreatedAt":"2026-08-31T12:00:00Z","clientTimezone":"America/Los_Angeles","receivedAt":"2026-08-31T12:00:01Z","status":"failed","lastErrorCode":"provider_unavailable","jobId":"job_00000000000000000000000000","receipt":null}}"#
+        XCTAssertNoThrow(try decoder.decode(CaptureDetailResponse.self, from: Data(failed.utf8)))
+        XCTAssertThrowsError(
+            try decoder.decode(
+                CaptureDetailResponse.self,
+                from: Data(failed.replacingOccurrences(of: #""status":"failed""#,
+                                                        with: #""status":"done""#).utf8)
+            ),
+            "a done capture still requires its receipt"
+        )
     }
 
     func testCaptureReceiptRejectsUnboundActionsAndStateMismatch() throws {

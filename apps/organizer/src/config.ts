@@ -136,7 +136,8 @@ export type OrganizerPipelineConfig =
 /**
  * Managed runtimes always route through the lease-bound provider registry.
  * The operator-funded OpenAI key is optional: the free BYOK-only beta runs
- * with an empty app-default record and app-default jobs fail closed to Inbox.
+ * with an empty app-default record, so app-default jobs fail closed: the capture stays saved
+ * and marked failed with provider_unavailable until the owner saves a key and retries.
  */
 export type OrganizerPlannerConfig =
   | Readonly<{ kind: "disabled" }>

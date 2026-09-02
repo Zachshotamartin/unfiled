@@ -35,6 +35,15 @@ an email sender exists (Supabase custom SMTP or an application mailer), and a si
 keyed on failures per email and per IP that is independent of the sign-up quota. Evidence: handler
 tests, an e2e stage for reset and throttle, and a live run on the deployed beta.
 
+### G1d. Inbox filing for owners without a key
+
+Today an owner with no saved provider key gets each capture saved and marked `failed` with
+`provider_unavailable`; the web and iPhone clients show it in Capture activity with a Settings
+prompt and a retry, and no note exists until a key is saved. The organizer produces no
+`kept_in_inbox` receipt today. Deliver: an `inbox` commit outcome in the organizer SQL that
+seals a `kept_in_inbox` receipt with reason `provider_key_missing` and sets the capture to
+`inbox`, client rendering for that state, and an e2e stage that runs a no-key owner end to end.
+
 ### G2. Prove the hosted topology
 
 Deliver:

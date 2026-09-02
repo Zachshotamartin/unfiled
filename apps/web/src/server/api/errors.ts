@@ -80,6 +80,13 @@ function reportServerFailure(
     /^[a-z_]{1,40}$/u.test(cause.reason)
       ? cause.reason
       : undefined;
+  const causeCode =
+    cause instanceof Error &&
+    "code" in cause &&
+    typeof cause.code === "string" &&
+    /^[a-z_]{1,40}$/u.test(cause.code)
+      ? cause.code
+      : undefined;
   let path = "unknown";
   try {
     path = new URL(request.url).pathname;
@@ -95,6 +102,7 @@ function reportServerFailure(
       errorClass,
       ...(causeClass === undefined ? {} : { causeClass }),
       ...(causeReason === undefined ? {} : { causeReason }),
+      ...(causeCode === undefined ? {} : { causeCode }),
       method: request.method,
       path
     })

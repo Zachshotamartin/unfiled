@@ -211,6 +211,19 @@ describe("errorResponse server-side failure log", () => {
         status: 500,
         errorClass: "Error"
       });
+      const coded = new HttpError(
+        503,
+        ApiErrorCode.PROVIDER_UNAVAILABLE,
+        "Encrypted storage failed."
+      );
+      coded.cause = Object.assign(new Error("service detail"), { code: "key_unavailable" });
+      errorResponse(coded, request);
+      const codedLine = String(sink.mock.calls[2]?.[0]);
+      expect(JSON.parse(codedLine)).toMatchObject({
+        causeClass: "Error",
+        causeCode: "key_unavailable"
+      });
+      expect(codedLine).not.toContain("service detail");
     } finally {
       sink.mockRestore();
     }
