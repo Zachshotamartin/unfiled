@@ -247,6 +247,9 @@ describe("Supabase password sign-up adapter", () => {
     );
     await expect(
       supabaseAuthProvider.signUp("person@example.com", "correct horse battery")
-    ).rejects.toMatchObject({ code: "validation_failed", status: 400 } satisfies Partial<HttpError>);
+    ).rejects.toMatchObject({
+      code: "validation_failed",
+      status: 400
+    } satisfies Partial<HttpError>);
   });
 });
