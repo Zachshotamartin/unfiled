@@ -2,13 +2,19 @@ import { randomUUID } from "node:crypto";
 
 import type { WorkerConfig } from "./config.js";
 import { WorkerConfigurationError } from "./errors.js";
-import { createOpenAiEmbeddingProvider } from "./embedding-provider.js";
+import {
+  createLocalHashEmbeddingProvider,
+  createOpenAiEmbeddingProvider
+} from "./embedding-provider.js";
 import { createWorkerApp, type WorkerApp } from "./http.js";
 import { createManagedIndexCryptoFactory } from "./index-crypto.js";
 import { createNoteIndexRepository } from "./index-database.js";
 import { createNoteIndexDrain } from "./index-drain.js";
 import { createVercelTrustedSourcesInvocationAuth } from "./invocation-auth-adapter.js";
-import { createWorkerKeyManagementAdapter } from "./key-management-adapter.js";
+import {
+  createWorkerKeyManagementAdapter,
+  managedKeyRecordParserForWorkerBoundary
+} from "./key-management-adapter.js";
 import { createPostgresIndexExecutor } from "./postgres-index-executor.js";
 
 export type WorkerComposition = Readonly<{
@@ -38,13 +44,19 @@ export function createWorkerComposition(config: WorkerConfig): WorkerComposition
     });
   }
 
-  if (config.runtime !== "production") {
+  if (config.runtime === "local") {
     throw new WorkerConfigurationError(["UNFILED_WORKER_ENV"]);
   }
 
   const postgres = createPostgresIndexExecutor(config.indexing.database);
-  const repository = createNoteIndexRepository(postgres.executor);
-  const embedding = createOpenAiEmbeddingProvider(config.indexing.embedding);
+  const repository = createNoteIndexRepository(
+    postgres.executor,
+    managedKeyRecordParserForWorkerBoundary(config.keyBoundary)
+  );
+  const embedding =
+    config.indexing.embedding.kind === "local-hash-v1"
+      ? createLocalHashEmbeddingProvider()
+      : createOpenAiEmbeddingProvider(config.indexing.embedding);
   const drain = createNoteIndexDrain({
     claimLimit: config.indexing.claimLimit,
     concurrency: config.indexing.concurrency,

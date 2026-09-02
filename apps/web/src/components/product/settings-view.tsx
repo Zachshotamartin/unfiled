@@ -11,7 +11,12 @@ import { AiSettings } from "./ai-settings";
 import { AccountDataControls } from "./account-data-controls";
 import { RoutingRulesSettings } from "./routing-rules-settings";
 
-export function SettingsView() {
+export type SettingsViewProps = Readonly<{
+  /** True only when this deployment provides an app-funded provider credential. */
+  managedFallbackAvailable?: boolean;
+}>;
+
+export function SettingsView({ managedFallbackAvailable = false }: SettingsViewProps = {}) {
   const router = useRouter();
   const session = useLiveResource<{ user: SessionUser }>("/api/v1/auth/session");
   async function signOut(): Promise<void> {
@@ -39,7 +44,7 @@ export function SettingsView() {
           <SignOutIcon size={17} /> Sign out
         </button>
       </section>
-      <AiSettings />
+      <AiSettings managedFallbackAvailable={managedFallbackAvailable} />
       <RoutingRulesSettings />
       <AccountDataControls />
       <section className="settings-row">

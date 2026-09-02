@@ -31,9 +31,9 @@ import type {
   ObjectWrapReservation
 } from "@unfiled/encrypted-aggregate";
 import {
-  parseManagedKeyRecord,
+  parseAnyManagedKeyRecord,
   type KeyClass,
-  type ManagedKeyRecordV1
+  type ManagedKeyRecord
 } from "@unfiled/key-management";
 import { isDeepStrictEqual } from "node:util";
 
@@ -121,7 +121,7 @@ export type OwnerInteractionPreparedReservation = Readonly<{
   recordVersion: number;
   keyClass: KeyClass;
   reservationId: string;
-  key: ManagedKeyRecordV1;
+  key: ManagedKeyRecord;
 }>;
 
 export type OwnerInteractionSourceDecision = Readonly<{
@@ -193,7 +193,7 @@ type OwnerInteractionPendingPreparation = Readonly<{
   occurredAt: string;
   completed: false;
   replayed: boolean;
-  requestMacKey: ManagedKeyRecordV1;
+  requestMacKey: ManagedKeyRecord;
   source: OwnerInteractionPreparedSource;
   members: readonly OwnerInteractionPreparedMember[];
   encryptedResponse: null;
@@ -204,7 +204,7 @@ type OwnerInteractionCompletedPreparation = Readonly<{
   occurredAt: string;
   completed: true;
   replayed: true;
-  requestMacKey: ManagedKeyRecordV1;
+  requestMacKey: ManagedKeyRecord;
   source: null;
   members: readonly OwnerInteractionPreparedMember[];
   encryptedResponse: EncryptedAggregateRecord<"idempotency_response">;
@@ -714,10 +714,10 @@ function parsePreparedKey(
     purpose: "content_mac" | "object_wrap";
   }>,
   failure: Failure
-): ManagedKeyRecordV1 {
-  let parsed: ManagedKeyRecordV1;
+): ManagedKeyRecord {
+  let parsed: ManagedKeyRecord;
   try {
-    parsed = parseManagedKeyRecord(value);
+    parsed = parseAnyManagedKeyRecord(value);
   } catch {
     return failure();
   }
@@ -736,10 +736,10 @@ function parseReplayRequestMacKey(
   value: unknown,
   ownerId: string,
   failure: Failure
-): ManagedKeyRecordV1 {
-  let parsed: ManagedKeyRecordV1;
+): ManagedKeyRecord {
+  let parsed: ManagedKeyRecord;
   try {
-    parsed = parseManagedKeyRecord(value);
+    parsed = parseAnyManagedKeyRecord(value);
   } catch {
     return failure();
   }
@@ -1522,7 +1522,7 @@ function parseCompletedResponse(
   encryptedResponse: EncryptedAggregateRecord<"idempotency_response">;
   encryptedResponseVerificationMac: KeyedMacRecord;
   occurredAt: string;
-  requestMacKey: ManagedKeyRecordV1;
+  requestMacKey: ManagedKeyRecord;
 }> {
   if (
     record.completed !== true ||

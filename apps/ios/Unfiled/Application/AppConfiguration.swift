@@ -6,8 +6,14 @@ enum AppConfigurationError: Error, Equatable {
 }
 
 struct AppConfiguration: Sendable {
+    /// Info.plist key populated from the `UNFILED_MANAGED_AI_FALLBACK_AVAILABLE` xcconfig value.
+    static let managedAIFallbackInfoKey = "UnfiledManagedAIFallbackAvailable"
+
     let apiBaseURL: URL
     let bundleIdentifier: String
+    /// Whether this deployment funds managed (app-default) AI. Unset, blank, or unexpanded values
+    /// mean unavailable, which is the free private-beta default.
+    let isManagedAIFallbackAvailable: Bool
 
     static func load(bundle: Bundle = .main) throws -> AppConfiguration {
         guard let bundleIdentifier = bundle.bundleIdentifier, !bundleIdentifier.isEmpty else {
@@ -16,12 +22,19 @@ struct AppConfiguration: Sendable {
         guard let rawURL = bundle.object(forInfoDictionaryKey: "UnfiledAPIBaseURL") as? String else {
             throw AppConfigurationError.invalidAPIBaseURL
         }
-        return try validated(apiBaseURLString: rawURL, bundleIdentifier: bundleIdentifier)
+        return try validated(
+            apiBaseURLString: rawURL,
+            bundleIdentifier: bundleIdentifier,
+            isManagedAIFallbackAvailable: managedAIFallbackAvailability(
+                from: bundle.object(forInfoDictionaryKey: managedAIFallbackInfoKey) as? String
+            )
+        )
     }
 
     static func validated(
         apiBaseURLString: String,
-        bundleIdentifier: String
+        bundleIdentifier: String,
+        isManagedAIFallbackAvailable: Bool = false
     ) throws -> AppConfiguration {
         guard !bundleIdentifier.isEmpty else {
             throw AppConfigurationError.missingBundleIdentifier
@@ -37,8 +50,19 @@ struct AppConfiguration: Sendable {
         }
         return AppConfiguration(
             apiBaseURL: apiBaseURL,
-            bundleIdentifier: bundleIdentifier
+            bundleIdentifier: bundleIdentifier,
+            isManagedAIFallbackAvailable: isManagedAIFallbackAvailable
         )
+    }
+
+    /// Accepts the xcconfig booleans `YES`/`NO` (plus `true`/`false` and `1`/`0`). Anything else,
+    /// including a missing key or an unexpanded `$(…)` placeholder, fails closed to unavailable.
+    static func managedAIFallbackAvailability(from rawValue: String?) -> Bool {
+        guard let rawValue else { return false }
+        switch rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "yes", "true", "1": return true
+        default: return false
+        }
     }
 
     private static func isLoopback(_ host: String) -> Bool {

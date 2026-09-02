@@ -1,5 +1,9 @@
 import { parseContentEnvelope, serializeContentEnvelope } from "@unfiled/content-crypto";
-import { parseManagedKeyRecord } from "@unfiled/key-management";
+import {
+  parseManagedKeyRecordV1,
+  type ManagedKeyRecord,
+  type ManagedKeyRecordParser
+} from "@unfiled/key-management";
 import type { PrivateRagGenerationSnapshot, PrivateRagPageReadResult } from "@unfiled/search";
 
 import type {
@@ -18,6 +22,14 @@ import type {
   OrganizerRepository
 } from "./drain.js";
 import { OrganizerProviderError, OrganizerUnavailableError } from "./errors.js";
+import {
+  ORGANIZER_MODEL_REGISTRY_VERSION,
+  isOrganizerModelId,
+  isOrganizerModelSelection,
+  isOrganizerProvider,
+  isOrganizerRoutingEffort,
+  resolveOrganizerModelId
+} from "./model-registry.js";
 import type { LeaseBoundOrganizerProviderRoute } from "./provider-credential.js";
 const EXPECTED_ROLE = "unfiled_organizer_worker";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -40,7 +52,6 @@ const TIMESTAMP =
   /^(\d{4})-(0[1-9]|1[0-2])-([0-2]\d|3[01])T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.(\d{1,6}))?(Z|([+-])([01]\d|2[0-3]):([0-5]\d))$/u;
 const DATE = /^\d{4}-\d{2}-\d{2}$/u;
 const MODEL_ID = /^[\x21-\x7e]{1,200}$/u;
-const ROUTING_MODEL_ID = /^[\x21-\x7e]{1,120}$/u;
 const SOURCE_BYTE_BUDGET = 8_388_608;
 const BASE64URL = /^[A-Za-z0-9_-]+$/u;
 const HEX_MAC = /^[0-9a-f]{64}$/u;
@@ -314,6 +325,7 @@ type ParsedProjection = EncryptedProjection &
 
 function projection(
   value: unknown,
+  parseRecord: ManagedKeyRecordParser,
   expected: Readonly<{
     ownerId: string;
     resourceId: string;
@@ -343,7 +355,7 @@ function projection(
   try {
     serializedEnvelope = serializeContentEnvelope(row.envelope);
     envelope = parseContentEnvelope(serializedEnvelope);
-    key = parseManagedKeyRecord(row.keyRecord);
+    key = parseRecord(row.keyRecord);
   } catch {
     return reject();
   }
@@ -386,7 +398,7 @@ function projection(
   ]);
   let contentMacKey;
   try {
-    contentMacKey = parseManagedKeyRecord(row.contentMacKeyRecord);
+    contentMacKey = parseRecord(row.contentMacKeyRecord);
   } catch {
     return reject();
   }
@@ -416,7 +428,11 @@ function projection(
   });
 }
 
-function claimResult(value: unknown, limit: number): readonly ClaimedOrganizerJob[] {
+function claimResult(
+  value: unknown,
+  limit: number,
+  parseRecord: ManagedKeyRecordParser
+): readonly ClaimedOrganizerJob[] {
   const root = exact(value, ["jobs", "sourceEnvelopeBytes", "sourceEnvelopeByteBudget"]);
   if (!Array.isArray(root.jobs) || root.jobs.length > limit) reject();
   const ids = new Set<string>();
@@ -441,7 +457,11 @@ function claimResult(value: unknown, limit: number): readonly ClaimedOrganizerJo
         "schemaVersion",
         "source",
         "expansionStyle",
-        "commandProjection"
+        "commandProjection",
+        "selectedProvider",
+        "modelSelection",
+        "adapterRegistryVersion",
+        "settingsRevision"
       ]);
       const jobId = string(row.jobId, JOB);
       const captureId = string(row.captureId, CAPTURE) as `cap_${string}`;
@@ -451,8 +471,8 @@ function claimResult(value: unknown, limit: number): readonly ClaimedOrganizerJo
       if (ids.has(jobId)) reject();
       ids.add(jobId);
       const promptVersion = string(row.promptVersion, /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/u);
-      const modelId = string(row.modelId, ROUTING_MODEL_ID);
       const schemaVersion = integer(row.schemaVersion, 1, 2_147_483_647);
+      const settingsRevision = integer(row.settingsRevision, 1, 2_147_483_647);
       if (
         typeof row.clientTimezone !== "string" ||
         !/^[A-Za-z_+-][A-Za-z0-9_+./:-]{0,99}$/u.test(row.clientTimezone) ||
@@ -464,7 +484,13 @@ function claimResult(value: unknown, limit: number): readonly ClaimedOrganizerJo
           row.routingEffort !== "thorough") ||
         (row.expansionStyle !== "off" &&
           row.expansionStyle !== "brief" &&
-          row.expansionStyle !== "detailed")
+          row.expansionStyle !== "detailed") ||
+        !isOrganizerProvider(row.selectedProvider) ||
+        !isOrganizerModelSelection(row.modelSelection) ||
+        !isOrganizerModelId(row.modelId) ||
+        row.adapterRegistryVersion !== ORGANIZER_MODEL_REGISTRY_VERSION ||
+        resolveOrganizerModelId(row.selectedProvider, row.modelSelection, row.routingEffort) !==
+          row.modelId
       )
         reject();
       if (row.commandProjection !== "legacy" && row.commandProjection !== "encrypted_only")
@@ -479,7 +505,11 @@ function claimResult(value: unknown, limit: number): readonly ClaimedOrganizerJo
         jobId,
         leaseExpiresAt: timestamp(row.leaseExpiresAt),
         leaseToken: string(row.leaseToken, UUID),
-        modelId,
+        modelId: row.modelId,
+        modelSelection: row.modelSelection,
+        adapterRegistryVersion: ORGANIZER_MODEL_REGISTRY_VERSION,
+        selectedProvider: row.selectedProvider,
+        settingsRevision,
         occurredAt: timestamp(row.occurredAt),
         ownerId,
         promptVersion,
@@ -487,7 +517,7 @@ function claimResult(value: unknown, limit: number): readonly ClaimedOrganizerJo
         routingEffort: row.routingEffort,
         routingMode: row.routingMode,
         schemaVersion,
-        source: projection(row.source, {
+        source: projection(row.source, parseRecord, {
           kind: "capture",
           ownerId,
           recordVersion: 1,
@@ -513,24 +543,31 @@ function claimResult(value: unknown, limit: number): readonly ClaimedOrganizerJo
 
 function providerRoute(value: unknown): LeaseBoundOrganizerProviderRoute {
   const row = exact(value, [
+    "adapterRegistryVersion",
     "credential",
     "credentialRevision",
     "expansionStyle",
+    "modelId",
+    "modelSelection",
     "provider",
     "routingEffort",
+    "settingsRevision",
     "source"
   ]);
   if (
-    row.provider !== "openai" ||
+    !isOrganizerProvider(row.provider) ||
     (row.source !== "app_default" && row.source !== "byok") ||
-    (row.routingEffort !== "economical" &&
-      row.routingEffort !== "standard" &&
-      row.routingEffort !== "thorough") ||
+    !isOrganizerRoutingEffort(row.routingEffort) ||
     (row.expansionStyle !== "off" &&
       row.expansionStyle !== "brief" &&
-      row.expansionStyle !== "detailed")
+      row.expansionStyle !== "detailed") ||
+    !isOrganizerModelSelection(row.modelSelection) ||
+    !isOrganizerModelId(row.modelId) ||
+    row.adapterRegistryVersion !== ORGANIZER_MODEL_REGISTRY_VERSION ||
+    resolveOrganizerModelId(row.provider, row.modelSelection, row.routingEffort) !== row.modelId
   )
     reject();
+  const settingsRevision = integer(row.settingsRevision, 1, 2_147_483_647);
   const credentialRevision =
     row.credentialRevision === null ? null : integer(row.credentialRevision, 1);
   if (row.source === "app_default") {
@@ -550,18 +587,23 @@ function providerRoute(value: unknown): LeaseBoundOrganizerProviderRoute {
     }
   }
   return Object.freeze({
+    adapterRegistryVersion: ORGANIZER_MODEL_REGISTRY_VERSION,
     credential: row.credential,
     credentialRevision,
     expansionStyle: row.expansionStyle,
-    provider: "openai",
+    modelId: row.modelId,
+    modelSelection: row.modelSelection,
+    provider: row.provider,
     routingEffort: row.routingEffort,
+    settingsRevision,
     source: row.source
   });
 }
 
 function candidateEntries(
   value: unknown,
-  input: Readonly<{ limit: number; ownerId: string }>
+  input: Readonly<{ limit: number; ownerId: string }>,
+  parseRecord: ManagedKeyRecordParser
 ): readonly EncryptedCandidate[] {
   if (!Array.isArray(value) || value.length > input.limit) reject();
   const ids = new Set<string>();
@@ -635,7 +677,7 @@ function candidateEntries(
         pinnedAt: nullableTimestamp(metadata.pinnedAt),
         revision,
         spaceId: metadata.spaceId as `spc_${string}` | null,
-        source: projection(row.aggregate, {
+        source: projection(row.aggregate, parseRecord, {
           kind: "note_content",
           ownerId: input.ownerId,
           recordVersion: revision,
@@ -651,7 +693,8 @@ function candidateEntries(
 function candidateResult(
   value: unknown,
   input: Readonly<{ jobId: string; limit: number }>,
-  ownerId: string
+  ownerId: string,
+  parseRecord: ManagedKeyRecordParser
 ): OrganizerCandidatePage {
   const root = exact(value, [
     "jobId",
@@ -662,7 +705,11 @@ function candidateResult(
     "encryptedByteBudget"
   ]);
   if (root.jobId !== input.jobId) reject();
-  const candidates = candidateEntries(root.candidates, { limit: input.limit, ownerId });
+  const candidates = candidateEntries(
+    root.candidates,
+    { limit: input.limit, ownerId },
+    parseRecord
+  );
   const encryptedByteBudget = integer(root.encryptedByteBudget, 1, SOURCE_BYTE_BUDGET);
   const encryptedBytes = integer(root.encryptedBytes, 0, encryptedByteBudget);
   const canonicalEnvelopeBytes = candidates.reduce(
@@ -682,7 +729,8 @@ function selectedCandidateResult(
     jobId: string;
     ownerId: string;
     selection: OrganizerRagSelection;
-  }>
+  }>,
+  parseRecord: ManagedKeyRecordParser
 ): OrganizerCandidatePage & Readonly<{ snapshot: PrivateRagGenerationSnapshot }> {
   const root = exact(value, [
     "candidates",
@@ -701,10 +749,14 @@ function selectedCandidateResult(
     String(integer(root.revisionToken, 0)) !== snapshot.revisionToken
   )
     reject();
-  const candidates = candidateEntries(root.candidates, {
-    limit: input.selection.candidates.length,
-    ownerId: input.ownerId
-  });
+  const candidates = candidateEntries(
+    root.candidates,
+    {
+      limit: input.selection.candidates.length,
+      ownerId: input.ownerId
+    },
+    parseRecord
+  );
   const encryptedByteBudget = integer(root.encryptedByteBudget, 1, SOURCE_BYTE_BUDGET);
   const encryptedBytes = integer(root.encryptedBytes, 0, encryptedByteBudget);
   const canonicalEnvelopeBytes = candidates.reduce(
@@ -788,7 +840,8 @@ function ragPageResult(
     limit: number;
     maxBytes: number;
     ownerId: string;
-  }>
+  }>,
+  parseRecord: ManagedKeyRecordParser
 ): PrivateRagPageReadResult<OrganizerRagRecord> {
   const wrapper = exact(value, ["jobId", "result"]);
   if (wrapper.jobId !== input.jobId) reject();
@@ -866,11 +919,11 @@ function ragPageResult(
     return Object.freeze({ status: "no_active_generation" as const });
   }
   const snapshot = ragSnapshot(root.generation, coverageRow);
-  const keyById = new Map<string, ReturnType<typeof parseManagedKeyRecord>>();
+  const keyById = new Map<string, ManagedKeyRecord>();
   for (const unknownKey of root.keys) {
     let key;
     try {
-      key = parseManagedKeyRecord(unknownKey);
+      key = parseRecord(unknownKey);
     } catch {
       return reject();
     }
@@ -920,6 +973,7 @@ function ragPageResult(
         recordVersion: indexedRevision,
         resourceId: indexId
       },
+      parseRecord,
       {
         kind: "note_rag_index",
         ownerId: input.ownerId,
@@ -995,7 +1049,8 @@ function preparation(
     noteId: string;
     expectedRevision: number | null;
     ownerId: string;
-  }>
+  }>,
+  parseRecord: ManagedKeyRecordParser
 ): OrganizerPreparation {
   const row = exact(value, [
     "expectedRevision",
@@ -1058,8 +1113,8 @@ function preparation(
   let contentMac;
   let objectWrap;
   try {
-    contentMac = parseManagedKeyRecord(keys.contentMac);
-    objectWrap = parseManagedKeyRecord(keys.objectWrap);
+    contentMac = parseRecord(keys.contentMac);
+    objectWrap = parseRecord(keys.objectWrap);
   } catch {
     return reject();
   }
@@ -1204,7 +1259,8 @@ function appendPreparationResult(
     jobId: string;
     noteId: `note_${string}`;
     ownerId: string;
-  }>
+  }>,
+  parseRecord: ManagedKeyRecordParser
 ): OrganizerAppendPreparationResult {
   const root = record(value);
   if (root.outcome === "replan") {
@@ -1256,13 +1312,17 @@ function appendPreparationResult(
   const noteId =
     mode === "create" ? `note_${expected.jobId.slice("job_".length)}` : expected.noteId;
   const expectedRevision = mode === "create" ? null : expected.expectedRevision;
-  const parsed = preparation(row.preparation, {
-    expectedRevision,
-    jobId: expected.jobId,
-    mode,
-    noteId,
-    ownerId: expected.ownerId
-  });
+  const parsed = preparation(
+    row.preparation,
+    {
+      expectedRevision,
+      jobId: expected.jobId,
+      mode,
+      noteId,
+      ownerId: expected.ownerId
+    },
+    parseRecord
+  );
   return row.outcome === "review"
     ? Object.freeze({
         conflictReason: row.conflictReason as "candidate_eligibility" | "revision",
@@ -1272,11 +1332,30 @@ function appendPreparationResult(
     : Object.freeze({ outcome: "prepared" as const, preparation: parsed });
 }
 
+/** Content-free failure identity (driver error code or error class) carried as the cause for logs. */
+function failureIdentity(code: unknown, error: unknown): Error {
+  const identity =
+    typeof code === "string" && /^[A-Za-z0-9_]{1,40}$/u.test(code)
+      ? code
+      : error instanceof Error
+        ? error.name
+        : "unknown";
+  const cause = new Error("database failure");
+  cause.name = identity;
+  return cause;
+}
+
+function unavailableBecause(code: unknown, error: unknown): OrganizerUnavailableError {
+  const unavailable = new OrganizerUnavailableError();
+  unavailable.cause = failureIdentity(code, error);
+  return unavailable;
+}
+
 function normalizeDatabaseFailure(error: unknown): never {
   if (error instanceof OrganizerDatabaseContractError || error instanceof OrganizerUnavailableError)
     throw error;
   if (error instanceof DOMException && error.name === "AbortError")
-    throw new OrganizerUnavailableError();
+    throw unavailableBecause("AbortError", error);
   const code =
     typeof error === "object" && error !== null && "code" in error
       ? (error as Readonly<{ code?: unknown }>).code
@@ -1299,10 +1378,10 @@ function normalizeDatabaseFailure(error: unknown): never {
       code === "57014" ||
       /^57P0[123]$/u.test(code))
   )
-    throw new OrganizerUnavailableError();
+    throw unavailableBecause(code, error);
   if (code === "22023" || code === "42501" || code === "P0001")
     throw new OrganizerDatabaseContractError("contract_violation");
-  throw new OrganizerUnavailableError();
+  throw unavailableBecause(code, error);
 }
 
 async function execute(
@@ -1326,7 +1405,8 @@ async function execute(
 }
 
 export function createOrganizerRepository(
-  executor: OrganizerDatabaseExecutor
+  executor: OrganizerDatabaseExecutor,
+  parseRecord: ManagedKeyRecordParser = parseManagedKeyRecordV1
 ): OrganizerRepository {
   const jobs = new Map<
     string,
@@ -1377,7 +1457,8 @@ export function createOrganizerRepository(
           [input.workerId, input.limit, input.leaseSeconds],
           input.signal
         ),
-        input.limit
+        input.limit,
+        parseRecord
       );
       for (const job of claimedJobs) {
         candidatePages.delete(job.jobId);
@@ -1424,7 +1505,8 @@ export function createOrganizerRepository(
           input.signal
         ),
         input,
-        context.ownerId
+        context.ownerId,
+        parseRecord
       );
       jobs.set(input.jobId, Object.freeze({ controls: page.controls, ownerId: context.ownerId }));
       candidatePages.set(input.jobId, page.candidates);
@@ -1449,7 +1531,8 @@ export function createOrganizerRepository(
           limit: input.limit,
           maxBytes: input.maxBytes,
           ownerId: context.ownerId
-        }
+        },
+        parseRecord
       );
     },
     async selectCandidates(input) {
@@ -1519,7 +1602,8 @@ export function createOrganizerRepository(
           ],
           input.signal
         ),
-        { jobId: input.jobId, ownerId: context.ownerId, selection: normalizedSelection }
+        { jobId: input.jobId, ownerId: context.ownerId, selection: normalizedSelection },
+        parseRecord
       );
       jobs.set(input.jobId, Object.freeze({ controls: page.controls, ownerId: context.ownerId }));
       candidatePages.set(input.jobId, page.candidates);
@@ -1541,7 +1625,8 @@ export function createOrganizerRepository(
           mode: "create",
           noteId: input.stableNoteId,
           ownerId: context.ownerId
-        }
+        },
+        parseRecord
       );
     },
     async prepareAppend(input) {
@@ -1565,7 +1650,8 @@ export function createOrganizerRepository(
           jobId: input.jobId,
           noteId: input.noteId,
           ownerId: context.ownerId
-        }
+        },
+        parseRecord
       );
     },
     async commit(input) {

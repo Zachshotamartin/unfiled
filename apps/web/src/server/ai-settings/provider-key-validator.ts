@@ -1,34 +1,60 @@
-import { ApiErrorCode } from "@unfiled/contracts";
+import {
+  ApiErrorCode,
+  PublicByokProviderSchema,
+  type PublicByokProvider
+} from "@unfiled/contracts";
 
 import { HttpError } from "@/server/api/errors";
 
-const OPENAI_VALIDATION_MODEL = "gpt-5.4-mini-2026-03-17";
-const OPENAI_VALIDATION_URL = `https://api.openai.com/v1/models/${encodeURIComponent(
-  OPENAI_VALIDATION_MODEL
-)}`;
-const TEST_VALIDATION_URL_VARIABLE = "UNFILED_TEST_OPENAI_VALIDATION_URL";
+/** The Automatic/Balanced OpenAI model from organization-model-registry-v2. */
+export const OPENAI_KEY_VALIDATION_MODEL = "gpt-5.6-terra" as const;
+/** One body-free model lookup proves an OpenAI key without spending tokens. */
+export const OPENAI_KEY_VALIDATION_URL =
+  `https://api.openai.com/v1/models/${encodeURIComponent(OPENAI_KEY_VALIDATION_MODEL)}` as const;
+/** One bounded model listing proves an Anthropic key without spending tokens. */
+export const ANTHROPIC_KEY_VALIDATION_URL = "https://api.anthropic.com/v1/models?limit=1" as const;
+export const ANTHROPIC_API_VERSION = "2023-06-01" as const;
 const TEST_VALIDATION_OPT_IN_VARIABLE = "UNFILED_ALLOW_TEST_PROVIDER_VALIDATION_OVERRIDE";
 
+const providerConfiguration = Object.freeze({
+  openai: Object.freeze({
+    environmentVariable: "UNFILED_TEST_OPENAI_VALIDATION_URL",
+    productionUrl: OPENAI_KEY_VALIDATION_URL
+  }),
+  anthropic: Object.freeze({
+    environmentVariable: "UNFILED_TEST_ANTHROPIC_VALIDATION_URL",
+    productionUrl: ANTHROPIC_KEY_VALIDATION_URL
+  })
+});
+
 export interface ProviderKeyValidator {
-  validate(provider: string, apiKey: string, signal: AbortSignal): Promise<void>;
+  validate(provider: PublicByokProvider, apiKey: string, signal: AbortSignal): Promise<void>;
 }
 
-export type OpenAiProviderKeyValidatorOptions = Readonly<{
+export type ProviderKeyValidatorOptions = Readonly<{
   environment?: Readonly<Record<string, string | undefined>>;
   fetch?: typeof fetch;
 }>;
 
-function unavailable(): HttpError {
+function providerLabel(provider: PublicByokProvider): string {
+  return provider === "openai" ? "OpenAI" : "Anthropic";
+}
+
+function unavailable(provider: PublicByokProvider): HttpError {
   return new HttpError(
     503,
     ApiErrorCode.PROVIDER_UNAVAILABLE,
-    "OpenAI could not validate that key right now. Try again."
+    `${providerLabel(provider)} could not validate that key right now. Try again.`
   );
 }
 
-function validationUrl(environment: Readonly<Record<string, string | undefined>>): string {
-  const override = environment[TEST_VALIDATION_URL_VARIABLE];
-  if (override === undefined) return OPENAI_VALIDATION_URL;
+function validationUrl(
+  provider: PublicByokProvider,
+  environment: Readonly<Record<string, string | undefined>>
+): string {
+  const configuration = providerConfiguration[provider];
+  const override = environment[configuration.environmentVariable];
+  if (override === undefined) return configuration.productionUrl;
 
   const hasVercelMarker = Object.entries(environment).some(
     ([name, value]) => value !== undefined && (name === "VERCEL" || name.startsWith("VERCEL_"))
@@ -39,14 +65,16 @@ function validationUrl(environment: Readonly<Record<string, string | undefined>>
     environment[TEST_VALIDATION_OPT_IN_VARIABLE] !== "1" ||
     hasVercelMarker
   ) {
-    throw unavailable();
+    throw unavailable(provider);
   }
 
   let parsed: URL;
+  let expected: URL;
   try {
     parsed = new URL(override);
+    expected = new URL(configuration.productionUrl);
   } catch {
-    throw unavailable();
+    throw unavailable(provider);
   }
   if (
     parsed.protocol !== "http:" ||
@@ -54,23 +82,42 @@ function validationUrl(environment: Readonly<Record<string, string | undefined>>
     parsed.port === "" ||
     parsed.username !== "" ||
     parsed.password !== "" ||
-    parsed.search !== "" ||
     parsed.hash !== "" ||
-    parsed.pathname !== `/v1/models/${encodeURIComponent(OPENAI_VALIDATION_MODEL)}`
+    parsed.pathname !== expected.pathname ||
+    parsed.search !== expected.search
   ) {
-    throw unavailable();
+    throw unavailable(provider);
   }
   return parsed.href;
 }
 
-export function createOpenAiProviderKeyValidator(
-  options: OpenAiProviderKeyValidatorOptions = {}
+function validationHeaders(provider: PublicByokProvider, apiKey: string): HeadersInit {
+  const shared = {
+    accept: "application/json",
+    "cache-control": "no-store",
+    pragma: "no-cache"
+  };
+  return provider === "openai"
+    ? { ...shared, authorization: `Bearer ${apiKey}` }
+    : {
+        ...shared,
+        "anthropic-version": ANTHROPIC_API_VERSION,
+        "x-api-key": apiKey
+      };
+}
+
+export function createProviderKeyValidator(
+  options: ProviderKeyValidatorOptions = {}
 ): ProviderKeyValidator {
   const request = options.fetch ?? globalThis.fetch;
   const environment = options.environment ?? process.env;
   return Object.freeze({
-    async validate(provider: string, apiKey: string, signal: AbortSignal): Promise<void> {
-      if (provider !== "openai") {
+    async validate(
+      provider: PublicByokProvider,
+      apiKey: string,
+      signal: AbortSignal
+    ): Promise<void> {
+      if (!PublicByokProviderSchema.safeParse(provider).success) {
         throw new HttpError(
           400,
           ApiErrorCode.VALIDATION_FAILED,
@@ -79,22 +126,17 @@ export function createOpenAiProviderKeyValidator(
       }
       let response: Response;
       try {
-        response = await request(validationUrl(environment), {
+        response = await request(validationUrl(provider, environment), {
           cache: "no-store",
           credentials: "omit",
-          headers: {
-            accept: "application/json",
-            authorization: `Bearer ${apiKey}`,
-            "cache-control": "no-store",
-            pragma: "no-cache"
-          },
+          headers: validationHeaders(provider, apiKey),
           method: "GET",
           redirect: "error",
           referrerPolicy: "no-referrer",
           signal
         });
       } catch {
-        throw unavailable();
+        throw unavailable(provider);
       }
       try {
         if (response.status === 200) return;
@@ -102,17 +144,17 @@ export function createOpenAiProviderKeyValidator(
           throw new HttpError(
             400,
             ApiErrorCode.PROVIDER_KEY_INVALID,
-            "OpenAI did not accept that key. Check it and try again."
+            `${providerLabel(provider)} did not accept that key. Check it and try again.`
           );
         }
         if (response.status === 429) {
           throw new HttpError(
             429,
             ApiErrorCode.RATE_LIMITED,
-            "OpenAI is temporarily rate limiting key validation. Try again."
+            `${providerLabel(provider)} is temporarily rate limiting key validation. Try again.`
           );
         }
-        throw unavailable();
+        throw unavailable(provider);
       } finally {
         try {
           await response.body?.cancel();
@@ -122,4 +164,11 @@ export function createOpenAiProviderKeyValidator(
       }
     }
   });
+}
+
+/** Backward-compatible constructor for callers that validate only OpenAI keys. */
+export function createOpenAiProviderKeyValidator(
+  options: ProviderKeyValidatorOptions = {}
+): ProviderKeyValidator {
+  return createProviderKeyValidator(options);
 }

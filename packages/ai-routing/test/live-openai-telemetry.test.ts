@@ -8,7 +8,7 @@ import {
   summarizeOpenAIEvaluationTelemetry
 } from "../src/index.js";
 
-const MODEL = "gpt-5.4-mini-2026-03-17";
+const MODEL = "gpt-5.6-terra";
 
 function requestBody(): string {
   return JSON.stringify({
@@ -88,7 +88,7 @@ describe("live OpenAI evaluation telemetry", () => {
     const attempt = attempts[0];
     if (attempt === undefined) throw new Error("Missing telemetry attempt");
     expect(attempt).toMatchObject({
-      estimatedCostUsd: 0.001065,
+      estimatedCostUsd: 0.0032,
       httpStatus: 200,
       latencyMs: 12,
       pricingModelMatched: true,

@@ -296,7 +296,7 @@ describe("Milestone E/F API client", () => {
       content: "A useful expansion",
       state: "accepted",
       stateRevision: 2,
-      modelId: "gpt-5.4-mini-2026-03-17",
+      modelId: "gpt-5.6-terra",
       promptVersion: "organizer-v1",
       createdAt: NOW,
       resolvedAt: NOW
@@ -651,6 +651,7 @@ describe("Milestone E/F API client", () => {
       organizationMode: "balanced",
       providerMode: "byok",
       byokProvider: "openai",
+      modelSelection: "auto",
       byokFallbackToApp: false,
       routingEffort: "standard",
       expansionStyle: "brief",
@@ -693,7 +694,7 @@ describe("Milestone E/F API client", () => {
       idempotencyKey: "settings-update-01",
       routingEffort: "thorough"
     });
-    await client.getProviderKeyMetadata();
+    await client.getProviderKeyMetadata("openai");
     await expect(
       client.putProviderKey({
         idempotencyKey: "provider-put-01",
@@ -711,7 +712,7 @@ describe("Milestone E/F API client", () => {
     expect(fetcher.mock.calls.map(([url, init]) => [requestUrl(url), init?.method])).toEqual([
       ["https://example.test/api/v1/me/settings", "GET"],
       ["https://example.test/api/v1/me/settings", "PATCH"],
-      ["https://example.test/api/v1/me/provider-key", "GET"],
+      ["https://example.test/api/v1/me/provider-key?provider=openai", "GET"],
       ["https://example.test/api/v1/me/provider-key", "PUT"],
       ["https://example.test/api/v1/me/provider-key", "DELETE"]
     ]);
@@ -761,7 +762,7 @@ describe("Milestone E/F API client", () => {
       client.putProviderKey({
         idempotencyKey: "provider-hidden-01",
         // @ts-expect-error The runtime boundary must reject unsupported callers too.
-        provider: "anthropic",
+        provider: "unsupported",
         expectedCredentialRevision: null,
         apiKey: "sk-ant-example-not-a-real-key-1234"
       })
@@ -842,7 +843,7 @@ describe("Milestone E/F API client", () => {
     const client = makeClient(fetcher);
 
     expect(() => client.listGeneratedBlocks("note_bad")).toThrow();
-    await expect(client.getProviderKeyMetadata()).rejects.toThrow();
+    await expect(client.getProviderKeyMetadata("openai")).rejects.toThrow();
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
@@ -854,7 +855,7 @@ describe("Milestone E/F API client", () => {
         })
       )
     );
-    await expect(missingPrivateHeaders.getProviderKeyMetadata()).rejects.toBeInstanceOf(
+    await expect(missingPrivateHeaders.getProviderKeyMetadata("anthropic")).rejects.toBeInstanceOf(
       ApiClientMalformedResponseError
     );
 
@@ -872,7 +873,7 @@ describe("Milestone E/F API client", () => {
         )
       )
     );
-    await expect(oversized.getProviderKeyMetadata()).rejects.toBeInstanceOf(
+    await expect(oversized.getProviderKeyMetadata("openai")).rejects.toBeInstanceOf(
       ApiClientMalformedResponseError
     );
     expect(cancellation).toHaveBeenCalledOnce();

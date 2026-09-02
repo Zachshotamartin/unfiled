@@ -1,15 +1,29 @@
 import {
   assertAiAssistedKmsReadiness,
   createAwsKmsEnvelopeCustodian,
+  createVercelSensitiveEnvironmentEnvelopeCustodian,
+  createVercelSensitiveEnvironmentKmsTransport,
   createVercelOidcKmsTransport,
   type AwsKmsTransport,
+  type CreateIntermediateKeyRequest,
   type DecryptDataKeyResponse,
   type GenerateDataKeyResponse,
   type IntermediateKeyCustodian,
+  type ManagedKeyRecord,
+  type ManagedKeyRecordParser,
+  type ManagedKeyRecordV1,
+  type ManagedKeyRecordV2,
+  parseManagedKeyRecordV1,
+  parseManagedKeyRecordV2,
   type ReEncryptDataKeyResponse
 } from "@unfiled/key-management";
 
-import type { AwsOrganizerKeyBoundary, OrganizerConfig, OrganizerRuntime } from "./config.js";
+import type {
+  AwsOrganizerKeyBoundary,
+  OrganizerConfig,
+  OrganizerRuntime,
+  VercelSensitiveEnvironmentOrganizerKeyBoundary
+} from "./config.js";
 import { OrganizerUnavailableError } from "./errors.js";
 import {
   isVerifiedOrganizerInvocation,
@@ -21,11 +35,15 @@ const JWT_PATTERN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u;
 declare const organizerAuthorityBrand: unique symbol;
 export type OrganizerKeyAuthority = Readonly<{ [organizerAuthorityBrand]: true }>;
 type AuthorityMetadata = Readonly<{
-  custodian?: IntermediateKeyCustodian;
-  custody: "aws-kms" | "local-synthetic";
+  custodian?: OrganizerIntermediateKeyCustodian;
+  custody: "aws-kms" | "local-synthetic" | "vercel-sensitive-env-v1";
+  parseRecord?: OrganizerManagedKeyRecordParser;
   requestId: string;
   runtime: OrganizerRuntime;
 }>;
+export type OrganizerManagedKeyRecord = ManagedKeyRecordV1 | ManagedKeyRecordV2;
+export type OrganizerManagedKeyRecordParser = ManagedKeyRecordParser<OrganizerManagedKeyRecord>;
+export type OrganizerIntermediateKeyCustodian = IntermediateKeyCustodian<OrganizerManagedKeyRecord>;
 const authorities = new WeakMap<object, AuthorityMetadata>();
 type OrganizerKmsResponse =
   DecryptDataKeyResponse | GenerateDataKeyResponse | ReEncryptDataKeyResponse;
@@ -170,11 +188,30 @@ export function isOrganizerKeyAuthority(
 
 export function custodianForOrganizerAuthority(
   authority: OrganizerKeyAuthority
-): IntermediateKeyCustodian {
+): OrganizerIntermediateKeyCustodian {
   const metadata = authorities.get(authority);
-  if (metadata?.custody !== "aws-kms" || metadata.custodian === undefined)
+  if (
+    (metadata?.custody !== "aws-kms" && metadata?.custody !== "vercel-sensitive-env-v1") ||
+    metadata.custodian === undefined
+  )
     throw new OrganizerUnavailableError();
   return metadata.custodian;
+}
+
+export function managedKeyRecordParserForOrganizerAuthority(
+  authority: OrganizerKeyAuthority
+): OrganizerManagedKeyRecordParser {
+  const parser = authorities.get(authority)?.parseRecord;
+  if (parser === undefined) throw new OrganizerUnavailableError();
+  return parser;
+}
+
+export function managedKeyRecordParserForOrganizerBoundary(
+  boundary: OrganizerConfig["keyBoundary"]
+): OrganizerManagedKeyRecordParser {
+  return boundary.kind === "vercel-sensitive-env-v1"
+    ? parseManagedKeyRecordV2
+    : parseManagedKeyRecordV1;
 }
 
 export function oidcTokenFromRequest(
@@ -215,7 +252,9 @@ async function openAwsSession(
 ): Promise<
   Readonly<{
     close(): void;
-    custodian: IntermediateKeyCustodian;
+    custodian: OrganizerIntermediateKeyCustodian;
+    custody: "aws-kms" | "vercel-sensitive-env-v1";
+    parseRecord: OrganizerManagedKeyRecordParser;
   }>
 > {
   let transport: Awaited<ReturnType<typeof createVercelOidcKmsTransport>> | undefined;
@@ -234,7 +273,125 @@ async function openAwsSession(
       transport,
       workload: "organization_worker"
     });
-    return Object.freeze({ close: () => transport?.destroy(), custodian });
+    return Object.freeze({
+      close: () => transport?.destroy(),
+      custodian: widenCustodian(custodian),
+      custody: "aws-kms" as const,
+      parseRecord: parseManagedKeyRecordV1
+    });
+  } catch {
+    transport?.destroy();
+    throw new OrganizerUnavailableError();
+  }
+}
+
+function widenCustodian<Record extends ManagedKeyRecord>(
+  custodian: IntermediateKeyCustodian<Record>
+): OrganizerIntermediateKeyCustodian {
+  return Object.freeze({
+    withGeneratedIntermediateKey(request, use, options) {
+      return custodian.withGeneratedIntermediateKey(
+        request,
+        (bytes, record) => use(bytes, record),
+        options
+      );
+    },
+    withUnwrappedIntermediateKey(record, use, options) {
+      return custodian.withUnwrappedIntermediateKey(
+        record,
+        (bytes, parsed) => use(bytes, parsed),
+        options
+      );
+    }
+  });
+}
+
+async function assertSensitiveRootReady(
+  custodian: IntermediateKeyCustodian<ManagedKeyRecordV2>,
+  request: CreateIntermediateKeyRequest,
+  signal: AbortSignal
+): Promise<void> {
+  await custodian.withGeneratedIntermediateKey(
+    request,
+    (generated, record) =>
+      // The custodian only opens active or retired records, so the throwaway
+      // readiness record is activated in memory; it is never persisted.
+      custodian.withUnwrappedIntermediateKey(
+        { ...record, activatedAt: record.createdAt, status: "active" },
+        (unwrapped) => {
+          if (
+            generated.byteLength !== unwrapped.byteLength ||
+            generated.some((byte, index) => byte !== unwrapped[index])
+          ) {
+            throw new OrganizerUnavailableError();
+          }
+          return Promise.resolve();
+        },
+        { signal }
+      ),
+    { signal }
+  );
+}
+
+async function openSensitiveSession(
+  boundary: VercelSensitiveEnvironmentOrganizerKeyBoundary,
+  signal: AbortSignal
+): Promise<
+  Readonly<{
+    close(): void;
+    custodian: OrganizerIntermediateKeyCustodian;
+    custody: "vercel-sensitive-env-v1";
+    parseRecord: OrganizerManagedKeyRecordParser;
+  }>
+> {
+  let transport: AwsKmsTransport | undefined;
+  try {
+    transport = await createVercelSensitiveEnvironmentKmsTransport({
+      expectedRootKeyIds: [
+        boundary.aiObjectWrapRootKeyId,
+        boundary.aiContentMacRootKeyId,
+        ...boundary.retiredRoots.ai_assisted.object_wrap,
+        ...boundary.retiredRoots.ai_assisted.content_mac
+      ]
+    });
+    if (signal.aborted) throw new OrganizerUnavailableError();
+    transport = createAbortBoundOrganizerKmsTransport(transport, signal);
+    const activeRoots = {
+      ai_assisted: {
+        content_mac: boundary.aiContentMacRootKeyId,
+        object_wrap: boundary.aiObjectWrapRootKeyId
+      }
+    } as const;
+    const custodian = createVercelSensitiveEnvironmentEnvelopeCustodian({
+      activeRoots,
+      deploymentEnvironment: boundary.deploymentEnvironment,
+      retiredRoots: boundary.retiredRoots,
+      transport,
+      workload: "organization_worker"
+    });
+    const base = {
+      createdAt: "2026-01-01T00:00:00.000Z",
+      keyClass: "ai_assisted" as const,
+      keyVersion: 1,
+      ownerId: "00000000-0000-4000-8000-000000000001",
+      predecessorKeyId: null
+    };
+    await assertSensitiveRootReady(
+      custodian,
+      { ...base, keyId: "readiness.ai.object-wrap.v2", purpose: "object_wrap" },
+      signal
+    );
+    await assertSensitiveRootReady(
+      custodian,
+      { ...base, keyId: "readiness.ai.content-mac.v2", purpose: "content_mac" },
+      signal
+    );
+    return Object.freeze({
+      close: () => transport?.destroy(),
+      custodian: widenCustodian(custodian),
+      custody: "vercel-sensitive-env-v1" as const,
+      parseRecord: parseManagedKeyRecordV2
+    });
   } catch {
     transport?.destroy();
     throw new OrganizerUnavailableError();
@@ -243,9 +400,9 @@ async function openAwsSession(
 
 function revocableCustodian(
   authority: OrganizerKeyAuthority,
-  underlying: IntermediateKeyCustodian,
+  underlying: OrganizerIntermediateKeyCustodian,
   requestSignal: AbortSignal
-): Readonly<{ custodian: IntermediateKeyCustodian; revoke(): void }> {
+): Readonly<{ custodian: OrganizerIntermediateKeyCustodian; revoke(): void }> {
   let open = true;
   const revoked = new AbortController();
   const signal = AbortSignal.any([requestSignal, revoked.signal]);
@@ -253,7 +410,7 @@ function revocableCustodian(
     if (!open || requestSignal.aborted || authorities.get(authority)?.custodian !== facade)
       throw new OrganizerUnavailableError();
   };
-  const facade: IntermediateKeyCustodian = Object.freeze({
+  const facade: OrganizerIntermediateKeyCustodian = Object.freeze({
     async withGeneratedIntermediateKey(request, use) {
       assertOpen();
       return underlying.withGeneratedIntermediateKey(
@@ -299,7 +456,7 @@ export function createOrganizerKeyManagementAdapter(): OrganizerKeyManagementAda
       )
         throw new OrganizerUnavailableError();
       if (boundary.kind === "local-synthetic") {
-        if (proof.runtime === "production" || proof.oidcToken !== undefined)
+        if (proof.runtime !== "local" || proof.oidcToken !== undefined)
           throw new OrganizerUnavailableError();
         const authority = issue({
           custody: "local-synthetic",
@@ -312,18 +469,34 @@ export function createOrganizerKeyManagementAdapter(): OrganizerKeyManagementAda
           authorities.delete(authority);
         }
       }
-      if (proof.runtime !== "production" || proof.oidcToken === undefined)
-        throw new OrganizerUnavailableError();
-      const session = await openAwsSession(boundary, signal);
+      if (proof.runtime === "local") throw new OrganizerUnavailableError();
+      const session =
+        boundary.kind === "aws-oidc"
+          ? await (async () => {
+              const boundaryEnvironment =
+                /^owner:[^:]+:project:[^:]+:environment:(preview|production)$/u.exec(
+                  boundary.expectedOidcSubject
+                )?.[1];
+              if (proof.oidcToken === undefined || boundaryEnvironment !== proof.runtime)
+                throw new OrganizerUnavailableError();
+              return openAwsSession(boundary, signal);
+            })()
+          : await (async () => {
+              if (proof.oidcToken !== undefined || boundary.deploymentEnvironment !== proof.runtime)
+                throw new OrganizerUnavailableError();
+              return openSensitiveSession(boundary, signal);
+            })();
       const authority = issue({
-        custody: "aws-kms",
+        custody: session.custody,
+        parseRecord: session.parseRecord,
         requestId: proof.requestId,
         runtime: proof.runtime
       });
       const lease = revocableCustodian(authority, session.custodian, signal);
       authorities.set(authority, {
-        custody: "aws-kms",
+        custody: session.custody,
         custodian: lease.custodian,
+        parseRecord: session.parseRecord,
         requestId: proof.requestId,
         runtime: proof.runtime
       });

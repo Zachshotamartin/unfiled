@@ -26,7 +26,7 @@ function success() {
 
 describe("encrypted index worker caller", () => {
   it("forwards only the content-free command and short-lived trusted-source token", async () => {
-    const request = vi.fn().mockResolvedValue(json(success()));
+    const request = vi.fn().mockImplementation(() => Promise.resolve(json(success())));
     const getOidcToken = vi.fn().mockResolvedValue(TOKEN);
     const client = createIndexWorkerClient({
       fetchImplementation: request,
@@ -43,14 +43,14 @@ describe("encrypted index worker caller", () => {
       body: '{"trigger":"schedule"}',
       headers: {
         "content-type": "application/json",
-        "x-vercel-trusted-oidc-idp-token": TOKEN
+        "x-unfiled-trusted-oidc-idp-token": TOKEN
       },
       method: "POST",
       redirect: "error"
     });
     expect(Object.keys(init.headers as Record<string, string>).sort()).toEqual([
       "content-type",
-      "x-vercel-trusted-oidc-idp-token"
+      "x-unfiled-trusted-oidc-idp-token"
     ]);
     expect(typeof init.body).toBe("string");
     expect(init.body as string).not.toContain("owner");
@@ -71,11 +71,12 @@ describe("encrypted index worker caller", () => {
     }
   });
 
-  it("requires the exact egress origin in a Vercel production runtime", async () => {
-    const request = vi.fn().mockResolvedValue(json(success()));
+  it("requires the exact egress origin in a matching managed-cloud runtime", async () => {
+    const request = vi.fn().mockImplementation(() => Promise.resolve(json(success())));
     const client = createEnvironmentIndexWorkerClient(
       {
         UNFILED_INDEX_WORKER_ORIGIN: ORIGIN,
+        UNFILED_WORKER_ENV: "production",
         VERCEL: "1",
         VERCEL_ENV: "production",
         VERCEL_PROJECT_ID: "prj_web12345"
@@ -83,23 +84,37 @@ describe("encrypted index worker caller", () => {
       { fetchImplementation: request, getOidcToken: () => Promise.resolve(TOKEN) }
     );
     await expect(client.drain("recovery")).resolves.toEqual(success());
+    const previewClient = createEnvironmentIndexWorkerClient(
+      {
+        UNFILED_INDEX_WORKER_ORIGIN: ORIGIN,
+        UNFILED_WORKER_ENV: "preview",
+        VERCEL: "1",
+        VERCEL_ENV: "preview",
+        VERCEL_PROJECT_ID: "prj_web12345"
+      },
+      { fetchImplementation: request, getOidcToken: () => Promise.resolve(TOKEN) }
+    );
+    await expect(previewClient.drain("recovery")).resolves.toEqual(success());
 
     for (const environment of [
       {},
       {
         UNFILED_INDEX_WORKER_ORIGIN: ORIGIN,
+        UNFILED_WORKER_ENV: "production",
         VERCEL: "0",
         VERCEL_ENV: "production",
         VERCEL_PROJECT_ID: "prj_web12345"
       },
       {
         UNFILED_INDEX_WORKER_ORIGIN: ORIGIN,
+        UNFILED_WORKER_ENV: "production",
         VERCEL: "1",
         VERCEL_ENV: "preview",
         VERCEL_PROJECT_ID: "prj_web12345"
       },
       {
         UNFILED_INDEX_WORKER_ORIGIN: ORIGIN,
+        UNFILED_WORKER_ENV: "production",
         VERCEL: "1",
         VERCEL_ENV: "production",
         VERCEL_PROJECT_ID: "invalid"
@@ -118,6 +133,7 @@ describe("encrypted index worker caller", () => {
         // exposes alias ownership only through its authenticated management plane,
         // so the reviewed exact origin is the runtime egress trust boundary.
         UNFILED_INDEX_WORKER_PROJECT_ID: "prj_unverifiedlegacyvalue",
+        UNFILED_WORKER_ENV: "production",
         VERCEL: "1",
         VERCEL_ENV: "production",
         VERCEL_PROJECT_ID: "prj_web12345"

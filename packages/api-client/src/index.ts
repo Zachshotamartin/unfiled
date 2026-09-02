@@ -4,15 +4,12 @@ import {
   AccountDeletionReceiptReplayRequestSchema,
   AccountDeletionTokenSchema,
   ApiErrorSchema,
-  AuthOtpAcceptedResponseSchema,
-  AuthOtpRequestSchema,
-  AuthOtpVerifyRequestSchema,
+  AuthPasswordSignInRequestSchema,
+  AuthPasswordSignUpRequestSchema,
   AuthRefreshRequestSchema,
   AuthSessionResponseSchema,
   AuthSessionSchema,
   AuthSignOutResponseSchema,
-  AuthVerifyRequestSchema,
-  AuthVerifyResponseSchema,
   CaptureCreateRequestSchema,
   CaptureCreateResponseSchema,
   CaptureDeleteRequestSchema,
@@ -77,6 +74,7 @@ import {
   SearchNotesResponseSchema,
   ProviderKeyDeleteRequestSchema,
   ProviderKeyDeleteResponseSchema,
+  PublicByokProviderSchema,
   ProviderKeyPutRequestSchema,
   ProviderKeyPutResponseSchema,
   ProviderKeyResponseSchema,
@@ -101,10 +99,9 @@ import {
   type ApiError,
   type AccountDeleteRequest,
   type AccountDeletionReceiptReplayRequest,
-  type AuthOtpRequest,
-  type AuthOtpVerifyRequest,
+  type AuthPasswordSignInRequest,
+  type AuthPasswordSignUpRequest,
   type AuthRefreshRequest,
-  type AuthVerifyRequest,
   type CaptureCreateRequest,
   type CaptureDeleteRequest,
   type CaptureListQuery,
@@ -132,6 +129,7 @@ import {
   type NoteSourcesQuery,
   type ProviderKeyDeleteRequest,
   type ProviderKeyPutRequest,
+  type PublicByokProvider,
   type ReviewItemListQuery,
   type ReviewResolveRequest,
   type RoutingRuleCreateRequest,
@@ -402,26 +400,21 @@ export function createApiClient(options: ApiClientOptions) {
   }
 
   return Object.freeze({
-    requestOtp(input: AuthOtpRequest) {
-      const body = AuthOtpRequestSchema.parse(input);
+    signUp(input: AuthPasswordSignUpRequest) {
+      const body = AuthPasswordSignUpRequestSchema.parse(input);
       return request(
-        "/auth/otp",
+        "/auth/sign-up",
         { authenticated: false, body, method: "POST" },
-        AuthOtpAcceptedResponseSchema
+        AuthSessionSchema
       );
     },
 
-    verifyOtp(input: AuthOtpVerifyRequest) {
-      const body = AuthOtpVerifyRequestSchema.parse(input);
-      return request("/auth/otp", { authenticated: false, body, method: "PUT" }, AuthSessionSchema);
-    },
-
-    verifyAuth(input: AuthVerifyRequest) {
-      const body = AuthVerifyRequestSchema.parse(input);
+    signIn(input: AuthPasswordSignInRequest) {
+      const body = AuthPasswordSignInRequestSchema.parse(input);
       return request(
-        "/auth/verify",
-        { authenticated: false, body, method: "PUT" },
-        AuthVerifyResponseSchema
+        "/auth/sign-in",
+        { authenticated: false, body, method: "POST" },
+        AuthSessionSchema
       );
     },
 
@@ -975,6 +968,7 @@ export function createApiClient(options: ApiClientOptions) {
         "organizationMode",
         "providerMode",
         "byokProvider",
+        "modelSelection",
         "byokFallbackToApp",
         "routingEffort",
         "expansionStyle",
@@ -988,9 +982,10 @@ export function createApiClient(options: ApiClientOptions) {
       return response;
     },
 
-    getProviderKeyMetadata() {
-      return request(
-        "/me/provider-key",
+    async getProviderKeyMetadata(provider: PublicByokProvider) {
+      const selectedProvider = PublicByokProviderSchema.parse(provider);
+      const response = await request(
+        `/me/provider-key?provider=${encodeURIComponent(selectedProvider)}`,
         {
           cache: "no-store",
           maximumResponseBytes: MAX_PROVIDER_KEY_RESPONSE_BYTES,
@@ -998,6 +993,10 @@ export function createApiClient(options: ApiClientOptions) {
         },
         ProviderKeyResponseSchema
       );
+      if (response.providerKey !== null && response.providerKey.provider !== selectedProvider) {
+        throw new ApiClientMalformedResponseError(200);
+      }
+      return response;
     },
 
     async putProviderKey(input: ProviderKeyPutRequest) {
@@ -1023,6 +1022,9 @@ export function createApiClient(options: ApiClientOptions) {
       if (response.providerKey.lastFour !== body.apiKey.slice(-4)) {
         throw new ApiClientMalformedResponseError(200);
       }
+      if (response.providerKey.provider !== body.provider) {
+        throw new ApiClientMalformedResponseError(200);
+      }
       return response;
     },
 
@@ -1041,6 +1043,9 @@ export function createApiClient(options: ApiClientOptions) {
         ProviderKeyDeleteResponseSchema
       );
       if (response.deletedCredentialRevision !== body.expectedCredentialRevision) {
+        throw new ApiClientMalformedResponseError(200);
+      }
+      if (response.provider !== body.provider) {
         throw new ApiClientMalformedResponseError(200);
       }
       return response;

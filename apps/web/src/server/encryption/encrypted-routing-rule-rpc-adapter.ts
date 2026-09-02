@@ -13,9 +13,9 @@ import type {
   ObjectWrapReservation
 } from "@unfiled/encrypted-aggregate";
 import {
-  parseManagedKeyRecord,
+  parseAnyManagedKeyRecord,
   type KeyClass,
-  type ManagedKeyRecordV1
+  type ManagedKeyRecord
 } from "@unfiled/key-management";
 
 import { canonicalUtcTimestampFromMicros } from "./canonical-rpc-timestamp";
@@ -55,7 +55,7 @@ export type RoutingRuleRequestMacKey = Readonly<{
 export type PreparedRoutingRuleObservationReservation = Readonly<{
   reservationId: string;
   operationCount: 1 | 2;
-  key: ManagedKeyRecordV1;
+  key: ManagedKeyRecord;
 }>;
 
 export type PreparedEncryptedRoutingRuleWrite = Readonly<{
@@ -332,9 +332,9 @@ function observationReservation(
   const reservationId = string(record.reservationId, 36, failure);
   const operationCount = integer(record.operationCount, 1, failure);
   const expectedOperationCount = expected.expectedRevision === 0 ? 2 : 1;
-  let key: ManagedKeyRecordV1;
+  let key: ManagedKeyRecord;
   try {
-    key = parseManagedKeyRecord(record.key);
+    key = parseAnyManagedKeyRecord(record.key);
   } catch {
     return failure();
   }

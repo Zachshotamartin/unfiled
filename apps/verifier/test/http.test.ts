@@ -22,6 +22,11 @@ const trustedSource: VercelTrustedSource = {
 const productionConfig: VerifierConfig = {
   maxRequestBytes: 1_024,
   port: 8_789,
+  releaseIdentity: {
+    commit: "c".repeat(40),
+    deployment: `sha256:${"d".repeat(64)}`,
+    environment: "production"
+  },
   requestTimeoutMs: 5_000,
   runtime: "production",
   verification: {
@@ -40,6 +45,7 @@ const productionConfig: VerifierConfig = {
       activeObjectWrapRootArn:
         "arn:aws:kms:us-west-2:123456789012:key/11111111-2222-4333-8444-555555555555",
       expectedOidcSubject: "owner:team-example:project:unfiled-verifier:environment:production",
+      kind: "aws-oidc",
       maxKeyRecords: 4,
       oidcAudience: "sts.amazonaws.com",
       region: "us-west-2",
@@ -105,7 +111,7 @@ function request(
   const headers = new Headers({
     "content-type": "application/json",
     "x-vercel-oidc-token": "workload.header.signature",
-    "x-vercel-trusted-oidc-idp-token": "source.header.signature",
+    "x-unfiled-trusted-oidc-idp-token": "source.header.signature",
     ...input.headers
   });
   const method = input.method ?? "POST";
@@ -184,13 +190,34 @@ describe("verifier HTTP service", () => {
     expect((await app(request({ method: "POST", path: "/health" }))).status).toBe(405);
   });
 
+  it("emits only the managed release consistency identity on success and error", async () => {
+    const app = createVerifierApp({ config: productionConfig });
+    for (const incoming of [request({ method: "GET", path: "/health" }), request({ path: "/x" })]) {
+      const response = await app(incoming);
+      expect(response.headers.get("x-unfiled-deployment")).toBe(
+        productionConfig.releaseIdentity?.deployment
+      );
+      expect(response.headers.get("x-unfiled-commit")).toBe(
+        productionConfig.releaseIdentity?.commit
+      );
+      expect(response.headers.get("x-unfiled-environment")).toBe("production");
+      expect(JSON.stringify([...response.headers])).not.toContain("dpl_");
+    }
+  });
+
   it("fails closed in local/preview without touching auth, KMS, or verifier", async () => {
     const authorize = vi.fn();
     const kms = vi.fn();
     const verify = vi.fn();
+    const productionReleaseIdentity = productionConfig.releaseIdentity;
+    if (productionReleaseIdentity === null) throw new Error("expected managed release identity");
     const app = createVerifierApp({
       config: {
         ...productionConfig,
+        releaseIdentity: {
+          ...productionReleaseIdentity,
+          environment: "preview"
+        },
         runtime: "preview",
         verification: { kind: "disabled" }
       },
@@ -211,7 +238,7 @@ describe("verifier HTTP service", () => {
     ["cookie", request({ headers: { cookie: "session=secret" } }), 401],
     ["authorization", request({ headers: { authorization: "Bearer fallback" } }), 401],
     ["bypass", request({ headers: { "x-vercel-protection-bypass": "fallback" } }), 401],
-    ["missing source", request({ headers: { "x-vercel-trusted-oidc-idp-token": "wrong" } }), 401],
+    ["missing source", request({ headers: { "x-unfiled-trusted-oidc-idp-token": "wrong" } }), 401],
     ["missing workload", request({ headers: { "x-vercel-oidc-token": "wrong" } }), 503],
     ["unknown route", request({ path: "/notes" }), 404]
   ])("rejects %s", async (_label, incoming, expectedStatus) => {

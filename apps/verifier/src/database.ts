@@ -1,8 +1,9 @@
 import type { ContentEnvelopeV1 } from "@unfiled/content-crypto";
 import {
   assertCanonicalEncryptedKeyMaterial,
-  parseManagedKeyRecord,
-  type ManagedKeyRecordV1
+  parseManagedKeyRecordV1,
+  type ManagedKeyRecord,
+  type ManagedKeyRecordParser
 } from "@unfiled/key-management";
 
 import { GenerationVerificationError } from "./errors.js";
@@ -75,7 +76,7 @@ export type BuildingIndexItem = Readonly<{
   encryptedByteLength: number;
   indexId: string;
   indexedRevision: number;
-  keyRecord: ManagedKeyRecordV1;
+  keyRecord: ManagedKeyRecord;
   noteId: string;
 }>;
 
@@ -332,46 +333,27 @@ function contentEnvelope(
   return parsed;
 }
 
-function normalizeManagedKey(value: unknown): ManagedKeyRecordV1 {
-  const row = exactRecord(value, [
-    "schemaVersion",
-    "ownerId",
-    "keyClass",
-    "purpose",
-    "keyId",
-    "keyVersion",
-    "status",
-    "encryptedKeyMaterial",
-    "rootKeyArn",
-    "createdAt",
-    "activatedAt",
-    "retiredAt",
-    "revokedAt",
-    "wrapOperations",
-    "wrapOperationLimit",
-    "rotation"
-  ]);
-  const rotation = exactRecord(row.rotation, [
-    "predecessorKeyId",
-    "previousRootKeyArn",
-    "rootRewrapCount",
-    "lastRootRewrappedAt"
-  ]);
+function normalizeManagedKey(
+  value: unknown,
+  parseRecord: ManagedKeyRecordParser
+): ManagedKeyRecord {
+  if (!isRecord(value)) rejectContract();
   try {
-    assertCanonicalEncryptedKeyMaterial(row.encryptedKeyMaterial);
+    assertCanonicalEncryptedKeyMaterial(value.encryptedKeyMaterial);
   } catch {
     throw new GenerationVerificationError();
   }
   try {
-    return parseManagedKeyRecord({
-      ...row,
-      createdAt: timestamp(row.createdAt),
-      activatedAt: nullableTimestamp(row.activatedAt),
-      retiredAt: nullableTimestamp(row.retiredAt),
-      revokedAt: nullableTimestamp(row.revokedAt),
+    if (!isRecord(value.rotation)) rejectContract();
+    return parseRecord({
+      ...value,
+      activatedAt: nullableTimestamp(value.activatedAt),
+      createdAt: timestamp(value.createdAt),
+      retiredAt: nullableTimestamp(value.retiredAt),
+      revokedAt: nullableTimestamp(value.revokedAt),
       rotation: {
-        ...rotation,
-        lastRootRewrappedAt: nullableTimestamp(rotation.lastRootRewrappedAt)
+        ...value.rotation,
+        lastRootRewrappedAt: nullableTimestamp(value.rotation.lastRootRewrappedAt)
       }
     });
   } catch {
@@ -500,7 +482,11 @@ function keyIdentity(value: Readonly<{ keyId: string; keyVersion: number }>): st
   return `${value.keyId}:${value.keyVersion}`;
 }
 
-function parseListResult(value: unknown, input: ReadBuildingPageInput): BuildingGenerationPage {
+function parseListResult(
+  value: unknown,
+  input: ReadBuildingPageInput,
+  parseRecord: ManagedKeyRecordParser
+): BuildingGenerationPage {
   const row = exactRecord(value, [
     "ownerId",
     "generation",
@@ -519,8 +505,8 @@ function parseListResult(value: unknown, input: ReadBuildingPageInput): Building
   }
   const generation = parseGeneration(row.generation, input);
   const parsedItems = row.items.map((item) => parseItem(item, input.ownerId));
-  const keys = row.keys.map(normalizeManagedKey);
-  const keyMap = new Map<string, ManagedKeyRecordV1>();
+  const keys = row.keys.map((key) => normalizeManagedKey(key, parseRecord));
+  const keyMap = new Map<string, ManagedKeyRecord>();
   for (const key of keys) {
     const identity = keyIdentity(key);
     if (
@@ -707,7 +693,8 @@ function resultValue(result: VerifierDatabaseQueryResult): unknown {
 }
 
 export function createGenerationVerificationRepository(
-  executor: VerifierDatabaseQueryExecutor
+  executor: VerifierDatabaseQueryExecutor,
+  parseRecord: ManagedKeyRecordParser = parseManagedKeyRecordV1
 ): GenerationVerificationRepository {
   const verifiedProofs = new WeakMap<object, AbortSignal>();
 
@@ -773,7 +760,8 @@ export function createGenerationVerificationRepository(
           input.signal,
           proof
         ),
-        input
+        input,
+        parseRecord
       );
     },
     async attest(input, proof): Promise<VerifiedGeneration> {

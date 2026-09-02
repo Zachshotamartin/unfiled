@@ -36,10 +36,15 @@ const keyManagementMocks = vi.hoisted(() => ({
   custodianForSearchAuthority: vi.fn()
 }));
 
-vi.mock("../src/key-management.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof SearchKeyManagementModule>()),
-  custodianForSearchAuthority: keyManagementMocks.custodianForSearchAuthority
-}));
+vi.mock("../src/key-management.js", async (importOriginal) => {
+  const original = await importOriginal<typeof SearchKeyManagementModule>();
+  return {
+    ...original,
+    custodianForSearchAuthority: keyManagementMocks.custodianForSearchAuthority,
+    managedKeyRecordParserForSearchAuthority: () =>
+      original.managedKeyRecordParserForSearchBoundary({ kind: "local-disabled" })
+  };
+});
 
 const SEARCH_ID = "11111111-1111-4111-8111-111111111111";
 const OWNER_ID = "22222222-2222-4222-8222-222222222222";

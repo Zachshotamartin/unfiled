@@ -32,10 +32,10 @@ function requestUrl(input: RequestInfo | URL): string {
 }
 
 describe("Milestone B API client", () => {
-  it("requests, verifies, and refreshes normalized OTP credentials", async () => {
+  it("creates an account, signs in, and refreshes normalized password credentials", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse({ accepted: true, retryAfterSeconds: 60 }, 202))
+      .mockResolvedValueOnce(jsonResponse(manualNoteFixtures.authSession))
       .mockResolvedValueOnce(jsonResponse(manualNoteFixtures.authSession))
       .mockResolvedValueOnce(jsonResponse(manualNoteFixtures.authSession));
     const client = createApiClient({
@@ -44,28 +44,29 @@ describe("Milestone B API client", () => {
       fetch: fetcher
     });
 
-    await expect(client.requestOtp({ email: " PERSON@Example.com " })).resolves.toEqual({
-      accepted: true,
-      retryAfterSeconds: 60
-    });
     await expect(
-      client.verifyOtp({ email: "PERSON@example.com", code: "123456" })
+      client.signUp({ email: " PERSON@Example.com ", password: "correct horse battery" })
+    ).resolves.toEqual(manualNoteFixtures.authSession);
+    await expect(
+      client.signIn({ email: "PERSON@example.com", password: "correct horse battery" })
     ).resolves.toEqual(manualNoteFixtures.authSession);
     await expect(client.refreshAuth({ refreshToken: "restart-safe-token" })).resolves.toEqual(
       manualNoteFixtures.authSession
     );
 
-    expect(fetcher.mock.calls[0]?.[0]).toBe("https://example.test/api/v1/auth/otp");
+    expect(fetcher.mock.calls[0]?.[0]).toBe("https://example.test/api/v1/auth/sign-up");
     expect(fetcher.mock.calls[0]?.[1]).toMatchObject({ method: "POST" });
-    expect(fetcher.mock.calls[1]?.[1]).toMatchObject({ method: "PUT" });
+    expect(fetcher.mock.calls[1]?.[0]).toBe("https://example.test/api/v1/auth/sign-in");
+    expect(fetcher.mock.calls[1]?.[1]).toMatchObject({ method: "POST" });
     expect(fetcher.mock.calls[2]?.[0]).toBe("https://example.test/api/v1/auth/refresh");
     expect(fetcher.mock.calls[2]?.[1]).toMatchObject({ method: "POST" });
     expect(await new Response(fetcher.mock.calls[0]?.[1]?.body).json()).toEqual({
-      email: "person@example.com"
+      email: "person@example.com",
+      password: "correct horse battery"
     });
   });
 
-  it("uses the implemented auth session, verify, and sign-out routes", async () => {
+  it("uses the implemented auth session, sign-in, and sign-out routes", async () => {
     const user = manualNoteFixtures.authSession.user;
     const fetcher = vi
       .fn<typeof fetch>()
@@ -80,14 +81,14 @@ describe("Milestone B API client", () => {
 
     await expect(client.getAuthSession()).resolves.toEqual({ user });
     await expect(
-      client.verifyAuth({ email: "PERSON@example.com", code: "123456" })
+      client.signIn({ email: "PERSON@example.com", password: "correct horse battery" })
     ).resolves.toEqual(manualNoteFixtures.authSession);
     await expect(client.signOut()).resolves.toEqual({ signedOut: true });
     expect(
       fetcher.mock.calls.map(([url, init]) => [requestUrl(url), init?.method ?? "GET"])
     ).toEqual([
       ["https://example.test/api/v1/auth/session", "GET"],
-      ["https://example.test/api/v1/auth/verify", "PUT"],
+      ["https://example.test/api/v1/auth/sign-in", "POST"],
       ["https://example.test/api/v1/auth/sign-out", "POST"]
     ]);
   });

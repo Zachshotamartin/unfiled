@@ -25,22 +25,22 @@ const trusted: VercelTrustedSource = Object.freeze({
 });
 const token = "aaa.bbb.ccc";
 
-function verified(overrides: Record<string, unknown> = {}) {
+function verified(overrides: Record<string, unknown> = {}, source: VercelTrustedSource = trusted) {
   const now = Math.floor(Date.now() / 1_000);
   return {
     protectedHeader: { alg: "RS256" },
     payload: {
-      aud: trusted.audience,
-      environment: trusted.environment,
+      aud: source.audience,
+      environment: source.environment,
       exp: now + 600,
       iat: now,
-      iss: trusted.issuer,
+      iss: source.issuer,
       nbf: now,
-      owner: trusted.teamSlug,
-      owner_id: trusted.ownerId,
-      project: trusted.projectName,
-      project_id: trusted.projectId,
-      sub: trusted.expectedSubject,
+      owner: source.teamSlug,
+      owner_id: source.ownerId,
+      project: source.projectName,
+      project_id: source.projectId,
+      sub: source.expectedSubject,
       ...overrides
     }
   };
@@ -83,7 +83,7 @@ describe("organizer invocation authentication", () => {
       authorizeLocalOrganizerInvocation({
         authorizationHeader: "Bearer wrong",
         requestId: "r",
-        runtime: "preview",
+        runtime: "local",
         secret
       })
     ).toThrow("invalid");
@@ -112,6 +112,33 @@ describe("organizer invocation authentication", () => {
     await expect(
       adapter.authorize(proof({ trustedSourceToken: " bad " }), new AbortController().signal)
     ).rejects.toMatchObject({ code: "unauthorized" });
+  });
+
+  it("issues a Preview-bound capability only from exact Preview Trusted Source claims", async () => {
+    const previewSource: VercelTrustedSource = Object.freeze({
+      ...trusted,
+      environment: "preview",
+      expectedSubject: "owner:team-example:project:unfiled-web:environment:preview"
+    });
+    vi.mocked(verifyVercelOidcToken).mockResolvedValue(verified({}, previewSource));
+
+    const capability = await createVercelTrustedSourcesInvocationAuth({
+      trustedSource: previewSource
+    }).authorize(proof(), new AbortController().signal);
+
+    expect(
+      isVerifiedOrganizerInvocation(capability, { requestId: "request-1", runtime: "preview" })
+    ).toBe(true);
+    expect(
+      isVerifiedOrganizerInvocation(capability, { requestId: "request-1", runtime: "production" })
+    ).toBe(false);
+    expect(verifyVercelOidcToken).toHaveBeenCalledWith(
+      token,
+      expect.objectContaining({
+        environment: "preview",
+        subject: previewSource.expectedSubject
+      })
+    );
   });
 
   it.each([
@@ -159,5 +186,46 @@ describe("organizer invocation authentication", () => {
     await expect(
       unconfiguredProductionInvocationAuth.authorize(proof(), new AbortController().signal)
     ).rejects.toBeInstanceOf(OrganizerUnavailableError);
+  });
+  it("logs a content-free rejection reason naming the failing claims only", async () => {
+    const sink = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const adapter = createVercelTrustedSourcesInvocationAuth({ trustedSource: trusted });
+      vi.mocked(verifyVercelOidcToken).mockResolvedValueOnce(
+        verified({ environment: "development", owner_id: "team_other" })
+      );
+      await expect(adapter.authorize(proof(), new AbortController().signal)).rejects.toMatchObject({
+        code: "unauthorized"
+      });
+      expect(sink).toHaveBeenCalledTimes(1);
+      const line = String(sink.mock.calls[0]?.[0]);
+      expect(JSON.parse(line)).toEqual({
+        event: "organizer.trusted_source_rejected",
+        service: "unfiled-organizer",
+        reason: "claims:owner_id,environment"
+      });
+      expect(line).not.toContain(token);
+      expect(line).not.toContain("team_other");
+      expect(line).not.toContain("development");
+      const failure = Object.assign(new Error("signature verification failed"), {
+        code: "ERR_JWS_SIGNATURE_VERIFICATION_FAILED"
+      });
+      vi.mocked(verifyVercelOidcToken).mockRejectedValueOnce(failure);
+      await expect(adapter.authorize(proof(), new AbortController().signal)).rejects.toMatchObject({
+        code: "unauthorized"
+      });
+      expect(JSON.parse(String(sink.mock.calls[1]?.[0]))).toMatchObject({
+        reason: "verification:ERR_JWS_SIGNATURE_VERIFICATION_FAILED"
+      });
+      await expect(
+        adapter.authorize(
+          proof({ authorizationHeader: "Bearer ambient" }),
+          new AbortController().signal
+        )
+      ).rejects.toMatchObject({ code: "unauthorized" });
+      expect(JSON.parse(String(sink.mock.calls[2]?.[0]))).toMatchObject({ reason: "proof_shape" });
+    } finally {
+      sink.mockRestore();
+    }
   });
 });

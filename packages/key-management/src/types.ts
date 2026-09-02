@@ -9,11 +9,13 @@ export const KEY_WORKLOADS = Object.freeze([
   "index_worker",
   "search_worker"
 ] as const);
+export const VERCEL_DEPLOYMENT_ENVIRONMENTS = Object.freeze(["preview", "production"] as const);
 
 export type KeyClass = (typeof KEY_CLASSES)[number];
 export type KeyPurpose = (typeof KEY_PURPOSES)[number];
 export type KeyStatus = (typeof KEY_STATUSES)[number];
 export type KeyWorkload = (typeof KEY_WORKLOADS)[number];
+export type VercelDeploymentEnvironment = (typeof VERCEL_DEPLOYMENT_ENVIRONMENTS)[number];
 
 export type KeyBinding = Readonly<{
   ownerId: string;
@@ -38,6 +40,13 @@ export type KeyRotationMetadata = Readonly<{
   lastRootRewrappedAt: string | null;
 }>;
 
+export type KeyRotationMetadataV2 = Readonly<{
+  predecessorKeyId: string | null;
+  previousRootKeyId: string | null;
+  rootRewrapCount: number;
+  lastRootRewrappedAt: string | null;
+}>;
+
 export type ManagedKeyRecordV1 = KeyReference &
   Readonly<{
     schemaVersion: 1;
@@ -52,6 +61,34 @@ export type ManagedKeyRecordV1 = KeyReference &
     wrapOperationLimit: number;
     rotation: KeyRotationMetadata;
   }>;
+
+/**
+ * Provider-neutral envelope record used by the bounded Vercel private-beta
+ * custodian. V1 remains the immutable AWS KMS wire contract; V2 deliberately
+ * does not disguise an environment-held root as an AWS ARN.
+ */
+export type ManagedKeyRecordV2 = KeyReference &
+  Readonly<{
+    schemaVersion: 2;
+    custodyProvider: "vercel_sensitive_environment_v1";
+    status: KeyStatus;
+    encryptedKeyMaterial: string;
+    rootKeyId: string;
+    wrapAlgorithm: "AES-256-GCM";
+    createdAt: string;
+    activatedAt: string | null;
+    retiredAt: string | null;
+    revokedAt: string | null;
+    wrapOperations: number;
+    wrapOperationLimit: number;
+    rotation: KeyRotationMetadataV2;
+  }>;
+
+export type ManagedKeyRecord = ManagedKeyRecordV1 | ManagedKeyRecordV2;
+
+export type ManagedKeyRecordParser<Record extends ManagedKeyRecord = ManagedKeyRecord> = (
+  value: unknown
+) => Record;
 
 export type CreateIntermediateKeyRequest = KeyReference &
   Readonly<{
@@ -95,6 +132,16 @@ export type IndexWorkerRetiredRootKeySet = Readonly<{
 
 export type SearchWorkerRetiredRootKeySet = IndexWorkerRetiredRootKeySet;
 
+export type VercelSensitiveEnvironmentRootKeySet = RootKeySet;
+export type VercelSensitiveEnvironmentAiAssistedRootKeySet = AiAssistedRootKeySet;
+export type VercelSensitiveEnvironmentIndexWorkerRootKeySet = IndexWorkerRootKeySet;
+export type VercelSensitiveEnvironmentSearchWorkerRootKeySet = SearchWorkerRootKeySet;
+export type VercelSensitiveEnvironmentWorkloadRootKeySet = WorkloadRootKeySet;
+export type VercelSensitiveEnvironmentRetiredRootKeySet = RetiredRootKeySet;
+export type VercelSensitiveEnvironmentAiAssistedRetiredRootKeySet = AiAssistedRetiredRootKeySet;
+export type VercelSensitiveEnvironmentIndexWorkerRetiredRootKeySet = IndexWorkerRetiredRootKeySet;
+export type VercelSensitiveEnvironmentSearchWorkerRetiredRootKeySet = SearchWorkerRetiredRootKeySet;
+
 export type ManagedKeyStore = Readonly<{
   findActive(binding: KeyBinding): Promise<unknown>;
   findById(selector: KeySelector): Promise<unknown>;
@@ -135,37 +182,45 @@ export type KeyCustodyOperationOptions = Readonly<{
   signal?: AbortSignal;
 }>;
 
-export type IntermediateKeyCustodian = Readonly<{
-  withGeneratedIntermediateKey<Result>(
-    request: CreateIntermediateKeyRequest,
-    use: (keyBytes: Uint8Array, record: ManagedKeyRecordV1) => Promise<Result>,
-    options?: KeyCustodyOperationOptions
-  ): Promise<Result>;
-  withUnwrappedIntermediateKey<Result>(
-    record: unknown,
-    use: (keyBytes: Uint8Array, record: ManagedKeyRecordV1) => Promise<Result>,
-    options?: KeyCustodyOperationOptions
-  ): Promise<Result>;
-}>;
+export type IntermediateKeyCustodian<Record extends ManagedKeyRecord = ManagedKeyRecordV1> =
+  Readonly<{
+    withGeneratedIntermediateKey<Result>(
+      request: CreateIntermediateKeyRequest,
+      use: (keyBytes: Uint8Array, record: Record) => Promise<Result>,
+      options?: KeyCustodyOperationOptions
+    ): Promise<Result>;
+    withUnwrappedIntermediateKey<Result>(
+      record: unknown,
+      use: (keyBytes: Uint8Array, record: Record) => Promise<Result>,
+      options?: KeyCustodyOperationOptions
+    ): Promise<Result>;
+  }>;
 
 /**
  * A decrypt-only view used by workloads that must never mint intermediate
  * keys. Keeping generation out of the object shape makes the boundary
  * enforceable before an IAM denial is needed.
  */
-export type DecryptOnlyIntermediateKeyCustodian = Pick<
-  IntermediateKeyCustodian,
-  "withUnwrappedIntermediateKey"
->;
+export type DecryptOnlyIntermediateKeyCustodian<
+  Record extends ManagedKeyRecord = ManagedKeyRecordV1
+> = Pick<IntermediateKeyCustodian<Record>, "withUnwrappedIntermediateKey">;
 
-export type InteractiveKeyCustodian = IntermediateKeyCustodian &
-  Readonly<{
-    rewrapIntermediateKey(
-      record: unknown,
-      rewrappedAt: string,
-      options?: KeyCustodyOperationOptions
-    ): Promise<ManagedKeyRecordV1>;
-  }>;
+export type InteractiveKeyCustodian<Record extends ManagedKeyRecord = ManagedKeyRecordV1> =
+  IntermediateKeyCustodian<Record> &
+    Readonly<{
+      rewrapIntermediateKey(
+        record: unknown,
+        rewrappedAt: string,
+        options?: KeyCustodyOperationOptions
+      ): Promise<Record>;
+    }>;
+
+export type VercelSensitiveEnvironmentIntermediateKeyCustodian =
+  IntermediateKeyCustodian<ManagedKeyRecordV2>;
+export type VercelSensitiveEnvironmentDecryptOnlyIntermediateKeyCustodian =
+  DecryptOnlyIntermediateKeyCustodian<ManagedKeyRecordV2>;
+export type VercelSensitiveEnvironmentInteractiveKeyCustodian =
+  InteractiveKeyCustodian<ManagedKeyRecordV2>;
 
 export const KeyManagementErrorCode = Object.freeze({
   ACCESS_DENIED: "access_denied",

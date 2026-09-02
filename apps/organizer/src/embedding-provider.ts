@@ -1,3 +1,10 @@
+import {
+  createLocalHashEmbedding,
+  LOCAL_HASH_EMBEDDING_DIMENSIONS,
+  LOCAL_HASH_EMBEDDING_MODEL_ID,
+  MAX_LOCAL_HASH_EMBEDDING_INPUT_BYTES
+} from "@unfiled/search";
+
 import { OrganizerProviderError } from "./errors.js";
 import type { OrganizerProviderCredentialAccess } from "./provider-credential.js";
 
@@ -23,6 +30,32 @@ export type OpenAIOrganizerEmbeddingProviderOptions = Readonly<{
   apiKey?: string;
   fetchImplementation?: typeof fetch;
 }>;
+
+export function createLocalHashOrganizerEmbeddingProvider(): OrganizerEmbeddingProvider {
+  return Object.freeze({
+    embed(input): Promise<Float32Array> {
+      try {
+        assertActive(input.signal);
+        if (
+          input.modelId !== LOCAL_HASH_EMBEDDING_MODEL_ID ||
+          input.dimensions !== LOCAL_HASH_EMBEDDING_DIMENSIONS ||
+          typeof input.text !== "string" ||
+          input.text.trim().length === 0 ||
+          new TextEncoder().encode(input.text).byteLength > MAX_LOCAL_HASH_EMBEDDING_INPUT_BYTES
+        ) {
+          throw new OrganizerProviderError("validation_failed", false);
+        }
+        return Promise.resolve(createLocalHashEmbedding(input.text));
+      } catch (error: unknown) {
+        return Promise.reject(
+          error instanceof OrganizerProviderError
+            ? error
+            : new OrganizerProviderError("validation_failed", false)
+        );
+      }
+    }
+  });
+}
 
 function record(value: unknown): Readonly<Record<string, unknown>> {
   if (value === null || typeof value !== "object" || Array.isArray(value))
@@ -339,6 +372,9 @@ export function createOpenAIOrganizerEmbeddingProvider(
         try {
           if (input.providerCredential !== undefined) {
             return await input.providerCredential.use((credential) => {
+              // Only an OpenAI credential may ever reach the OpenAI embeddings endpoint.
+              if (credential.provider !== "openai")
+                throw new OrganizerProviderError("validation_failed", false);
               return credential.withApiKey((selectedApiKey) =>
                 embedWithApiKey(input, selectedApiKey, request)
               );

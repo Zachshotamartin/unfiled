@@ -181,7 +181,7 @@ jobs:
             exit 1
           fi
 
-      - name: Build the SwiftUI app and WidgetKit App Intents extension
+      - name: Build the SwiftUI app
         run: pnpm ios:build
 
       - name: Run iOS unit tests in a simulator

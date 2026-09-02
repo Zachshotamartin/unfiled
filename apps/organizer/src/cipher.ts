@@ -30,8 +30,8 @@ import {
 } from "@unfiled/encrypted-aggregate";
 import {
   createManagedKeyResolver,
-  parseManagedKeyRecord,
-  type ManagedKeyRecordV1,
+  type ManagedKeyRecord,
+  type ManagedKeyRecordParser,
   type ManagedKeyStore
 } from "@unfiled/key-management";
 import { createHash } from "node:crypto";
@@ -45,7 +45,11 @@ import type {
   OrganizerReviewReason
 } from "./drain.js";
 import { OrganizerUnavailableError } from "./errors.js";
-import { custodianForOrganizerAuthority, type OrganizerKeyAuthority } from "./key-management.js";
+import {
+  custodianForOrganizerAuthority,
+  managedKeyRecordParserForOrganizerAuthority,
+  type OrganizerKeyAuthority
+} from "./key-management.js";
 import { organizerLocalDate } from "./local-date.js";
 import { sameOrganizerCaptureControls, type DecryptedCandidate } from "./planner.js";
 
@@ -99,7 +103,7 @@ function sameCanonical(left: unknown, right: unknown): boolean {
 }
 
 function sameBinding(
-  record: ManagedKeyRecordV1,
+  record: ManagedKeyRecord,
   binding: Readonly<{ ownerId: string; keyClass: string; purpose: string }>
 ): boolean {
   return (
@@ -109,14 +113,14 @@ function sameBinding(
   );
 }
 
-function keyStore(records: readonly ManagedKeyRecordV1[]): ManagedKeyStore {
+function keyStore(records: readonly ManagedKeyRecord[]): ManagedKeyStore {
   return Object.freeze({
-    findActive(binding): Promise<ManagedKeyRecordV1 | null> {
+    findActive(binding): Promise<ManagedKeyRecord | null> {
       return Promise.resolve(
         records.find((record) => record.status === "active" && sameBinding(record, binding)) ?? null
       );
     },
-    findById(selector): Promise<ManagedKeyRecordV1 | null> {
+    findById(selector): Promise<ManagedKeyRecord | null> {
       return Promise.resolve(
         records.find(
           (record) =>
@@ -134,13 +138,14 @@ function keyStore(records: readonly ManagedKeyRecordV1[]): ManagedKeyStore {
 function parsedProjection<Kind extends AggregateContentKind>(
   ownerId: string,
   projection: EncryptedProjection,
+  parseRecord: ManagedKeyRecordParser,
   expected: Readonly<{
     keyClass: "ai_assisted";
     kind: Kind;
     recordVersion: number;
     resourceId: string;
   }>
-): Readonly<{ key: ManagedKeyRecordV1; record: EncryptedAggregateRecord<Kind> }> {
+): Readonly<{ key: ManagedKeyRecord; record: EncryptedAggregateRecord<Kind> }> {
   if (
     projection.resourceId !== expected.resourceId ||
     projection.recordVersion !== expected.recordVersion
@@ -154,10 +159,10 @@ function parsedProjection<Kind extends AggregateContentKind>(
     "keyPurpose",
     "keyVersion"
   ]);
-  let key: ManagedKeyRecordV1;
+  let key: ManagedKeyRecord;
   let envelope: ReturnType<typeof parseContentEnvelope>;
   try {
-    key = parseManagedKeyRecord(projection.key);
+    key = parseRecord(projection.key);
     envelope = parseContentEnvelope(serializeContentEnvelope(cipher.envelope));
   } catch {
     return unavailable();
@@ -197,10 +202,12 @@ function parsedProjection<Kind extends AggregateContentKind>(
 
 function readAggregate(
   authority: OrganizerKeyAuthority,
-  keys: readonly ManagedKeyRecordV1[]
+  keys: readonly ManagedKeyRecord[]
 ): EncryptedAggregateService {
+  const parseRecord = managedKeyRecordParserForOrganizerAuthority(authority);
   const resolver = createManagedKeyResolver({
     custodian: custodianForOrganizerAuthority(authority),
+    parseRecord,
     store: keyStore(keys),
     workload: "organization_worker"
   });
@@ -216,8 +223,9 @@ function readAggregate(
 
 function captureAuthentication(
   ownerId: string,
-  projection: EncryptedProjection
-): Readonly<{ contentMac: unknown; key: ManagedKeyRecordV1 }> {
+  projection: EncryptedProjection,
+  parseRecord: ManagedKeyRecordParser
+): Readonly<{ contentMac: unknown; key: ManagedKeyRecord }> {
   const contentMac = exact(projection.contentMac, [
     "value",
     "keyId",
@@ -225,9 +233,9 @@ function captureAuthentication(
     "keyPurpose",
     "keyVersion"
   ]);
-  let key: ManagedKeyRecordV1;
+  let key: ManagedKeyRecord;
   try {
-    key = parseManagedKeyRecord(projection.contentMacKey);
+    key = parseRecord(projection.contentMacKey);
   } catch {
     return unavailable();
   }
@@ -253,11 +261,12 @@ function writeAggregate(
   preparation: OrganizerPreparation,
   reservations: readonly ReservationSpec[]
 ): Readonly<{ aggregate: EncryptedAggregateService; assertConsumed(): void }> {
-  let contentMac: ManagedKeyRecordV1;
-  let objectWrap: ManagedKeyRecordV1;
+  const parseRecord = managedKeyRecordParserForOrganizerAuthority(authority);
+  let contentMac: ManagedKeyRecord;
+  let objectWrap: ManagedKeyRecord;
   try {
-    contentMac = parseManagedKeyRecord(preparation.keys.contentMac);
-    objectWrap = parseManagedKeyRecord(preparation.keys.objectWrap);
+    contentMac = parseRecord(preparation.keys.contentMac);
+    objectWrap = parseRecord(preparation.keys.objectWrap);
   } catch {
     return unavailable();
   }
@@ -275,6 +284,7 @@ function writeAggregate(
   let reservationIndex = 0;
   const resolver = createManagedKeyResolver({
     custodian: custodianForOrganizerAuthority(authority),
+    parseRecord,
     store: keyStore([contentMac, objectWrap]),
     workload: "organization_worker"
   });
@@ -648,8 +658,8 @@ function deferredReceipt(
   });
 }
 
-function contentMacReference(preparation: OrganizerPreparation) {
-  const key = parseManagedKeyRecord(preparation.keys.contentMac);
+function contentMacReference(authority: OrganizerKeyAuthority, preparation: OrganizerPreparation) {
+  const key = managedKeyRecordParserForOrganizerAuthority(authority)(preparation.keys.contentMac);
   return Object.freeze({
     keyClass: key.keyClass,
     keyId: key.keyId,
@@ -939,7 +949,7 @@ async function sealRoutedCommand(
   const idempotencyKey = `organizer:${input.job.jobId}`;
   const requestMac = await runtime.aggregate.createIdempotencyRequestMac(access, {
     idempotencyKey,
-    keyReference: contentMacReference(input.preparation),
+    keyReference: contentMacReference(input.authority, input.preparation),
     logicalRequest: request,
     requestCodec: requestPayloadCodec,
     transition
@@ -1245,13 +1255,18 @@ export function createProductionOrganizerCipher(): OrganizerCipher {
     async openCapture(input) {
       assertActive(input.signal);
       try {
-        const bound = parsedProjection(input.job.ownerId, input.job.source, {
+        const parseRecord = managedKeyRecordParserForOrganizerAuthority(input.authority);
+        const bound = parsedProjection(input.job.ownerId, input.job.source, parseRecord, {
           keyClass: "ai_assisted",
           kind: "capture",
           recordVersion: 1,
           resourceId: input.job.captureId
         });
-        const authentication = captureAuthentication(input.job.ownerId, input.job.source);
+        const authentication = captureAuthentication(
+          input.job.ownerId,
+          input.job.source,
+          parseRecord
+        );
         const aggregate = readAggregate(input.authority, [bound.key, authentication.key]);
         const access = authorizeAggregateOwner({
           authenticatedOwnerId: input.job.ownerId,
@@ -1275,12 +1290,17 @@ export function createProductionOrganizerCipher(): OrganizerCipher {
     async openCandidate(input) {
       assertActive(input.signal);
       try {
-        const bound = parsedProjection(input.ownerId, input.candidate.source, {
-          keyClass: "ai_assisted",
-          kind: "note_content",
-          recordVersion: input.candidate.revision,
-          resourceId: input.candidate.noteId
-        });
+        const bound = parsedProjection(
+          input.ownerId,
+          input.candidate.source,
+          managedKeyRecordParserForOrganizerAuthority(input.authority),
+          {
+            keyClass: "ai_assisted",
+            kind: "note_content",
+            recordVersion: input.candidate.revision,
+            resourceId: input.candidate.noteId
+          }
+        );
         const aggregate = readAggregate(input.authority, [bound.key]);
         const access = authorizeAggregateOwner({
           authenticatedOwnerId: input.ownerId,

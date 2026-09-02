@@ -1,3 +1,10 @@
+import { encryptedAggregateRuntimeRpcFunctions } from "@/server/encryption/encrypted-aggregate-runtime";
+import {
+  createManagedOwnerKeyBootstrap,
+  freshOwnerOnboardingEnabled,
+  freshOwnerOnboardingRpcFunctions,
+  FreshOwnerOnboardingRolloutSource
+} from "@/server/encryption/fresh-owner-onboarding";
 import { ManagedEncryptedNoteRepository } from "@/server/encryption/managed-encrypted-note-repository";
 import {
   ContentEncryptionRolloutRpcSource,
@@ -29,6 +36,11 @@ export type ProductionManualNotesCompositionOptions = Readonly<{
   environment?: WebKeyRuntimeEnvironment;
   fetch?: typeof fetch;
   signal?: AbortSignal;
+  /**
+   * Drives owners with no legacy objects through the official rollout on first
+   * use. Defaults to "no legacy content key is configured"; test seam otherwise.
+   */
+  freshOwnerOnboarding?: boolean;
 }>;
 
 /**
@@ -40,14 +52,35 @@ export function createProductionManualNotesComposition(
   options: ProductionManualNotesCompositionOptions
 ): ManualNotesRepository {
   const signal = options.signal;
-  const rolloutClient = createServiceRpcClient({
-    allowedFunctions: rolloutRpcFunctions,
+  const clientOptions = {
     ...(options.environment === undefined ? {} : { environment: options.environment }),
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
     ...(signal === undefined ? {} : { signal })
+  };
+  const rolloutClient = createServiceRpcClient({
+    allowedFunctions: rolloutRpcFunctions,
+    ...clientOptions
+  });
+  const onboarding = new FreshOwnerOnboardingRolloutSource({
+    rollout: new ContentEncryptionRolloutRpcSource(rolloutClient),
+    client: createServiceRpcClient({
+      allowedFunctions: freshOwnerOnboardingRpcFunctions,
+      ...clientOptions
+    }),
+    ensureOwnerKeys: createManagedOwnerKeyBootstrap({
+      client: createServiceRpcClient({
+        allowedFunctions: encryptedAggregateRuntimeRpcFunctions,
+        ...clientOptions
+      }),
+      ...(options.environment === undefined ? {} : { environment: options.environment }),
+      ...(signal === undefined ? {} : { signal })
+    }),
+    enabled:
+      options.freshOwnerOnboarding ??
+      freshOwnerOnboardingEnabled(options.environment ?? process.env)
   });
   const rollout = new CapabilityGuardedEncryptionRolloutStateSource(
-    new ContentEncryptionRolloutRpcSource(rolloutClient),
+    onboarding,
     productionManualNotesCapabilityReadiness
   );
   const encrypted =

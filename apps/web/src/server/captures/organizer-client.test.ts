@@ -23,7 +23,7 @@ function success() {
 
 describe("isolated encrypted organizer caller", () => {
   it("forwards only a content-free command and the short-lived trusted-source token", async () => {
-    const request = vi.fn().mockResolvedValue(json(success()));
+    const request = vi.fn().mockImplementation(() => Promise.resolve(json(success())));
     const getOidcToken = vi.fn().mockResolvedValue(TOKEN);
     const client = createOrganizerClient({
       fetchImplementation: request,
@@ -38,14 +38,14 @@ describe("isolated encrypted organizer caller", () => {
       body: '{"trigger":"schedule"}',
       headers: {
         "content-type": "application/json",
-        "x-vercel-trusted-oidc-idp-token": TOKEN
+        "x-unfiled-trusted-oidc-idp-token": TOKEN
       },
       method: "POST",
       redirect: "error"
     });
     expect(Object.keys(init.headers as Record<string, string>).sort()).toEqual([
       "content-type",
-      "x-vercel-trusted-oidc-idp-token"
+      "x-unfiled-trusted-oidc-idp-token"
     ]);
     expect(init.body as string).not.toContain("owner");
     expect(getOidcToken).toHaveBeenCalledOnce();
@@ -69,8 +69,8 @@ describe("isolated encrypted organizer caller", () => {
     );
   });
 
-  it("requires the production web runtime and exact organizer egress origin", async () => {
-    const request = vi.fn().mockResolvedValue(json(success()));
+  it("requires matching managed-cloud runtimes and an exact organizer egress origin", async () => {
+    const request = vi.fn().mockImplementation(() => Promise.resolve(json(success())));
     const dependencies = {
       fetchImplementation: request,
       getOidcToken: () => Promise.resolve(TOKEN)
@@ -78,6 +78,7 @@ describe("isolated encrypted organizer caller", () => {
     const client = createEnvironmentOrganizerClient(
       {
         UNFILED_ORGANIZER_ORIGIN: ORIGIN,
+        UNFILED_ORGANIZER_ENV: "production",
         VERCEL: "1",
         VERCEL_ENV: "production",
         VERCEL_PROJECT_ID: "prj_web12345"
@@ -85,23 +86,37 @@ describe("isolated encrypted organizer caller", () => {
       dependencies
     );
     await expect(client.drain("recovery")).resolves.toEqual(success());
+    const previewClient = createEnvironmentOrganizerClient(
+      {
+        UNFILED_ORGANIZER_ORIGIN: ORIGIN,
+        UNFILED_ORGANIZER_ENV: "preview",
+        VERCEL: "1",
+        VERCEL_ENV: "preview",
+        VERCEL_PROJECT_ID: "prj_web12345"
+      },
+      dependencies
+    );
+    await expect(previewClient.drain("recovery")).resolves.toEqual(success());
 
     for (const environment of [
       {},
       {
         UNFILED_ORGANIZER_ORIGIN: ORIGIN,
+        UNFILED_ORGANIZER_ENV: "production",
         VERCEL: "0",
         VERCEL_ENV: "production",
         VERCEL_PROJECT_ID: "prj_web12345"
       },
       {
         UNFILED_ORGANIZER_ORIGIN: ORIGIN,
+        UNFILED_ORGANIZER_ENV: "production",
         VERCEL: "1",
         VERCEL_ENV: "preview",
         VERCEL_PROJECT_ID: "prj_web12345"
       },
       {
         UNFILED_ORGANIZER_ORIGIN: ORIGIN,
+        UNFILED_ORGANIZER_ENV: "production",
         VERCEL: "1",
         VERCEL_ENV: "production",
         VERCEL_PROJECT_ID: "invalid"

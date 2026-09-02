@@ -4,6 +4,8 @@ import {
   RAG_VERIFICATION_DATABASE_CONNECTION_ATTEMPTS,
   RAG_VERIFICATION_MAX_PAGES
 } from "./capacity.js";
+import { createHash } from "node:crypto";
+
 import { VerifierConfigurationError } from "./errors.js";
 
 const DEFAULT_PORT = 8_789;
@@ -32,6 +34,13 @@ const VERCEL_OIDC_ISSUER_ORIGIN = "https://oidc.vercel.com" as const;
 const VERCEL_OIDC_AUDIENCE_ORIGIN = "https://vercel.com" as const;
 const KMS_KEY_ARN_PATTERN =
   /^arn:(aws(?:-us-gov|-cn)?):kms:([a-z0-9-]+):(\d{12}):key\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const VERCEL_ROOT_KEY_ID_PATTERN =
+  /^urn:unfiled:key-root:vercel-sensitive-env-v1:(preview|production):[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const KEY_CUSTODIAN_VARIABLE = "UNFILED_KEY_CUSTODIAN" as const;
+const VERCEL_SENSITIVE_KEY_RING_VARIABLE = "UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1" as const;
+const VERCEL_OBJECT_WRAP_ROOT_VARIABLE = "UNFILED_VERIFIER_AI_OBJECT_WRAP_ROOT_KEY_ID" as const;
+const VERCEL_RETIRED_OBJECT_WRAP_ROOTS_VARIABLE =
+  "UNFILED_VERIFIER_RETIRED_AI_OBJECT_WRAP_ROOT_KEY_IDS_JSON" as const;
 
 const STATIC_AWS_CREDENTIALS = [
   "AWS_ACCESS_KEY_ID",
@@ -68,7 +77,8 @@ const FORBIDDEN_CAPACITY_OVERRIDES = [
   "UNFILED_VERIFIER_PAGE_CIPHERTEXT_BYTE_BUDGET"
 ] as const;
 
-const PRODUCTION_VARIABLES = [
+const CLOUD_VARIABLES = [
+  "UNFILED_KEY_CUSTODIAN",
   "UNFILED_AWS_REGION",
   "UNFILED_AWS_ROLE_ARN",
   "UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN",
@@ -83,7 +93,10 @@ const PRODUCTION_VARIABLES = [
   "UNFILED_VERIFIER_DATABASE_URL",
   "UNFILED_VERIFIER_DATABASE_EXPECTED_HOST",
   "UNFILED_VERIFIER_DATABASE_PROJECT_REF",
-  "UNFILED_VERIFIER_DATABASE_CA_PEM_BASE64"
+  "UNFILED_VERIFIER_DATABASE_CA_PEM_BASE64",
+  "UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1",
+  "UNFILED_VERIFIER_AI_OBJECT_WRAP_ROOT_KEY_ID",
+  "UNFILED_VERIFIER_RETIRED_AI_OBJECT_WRAP_ROOT_KEY_IDS_JSON"
 ] as const;
 
 const SUPABASE_CAPABILITY_PATTERN = /SUPABASE/iu;
@@ -92,10 +105,15 @@ const GENERIC_DATABASE_CAPABILITY_PATTERN =
 
 export type VerifierRuntime = "local" | "preview" | "production";
 export type VerifierEnvironment = Readonly<Record<string, string | undefined>>;
+export type VerifierReleaseIdentity = Readonly<{
+  commit: string;
+  deployment: `sha256:${string}`;
+  environment: "preview" | "production";
+}>;
 
 export type VercelTrustedSource = Readonly<{
   audience: string;
-  environment: "production";
+  environment: "preview" | "production";
   expectedSubject: string;
   issuer: string;
   ownerId: string;
@@ -113,9 +131,10 @@ export type VerifierDatabaseConfig = Readonly<{
   url: string;
 }>;
 
-export type VerifierKmsConfig = Readonly<{
+export type AwsVerifierKmsConfig = Readonly<{
   activeObjectWrapRootArn: string;
   expectedOidcSubject: string;
+  kind: "aws-oidc";
   maxKeyRecords: number;
   oidcAudience: typeof AWS_OIDC_AUDIENCE;
   region: string;
@@ -124,6 +143,18 @@ export type VerifierKmsConfig = Readonly<{
   timeoutMs: number;
   vercelProjectId: string;
 }>;
+
+export type VercelSensitiveEnvironmentVerifierKeyConfig = Readonly<{
+  activeObjectWrapRootKeyId: string;
+  deploymentEnvironment: "preview" | "production";
+  kind: "vercel-sensitive-env-v1";
+  maxKeyRecords: number;
+  retiredObjectWrapRootKeyIds: readonly string[];
+  timeoutMs: number;
+  vercelProjectId: string;
+}>;
+
+export type VerifierKmsConfig = AwsVerifierKmsConfig | VercelSensitiveEnvironmentVerifierKeyConfig;
 
 export type EnabledVerificationConfig = Readonly<{
   database: VerifierDatabaseConfig;
@@ -136,6 +167,7 @@ export type EnabledVerificationConfig = Readonly<{
 export type VerifierConfig = Readonly<{
   maxRequestBytes: number;
   port: number;
+  releaseIdentity: VerifierReleaseIdentity | null;
   requestTimeoutMs: number;
   runtime: VerifierRuntime;
   verification: Readonly<{ kind: "disabled" }> | EnabledVerificationConfig;
@@ -228,18 +260,42 @@ function parseRuntime(environment: VerifierEnvironment): VerifierRuntime {
   if (runtime !== "local" && runtime !== "preview" && runtime !== "production") {
     throw new VerifierConfigurationError(["UNFILED_VERIFIER_ENV"]);
   }
-  const expectedVercelEnvironment =
-    runtime === "production" ? "production" : runtime === "preview" ? "preview" : "development";
   const actualVercelEnvironment = environment.VERCEL_ENV?.trim();
   if (
-    (runtime === "production" && actualVercelEnvironment !== expectedVercelEnvironment) ||
-    (runtime !== "production" &&
-      actualVercelEnvironment !== undefined &&
-      actualVercelEnvironment !== expectedVercelEnvironment)
+    (runtime === "local" &&
+      (environment.VERCEL !== undefined || environment.VERCEL_ENV !== undefined)) ||
+    (runtime !== "local" && (environment.VERCEL !== "1" || actualVercelEnvironment !== runtime))
   ) {
     throw new VerifierConfigurationError(["UNFILED_VERIFIER_ENV", "VERCEL_ENV"]);
   }
   return runtime;
+}
+
+function parseReleaseIdentity(
+  environment: VerifierEnvironment,
+  runtime: VerifierRuntime
+): VerifierReleaseIdentity | null {
+  if (runtime === "local") {
+    rejectCapabilities(environment, ["VERCEL_DEPLOYMENT_ID", "VERCEL_GIT_COMMIT_SHA"]);
+    return null;
+  }
+  const deploymentId = environment.VERCEL_DEPLOYMENT_ID?.trim();
+  const commit = environment.VERCEL_GIT_COMMIT_SHA;
+  const invalid: string[] = [];
+  if (deploymentId === undefined || !/^[A-Za-z0-9_-]{1,128}$/u.test(deploymentId)) {
+    invalid.push("VERCEL_DEPLOYMENT_ID");
+  }
+  if (commit === undefined || !/^[0-9a-f]{40}$/u.test(commit)) {
+    invalid.push("VERCEL_GIT_COMMIT_SHA");
+  }
+  if (invalid.length > 0 || deploymentId === undefined || commit === undefined) {
+    throw new VerifierConfigurationError(invalid);
+  }
+  return Object.freeze({
+    commit,
+    deployment: `sha256:${createHash("sha256").update(deploymentId, "utf8").digest("hex")}`,
+    environment: runtime
+  });
 }
 
 function hasInvalidPemCharacter(value: string): boolean {
@@ -364,11 +420,12 @@ function parseRetiredObjectWrapRoots(
   return Object.freeze(roots);
 }
 
-function parseKms(
+function parseAwsKms(
   environment: VerifierEnvironment,
   timeoutMs: number,
-  maxKeyRecords: number
-): VerifierKmsConfig {
+  maxKeyRecords: number,
+  runtime: "preview" | "production"
+): AwsVerifierKmsConfig {
   const region = required(environment, "UNFILED_AWS_REGION");
   const roleArn = required(environment, "UNFILED_AWS_ROLE_ARN");
   const activeObjectWrapRootArn = required(environment, "UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN");
@@ -378,7 +435,7 @@ function parseKms(
     roleArn
   );
   const root = KMS_KEY_ARN_PATTERN.exec(activeObjectWrapRootArn);
-  const subject = /^owner:([^:]+):project:([^:]+):environment:production$/u.exec(
+  const subject = /^owner:([^:]+):project:([^:]+):environment:(preview|production)$/u.exec(
     expectedOidcSubject
   );
   const actualProjectId = environment.VERCEL_PROJECT_ID?.trim();
@@ -386,7 +443,7 @@ function parseKms(
   if (!/^[a-z]{2}(?:-gov)?-[a-z]+-\d$/u.test(region)) invalid.push("UNFILED_AWS_REGION");
   if (role === null) invalid.push("UNFILED_AWS_ROLE_ARN");
   if (root === null) invalid.push("UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN");
-  if (subject === null || expectedOidcSubject.length > 512) {
+  if (subject?.[3] !== runtime || expectedOidcSubject.length > 512) {
     invalid.push("UNFILED_VERIFIER_EXPECTED_OIDC_SUBJECT");
   }
   if (!/^prj_[A-Za-z0-9]+$/u.test(vercelProjectId) || actualProjectId !== vercelProjectId) {
@@ -417,6 +474,7 @@ function parseKms(
   return Object.freeze({
     activeObjectWrapRootArn,
     expectedOidcSubject,
+    kind: "aws-oidc",
     maxKeyRecords,
     oidcAudience: AWS_OIDC_AUDIENCE,
     region,
@@ -432,25 +490,144 @@ function parseKms(
   });
 }
 
+function exactSensitiveValue(environment: VerifierEnvironment, name: string): string {
+  const raw = environment[name];
+  if (raw === undefined || raw.length === 0 || raw.trim() !== raw) {
+    throw new VerifierConfigurationError([name]);
+  }
+  return raw;
+}
+
+function parseVercelRetiredObjectWrapRoots(
+  environment: VerifierEnvironment,
+  activeRootKeyId: string,
+  runtime: "preview" | "production"
+): readonly string[] {
+  const raw = environment[VERCEL_RETIRED_OBJECT_WRAP_ROOTS_VARIABLE] ?? "[]";
+  if (
+    raw.trim() !== raw ||
+    new TextEncoder().encode(raw).byteLength > MAX_RETIRED_ROOT_REGISTRY_BYTES
+  ) {
+    throw new VerifierConfigurationError([VERCEL_RETIRED_OBJECT_WRAP_ROOTS_VARIABLE]);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new VerifierConfigurationError([VERCEL_RETIRED_OBJECT_WRAP_ROOTS_VARIABLE]);
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length > MAX_RETIRED_OBJECT_WRAP_ROOTS ||
+    JSON.stringify(parsed) !== raw
+  ) {
+    throw new VerifierConfigurationError([VERCEL_RETIRED_OBJECT_WRAP_ROOTS_VARIABLE]);
+  }
+  const roots: string[] = [];
+  const seen = new Set<string>([activeRootKeyId]);
+  for (const entry of parsed) {
+    if (
+      typeof entry !== "string" ||
+      VERCEL_ROOT_KEY_ID_PATTERN.exec(entry)?.[1] !== runtime ||
+      seen.has(entry)
+    ) {
+      throw new VerifierConfigurationError([VERCEL_RETIRED_OBJECT_WRAP_ROOTS_VARIABLE]);
+    }
+    seen.add(entry);
+    roots.push(entry);
+  }
+  return Object.freeze(roots);
+}
+
+function parseVercelSensitiveEnvironmentKeys(
+  environment: VerifierEnvironment,
+  timeoutMs: number,
+  maxKeyRecords: number,
+  runtime: "preview" | "production"
+): VercelSensitiveEnvironmentVerifierKeyConfig {
+  const activeObjectWrapRootKeyId = exactSensitiveValue(
+    environment,
+    VERCEL_OBJECT_WRAP_ROOT_VARIABLE
+  );
+  const vercelProjectId = exactSensitiveValue(environment, "UNFILED_VERIFIER_PROJECT_ID");
+  const ring = exactSensitiveValue(environment, VERCEL_SENSITIVE_KEY_RING_VARIABLE);
+  const invalid: string[] = [];
+  if (VERCEL_ROOT_KEY_ID_PATTERN.exec(activeObjectWrapRootKeyId)?.[1] !== runtime) {
+    invalid.push(VERCEL_OBJECT_WRAP_ROOT_VARIABLE);
+  }
+  if (
+    !/^prj_[A-Za-z0-9]+$/u.test(vercelProjectId) ||
+    environment.VERCEL_PROJECT_ID !== vercelProjectId
+  ) {
+    invalid.push("UNFILED_VERIFIER_PROJECT_ID", "VERCEL_PROJECT_ID");
+  }
+  if (new TextEncoder().encode(ring).byteLength > 32_768) {
+    invalid.push(VERCEL_SENSITIVE_KEY_RING_VARIABLE);
+  }
+  if (invalid.length > 0) throw new VerifierConfigurationError([...new Set(invalid)]);
+  return Object.freeze({
+    activeObjectWrapRootKeyId,
+    deploymentEnvironment: runtime,
+    kind: "vercel-sensitive-env-v1",
+    maxKeyRecords,
+    retiredObjectWrapRootKeyIds: parseVercelRetiredObjectWrapRoots(
+      environment,
+      activeObjectWrapRootKeyId,
+      runtime
+    ),
+    timeoutMs,
+    vercelProjectId
+  });
+}
+
+function parseManagedKeys(
+  environment: VerifierEnvironment,
+  timeoutMs: number,
+  maxKeyRecords: number,
+  runtime: "preview" | "production"
+): VerifierKmsConfig {
+  const mode = exactSensitiveValue(environment, KEY_CUSTODIAN_VARIABLE);
+  const awsOnly = [
+    "UNFILED_AWS_REGION",
+    "UNFILED_AWS_ROLE_ARN",
+    "UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN",
+    "UNFILED_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON",
+    "UNFILED_VERIFIER_EXPECTED_OIDC_SUBJECT"
+  ] as const;
+  const sensitiveOnly = [
+    VERCEL_SENSITIVE_KEY_RING_VARIABLE,
+    VERCEL_OBJECT_WRAP_ROOT_VARIABLE,
+    VERCEL_RETIRED_OBJECT_WRAP_ROOTS_VARIABLE
+  ] as const;
+  if (mode === "aws-kms") {
+    rejectCapabilities(environment, sensitiveOnly);
+    return parseAwsKms(environment, timeoutMs, maxKeyRecords, runtime);
+  }
+  if (mode === "vercel-sensitive-env-v1") {
+    rejectCapabilities(environment, awsOnly);
+    return parseVercelSensitiveEnvironmentKeys(environment, timeoutMs, maxKeyRecords, runtime);
+  }
+  throw new VerifierConfigurationError([KEY_CUSTODIAN_VARIABLE]);
+}
+
 function parseTrustedSource(
   environment: VerifierEnvironment,
-  verifierSubject: string,
-  verifierProjectId: string
+  verifierProjectId: string,
+  runtime: "preview" | "production"
 ): VercelTrustedSource {
   const teamSlug = required(environment, "UNFILED_TRUSTED_SOURCE_TEAM_SLUG");
   const ownerId = required(environment, "UNFILED_TRUSTED_SOURCE_OWNER_ID");
   const projectId = required(environment, "UNFILED_TRUSTED_SOURCE_WEB_PROJECT_ID");
   const projectName = required(environment, "UNFILED_TRUSTED_SOURCE_WEB_PROJECT_NAME");
   const expectedSubject = required(environment, "UNFILED_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT");
-  const verifierMatch = /^owner:([^:]+):project:([^:]+):environment:production$/u.exec(
-    verifierSubject
-  );
-  const derivedSubject = `owner:${teamSlug}:project:${projectName}:environment:production`;
+  const derivedSubject = `owner:${teamSlug}:project:${projectName}:environment:${runtime}`;
   const invalid: string[] = [];
-  if (
-    !/^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/u.test(teamSlug) ||
-    verifierMatch?.[1] !== teamSlug
-  ) {
+  const configuredSubject =
+    /^owner:([^:]+):project:([^:]+):environment:(preview|production)$/u.exec(expectedSubject);
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/u.test(teamSlug)) {
+    invalid.push("UNFILED_TRUSTED_SOURCE_TEAM_SLUG");
+  }
+  if (configuredSubject !== null && configuredSubject[1] !== teamSlug) {
     invalid.push("UNFILED_TRUSTED_SOURCE_TEAM_SLUG");
   }
   if (!/^team_[A-Za-z0-9]+$/u.test(ownerId)) {
@@ -459,10 +636,10 @@ function parseTrustedSource(
   if (!/^prj_[A-Za-z0-9]+$/u.test(projectId) || projectId === verifierProjectId) {
     invalid.push("UNFILED_TRUSTED_SOURCE_WEB_PROJECT_ID");
   }
-  if (
-    !/^[a-z0-9](?:[a-z0-9_-]{0,98}[a-z0-9])?$/u.test(projectName) ||
-    projectName === verifierMatch?.[2]
-  ) {
+  if (!/^[a-z0-9](?:[a-z0-9_-]{0,98}[a-z0-9])?$/u.test(projectName)) {
+    invalid.push("UNFILED_TRUSTED_SOURCE_WEB_PROJECT_NAME");
+  }
+  if (configuredSubject !== null && configuredSubject[2] !== projectName) {
     invalid.push("UNFILED_TRUSTED_SOURCE_WEB_PROJECT_NAME");
   }
   if (expectedSubject !== derivedSubject) {
@@ -471,7 +648,7 @@ function parseTrustedSource(
   if (invalid.length > 0) throw new VerifierConfigurationError([...new Set(invalid)]);
   return Object.freeze({
     audience: `${VERCEL_OIDC_AUDIENCE_ORIGIN}/${teamSlug}`,
-    environment: "production",
+    environment: runtime,
     expectedSubject,
     issuer: `${VERCEL_OIDC_ISSUER_ORIGIN}/${teamSlug}`,
     ownerId,
@@ -483,7 +660,8 @@ function parseTrustedSource(
 
 function enabledVerification(
   environment: VerifierEnvironment,
-  requestTimeoutMs: number
+  requestTimeoutMs: number,
+  runtime: "preview" | "production"
 ): EnabledVerificationConfig {
   const decryptConcurrency = parseInteger(
     environment,
@@ -528,11 +706,16 @@ function enabledVerification(
       "UNFILED_VERIFIER_KMS_TIMEOUT_MS"
     ]);
   }
-  const kms = parseKms(environment, kmsTimeoutMs, RAG_GENERATION_VERIFICATION_MAX_DISTINCT_KEYS);
+  const kms = parseManagedKeys(
+    environment,
+    kmsTimeoutMs,
+    RAG_GENERATION_VERIFICATION_MAX_DISTINCT_KEYS,
+    runtime
+  );
   return Object.freeze({
     database: parseDatabase(environment, connectTimeoutMs, statementTimeoutMs),
     decryptConcurrency,
-    invocation: parseTrustedSource(environment, kms.expectedOidcSubject, kms.vercelProjectId),
+    invocation: parseTrustedSource(environment, kms.vercelProjectId, runtime),
     kind: "enabled",
     kms
   });
@@ -551,8 +734,8 @@ export function loadVerifierConfig(environment: VerifierEnvironment = process.en
     1_000,
     VERIFIER_REQUEST_MAX_TIMEOUT_MS
   );
-  if (runtime !== "production") {
-    rejectCapabilities(environment, PRODUCTION_VARIABLES);
+  if (runtime === "local") {
+    rejectCapabilities(environment, CLOUD_VARIABLES);
     return Object.freeze({
       maxRequestBytes: parseInteger(
         environment,
@@ -562,6 +745,7 @@ export function loadVerifierConfig(environment: VerifierEnvironment = process.en
         MAX_REQUEST_BYTES
       ),
       port: parseInteger(environment, "PORT", DEFAULT_PORT, 1, 65_535),
+      releaseIdentity: parseReleaseIdentity(environment, runtime),
       requestTimeoutMs,
       runtime,
       verification: Object.freeze({ kind: "disabled" })
@@ -576,9 +760,10 @@ export function loadVerifierConfig(environment: VerifierEnvironment = process.en
       MAX_REQUEST_BYTES
     ),
     port: parseInteger(environment, "PORT", DEFAULT_PORT, 1, 65_535),
+    releaseIdentity: parseReleaseIdentity(environment, runtime),
     requestTimeoutMs,
     runtime,
-    verification: enabledVerification(environment, requestTimeoutMs)
+    verification: enabledVerification(environment, requestTimeoutMs, runtime)
   });
 }
 

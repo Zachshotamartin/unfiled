@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { loadWorkerConfig } from "./config.js";
+import { WorkerConfigurationError } from "./errors.js";
 import { createWorkerComposition } from "./composition.js";
 import type { WorkerApp } from "./http.js";
 
@@ -33,6 +34,19 @@ function unavailableResponse(request: Request): Response {
   );
 }
 
+/** Server-side only: configuration failures name the offending variables, never their values. */
+function reportStartupFailure(error: unknown): void {
+  const detail =
+    error instanceof WorkerConfigurationError
+      ? error.message
+      : error instanceof Error
+        ? error.name
+        : "unknown";
+  console.error(
+    JSON.stringify({ event: "worker.startup_failed", service: "unfiled-worker", detail })
+  );
+}
+
 export function handleWorkerRequest(request: Request): Promise<Response> {
   try {
     if (application === undefined) {
@@ -40,7 +54,8 @@ export function handleWorkerRequest(request: Request): Promise<Response> {
       application = createWorkerComposition(config).app;
     }
     return application(request);
-  } catch {
+  } catch (error) {
+    reportStartupFailure(error);
     return Promise.resolve(unavailableResponse(request));
   }
 }

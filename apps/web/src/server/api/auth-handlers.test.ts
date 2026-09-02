@@ -17,9 +17,9 @@ function provider(overrides: Partial<AuthProvider> = {}): AuthProvider {
   return {
     getUser: vi.fn(() => Promise.resolve(session.user)),
     refresh: vi.fn(() => Promise.resolve(session)),
-    requestCode: vi.fn(() => Promise.resolve()),
+    signInWithPassword: vi.fn(() => Promise.resolve(session)),
     signOut: vi.fn(() => Promise.resolve()),
-    verifyCode: vi.fn(() => Promise.resolve(session)),
+    signUp: vi.fn(() => Promise.resolve(session)),
     ...overrides
   };
 }
@@ -35,26 +35,37 @@ function jsonRequest(path: string, body: unknown, headers?: HeadersInit): Reques
 }
 
 describe("auth route handlers", () => {
-  it("normalizes OTP email, applies privacy-safe quota, and returns non-enumerating acceptance", async () => {
-    const requestCode = vi.fn(() => Promise.resolve());
-    const auth = provider({ requestCode });
+  it("creates an account with a normalized email, applies the quota, and returns a session with HttpOnly cookies", async () => {
+    const signUp = vi.fn(() => Promise.resolve(session));
     const quota = vi.fn(() => Promise.resolve());
-    const handlers = createAuthHandlers({ provider: auth, consumeQuota: quota });
-    const response = await handlers.requestCode(
+    const handlers = createAuthHandlers({ provider: provider({ signUp }), consumeQuota: quota });
+    const response = await handlers.signUp(
       jsonRequest(
-        "/api/v1/auth/otp",
-        { email: " Person@Example.COM " },
+        "/api/v1/auth/sign-up",
+        { email: " Person@Example.COM ", password: "correct horse battery" },
         { "x-forwarded-for": "203.0.113.7, 10.0.0.1" }
       )
     );
+    const body: unknown = await response.json();
 
-    expect(response.status).toBe(202);
-    await expect(response.json()).resolves.toEqual({
-      accepted: true,
-      retryAfterSeconds: 60
-    });
+    expect(response.status).toBe(200);
+    expect(AuthSessionSchema.safeParse(body).success).toBe(true);
+    expect(response.headers.get("set-cookie")).toContain("HttpOnly");
     expect(quota).toHaveBeenCalledWith("person@example.com", "203.0.113.7");
-    expect(requestCode).toHaveBeenCalledWith("person@example.com");
+    expect(signUp).toHaveBeenCalledWith("person@example.com", "correct horse battery");
+  });
+
+  it("rejects short passwords and malformed emails before touching the provider", async () => {
+    const signUp = vi.fn(() => Promise.resolve(session));
+    const quota = vi.fn(() => Promise.resolve());
+    const handlers = createAuthHandlers({ provider: provider({ signUp }), consumeQuota: quota });
+    const response = await handlers.signUp(
+      jsonRequest("/api/v1/auth/sign-up", { email: "person@example.com", password: "short" })
+    );
+
+    expect(response.status).toBe(400);
+    expect(quota).not.toHaveBeenCalled();
+    expect(signUp).not.toHaveBeenCalled();
   });
 
   it("passes the authoritative retry interval through a safe 429 response", async () => {
@@ -62,14 +73,17 @@ describe("auth route handlers", () => {
       provider: provider(),
       consumeQuota: vi.fn(() =>
         Promise.reject(
-          new HttpError(429, "rate_limited", "Try requesting another code later.", {
+          new HttpError(429, "rate_limited", "Too many attempts. Try again later.", {
             retryAfterSeconds: 17
           })
         )
       )
     });
-    const response = await handlers.requestCode(
-      jsonRequest("/api/v1/auth/otp", { email: "person@example.com" })
+    const response = await handlers.signUp(
+      jsonRequest("/api/v1/auth/sign-up", {
+        email: "person@example.com",
+        password: "correct horse battery"
+      })
     );
     const body = (await response.json()) as { retryAfterSeconds?: number };
 
@@ -78,10 +92,14 @@ describe("auth route handlers", () => {
     expect(body.retryAfterSeconds).toBe(17);
   });
 
-  it("verifies a code, returns the canonical mobile session, and sets HttpOnly cookies", async () => {
-    const handlers = createAuthHandlers({ provider: provider(), consumeQuota: vi.fn() });
-    const response = await handlers.verifyCode(
-      jsonRequest("/api/v1/auth/otp", { email: "person@example.com", code: "123456" })
+  it("signs in with a password, returns the canonical session, and never consumes quota on success", async () => {
+    const quota = vi.fn(() => Promise.resolve());
+    const handlers = createAuthHandlers({ provider: provider(), consumeQuota: quota });
+    const response = await handlers.signIn(
+      jsonRequest("/api/v1/auth/sign-in", {
+        email: "person@example.com",
+        password: "correct horse battery"
+      })
     );
     const body: unknown = await response.json();
 
@@ -89,6 +107,28 @@ describe("auth route handlers", () => {
     expect(AuthSessionSchema.safeParse(body).success).toBe(true);
     expect(response.headers.get("set-cookie")).toContain("HttpOnly");
     expect(response.headers.get("set-cookie")).toContain("SameSite=Lax");
+    expect(quota).not.toHaveBeenCalled();
+  });
+
+  it("counts rejected credentials against the quota and answers with a stable 401", async () => {
+    const quota = vi.fn(() => Promise.resolve());
+    const handlers = createAuthHandlers({
+      provider: provider({
+        signInWithPassword: vi.fn(() =>
+          Promise.reject(new HttpError(401, "unauthorized", "Email or password is incorrect."))
+        )
+      }),
+      consumeQuota: quota
+    });
+    const response = await handlers.signIn(
+      jsonRequest("/api/v1/auth/sign-in", {
+        email: "person@example.com",
+        password: "wrong password"
+      })
+    );
+
+    expect(response.status).toBe(401);
+    expect(quota).toHaveBeenCalledWith("person@example.com", "unknown");
   });
 
   it("refreshes restart-safe mobile credentials without trusting a user id", async () => {

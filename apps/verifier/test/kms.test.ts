@@ -19,7 +19,7 @@ vi.mock("@vercel/oidc-aws-credentials-provider", () => ({
 }));
 vi.mock("@vercel/oidc", () => ({ verifyVercelOidcToken: mocks.verify }));
 
-import type { VerifierKmsConfig, VercelTrustedSource } from "../src/config";
+import type { AwsVerifierKmsConfig, VercelTrustedSource } from "../src/config";
 import { createProductionInvocationAuth } from "../src/invocation-auth";
 import { createVerifierKmsAdapter, type VerifierKeySession } from "../src/kms";
 import { OWNER_ID, RETIRED_ROOT_ARN, ROOT_ARN, keyRecord } from "./fixtures";
@@ -35,9 +35,10 @@ const trustedSource: VercelTrustedSource = {
   teamSlug: "team-example"
 };
 
-const kmsConfig: VerifierKmsConfig = {
+const kmsConfig: AwsVerifierKmsConfig = {
   activeObjectWrapRootArn: ROOT_ARN,
   expectedOidcSubject: "owner:team-example:project:unfiled-verifier:environment:production",
+  kind: "aws-oidc",
   maxKeyRecords: 4,
   oidcAudience: "sts.amazonaws.com",
   region: "us-west-2",
@@ -47,25 +48,25 @@ const kmsConfig: VerifierKmsConfig = {
   vercelProjectId: "prj_verifier123"
 };
 
-async function invocation() {
+async function invocation(source: VercelTrustedSource = trustedSource) {
   const now = Math.floor(Date.now() / 1_000);
   mocks.verify.mockResolvedValue({
     payload: {
-      aud: trustedSource.audience,
-      environment: "production",
+      aud: source.audience,
+      environment: source.environment,
       exp: now + 300,
       iat: now,
-      iss: trustedSource.issuer,
+      iss: source.issuer,
       nbf: now,
-      owner: trustedSource.teamSlug,
-      owner_id: trustedSource.ownerId,
-      project: trustedSource.projectName,
-      project_id: trustedSource.projectId,
-      sub: trustedSource.expectedSubject
+      owner: source.teamSlug,
+      owner_id: source.ownerId,
+      project: source.projectName,
+      project_id: source.projectId,
+      sub: source.expectedSubject
     },
     protectedHeader: { alg: "RS256" }
   });
-  return createProductionInvocationAuth(trustedSource).authorize(
+  return createProductionInvocationAuth(source).authorize(
     {
       authorizationHeader: null,
       protectionBypassHeader: null,
@@ -80,6 +81,65 @@ describe("decrypt-only verifier KMS session", () => {
   beforeEach(() => {
     mocks.credentials.mockClear();
     mocks.verify.mockReset();
+  });
+
+  it("opens the separately configured Preview KMS boundary without a local path", async () => {
+    const previewSource: VercelTrustedSource = {
+      ...trustedSource,
+      environment: "preview",
+      expectedSubject: "owner:team-example:project:unfiled-web:environment:preview"
+    };
+    const previewKms: AwsVerifierKmsConfig = {
+      ...kmsConfig,
+      expectedOidcSubject: "owner:team-example:project:unfiled-verifier:environment:preview",
+      roleArn: "arn:aws:iam::123456789012:role/unfiled-verifier-preview"
+    };
+    const destroy = vi.fn();
+    const factory = vi.fn(() => ({ destroy, send: vi.fn() }));
+
+    await expect(
+      createVerifierKmsAdapter(factory).withKeySession(
+        previewKms,
+        {
+          invocation: await invocation(previewSource),
+          requestId: "request-1",
+          runtime: "preview"
+        },
+        new AbortController().signal,
+        () => Promise.resolve("preview")
+      )
+    ).resolves.toBe("preview");
+
+    expect(mocks.credentials).toHaveBeenCalledWith({
+      audience: "sts.amazonaws.com",
+      roleArn: "arn:aws:iam::123456789012:role/unfiled-verifier-preview",
+      roleSessionName: "unfiled-rag-verifier"
+    });
+    expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a cross-environment KMS boundary before opening AWS", async () => {
+    const previewSource: VercelTrustedSource = {
+      ...trustedSource,
+      environment: "preview",
+      expectedSubject: "owner:team-example:project:unfiled-web:environment:preview"
+    };
+    const factory = vi.fn(() => ({ destroy: vi.fn(), send: vi.fn() }));
+
+    await expect(
+      createVerifierKmsAdapter(factory).withKeySession(
+        kmsConfig,
+        {
+          invocation: await invocation(previewSource),
+          requestId: "request-1",
+          runtime: "preview"
+        },
+        new AbortController().signal,
+        () => Promise.resolve("must-not-run")
+      )
+    ).rejects.toMatchObject({ code: "provider_unavailable", status: 503 });
+
+    expect(factory).not.toHaveBeenCalled();
   });
 
   it("uses one Decrypt command per exact key and caches the non-extractable imported key", async () => {

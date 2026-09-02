@@ -40,6 +40,28 @@ export type OpenAiEmbeddingProviderOptions = Readonly<{
   timeoutMs: number;
 }>;
 
+export function createLocalHashEmbeddingProvider(): EmbeddingProvider {
+  return Object.freeze({
+    embed(input): Promise<Float32Array> {
+      if (
+        input.signal.aborted ||
+        input.modelId !== LOCAL_HASH_EMBEDDING_MODEL_ID ||
+        input.dimensions !== LOCAL_HASH_EMBEDDING_DIMENSIONS ||
+        typeof input.text !== "string" ||
+        input.text.trim().length === 0 ||
+        new TextEncoder().encode(input.text).byteLength > MAX_LOCAL_HASH_EMBEDDING_INPUT_BYTES
+      ) {
+        return Promise.reject(new EmbeddingProviderError("validation_failed", false));
+      }
+      try {
+        return Promise.resolve(createLocalHashEmbedding(input.text));
+      } catch {
+        return Promise.reject(new EmbeddingProviderError("validation_failed", false));
+      }
+    }
+  });
+}
+
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -248,3 +270,9 @@ export function createOpenAiEmbeddingProvider(
     }
   });
 }
+import {
+  createLocalHashEmbedding,
+  LOCAL_HASH_EMBEDDING_DIMENSIONS,
+  LOCAL_HASH_EMBEDDING_MODEL_ID,
+  MAX_LOCAL_HASH_EMBEDDING_INPUT_BYTES
+} from "@unfiled/search";

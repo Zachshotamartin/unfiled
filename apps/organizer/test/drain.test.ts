@@ -19,6 +19,7 @@ import {
 } from "../src/errors.js";
 import type { OrganizerKeyAuthority } from "../src/key-management.js";
 import type { OrganizerPlanner } from "../src/planner.js";
+import type { OrganizerAppDefaultApiKeys } from "../src/provider-credential.js";
 
 const signal = new AbortController().signal;
 const authority = {} as OrganizerKeyAuthority;
@@ -66,7 +67,11 @@ const job: ClaimedOrganizerJob = Object.freeze({
   jobId: "job_01ARZ3NDEKTSV4RRFFQ69G5FAV",
   leaseExpiresAt: "2026-08-31T20:00:00.000Z",
   leaseToken: "11111111-1111-4111-8111-111111111111",
-  modelId: "gpt-5.4-mini-2026-03-17",
+  modelId: "gpt-5.6-terra",
+  modelSelection: "auto",
+  selectedProvider: "openai",
+  adapterRegistryVersion: "organization-model-registry-v2",
+  settingsRevision: 1,
   occurredAt: "2026-08-31T19:58:00.000Z",
   ownerId: "22222222-2222-4222-8222-222222222222",
   promptVersion: "routing-v1",
@@ -154,11 +159,15 @@ function repository(overrides: Partial<OrganizerRepository> = {}): OrganizerRepo
       .mockResolvedValue({ deadLetteredCount: 0, recoveredCount: 0, requeuedCount: 0 }),
     claim: vi.fn().mockResolvedValue([job]),
     providerRoute: vi.fn().mockResolvedValue({
+      adapterRegistryVersion: "organization-model-registry-v2",
       credential: null,
       credentialRevision: null,
       expansionStyle: "brief",
+      modelId: "gpt-5.6-terra",
+      modelSelection: "auto",
       provider: "openai",
       routingEffort: "standard",
+      settingsRevision: 1,
       source: "app_default"
     }),
     heartbeat: vi.fn().mockResolvedValue({
@@ -277,10 +286,10 @@ function drain(
   planner = appendPlanner,
   crypto = cipher(),
   routingPolicyContext: OrganizerRoutingPolicyContext | null = automaticPolicyContext,
-  appDefaultProviderApiKey?: string
+  appDefaultProviderApiKeys?: OrganizerAppDefaultApiKeys
 ) {
   return createOrganizerDrain({
-    ...(appDefaultProviderApiKey === undefined ? {} : { appDefaultProviderApiKey }),
+    ...(appDefaultProviderApiKeys === undefined ? {} : { appDefaultProviderApiKeys }),
     cipher: crypto,
     claimLimit: 2,
     concurrency: 2,
@@ -1096,11 +1105,15 @@ describe("organizer drain", () => {
   it("binds a BYOK 401 failure to the exact lease-resolved credential revision", async () => {
     const byok = "sk-byok-abcdefghijklmnopqrstuvwxyz0123456789";
     const providerRoute = vi.fn().mockResolvedValue({
+      adapterRegistryVersion: job.adapterRegistryVersion,
       credential: byok,
       credentialRevision: 14,
       expansionStyle: job.expansionStyle,
-      provider: "openai",
+      modelId: job.modelId,
+      modelSelection: job.modelSelection,
+      provider: job.selectedProvider,
       routingEffort: job.routingEffort,
+      settingsRevision: job.settingsRevision,
       source: "byok"
     });
     const repo = repository({
@@ -1118,13 +1131,9 @@ describe("organizer drain", () => {
         );
       })
     };
-    const result = await drain(
-      repo,
-      planner,
-      cipher(),
-      automaticPolicyContext,
-      "sk-app-abcdefghijklmnopqrstuvwxyz0123456789"
-    ).drain({ authority, requestId: "byok-401", signal, trigger: "schedule" });
+    const result = await drain(repo, planner, cipher(), automaticPolicyContext, {
+      openai: "sk-app-abcdefghijklmnopqrstuvwxyz0123456789"
+    }).drain({ authority, requestId: "byok-401", signal, trigger: "schedule" });
     expect(result).toEqual({ claimed: 1, completed: 0, failed: 1, retryScheduled: 0 });
     expect(providerRoute).toHaveBeenCalledWith({
       jobId: job.jobId,

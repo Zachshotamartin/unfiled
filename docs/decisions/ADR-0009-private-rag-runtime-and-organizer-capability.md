@@ -4,6 +4,7 @@
 - Date: 2026-08-31
 - Narrows: ADR-0006 private retrieval and ADR-0007 worker database capability
 - Decision drivers: make the encrypted index executable without a Supabase bypass credential; preserve the audited six-function index-worker allowlist; prevent organizer authority from being smuggled into an index RPC; keep private-manual keys and content outside both AI workloads.
+- Amended 2026-09-02: this record refers to "KMS-wrapped" intermediate keys and an AI-only AWS role. Under [ADR-0016](./ADR-0016-free-beta-vercel-sensitive-key-custody-and-local-hash-retrieval.md) the free-beta custodian is the Vercel Sensitive root ring: the worker receives the AI object-wrap root only and the organizer receives the AI object-wrap and AI content-MAC roots, which preserves the same class/purpose boundary without AWS. The six-RPC index allowlist and the separate organizer identity are unchanged.
 
 ## Context
 

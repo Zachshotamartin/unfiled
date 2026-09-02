@@ -3,11 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   AuthSessionResponseSchema,
   AuthSignOutResponseSchema,
-  AuthOtpAcceptedResponseSchema,
+  AuthPasswordSignInRequestSchema,
+  AuthPasswordSignUpRequestSchema,
   AuthRefreshRequestSchema,
-  AuthOtpRequestSchema,
-  AuthOtpVerifyRequestSchema,
-  AuthVerifyRequestSchema,
   IdempotencyKeySchema,
   InteractiveOperationsRequestSchema,
   ListReviewItemsResponseSchema,
@@ -53,29 +51,38 @@ import {
 const idempotencyKey = "manual-note-write-01J6M9Q7";
 
 describe("Milestone B manual-note contracts", () => {
-  it("normalizes email and accepts exactly six OTP digits", () => {
-    expect(AuthOtpAcceptedResponseSchema.parse({ accepted: true, retryAfterSeconds: 60 })).toEqual({
-      accepted: true,
-      retryAfterSeconds: 60
-    });
-    expect(AuthOtpAcceptedResponseSchema.safeParse({ accepted: true }).success).toBe(false);
-    expect(AuthOtpRequestSchema.parse({ email: "  PERSON@Example.COM " })).toEqual({
-      email: "person@example.com"
-    });
+  it("normalizes email and bounds passwords for sign-up and sign-in", () => {
     expect(
-      AuthOtpVerifyRequestSchema.parse({ email: "PERSON@example.com", code: "123456" })
-    ).toEqual({ email: "person@example.com", code: "123456" });
+      AuthPasswordSignUpRequestSchema.parse({
+        email: "  PERSON@Example.COM ",
+        password: "correct horse"
+      })
+    ).toEqual({ email: "person@example.com", password: "correct horse" });
     expect(
-      AuthOtpVerifyRequestSchema.safeParse({ email: "person@example.com", code: "12345" }).success
+      AuthPasswordSignInRequestSchema.safeParse({ email: "person@example.com", password: "short" })
+        .success
     ).toBe(false);
-    expect(AuthOtpRequestSchema.safeParse({ email: "not-email", extra: true }).success).toBe(false);
+    expect(
+      AuthPasswordSignInRequestSchema.safeParse({
+        email: "person@example.com",
+        password: "x".repeat(73)
+      }).success
+    ).toBe(false);
+    expect(
+      AuthPasswordSignUpRequestSchema.safeParse({ email: "not-email", password: "correct horse" })
+        .success
+    ).toBe(false);
+    expect(
+      AuthPasswordSignUpRequestSchema.safeParse({
+        email: "person@example.com",
+        password: "correct horse",
+        extra: true
+      }).success
+    ).toBe(false);
     expect(AuthRefreshRequestSchema.parse({ refreshToken: "restart-safe-token" })).toEqual({
       refreshToken: "restart-safe-token"
     });
     expect(AuthRefreshRequestSchema.safeParse({ refreshToken: "" }).success).toBe(false);
-    expect(
-      AuthVerifyRequestSchema.parse({ email: " PERSON@example.com ", code: "123456" })
-    ).toEqual({ email: "person@example.com", code: "123456" });
     expect(AuthSessionResponseSchema.parse({ user: manualNoteFixtures.authSession.user })).toEqual({
       user: manualNoteFixtures.authSession.user
     });
@@ -383,11 +390,11 @@ describe("Milestone B manual-note contracts", () => {
 
   it("publishes every B path with an Idempotency-Key on writes", () => {
     const expectedPaths = [
-      "/auth/otp",
       "/auth/refresh",
       "/auth/session",
+      "/auth/sign-in",
       "/auth/sign-out",
-      "/auth/verify",
+      "/auth/sign-up",
       "/captures",
       "/captures/{captureId}",
       "/captures/{captureId}/receipt",

@@ -404,6 +404,7 @@ describe("production verifier capacity gate", () => {
               if (
                 record.ownerId !== OWNER_ID ||
                 record.keyId !== KEY_ID ||
+                record.schemaVersion !== 1 ||
                 record.rootKeyArn !== ROOT_ARN
               ) {
                 throw new Error("unexpected capacity-gate key record");

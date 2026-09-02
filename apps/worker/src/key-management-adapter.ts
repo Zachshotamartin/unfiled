@@ -1,13 +1,27 @@
 import {
   assertIndexWorkerKmsReadiness,
   createAwsKmsEnvelopeCustodian,
+  createVercelSensitiveEnvironmentEnvelopeCustodian,
+  createVercelSensitiveEnvironmentKmsTransport,
   createVercelOidcKmsTransport,
   type CreateIntermediateKeyRequest,
   type IntermediateKeyCustodian,
+  type ManagedKeyRecord,
+  type ManagedKeyRecordParser,
   type ManagedKeyRecordV1
 } from "@unfiled/key-management";
+import {
+  parseManagedKeyRecordV1,
+  parseManagedKeyRecordV2,
+  type ManagedKeyRecordV2
+} from "@unfiled/key-management";
 
-import type { AwsWorkerKeyBoundary, WorkerConfig, WorkerRuntime } from "./config.js";
+import type {
+  AwsWorkerKeyBoundary,
+  VercelSensitiveEnvironmentWorkerKeyBoundary,
+  WorkerConfig,
+  WorkerRuntime
+} from "./config.js";
 import { WorkerUnavailableError } from "./errors.js";
 import {
   isVerifiedWorkerInvocation,
@@ -29,11 +43,16 @@ export type AiAssistedKeyAuthority = Readonly<{
 }>;
 
 type AuthorityMetadata = Readonly<{
-  custody: "aws-kms" | "local-synthetic";
-  custodian?: IntermediateKeyCustodian;
+  custody: "aws-kms" | "local-synthetic" | "vercel-sensitive-env-v1";
+  custodian?: WorkerIntermediateKeyCustodian;
+  parseRecord?: WorkerManagedKeyRecordParser;
   requestId: string;
   runtime: WorkerRuntime;
 }>;
+
+export type WorkerManagedKeyRecord = ManagedKeyRecordV1 | ManagedKeyRecordV2;
+export type WorkerManagedKeyRecordParser = ManagedKeyRecordParser<WorkerManagedKeyRecord>;
+export type WorkerIntermediateKeyCustodian = IntermediateKeyCustodian<WorkerManagedKeyRecord>;
 
 const issuedAuthorities = new WeakMap<object, AuthorityMetadata>();
 
@@ -48,13 +67,34 @@ function issueAuthority(metadata: AuthorityMetadata): AiAssistedKeyAuthority {
 }
 
 type RevocableCustodianLease = Readonly<{
-  custodian: IntermediateKeyCustodian;
+  custodian: WorkerIntermediateKeyCustodian;
   revoke(): void;
 }>;
 
+function widenCustodian<Record extends ManagedKeyRecord>(
+  custodian: IntermediateKeyCustodian<Record>
+): WorkerIntermediateKeyCustodian {
+  return Object.freeze({
+    withGeneratedIntermediateKey(request, use, options) {
+      return custodian.withGeneratedIntermediateKey(
+        request,
+        (bytes, record) => use(bytes, record),
+        options
+      );
+    },
+    withUnwrappedIntermediateKey(record, use, options) {
+      return custodian.withUnwrappedIntermediateKey(
+        record,
+        (bytes, parsed) => use(bytes, parsed),
+        options
+      );
+    }
+  });
+}
+
 function createRevocableCustodian(
   authority: AiAssistedKeyAuthority,
-  underlying: IntermediateKeyCustodian,
+  underlying: WorkerIntermediateKeyCustodian,
   requestSignal: AbortSignal
 ): RevocableCustodianLease {
   let open = true;
@@ -65,17 +105,17 @@ function createRevocableCustodian(
     if (
       !open ||
       requestSignal.aborted ||
-      metadata?.custody !== "aws-kms" ||
+      (metadata?.custody !== "aws-kms" && metadata?.custody !== "vercel-sensitive-env-v1") ||
       metadata.custodian !== facade
     ) {
       throw new WorkerUnavailableError();
     }
   };
 
-  const facade: IntermediateKeyCustodian = Object.freeze({
+  const facade: WorkerIntermediateKeyCustodian = Object.freeze({
     async withGeneratedIntermediateKey<Result>(
       request: CreateIntermediateKeyRequest,
-      use: (keyBytes: Uint8Array, record: ManagedKeyRecordV1) => Promise<Result>
+      use: (keyBytes: Uint8Array, record: WorkerManagedKeyRecord) => Promise<Result>
     ): Promise<Result> {
       assertOpen();
       return underlying.withGeneratedIntermediateKey(
@@ -89,7 +129,7 @@ function createRevocableCustodian(
     },
     async withUnwrappedIntermediateKey<Result>(
       record: unknown,
-      use: (keyBytes: Uint8Array, parsedRecord: ManagedKeyRecordV1) => Promise<Result>
+      use: (keyBytes: Uint8Array, parsedRecord: WorkerManagedKeyRecord) => Promise<Result>
     ): Promise<Result> {
       assertOpen();
       return underlying.withUnwrappedIntermediateKey(
@@ -129,12 +169,30 @@ export function isAiAssistedKeyAuthority(
 /** Available only while the adapter's authority callback is active. */
 export function custodianForAiAssistedAuthority(
   authority: AiAssistedKeyAuthority
-): IntermediateKeyCustodian {
+): WorkerIntermediateKeyCustodian {
   const metadata = issuedAuthorities.get(authority);
-  if (metadata?.custody !== "aws-kms" || metadata.custodian === undefined) {
+  if (
+    (metadata?.custody !== "aws-kms" && metadata?.custody !== "vercel-sensitive-env-v1") ||
+    metadata.custodian === undefined
+  ) {
     throw new WorkerUnavailableError();
   }
   return metadata.custodian;
+}
+
+export function managedKeyRecordParserForAiAssistedAuthority(
+  authority: AiAssistedKeyAuthority
+): WorkerManagedKeyRecordParser {
+  const metadata = issuedAuthorities.get(authority);
+  if (metadata?.parseRecord === undefined) throw new WorkerUnavailableError();
+  return metadata.parseRecord;
+}
+
+export function managedKeyRecordParserForWorkerBoundary(
+  boundary: WorkerConfig["keyBoundary"]
+): WorkerManagedKeyRecordParser {
+  if (boundary.kind === "vercel-sensitive-env-v1") return parseManagedKeyRecordV2;
+  return parseManagedKeyRecordV1;
 }
 
 export type WorkerIdentityProof = Readonly<{
@@ -155,7 +213,9 @@ export type WorkerKeyManagementAdapter = Readonly<{
 
 type AwsReadinessSession = Readonly<{
   close(): void;
-  custodian: IntermediateKeyCustodian;
+  custodian: WorkerIntermediateKeyCustodian;
+  custody: "aws-kms" | "vercel-sensitive-env-v1";
+  parseRecord: WorkerManagedKeyRecordParser;
 }>;
 
 export function oidcTokenFromRequest(
@@ -215,7 +275,70 @@ async function openAwsReadinessSession(
     });
     return Object.freeze({
       close: () => transport?.destroy(),
-      custodian
+      custodian: widenCustodian(custodian),
+      custody: "aws-kms" as const,
+      parseRecord: parseManagedKeyRecordV1
+    });
+  } catch {
+    transport?.destroy();
+    throw new WorkerUnavailableError();
+  }
+}
+
+async function openVercelSensitiveEnvironmentSession(
+  boundary: VercelSensitiveEnvironmentWorkerKeyBoundary,
+  signal: AbortSignal
+): Promise<AwsReadinessSession> {
+  let transport:
+    Awaited<ReturnType<typeof createVercelSensitiveEnvironmentKmsTransport>> | undefined;
+  const retired = boundary.retiredRoots.ai_assisted.object_wrap;
+  try {
+    transport = await createVercelSensitiveEnvironmentKmsTransport({
+      expectedRootKeyIds: [boundary.aiObjectWrapRootKeyId, ...retired]
+    });
+    const activeRoots = {
+      ai_assisted: { object_wrap: boundary.aiObjectWrapRootKeyId }
+    } as const;
+    const custodian = createVercelSensitiveEnvironmentEnvelopeCustodian({
+      activeRoots,
+      deploymentEnvironment: boundary.deploymentEnvironment,
+      retiredRoots: boundary.retiredRoots,
+      transport,
+      workload: "index_worker"
+    });
+    await custodian.withGeneratedIntermediateKey(
+      {
+        createdAt: "2026-01-01T00:00:00.000Z",
+        keyClass: "ai_assisted",
+        keyId: "readiness.ai.object-wrap.v2",
+        keyVersion: 1,
+        ownerId: "00000000-0000-4000-8000-000000000001",
+        predecessorKeyId: null,
+        purpose: "object_wrap"
+      },
+      (generated, record) =>
+        // The custodian only opens active/retired records, so the throwaway
+        // readiness record is activated in memory; it is never persisted.
+        custodian.withUnwrappedIntermediateKey(
+          { ...record, activatedAt: record.createdAt, status: "active" },
+          (unwrapped) => {
+            if (
+              generated.byteLength !== unwrapped.byteLength ||
+              generated.some((byte, index) => byte !== unwrapped[index])
+            ) {
+              throw new WorkerUnavailableError();
+            }
+            return Promise.resolve();
+          },
+          { signal }
+        ),
+      { signal }
+    );
+    return Object.freeze({
+      close: () => transport?.destroy(),
+      custodian: widenCustodian(custodian),
+      custody: "vercel-sensitive-env-v1" as const,
+      parseRecord: parseManagedKeyRecordV2
     });
   } catch {
     transport?.destroy();
@@ -242,7 +365,7 @@ export function createWorkerKeyManagementAdapter(): WorkerKeyManagementAdapter {
       }
 
       if (boundary.kind === "local-synthetic") {
-        if (proof.runtime === "production" || proof.oidcToken !== undefined) {
+        if (proof.runtime !== "local" || proof.oidcToken !== undefined) {
           throw new WorkerUnavailableError();
         }
         const authority = issueAuthority({
@@ -257,18 +380,26 @@ export function createWorkerKeyManagementAdapter(): WorkerKeyManagementAdapter {
         }
       }
 
-      if (proof.runtime !== "production" || proof.oidcToken === undefined) {
-        throw new WorkerUnavailableError();
-      }
+      if (proof.runtime === "local") throw new WorkerUnavailableError();
       let session: AwsReadinessSession;
-      try {
+      if (boundary.kind === "aws-oidc") {
+        const boundaryEnvironment =
+          /^owner:[^:]+:project:[^:]+:environment:(preview|production)$/u.exec(
+            boundary.expectedOidcSubject
+          )?.[1];
+        if (proof.oidcToken === undefined || boundaryEnvironment !== proof.runtime) {
+          throw new WorkerUnavailableError();
+        }
         session = await openAwsReadinessSession(
           boundary,
           { oidcToken: proof.oidcToken, requestId: proof.requestId },
           signal
         );
-      } catch {
-        throw new WorkerUnavailableError();
+      } else {
+        if (proof.oidcToken !== undefined || boundary.deploymentEnvironment !== proof.runtime) {
+          throw new WorkerUnavailableError();
+        }
+        session = await openVercelSensitiveEnvironmentSession(boundary, signal);
       }
       let closed = false;
       let authority: AiAssistedKeyAuthority | undefined;
@@ -284,7 +415,8 @@ export function createWorkerKeyManagementAdapter(): WorkerKeyManagementAdapter {
       try {
         assertSignalActive(signal);
         const authorityMetadata = {
-          custody: "aws-kms",
+          custody: session.custody,
+          parseRecord: session.parseRecord,
           requestId: proof.requestId,
           runtime: proof.runtime
         } as const;

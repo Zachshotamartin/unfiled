@@ -5,6 +5,8 @@ import { loadWorkerConfig, WORKER_CAPABILITIES, type WorkerEnvironment } from ".
 const SECRET = "worker-only-drain-secret-with-adequate-length";
 const PROJECT_REF = "abcdefghijklmnopqrst";
 const DATABASE_HOST = "aws-0-us-west-2.pooler.supabase.com";
+const SENSITIVE_ROOT =
+  "urn:unfiled:key-root:vercel-sensitive-env-v1:production:11111111-2222-4333-8444-555555555555";
 const DATABASE_CA = `-----BEGIN CERTIFICATE-----
 VGhpcyBpcyBhIHN0cmljdCB0ZXN0LW9ubHkgQ0EgZml4dHVyZSB0aGF0IGlzIG5vdCBhIHJlYWwg
 Y2VydGlmaWNhdGUu
@@ -21,6 +23,7 @@ function local(overrides: WorkerEnvironment = {}): WorkerEnvironment {
 
 function production(overrides: WorkerEnvironment = {}): WorkerEnvironment {
   return {
+    UNFILED_KEY_CUSTODIAN: "aws-kms",
     UNFILED_AWS_REGION: "us-west-2",
     UNFILED_AWS_ROLE_ARN: "arn:aws:iam::123456789012:role/unfiled-worker-production",
     UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN:
@@ -33,6 +36,7 @@ function production(overrides: WorkerEnvironment = {}): WorkerEnvironment {
     UNFILED_TRUSTED_SOURCE_WEB_PROJECT_NAME: "unfiled-web",
     UNFILED_EMBEDDING_DIMENSIONS: "1536",
     UNFILED_EMBEDDING_MODEL_ID: "text-embedding-3-small",
+    UNFILED_WORKER_EMBEDDING_PROVIDER: "openai",
     UNFILED_OPENAI_EMBEDDING_API_KEY: "test-openai-production-key-with-sufficient-length",
     UNFILED_WORKER_DATABASE_CA_PEM_BASE64: Buffer.from(DATABASE_CA).toString("base64"),
     UNFILED_WORKER_DATABASE_EXPECTED_HOST: DATABASE_HOST,
@@ -42,10 +46,29 @@ function production(overrides: WorkerEnvironment = {}): WorkerEnvironment {
     UNFILED_WORKER_EXPECTED_OIDC_SUBJECT:
       "owner:team-example:project:unfiled-worker:environment:production",
     UNFILED_WORKER_PROJECT_ID: "prj_example",
+    VERCEL: "1",
+    VERCEL_DEPLOYMENT_ID: "dpl_workerproduction123",
     VERCEL_ENV: "production",
+    VERCEL_GIT_COMMIT_SHA: "a".repeat(40),
     VERCEL_PROJECT_ID: "prj_example",
     ...overrides
   };
+}
+
+function preview(overrides: WorkerEnvironment = {}): WorkerEnvironment {
+  return production({
+    UNFILED_AWS_ROLE_ARN: "arn:aws:iam::123456789012:role/unfiled-worker-preview",
+    UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN:
+      "arn:aws:kms:us-west-2:123456789012:key/22222222-3333-4444-8555-666666666666",
+    UNFILED_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT:
+      "owner:team-example:project:unfiled-web:environment:preview",
+    UNFILED_WORKER_ENV: "preview",
+    UNFILED_WORKER_EXPECTED_OIDC_SUBJECT:
+      "owner:team-example:project:unfiled-worker:environment:preview",
+    VERCEL_DEPLOYMENT_ID: "dpl_workerpreview123",
+    VERCEL_ENV: "preview",
+    ...overrides
+  });
 }
 
 describe("worker environment validation", () => {
@@ -56,6 +79,7 @@ describe("worker environment validation", () => {
       keyBoundary: { kind: "local-synthetic", keyClass: "ai_assisted" },
       maxRequestBytes: 1_024,
       port: 8_788,
+      releaseIdentity: null,
       requestTimeoutMs: 45_000,
       runtime: "local"
     });
@@ -73,6 +97,11 @@ describe("worker environment validation", () => {
     const config = loadWorkerConfig(production());
 
     expect(config.runtime).toBe("production");
+    expect(config.releaseIdentity).toEqual({
+      commit: "a".repeat(40),
+      deployment: "sha256:8a0b6ad0d3fc49a31ea81668ad72144011d3d671501fd4cccf09af5f7c453d7b",
+      environment: "production"
+    });
     expect(config.indexing).toMatchObject({
       claimLimit: 2,
       concurrency: 2,
@@ -84,6 +113,7 @@ describe("worker environment validation", () => {
       },
       embedding: {
         dimensions: 1536,
+        kind: "openai",
         modelId: "text-embedding-3-small",
         timeoutMs: 10_000
       },
@@ -116,6 +146,72 @@ describe("worker environment validation", () => {
       roleArn: "arn:aws:iam::123456789012:role/unfiled-worker-production",
       vercelProjectId: "prj_example"
     });
+  });
+
+  it("loads the fixed provider-free local hash embedding profile", () => {
+    const config = loadWorkerConfig(
+      production({
+        UNFILED_WORKER_EMBEDDING_PROVIDER: "local-hash-v1",
+        UNFILED_OPENAI_EMBEDDING_API_KEY: undefined,
+        UNFILED_EMBEDDING_MODEL_ID: undefined,
+        UNFILED_EMBEDDING_DIMENSIONS: undefined
+      })
+    );
+
+    expect(config.indexing).toMatchObject({
+      embedding: {
+        dimensions: 512,
+        kind: "local-hash-v1",
+        modelId: "unfiled-local-hash-v1"
+      },
+      kind: "enabled"
+    });
+  });
+
+  it("loads Vercel sensitive-environment custody without AWS workload credentials", () => {
+    const config = loadWorkerConfig(
+      production({
+        UNFILED_KEY_CUSTODIAN: "vercel-sensitive-env-v1",
+        UNFILED_AWS_REGION: undefined,
+        UNFILED_AWS_ROLE_ARN: undefined,
+        UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN: undefined,
+        UNFILED_WORKER_EXPECTED_OIDC_SUBJECT: undefined,
+        UNFILED_WORKER_AI_OBJECT_WRAP_ROOT_KEY_ID: SENSITIVE_ROOT,
+        UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1: '{"version":1}'
+      })
+    );
+
+    expect(config.keyBoundary).toEqual({
+      aiObjectWrapRootKeyId: SENSITIVE_ROOT,
+      deploymentEnvironment: "production",
+      kind: "vercel-sensitive-env-v1",
+      keyClass: "ai_assisted",
+      retiredRoots: { ai_assisted: { object_wrap: [] } },
+      vercelProjectId: "prj_example"
+    });
+  });
+
+  it("loads Preview through its exact managed AWS/OIDC and indexing boundary", () => {
+    const config = loadWorkerConfig(preview());
+
+    expect(config).toMatchObject({
+      runtime: "preview",
+      releaseIdentity: { environment: "preview" },
+      indexing: { kind: "enabled" },
+      invocationAuth: {
+        kind: "production-verifier",
+        trustedSource: {
+          environment: "preview",
+          expectedSubject: "owner:team-example:project:unfiled-web:environment:preview"
+        }
+      },
+      keyBoundary: {
+        kind: "aws-oidc",
+        expectedOidcSubject: "owner:team-example:project:unfiled-worker:environment:preview",
+        roleArn: "arn:aws:iam::123456789012:role/unfiled-worker-preview"
+      }
+    });
+    expect(config.keyBoundary.kind).toBe("aws-oidc");
   });
 
   it("rejects static AWS credentials, private keys, and user-session capability", () => {
@@ -241,17 +337,42 @@ describe("worker environment validation", () => {
 
   it("requires environment-specific secrets and a matching Vercel environment", () => {
     expect(() => loadWorkerConfig(local({ CRON_SECRET: SECRET }))).toThrow("CRON_SECRET");
+    expect(() => loadWorkerConfig(local({ VERCEL: "1" }))).toThrow("VERCEL_ENV");
     expect(() => loadWorkerConfig(production({ UNFILED_WORKER_DRAIN_SECRET: SECRET }))).toThrow(
       "UNFILED_WORKER_DRAIN_SECRET"
     );
     expect(() => loadWorkerConfig(production({ VERCEL_ENV: "preview" }))).toThrow("VERCEL_ENV");
+    expect(() => loadWorkerConfig(preview({ VERCEL: undefined }))).toThrow("VERCEL_ENV");
+    expect(() => loadWorkerConfig(preview({ VERCEL_DEPLOYMENT_ID: undefined }))).toThrow(
+      "VERCEL_DEPLOYMENT_ID"
+    );
+    expect(() => loadWorkerConfig(preview({ VERCEL_GIT_COMMIT_SHA: "A".repeat(40) }))).toThrow(
+      "VERCEL_GIT_COMMIT_SHA"
+    );
+    expect(() => loadWorkerConfig(preview({ VERCEL_DEPLOYMENT_ID: "unsafe/value" }))).toThrow(
+      "VERCEL_DEPLOYMENT_ID"
+    );
+    expect(() => loadWorkerConfig(preview({ UNFILED_WORKER_DRAIN_SECRET: SECRET }))).toThrow(
+      "UNFILED_WORKER_DRAIN_SECRET"
+    );
+    expect(() =>
+      loadWorkerConfig(
+        preview({
+          UNFILED_WORKER_EXPECTED_OIDC_SUBJECT:
+            "owner:team-example:project:unfiled-worker:environment:production"
+        })
+      )
+    ).toThrow("UNFILED_WORKER_EXPECTED_OIDC_SUBJECT");
     expect(() => loadWorkerConfig({ UNFILED_WORKER_ENV: "staging" })).toThrow("UNFILED_WORKER_ENV");
   });
 
   it("rejects database/provider indexing capabilities outside production", () => {
     const productionIndexing = production();
     const localIndexing: Record<string, string | undefined> = { ...productionIndexing };
+    delete localIndexing.VERCEL;
+    delete localIndexing.VERCEL_DEPLOYMENT_ID;
     delete localIndexing.VERCEL_ENV;
+    delete localIndexing.VERCEL_GIT_COMMIT_SHA;
     delete localIndexing.VERCEL_PROJECT_ID;
     localIndexing.UNFILED_WORKER_ENV = "local";
     localIndexing.UNFILED_WORKER_DRAIN_SECRET = SECRET;
@@ -395,5 +516,66 @@ describe("worker environment validation", () => {
         loadWorkerConfig(production({ UNFILED_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON: raw }))
       ).toThrow("UNFILED_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON");
     }
+  });
+
+  it("rejects ambiguous, malformed, or cross-environment Vercel sensitive-environment custody", () => {
+    const previewRoot =
+      "urn:unfiled:key-root:vercel-sensitive-env-v1:preview:22222222-2222-4222-8222-222222222222";
+    const retiredRoot =
+      "urn:unfiled:key-root:vercel-sensitive-env-v1:production:33333333-3333-4333-8333-333333333333";
+    const retiredVariable = "UNFILED_WORKER_RETIRED_AI_OBJECT_WRAP_ROOT_KEY_IDS_JSON";
+    const sensitive = (overrides: WorkerEnvironment = {}): WorkerEnvironment =>
+      production({
+        UNFILED_KEY_CUSTODIAN: "vercel-sensitive-env-v1",
+        UNFILED_AWS_REGION: undefined,
+        UNFILED_AWS_ROLE_ARN: undefined,
+        UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN: undefined,
+        UNFILED_WORKER_EXPECTED_OIDC_SUBJECT: undefined,
+        UNFILED_WORKER_AI_OBJECT_WRAP_ROOT_KEY_ID: SENSITIVE_ROOT,
+        UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1: '{"version":1}',
+        ...overrides
+      });
+
+    expect(
+      loadWorkerConfig(sensitive({ [retiredVariable]: JSON.stringify([retiredRoot]) })).keyBoundary
+    ).toMatchObject({ retiredRoots: { ai_assisted: { object_wrap: [retiredRoot] } } });
+
+    const rejected: readonly (readonly [string, WorkerEnvironment])[] = [
+      ["UNFILED_KEY_CUSTODIAN", { UNFILED_KEY_CUSTODIAN: "local" }],
+      ["UNFILED_KEY_CUSTODIAN", { UNFILED_KEY_CUSTODIAN: " vercel-sensitive-env-v1" }],
+      [
+        "UNFILED_AWS_ROLE_ARN",
+        { UNFILED_AWS_ROLE_ARN: "arn:aws:iam::123456789012:role/unfiled-worker-production" }
+      ],
+      ["UNFILED_WORKER_PROJECT_ID", { VERCEL_PROJECT_ID: "prj_other" }],
+      ["UNFILED_WORKER_PROJECT_ID", { UNFILED_WORKER_PROJECT_ID: "prj_example " }],
+      [
+        "UNFILED_WORKER_AI_OBJECT_WRAP_ROOT_KEY_ID",
+        { UNFILED_WORKER_AI_OBJECT_WRAP_ROOT_KEY_ID: previewRoot }
+      ],
+      [
+        "UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1",
+        { UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1: "x".repeat(32_769) }
+      ],
+      [
+        "UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1",
+        { UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1: undefined }
+      ],
+      [retiredVariable, { [retiredVariable]: " []" }],
+      [retiredVariable, { [retiredVariable]: "[" }],
+      [retiredVariable, { [retiredVariable]: "{}" }],
+      [retiredVariable, { [retiredVariable]: "[ ]" }],
+      [retiredVariable, { [retiredVariable]: "[1]" }],
+      [retiredVariable, { [retiredVariable]: JSON.stringify([SENSITIVE_ROOT]) }],
+      [retiredVariable, { [retiredVariable]: JSON.stringify([previewRoot]) }],
+      [retiredVariable, { [retiredVariable]: JSON.stringify([retiredRoot, retiredRoot]) }]
+    ];
+    for (const [name, overrides] of rejected) {
+      expect(() => loadWorkerConfig(sensitive(overrides))).toThrow(name);
+    }
+
+    expect(() =>
+      loadWorkerConfig(production({ UNFILED_WORKER_AI_OBJECT_WRAP_ROOT_KEY_ID: SENSITIVE_ROOT }))
+    ).toThrow("UNFILED_WORKER_AI_OBJECT_WRAP_ROOT_KEY_ID");
   });
 });

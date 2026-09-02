@@ -56,6 +56,12 @@ function json(
   for (const [name, content] of Object.entries(extra)) responseHeaders.set(name, content);
   return new Response(JSON.stringify(value), { headers: responseHeaders, status });
 }
+function attachReleaseIdentity(response: Response, config: OrganizerConfig): void {
+  if (config.releaseIdentity === null) return;
+  response.headers.set("x-unfiled-deployment", config.releaseIdentity.deployment);
+  response.headers.set("x-unfiled-commit", config.releaseIdentity.commit);
+  response.headers.set("x-unfiled-environment", config.releaseIdentity.environment);
+}
 function id(): string {
   return randomUUID();
 }
@@ -236,6 +242,25 @@ async function deadline<T>(
   }
 }
 
+/**
+ * Server-side only: the first stack frame of a failure as "file:function", stripped of
+ * paths, line numbers, and any argument text. It names where an unavailability was
+ * raised without carrying request or note content.
+ */
+function throwSite(error: unknown): string | undefined {
+  if (!(error instanceof Error) || typeof error.stack !== "string") return undefined;
+  const frame = error.stack.split("\n").find((line) => /^\s*at /u.test(line));
+  if (frame === undefined) return undefined;
+  const match = /at (?:async )?([A-Za-z0-9_.$<>]+)? ?\(?([^()\s]+?)(?::\d+){1,2}\)?$/u.exec(
+    frame.trim()
+  );
+  if (match === null) return undefined;
+  const fn = match[1] ?? "anonymous";
+  const file = (match[2] ?? "").split("/").pop() ?? "";
+  const site = `${file.replace(/[^A-Za-z0-9_.-]/gu, "")}:${fn.replace(/[^A-Za-z0-9_.$<>]/gu, "")}`;
+  return site.length > 1 && site.length <= 120 ? site : undefined;
+}
+
 export function createOrganizerApp(dependencies: OrganizerAppDependencies): OrganizerApp {
   const { config } = dependencies;
   const clock = dependencies.clock ?? { now: () => Date.now() };
@@ -274,7 +299,7 @@ export function createOrganizerApp(dependencies: OrganizerAppDependencies): Orga
         const result = await deadline(request, config.requestTimeoutMs, async (signal) => {
           const invocation =
             config.invocationAuth.kind === "bearer"
-              ? config.runtime === "production"
+              ? config.runtime !== "local"
                 ? await Promise.reject(
                     new OrganizerError(503, "provider_unavailable", "Invalid auth composition.", {
                       retryable: true
@@ -283,7 +308,7 @@ export function createOrganizerApp(dependencies: OrganizerAppDependencies): Orga
                 : authorizeLocalOrganizerInvocation({
                     authorizationHeader: request.headers.get("authorization"),
                     requestId,
-                    runtime: config.runtime,
+                    runtime: "local",
                     secret: config.invocationAuth.secret
                   })
               : await productionAuth.authorize(
@@ -291,7 +316,7 @@ export function createOrganizerApp(dependencies: OrganizerAppDependencies): Orga
                     authorizationHeader: request.headers.get("authorization"),
                     protectionBypassHeader: request.headers.get("x-vercel-protection-bypass"),
                     requestId,
-                    trustedSourceToken: request.headers.get("x-vercel-trusted-oidc-idp-token")
+                    trustedSourceToken: request.headers.get("x-unfiled-trusted-oidc-idp-token")
                   },
                   signal
                 );
@@ -329,10 +354,20 @@ export function createOrganizerApp(dependencies: OrganizerAppDependencies): Orga
       reported = error;
       response = errorResponse(error, requestId, config.invocationAuth.kind);
     }
+    attachReleaseIdentity(response, config);
     const classified = reported === undefined ? undefined : classifyOrganizerError(reported);
+    const causeName =
+      reported instanceof Error &&
+      reported.cause instanceof Error &&
+      /^[A-Za-z0-9_]{1,40}$/u.test(reported.cause.name)
+        ? reported.cause.name
+        : undefined;
+    const origin = causeName === undefined ? throwSite(reported) : undefined;
     logger.log({
       durationMs: Math.max(0, clock.now() - started),
       ...(classified === undefined ? {} : { errorClass: classified.errorClass }),
+      ...(causeName === undefined ? {} : { causeName }),
+      ...(origin === undefined ? {} : { origin }),
       event: "request.completed",
       level: response.status >= 500 ? "error" : response.status >= 400 ? "warn" : "info",
       method: selectedMethod,

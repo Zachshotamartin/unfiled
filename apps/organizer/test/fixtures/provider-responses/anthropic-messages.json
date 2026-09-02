@@ -1,0 +1,74 @@
+{
+  "contract": "anthropic.messages.2023-06-01",
+  "recordedAgainst": "official Messages API reference shape, 2026-09-02, synthetic content only",
+  "success": {
+    "id": "msg_synthetic",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-5",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "toolu_synthetic",
+        "name": "unfiled_organization_plan_v1",
+        "input": {
+          "alternatives": [],
+          "captureKind": "list_items",
+          "decision": "append_to_note",
+          "destination": {
+            "candidateId": "candidate_00000000000000000000000000000001",
+            "newNote": null
+          },
+          "generatedExpansion": null,
+          "operations": [
+            { "items": ["milk", "bread"], "section": null, "type": "append_list_items" }
+          ],
+          "reasonCodes": ["explicit_shopping_intent", "type_match"],
+          "schemaVersion": 1
+        }
+      }
+    ],
+    "stop_reason": "tool_use",
+    "stop_sequence": null,
+    "usage": {
+      "input_tokens": 431,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 88
+    }
+  },
+  "refusal": {
+    "id": "msg_synthetic_refusal",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-opus-5",
+    "content": [],
+    "stop_reason": "refusal",
+    "stop_sequence": null,
+    "usage": { "input_tokens": 431, "output_tokens": 0 }
+  },
+  "maxTokens": {
+    "id": "msg_synthetic_truncated",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-5",
+    "content": [{ "type": "text", "text": "SYNTHETIC-PARTIAL-CANARY" }],
+    "stop_reason": "max_tokens",
+    "stop_sequence": null,
+    "usage": { "input_tokens": 431, "output_tokens": 8192 }
+  },
+  "textOnly": {
+    "id": "msg_synthetic_text",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-5",
+    "content": [{ "type": "text", "text": "SYNTHETIC-TEXT-CANARY" }],
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "usage": { "input_tokens": 431, "output_tokens": 12 }
+  },
+  "errorEnvelope": {
+    "type": "error",
+    "error": { "type": "overloaded_error", "message": "SYNTHETIC-ERROR-CANARY" }
+  }
+}

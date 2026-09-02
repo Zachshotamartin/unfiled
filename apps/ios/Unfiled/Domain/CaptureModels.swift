@@ -124,7 +124,7 @@ public struct CaptureSummary: Codable, Equatable, Sendable {
         let terminal = status != .queued && status != .processing
         guard (1 ... 280).contains(rawContentPreview.utf16.count),
               !rawContentPreview.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              receiptAvailable == terminal else {
+              receiptAvailable == terminal || (status == .failed && !receiptAvailable) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .receiptAvailable,
                 in: container,
@@ -520,7 +520,8 @@ public struct CaptureDetail: Codable, Equatable, Sendable {
         case .done:
             return receipt.map { $0.outcome == .createdNote || $0.outcome == .addedToNote } ?? false
         case .failed:
-            return receipt?.outcome == .failed
+            // A failed job records its error code without an organization receipt.
+            return receipt.map { $0.outcome == .failed } ?? true
         case .inbox:
             return receipt?.outcome == .keptInInbox
         case .needsReview:

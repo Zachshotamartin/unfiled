@@ -58,6 +58,13 @@ function jsonResponse(value: unknown, status: number, requestId: string): Respon
   });
 }
 
+function attachReleaseIdentity(response: Response, config: VerifierConfig): void {
+  if (config.releaseIdentity === null) return;
+  response.headers.set("x-unfiled-deployment", config.releaseIdentity.deployment);
+  response.headers.set("x-unfiled-commit", config.releaseIdentity.commit);
+  response.headers.set("x-unfiled-environment", config.releaseIdentity.environment);
+}
+
 function requestId(request: Request): string {
   const candidate = request.headers.get("x-request-id")?.trim();
   return candidate !== undefined && REQUEST_ID_PATTERN.test(candidate) ? candidate : randomUUID();
@@ -305,9 +312,10 @@ export function createVerifierApp(dependencies: VerifierAppDependencies): Verifi
         if (request.headers.has("cookie")) {
           throw new VerifierError(401, "unauthorized", "User sessions are not accepted.");
         }
-        if (config.runtime !== "production" || config.verification.kind !== "enabled") {
+        if (config.runtime === "local" || config.verification.kind !== "enabled") {
           throw new VerifierUnavailableError();
         }
+        const managedRuntime = config.runtime;
         const verificationConfig = config.verification;
         const result = await withDeadline(request, config.requestTimeoutMs, async (signal) => {
           const invocation = await productionAuth.authorize(
@@ -315,15 +323,17 @@ export function createVerifierApp(dependencies: VerifierAppDependencies): Verifi
               authorizationHeader: request.headers.get("authorization"),
               protectionBypassHeader: request.headers.get("x-vercel-protection-bypass"),
               requestId: id,
-              trustedSourceToken: request.headers.get("x-vercel-trusted-oidc-idp-token")
+              trustedSourceToken: request.headers.get("x-unfiled-trusted-oidc-idp-token")
             },
             signal
           );
-          assertWorkloadOidcPresence(request);
+          if (verificationConfig.kms.kind === "aws-oidc") {
+            assertWorkloadOidcPresence(request);
+          }
           const target = await readTarget(request, config.maxRequestBytes, signal);
           return kms.withKeySession(
             verificationConfig.kms,
-            { invocation, requestId: id, runtime: "production" },
+            { invocation, requestId: id, runtime: managedRuntime },
             signal,
             (keys) => verifier.verify(target, keys, signal)
           );
@@ -337,6 +347,7 @@ export function createVerifierApp(dependencies: VerifierAppDependencies): Verifi
       reportedError = error;
       response = errorResponse(error, id);
     }
+    attachReleaseIdentity(response, config);
     const classified =
       reportedError === undefined ? undefined : classifyVerifierError(reportedError);
     logger.log({

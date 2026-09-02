@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { LOCAL_HASH_EMBEDDING_DIMENSIONS, LOCAL_HASH_EMBEDDING_MODEL_ID } from "@unfiled/search";
+
 import { OrganizerConfigurationError } from "./errors.js";
 
 const DEFAULT_PORT = 8_790;
@@ -8,8 +11,18 @@ const MAX_DATABASE_URL_LENGTH = 4_096;
 const MAX_RETIRED_ROOTS = 20;
 const MAX_RETIRED_REGISTRY_BYTES = 32_768;
 const ORGANIZER_OPENAI_API_KEY = "UNFILED_ORGANIZER_OPENAI_API_KEY" as const;
+const KEY_CUSTODIAN_VARIABLE = "UNFILED_KEY_CUSTODIAN" as const;
+const VERCEL_SENSITIVE_KEY_RING_VARIABLE = "UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1" as const;
+const VERCEL_OBJECT_WRAP_ROOT_VARIABLE = "UNFILED_ORGANIZER_AI_OBJECT_WRAP_ROOT_KEY_ID" as const;
+const VERCEL_CONTENT_MAC_ROOT_VARIABLE = "UNFILED_ORGANIZER_AI_CONTENT_MAC_ROOT_KEY_ID" as const;
+const VERCEL_RETIRED_OBJECT_WRAP_ROOTS_VARIABLE =
+  "UNFILED_ORGANIZER_RETIRED_AI_OBJECT_WRAP_ROOT_KEY_IDS_JSON" as const;
+const VERCEL_RETIRED_CONTENT_MAC_ROOTS_VARIABLE =
+  "UNFILED_ORGANIZER_RETIRED_AI_CONTENT_MAC_ROOT_KEY_IDS_JSON" as const;
 const KMS_KEY_ARN_PATTERN =
   /^arn:(aws(?:-us-gov|-cn)?):kms:([a-z0-9-]+):(\d{12}):key\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const VERCEL_ROOT_KEY_ID_PATTERN =
+  /^urn:unfiled:key-root:vercel-sensitive-env-v1:(preview|production):[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 export const AWS_OIDC_AUDIENCE = "sts.amazonaws.com" as const;
 export const VERCEL_OIDC_ISSUER_ORIGIN = "https://oidc.vercel.com" as const;
@@ -50,6 +63,11 @@ const SUPABASE_CAPABILITY_PATTERN = /SUPABASE/iu;
 
 export type OrganizerRuntime = "local" | "preview" | "production";
 export type OrganizerEnvironment = Readonly<Record<string, string | undefined>>;
+export type OrganizerReleaseIdentity = Readonly<{
+  commit: string;
+  deployment: `sha256:${string}`;
+  environment: "preview" | "production";
+}>;
 export type OrganizerRetiredRoots = Readonly<{
   ai_assisted: Readonly<{
     content_mac: readonly string[];
@@ -72,9 +90,22 @@ export type AwsOrganizerKeyBoundary = Readonly<{
   roleArn: string;
   vercelProjectId: string;
 }>;
+export type VercelSensitiveEnvironmentOrganizerKeyBoundary = Readonly<{
+  aiContentMacRootKeyId: string;
+  aiObjectWrapRootKeyId: string;
+  deploymentEnvironment: "preview" | "production";
+  kind: "vercel-sensitive-env-v1";
+  keyClass: "ai_assisted";
+  retiredRoots: OrganizerRetiredRoots;
+  vercelProjectId: string;
+}>;
+export type OrganizerKeyBoundary =
+  | LocalOrganizerKeyBoundary
+  | AwsOrganizerKeyBoundary
+  | VercelSensitiveEnvironmentOrganizerKeyBoundary;
 export type VercelTrustedSource = Readonly<{
   audience: string;
-  environment: "production";
+  environment: "preview" | "production";
   expectedSubject: string;
   issuer: string;
   ownerId: string;
@@ -102,15 +133,35 @@ export type OrganizerPipelineConfig =
       leaseSeconds: number;
       recoveryLimit: number;
     }>;
+/**
+ * Managed runtimes always route through the lease-bound provider registry.
+ * The operator-funded OpenAI key is optional: the free BYOK-only beta runs
+ * with an empty app-default record, so app-default jobs fail closed: the capture stays saved
+ * and marked failed with provider_unavailable until the owner saves a key and retries.
+ */
 export type OrganizerPlannerConfig =
-  Readonly<{ kind: "disabled" }> | Readonly<{ apiKey: string; kind: "openai-responses" }>;
+  | Readonly<{ kind: "disabled" }>
+  | Readonly<{
+      appDefaultApiKeys: Readonly<{ openai?: string }>;
+      kind: "lease-bound-provider-registry-v2";
+    }>;
+export type OrganizerEmbeddingConfig =
+  | Readonly<{ kind: "disabled" }>
+  | Readonly<{ kind: "openai" }>
+  | Readonly<{
+      dimensions: typeof LOCAL_HASH_EMBEDDING_DIMENSIONS;
+      kind: "local-hash-v1";
+      modelId: typeof LOCAL_HASH_EMBEDDING_MODEL_ID;
+    }>;
 export type OrganizerConfig = Readonly<{
+  embedding: OrganizerEmbeddingConfig;
   invocationAuth: OrganizerInvocationAuth;
-  keyBoundary: LocalOrganizerKeyBoundary | AwsOrganizerKeyBoundary;
+  keyBoundary: OrganizerKeyBoundary;
   maxRequestBytes: number;
   pipeline: OrganizerPipelineConfig;
   planner: OrganizerPlannerConfig;
   port: number;
+  releaseIdentity: OrganizerReleaseIdentity | null;
   requestTimeoutMs: number;
   runtime: OrganizerRuntime;
 }>;
@@ -122,6 +173,9 @@ export const ORGANIZER_CAPABILITIES = Object.freeze({
   generateDataKeyClasses: ["ai_assisted"] as const,
   generateDataKeyPurposes: ["content_mac", "object_wrap"] as const,
   productionPlannerConfigured: true,
+  providerRegistryVersion: "organization-model-registry-v2" as const,
+  providers: ["openai", "anthropic"] as const,
+  requiresAppDefaultProviderKey: false,
   rendersUserInterface: false
 });
 
@@ -172,21 +226,45 @@ function planner(
   selectedRuntime: OrganizerRuntime
 ): OrganizerPlannerConfig {
   const raw = environment[ORGANIZER_OPENAI_API_KEY];
-  if (selectedRuntime !== "production") {
+  if (selectedRuntime === "local") {
     if (hasValue(environment, ORGANIZER_OPENAI_API_KEY))
       throw new OrganizerConfigurationError([ORGANIZER_OPENAI_API_KEY]);
     return Object.freeze({ kind: "disabled" });
   }
-  if (
-    raw === undefined ||
-    raw.length < 20 ||
-    raw.length > 512 ||
-    raw.trim() !== raw ||
-    hasUnsafeSecretCharacter(raw)
-  ) {
+  if (raw === undefined || raw.length === 0) {
+    return Object.freeze({
+      appDefaultApiKeys: Object.freeze({}),
+      kind: "lease-bound-provider-registry-v2"
+    });
+  }
+  if (raw.length < 20 || raw.length > 512 || raw.trim() !== raw || hasUnsafeSecretCharacter(raw)) {
     throw new OrganizerConfigurationError([ORGANIZER_OPENAI_API_KEY]);
   }
-  return Object.freeze({ apiKey: raw, kind: "openai-responses" });
+  return Object.freeze({
+    appDefaultApiKeys: Object.freeze({ openai: raw }),
+    kind: "lease-bound-provider-registry-v2"
+  });
+}
+
+function embedding(
+  environment: OrganizerEnvironment,
+  selectedRuntime: OrganizerRuntime
+): OrganizerEmbeddingConfig {
+  const name = "UNFILED_ORGANIZER_EMBEDDING_PROVIDER";
+  if (selectedRuntime === "local") {
+    if (hasValue(environment, name)) throw new OrganizerConfigurationError([name]);
+    return Object.freeze({ kind: "disabled" });
+  }
+  const selected = required(environment, name);
+  if (selected === "openai") return Object.freeze({ kind: "openai" });
+  if (selected === "local-hash-v1") {
+    return Object.freeze({
+      dimensions: LOCAL_HASH_EMBEDDING_DIMENSIONS,
+      kind: "local-hash-v1",
+      modelId: LOCAL_HASH_EMBEDDING_MODEL_ID
+    });
+  }
+  throw new OrganizerConfigurationError([name]);
 }
 
 function integer(
@@ -211,16 +289,42 @@ function runtime(environment: OrganizerEnvironment): OrganizerRuntime {
   if (value !== "local" && value !== "preview" && value !== "production") {
     throw new OrganizerConfigurationError(["UNFILED_ORGANIZER_ENV"]);
   }
-  const expected =
-    value === "production" ? "production" : value === "preview" ? "preview" : "development";
   const vercel = environment.VERCEL_ENV?.trim();
   if (
-    (value === "production" && vercel !== expected) ||
-    (value !== "production" && vercel !== undefined && vercel !== expected)
+    (value === "local" &&
+      (environment.VERCEL !== undefined || environment.VERCEL_ENV !== undefined)) ||
+    (value !== "local" && (environment.VERCEL !== "1" || vercel !== value))
   ) {
     throw new OrganizerConfigurationError(["UNFILED_ORGANIZER_ENV", "VERCEL_ENV"]);
   }
   return value;
+}
+
+function releaseIdentity(
+  environment: OrganizerEnvironment,
+  selectedRuntime: OrganizerRuntime
+): OrganizerReleaseIdentity | null {
+  if (selectedRuntime === "local") {
+    rejectCapabilities(environment, ["VERCEL_DEPLOYMENT_ID", "VERCEL_GIT_COMMIT_SHA"]);
+    return null;
+  }
+  const deploymentId = environment.VERCEL_DEPLOYMENT_ID?.trim();
+  const commit = environment.VERCEL_GIT_COMMIT_SHA;
+  const invalid: string[] = [];
+  if (deploymentId === undefined || !/^[A-Za-z0-9_-]{1,128}$/u.test(deploymentId)) {
+    invalid.push("VERCEL_DEPLOYMENT_ID");
+  }
+  if (commit === undefined || !/^[0-9a-f]{40}$/u.test(commit)) {
+    invalid.push("VERCEL_GIT_COMMIT_SHA");
+  }
+  if (invalid.length > 0 || deploymentId === undefined || commit === undefined) {
+    throw new OrganizerConfigurationError(invalid);
+  }
+  return Object.freeze({
+    commit,
+    deployment: `sha256:${createHash("sha256").update(deploymentId, "utf8").digest("hex")}`,
+    environment: selectedRuntime
+  });
 }
 
 function parsePem(environment: OrganizerEnvironment): string {
@@ -294,7 +398,10 @@ function parseRetiredRoots(
   });
 }
 
-function awsBoundary(environment: OrganizerEnvironment): AwsOrganizerKeyBoundary {
+function awsBoundary(
+  environment: OrganizerEnvironment,
+  selectedRuntime: "preview" | "production"
+): AwsOrganizerKeyBoundary {
   const region = required(environment, "UNFILED_AWS_REGION");
   const roleArn = required(environment, "UNFILED_AWS_ROLE_ARN");
   const objectArn = required(environment, "UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN");
@@ -311,9 +418,12 @@ function awsBoundary(environment: OrganizerEnvironment): AwsOrganizerKeyBoundary
   if (role === null) invalid.push("UNFILED_AWS_ROLE_ARN");
   if (objectMatch === null) invalid.push("UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN");
   if (macMatch === null || macArn === objectArn) invalid.push("UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN");
+  const subjectMatch = /^owner:([^:]+):project:([^:]+):environment:(preview|production)$/u.exec(
+    subject
+  );
   if (
     !/^[A-Za-z0-9_./:@-]{1,512}$/u.test(subject) ||
-    !subject.endsWith(":environment:production") ||
+    subjectMatch?.[3] !== selectedRuntime ||
     subject.includes(":project:prj_")
   )
     invalid.push("UNFILED_ORGANIZER_EXPECTED_OIDC_SUBJECT");
@@ -352,32 +462,158 @@ function awsBoundary(environment: OrganizerEnvironment): AwsOrganizerKeyBoundary
   });
 }
 
+function exactSensitiveValue(environment: OrganizerEnvironment, name: string): string {
+  const raw = environment[name];
+  if (raw === undefined || raw.length === 0 || raw.trim() !== raw) {
+    throw new OrganizerConfigurationError([name]);
+  }
+  return raw;
+}
+
+function parseVercelRetiredRoots(
+  environment: OrganizerEnvironment,
+  selectedRuntime: "preview" | "production",
+  activeRoots: readonly string[]
+): OrganizerRetiredRoots {
+  function parse(name: string): readonly string[] {
+    const raw = environment[name] ?? "[]";
+    if (
+      raw.trim() !== raw ||
+      new TextEncoder().encode(raw).byteLength > MAX_RETIRED_REGISTRY_BYTES
+    ) {
+      throw new OrganizerConfigurationError([name]);
+    }
+    let value: unknown;
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      throw new OrganizerConfigurationError([name]);
+    }
+    if (
+      !Array.isArray(value) ||
+      value.length > MAX_RETIRED_ROOTS ||
+      JSON.stringify(value) !== raw
+    ) {
+      throw new OrganizerConfigurationError([name]);
+    }
+    const roots: string[] = [];
+    const seen = new Set(activeRoots);
+    for (const entry of value) {
+      if (
+        typeof entry !== "string" ||
+        VERCEL_ROOT_KEY_ID_PATTERN.exec(entry)?.[1] !== selectedRuntime ||
+        seen.has(entry)
+      ) {
+        throw new OrganizerConfigurationError([name]);
+      }
+      seen.add(entry);
+      roots.push(entry);
+    }
+    return Object.freeze(roots);
+  }
+  return Object.freeze({
+    ai_assisted: Object.freeze({
+      content_mac: parse(VERCEL_RETIRED_CONTENT_MAC_ROOTS_VARIABLE),
+      object_wrap: parse(VERCEL_RETIRED_OBJECT_WRAP_ROOTS_VARIABLE)
+    })
+  });
+}
+
+function vercelSensitiveEnvironmentBoundary(
+  environment: OrganizerEnvironment,
+  selectedRuntime: "preview" | "production"
+): VercelSensitiveEnvironmentOrganizerKeyBoundary {
+  const projectId = exactSensitiveValue(environment, "UNFILED_ORGANIZER_PROJECT_ID");
+  const objectRootKeyId = exactSensitiveValue(environment, VERCEL_OBJECT_WRAP_ROOT_VARIABLE);
+  const contentMacRootKeyId = exactSensitiveValue(environment, VERCEL_CONTENT_MAC_ROOT_VARIABLE);
+  const ring = exactSensitiveValue(environment, VERCEL_SENSITIVE_KEY_RING_VARIABLE);
+  const invalid: string[] = [];
+  if (!/^prj_[A-Za-z0-9]+$/u.test(projectId) || environment.VERCEL_PROJECT_ID !== projectId) {
+    invalid.push("UNFILED_ORGANIZER_PROJECT_ID", "VERCEL_PROJECT_ID");
+  }
+  if (VERCEL_ROOT_KEY_ID_PATTERN.exec(objectRootKeyId)?.[1] !== selectedRuntime) {
+    invalid.push(VERCEL_OBJECT_WRAP_ROOT_VARIABLE);
+  }
+  if (
+    VERCEL_ROOT_KEY_ID_PATTERN.exec(contentMacRootKeyId)?.[1] !== selectedRuntime ||
+    contentMacRootKeyId === objectRootKeyId
+  ) {
+    invalid.push(VERCEL_CONTENT_MAC_ROOT_VARIABLE);
+  }
+  if (new TextEncoder().encode(ring).byteLength > 32_768) {
+    invalid.push(VERCEL_SENSITIVE_KEY_RING_VARIABLE);
+  }
+  if (invalid.length > 0) throw new OrganizerConfigurationError([...new Set(invalid)]);
+  return Object.freeze({
+    aiContentMacRootKeyId: contentMacRootKeyId,
+    aiObjectWrapRootKeyId: objectRootKeyId,
+    deploymentEnvironment: selectedRuntime,
+    kind: "vercel-sensitive-env-v1",
+    keyClass: "ai_assisted",
+    retiredRoots: parseVercelRetiredRoots(environment, selectedRuntime, [
+      objectRootKeyId,
+      contentMacRootKeyId
+    ]),
+    vercelProjectId: projectId
+  });
+}
+
+function managedKeyBoundary(
+  environment: OrganizerEnvironment,
+  selectedRuntime: "preview" | "production"
+): AwsOrganizerKeyBoundary | VercelSensitiveEnvironmentOrganizerKeyBoundary {
+  const mode = exactSensitiveValue(environment, KEY_CUSTODIAN_VARIABLE);
+  const awsOnly = [
+    "UNFILED_AWS_REGION",
+    "UNFILED_AWS_ROLE_ARN",
+    "UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN",
+    "UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN",
+    "UNFILED_ORGANIZER_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON",
+    "UNFILED_ORGANIZER_RETIRED_AI_CONTENT_MAC_ROOTS_JSON",
+    "UNFILED_ORGANIZER_EXPECTED_OIDC_SUBJECT"
+  ] as const;
+  const sensitiveOnly = [
+    VERCEL_SENSITIVE_KEY_RING_VARIABLE,
+    VERCEL_OBJECT_WRAP_ROOT_VARIABLE,
+    VERCEL_CONTENT_MAC_ROOT_VARIABLE,
+    VERCEL_RETIRED_OBJECT_WRAP_ROOTS_VARIABLE,
+    VERCEL_RETIRED_CONTENT_MAC_ROOTS_VARIABLE
+  ] as const;
+  if (mode === "aws-kms") {
+    rejectCapabilities(environment, sensitiveOnly);
+    return awsBoundary(environment, selectedRuntime);
+  }
+  if (mode === "vercel-sensitive-env-v1") {
+    rejectCapabilities(environment, awsOnly);
+    return vercelSensitiveEnvironmentBoundary(environment, selectedRuntime);
+  }
+  throw new OrganizerConfigurationError([KEY_CUSTODIAN_VARIABLE]);
+}
+
 function trustedSource(
   environment: OrganizerEnvironment,
-  boundary: AwsOrganizerKeyBoundary
+  organizerProjectId: string,
+  selectedRuntime: "preview" | "production"
 ): VercelTrustedSource {
   const teamSlug = required(environment, "UNFILED_TRUSTED_SOURCE_TEAM_SLUG");
   const ownerId = required(environment, "UNFILED_TRUSTED_SOURCE_OWNER_ID");
   const projectId = required(environment, "UNFILED_TRUSTED_SOURCE_WEB_PROJECT_ID");
   const projectName = required(environment, "UNFILED_TRUSTED_SOURCE_WEB_PROJECT_NAME");
   const subject = required(environment, "UNFILED_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT");
-  const workload = /^owner:([^:]+):project:([^:]+):environment:production$/u.exec(
-    boundary.expectedOidcSubject
-  );
-  const expected = `owner:${teamSlug}:project:${projectName}:environment:production`;
+  const expected = `owner:${teamSlug}:project:${projectName}:environment:${selectedRuntime}`;
   const invalid: string[] = [];
-  if (!/^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/u.test(teamSlug) || teamSlug !== workload?.[1])
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/u.test(teamSlug))
     invalid.push("UNFILED_TRUSTED_SOURCE_TEAM_SLUG");
   if (!/^team_[A-Za-z0-9]+$/u.test(ownerId)) invalid.push("UNFILED_TRUSTED_SOURCE_OWNER_ID");
-  if (!/^prj_[A-Za-z0-9]+$/u.test(projectId) || projectId === boundary.vercelProjectId)
+  if (!/^prj_[A-Za-z0-9]+$/u.test(projectId) || projectId === organizerProjectId)
     invalid.push("UNFILED_TRUSTED_SOURCE_WEB_PROJECT_ID");
-  if (!/^[a-z0-9][a-z0-9_-]{0,99}$/u.test(projectName) || projectName === workload?.[2])
+  if (!/^[a-z0-9][a-z0-9_-]{0,99}$/u.test(projectName))
     invalid.push("UNFILED_TRUSTED_SOURCE_WEB_PROJECT_NAME");
   if (subject !== expected) invalid.push("UNFILED_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT");
   if (invalid.length > 0) throw new OrganizerConfigurationError([...new Set(invalid)]);
   return Object.freeze({
     audience: `${VERCEL_OIDC_AUDIENCE_ORIGIN}/${teamSlug}`,
-    environment: "production",
+    environment: selectedRuntime,
     expectedSubject: subject,
     issuer: `${VERCEL_OIDC_ISSUER_ORIGIN}/${teamSlug}`,
     ownerId,
@@ -398,7 +634,7 @@ function pipeline(
     "UNFILED_ORGANIZER_DATABASE_CA_PEM_BASE64"
   ] as const;
   const present = names.filter((name) => hasValue(environment, name));
-  if (selectedRuntime !== "production") {
+  if (selectedRuntime === "local") {
     if (present.length > 0) throw new OrganizerConfigurationError(present);
     return Object.freeze({ kind: "disabled" });
   }
@@ -460,19 +696,41 @@ export function loadOrganizerConfig(
   rejectAmbientDatabaseCapabilities(environment);
   const selectedRuntime = runtime(environment);
   const selectedPlanner = planner(environment, selectedRuntime);
-  const keyBoundary =
-    selectedRuntime === "production"
-      ? awsBoundary(environment)
-      : ({ kind: "local-synthetic", keyClass: "ai_assisted" } as const);
+  const selectedEmbedding = embedding(environment, selectedRuntime);
+  let keyBoundary: OrganizerKeyBoundary;
+  if (selectedRuntime === "local") {
+    rejectCapabilities(environment, [
+      KEY_CUSTODIAN_VARIABLE,
+      VERCEL_SENSITIVE_KEY_RING_VARIABLE,
+      VERCEL_OBJECT_WRAP_ROOT_VARIABLE,
+      VERCEL_CONTENT_MAC_ROOT_VARIABLE,
+      VERCEL_RETIRED_OBJECT_WRAP_ROOTS_VARIABLE,
+      VERCEL_RETIRED_CONTENT_MAC_ROOTS_VARIABLE,
+      "UNFILED_AWS_REGION",
+      "UNFILED_AWS_ROLE_ARN",
+      "UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN",
+      "UNFILED_AI_CONTENT_MAC_KMS_KEY_ARN",
+      "UNFILED_ORGANIZER_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON",
+      "UNFILED_ORGANIZER_RETIRED_AI_CONTENT_MAC_ROOTS_JSON",
+      "UNFILED_ORGANIZER_EXPECTED_OIDC_SUBJECT",
+      "UNFILED_ORGANIZER_PROJECT_ID"
+    ]);
+    keyBoundary = { kind: "local-synthetic", keyClass: "ai_assisted" };
+  } else {
+    keyBoundary = managedKeyBoundary(environment, selectedRuntime);
+  }
   let invocationAuth: OrganizerInvocationAuth;
-  if (selectedRuntime === "production") {
+  if (selectedRuntime !== "local") {
+    if (keyBoundary.kind === "local-synthetic") {
+      throw new OrganizerConfigurationError([KEY_CUSTODIAN_VARIABLE]);
+    }
     const forbidden = ["CRON_SECRET", "UNFILED_ORGANIZER_DRAIN_SECRET"].filter((name) =>
       hasValue(environment, name)
     );
     if (forbidden.length > 0) throw new OrganizerConfigurationError(forbidden);
     invocationAuth = {
       kind: "production-trusted-source",
-      trustedSource: trustedSource(environment, keyBoundary as AwsOrganizerKeyBoundary)
+      trustedSource: trustedSource(environment, keyBoundary.vercelProjectId, selectedRuntime)
     };
   } else {
     if (hasValue(environment, "CRON_SECRET"))
@@ -500,6 +758,7 @@ export function loadOrganizerConfig(
     ]);
   }
   return Object.freeze({
+    embedding: selectedEmbedding,
     invocationAuth,
     keyBoundary,
     maxRequestBytes: integer(
@@ -512,6 +771,7 @@ export function loadOrganizerConfig(
     pipeline: selectedPipeline,
     planner: selectedPlanner,
     port: integer(environment, "PORT", DEFAULT_PORT, 1, 65_535),
+    releaseIdentity: releaseIdentity(environment, selectedRuntime),
     requestTimeoutMs,
     runtime: selectedRuntime
   });

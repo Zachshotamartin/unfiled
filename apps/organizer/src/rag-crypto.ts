@@ -6,8 +6,8 @@ import {
 } from "@unfiled/encrypted-aggregate";
 import {
   createManagedKeyResolver,
-  parseManagedKeyRecord,
-  type ManagedKeyRecordV1,
+  type ManagedKeyRecord,
+  type ManagedKeyRecordParser,
   type ManagedKeyStore
 } from "@unfiled/key-management";
 import {
@@ -18,7 +18,11 @@ import {
 
 import type { OrganizerRagRecord } from "./drain.js";
 import { OrganizerUnavailableError } from "./errors.js";
-import { custodianForOrganizerAuthority, type OrganizerKeyAuthority } from "./key-management.js";
+import {
+  custodianForOrganizerAuthority,
+  managedKeyRecordParserForOrganizerAuthority,
+  type OrganizerKeyAuthority
+} from "./key-management.js";
 
 const INDEX_ID = /^irw_[0-9A-HJKMNP-TV-Z]{26}$/u;
 
@@ -45,12 +49,12 @@ function exact(value: unknown, keys: readonly string[]): Readonly<Record<string,
   return row;
 }
 
-function matchingStore(key: ManagedKeyRecordV1): ManagedKeyStore {
+function matchingStore(key: ManagedKeyRecord): ManagedKeyStore {
   return Object.freeze({
     findActive(): Promise<null> {
       return Promise.resolve(null);
     },
-    findById(selector): Promise<ManagedKeyRecordV1 | null> {
+    findById(selector): Promise<ManagedKeyRecord | null> {
       return Promise.resolve(
         selector.ownerId === key.ownerId &&
           selector.keyClass === key.keyClass &&
@@ -65,13 +69,14 @@ function matchingStore(key: ManagedKeyRecordV1): ManagedKeyStore {
 
 function encryptedRecord(
   ownerId: string,
+  parseRecord: ManagedKeyRecordParser,
   item: Readonly<{
     indexId: string;
     indexedRevision: number;
     record: OrganizerRagRecord;
   }>
 ): Readonly<{
-  key: ManagedKeyRecordV1;
+  key: ManagedKeyRecord;
   record: EncryptedAggregateRecord<"note_rag_index">;
 }> {
   if (
@@ -88,10 +93,10 @@ function encryptedRecord(
     "keyPurpose",
     "keyVersion"
   ]);
-  let key: ManagedKeyRecordV1;
+  let key: ManagedKeyRecord;
   let envelope: ReturnType<typeof parseContentEnvelope>;
   try {
-    key = parseManagedKeyRecord(item.record.key);
+    key = parseRecord(item.record.key);
     envelope = parseContentEnvelope(serializeContentEnvelope(cipher.envelope));
   } catch {
     return unavailable();
@@ -133,13 +138,15 @@ export function createOrganizerRagPayloadOpener(
   authority: OrganizerKeyAuthority
 ): PrivateRagPayloadOpener<OrganizerRagRecord> {
   const custodian = custodianForOrganizerAuthority(authority);
+  const parseRecord = managedKeyRecordParserForOrganizerAuthority(authority);
   return Object.freeze({
     async openPayload(input) {
       assertActive(input.signal);
       try {
-        const bound = encryptedRecord(input.ownerId, input.item);
+        const bound = encryptedRecord(input.ownerId, parseRecord, input.item);
         const resolver = createManagedKeyResolver({
           custodian,
+          parseRecord,
           store: matchingStore(bound.key),
           workload: "organization_worker"
         });

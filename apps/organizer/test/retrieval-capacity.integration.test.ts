@@ -24,10 +24,18 @@ const keyManagementMocks = vi.hoisted(() => ({
   custodianForOrganizerAuthority: vi.fn()
 }));
 
-vi.mock("../src/key-management.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof OrganizerKeyManagementModule>()),
-  custodianForOrganizerAuthority: keyManagementMocks.custodianForOrganizerAuthority
-}));
+vi.mock("../src/key-management.js", async (importOriginal) => {
+  const original = await importOriginal<typeof OrganizerKeyManagementModule>();
+  return {
+    ...original,
+    custodianForOrganizerAuthority: keyManagementMocks.custodianForOrganizerAuthority,
+    managedKeyRecordParserForOrganizerAuthority: () =>
+      original.managedKeyRecordParserForOrganizerBoundary({
+        kind: "local-synthetic",
+        keyClass: "ai_assisted"
+      })
+  };
+});
 
 const OWNER_ID = "22222222-2222-4222-8222-222222222222";
 const GENERATION_ID = "igen_01ARZ3NDEKTSV4RRFFQ69G5FAA";

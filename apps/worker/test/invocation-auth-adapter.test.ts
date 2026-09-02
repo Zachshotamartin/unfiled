@@ -26,20 +26,23 @@ const trustedSource: VercelTrustedSource = Object.freeze({
   teamSlug: "team-example"
 });
 
-function tokenResult(overrides: Readonly<Record<string, unknown>> = {}) {
+function tokenResult(
+  overrides: Readonly<Record<string, unknown>> = {},
+  source: VercelTrustedSource = trustedSource
+) {
   return {
     payload: {
-      aud: trustedSource.audience,
-      environment: trustedSource.environment,
+      aud: source.audience,
+      environment: source.environment,
       exp: NOW_SECONDS + 300,
       iat: NOW_SECONDS - 10,
-      iss: trustedSource.issuer,
+      iss: source.issuer,
       nbf: NOW_SECONDS - 10,
-      owner: trustedSource.teamSlug,
-      owner_id: trustedSource.ownerId,
-      project: trustedSource.projectName,
-      project_id: trustedSource.projectId,
-      sub: trustedSource.expectedSubject,
+      owner: source.teamSlug,
+      owner_id: source.ownerId,
+      project: source.projectName,
+      project_id: source.projectId,
+      sub: source.expectedSubject,
       ...overrides
     },
     protectedHeader: { alg: "RS256" }
@@ -91,6 +94,33 @@ describe("Vercel Trusted Sources invocation authentication", () => {
     expect(Object.keys(capability)).toEqual([]);
   });
 
+  it("issues a Preview-bound capability only for an exact Preview source identity", async () => {
+    const previewSource: VercelTrustedSource = Object.freeze({
+      ...trustedSource,
+      environment: "preview",
+      expectedSubject: "owner:team-example:project:unfiled-web:environment:preview"
+    });
+    oidcMocks.verify.mockResolvedValue(tokenResult({}, previewSource));
+
+    const capability = await createVercelTrustedSourcesInvocationAuth({
+      trustedSource: previewSource
+    }).authorize(proof(), new AbortController().signal);
+
+    expect(
+      isVerifiedWorkerInvocation(capability, { requestId: "request-1", runtime: "preview" })
+    ).toBe(true);
+    expect(
+      isVerifiedWorkerInvocation(capability, { requestId: "request-1", runtime: "production" })
+    ).toBe(false);
+    expect(oidcMocks.verify).toHaveBeenCalledWith(
+      TOKEN,
+      expect.objectContaining({
+        environment: "preview",
+        subject: previewSource.expectedSubject
+      })
+    );
+  });
+
   it.each([
     ["issuer", { iss: "https://oidc.vercel.com/another-team" }],
     ["audience", { aud: "https://vercel.com/another-team" }],
@@ -105,7 +135,7 @@ describe("Vercel Trusted Sources invocation authentication", () => {
     ["missing not-before", { nbf: undefined }],
     ["future issuance", { iat: NOW_SECONDS + 60 }],
     ["future not-before", { nbf: NOW_SECONDS + 60 }],
-    ["overlong production lifetime", { exp: NOW_SECONDS + 7_200 }]
+    ["overlong production lifetime", { exp: NOW_SECONDS + 12 * 3_600 + 120 }]
   ])("rejects a cryptographically returned token with the wrong %s", async (_label, claims) => {
     oidcMocks.verify.mockResolvedValue(tokenResult(claims));
     await expect(adapter().authorize(proof(), new AbortController().signal)).rejects.toMatchObject({

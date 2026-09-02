@@ -11,15 +11,12 @@ import {
   AccountExportTagSchema
 } from "./account.js";
 import {
-  AuthOtpAcceptedResponseSchema,
-  AuthOtpRequestSchema,
-  AuthOtpVerifyRequestSchema,
+  AuthPasswordSignInRequestSchema,
+  AuthPasswordSignUpRequestSchema,
   AuthRefreshRequestSchema,
   AuthSessionResponseSchema,
   AuthSessionSchema,
-  AuthSignOutResponseSchema,
-  AuthVerifyRequestSchema,
-  AuthVerifyResponseSchema
+  AuthSignOutResponseSchema
 } from "./auth.js";
 import {
   CaptureCreateRequestSchema,
@@ -116,6 +113,7 @@ import {
   ProviderKeyMetadataSchema,
   ProviderKeyPutRequestSchema,
   ProviderKeyPutResponseSchema,
+  ProviderKeyQuerySchema,
   ProviderKeyResponseSchema,
   UserSettingsDtoSchema,
   UserSettingsResponseSchema,
@@ -348,6 +346,13 @@ const generatedBlockCursorQuery = {
   description: "The last block ID returned by the previous fixed 50-item note page.",
   schema: { type: "string", pattern: "^blk_[0-9A-HJKMNP-TV-Z]{26}$" }
 } as const;
+const providerKeyProviderQuery = {
+  name: "provider",
+  in: "query",
+  required: true,
+  description: "The provider whose isolated Vault-key metadata should be returned.",
+  schema: { type: "string", enum: ["openai", "anthropic"] }
+} as const;
 const limitQuery = {
   name: "limit",
   in: "query",
@@ -503,21 +508,24 @@ export const openApiDocument = {
   },
   servers: [{ url: "/api/v1" }],
   paths: {
-    "/auth/otp": {
+    "/auth/sign-up": {
       post: {
-        operationId: "requestOtp",
-        summary: "Request a non-enumerating email OTP",
-        requestBody: jsonBody("AuthOtpRequest"),
+        operationId: "signUp",
+        summary: "Create an account with an email address and password",
+        requestBody: jsonBody("AuthPasswordSignUpRequest"),
         responses: {
-          "202": jsonResponse("OTP request accepted", "AuthOtpAcceptedResponse"),
+          "200": jsonResponse("Authenticated session", "AuthSession"),
           "400": errorResponse,
-          "429": errorResponse
+          "429": errorResponse,
+          "503": errorResponse
         }
-      },
-      put: {
-        operationId: "verifyOtp",
-        summary: "Verify a six-digit email OTP",
-        requestBody: jsonBody("AuthOtpVerifyRequest"),
+      }
+    },
+    "/auth/sign-in": {
+      post: {
+        operationId: "signIn",
+        summary: "Sign in with an email address and password",
+        requestBody: jsonBody("AuthPasswordSignInRequest"),
         responses: {
           "200": jsonResponse("Authenticated session", "AuthSession"),
           "400": errorResponse,
@@ -558,19 +566,6 @@ export const openApiDocument = {
         responses: {
           "200": jsonResponse("Signed out", "AuthSignOutResponse"),
           "401": errorResponse
-        }
-      }
-    },
-    "/auth/verify": {
-      put: {
-        operationId: "verifyAuth",
-        summary: "Verify a six-digit email OTP",
-        requestBody: jsonBody("AuthVerifyRequest"),
-        responses: {
-          "200": jsonResponse("Authenticated session", "AuthVerifyResponse"),
-          "400": errorResponse,
-          "401": errorResponse,
-          "429": errorResponse
         }
       }
     },
@@ -1157,6 +1152,7 @@ export const openApiDocument = {
         operationId: "getProviderKeyMetadata",
         summary: "Read provider-key metadata without exposing key material",
         security: authenticated,
+        parameters: [providerKeyProviderQuery],
         responses: {
           "200": privateJsonResponse("Provider-key metadata", "ProviderKeyResponse"),
           ...privateProviderKeyReadErrors
@@ -1241,15 +1237,12 @@ export const openApiDocument = {
       AccountExportSpace: openApiSchema(AccountExportSpaceSchema),
       AccountExportTag: openApiSchema(AccountExportTagSchema),
       ApiError: openApiSchema(ApiErrorSchema),
-      AuthOtpRequest: openApiSchema(AuthOtpRequestSchema),
-      AuthOtpAcceptedResponse: openApiSchema(AuthOtpAcceptedResponseSchema),
-      AuthOtpVerifyRequest: openApiSchema(AuthOtpVerifyRequestSchema),
+      AuthPasswordSignInRequest: openApiSchema(AuthPasswordSignInRequestSchema),
+      AuthPasswordSignUpRequest: openApiSchema(AuthPasswordSignUpRequestSchema),
       AuthRefreshRequest: openApiSchema(AuthRefreshRequestSchema),
       AuthSession: openApiSchema(AuthSessionSchema),
       AuthSessionResponse: openApiSchema(AuthSessionResponseSchema),
       AuthSignOutResponse: openApiSchema(AuthSignOutResponseSchema),
-      AuthVerifyRequest: openApiSchema(AuthVerifyRequestSchema),
-      AuthVerifyResponse: openApiSchema(AuthVerifyResponseSchema),
       CaptureCreateRequest: openApiSchema(CaptureCreateRequestSchema),
       CaptureCreateResponse: openApiSchema(CaptureCreateResponseSchema),
       CaptureContentRemovalMutation: openApiSchema(CaptureContentRemovalMutationSchema),
@@ -1340,6 +1333,7 @@ export const openApiDocument = {
       UserSettingsUpdateRequest: openApiSchema(UserSettingsUpdateRequestSchema),
       UserSettingsUpdateResponse: openApiSchema(UserSettingsUpdateResponseSchema),
       ProviderKeyMetadata: openApiSchema(ProviderKeyMetadataSchema),
+      ProviderKeyQuery: openApiSchema(ProviderKeyQuerySchema),
       ProviderKeyResponse: openApiSchema(ProviderKeyResponseSchema),
       ProviderKeyPutRequest: openApiSchema(ProviderKeyPutRequestSchema),
       ProviderKeyPutResponse: openApiSchema(ProviderKeyPutResponseSchema),

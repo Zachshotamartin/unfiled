@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  LOCAL_HASH_EMBEDDING_DIMENSIONS,
+  LOCAL_HASH_EMBEDDING_MODEL_ID,
+  MAX_LOCAL_HASH_EMBEDDING_INPUT_BYTES
+} from "@unfiled/search";
 
 import {
+  createLocalHashOrganizerEmbeddingProvider,
   createOpenAIOrganizerEmbeddingProvider,
   type OrganizerEmbeddingProvider
 } from "../src/embedding-provider.js";
@@ -88,6 +94,47 @@ function allZero(bytes: Uint8Array): boolean {
 }
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("provider-free local hash organizer embedding provider", () => {
+  it("uses only the pinned local profile and never opens a provider credential", async () => {
+    const credential = {
+      lastSelection: vi.fn(),
+      use: vi.fn()
+    };
+    const provider = createLocalHashOrganizerEmbeddingProvider();
+
+    const vector = await provider.embed({
+      dimensions: LOCAL_HASH_EMBEDDING_DIMENSIONS,
+      modelId: LOCAL_HASH_EMBEDDING_MODEL_ID,
+      providerCredential: credential,
+      signal: new AbortController().signal,
+      text: "shopping oats and apples"
+    });
+
+    expect(vector).toHaveLength(LOCAL_HASH_EMBEDDING_DIMENSIONS);
+    expect(credential.use).not.toHaveBeenCalled();
+  });
+
+  it("rejects a generation-profile mismatch and oversized input", async () => {
+    const provider = createLocalHashOrganizerEmbeddingProvider();
+    await expect(
+      provider.embed({
+        dimensions: LOCAL_HASH_EMBEDDING_DIMENSIONS,
+        modelId: "text-embedding-3-small",
+        signal: new AbortController().signal,
+        text: "private text"
+      })
+    ).rejects.toMatchObject({ safeCode: "validation_failed" });
+    await expect(
+      provider.embed({
+        dimensions: LOCAL_HASH_EMBEDDING_DIMENSIONS,
+        modelId: LOCAL_HASH_EMBEDDING_MODEL_ID,
+        signal: new AbortController().signal,
+        text: "x".repeat(MAX_LOCAL_HASH_EMBEDDING_INPUT_BYTES + 1)
+      })
+    ).rejects.toMatchObject({ safeCode: "validation_failed" });
+  });
+});
 
 describe("OpenAI organizer embedding provider", () => {
   it("sends the exact bounded request and returns finite float32 values", async () => {
@@ -273,11 +320,15 @@ describe("OpenAI organizer embedding provider", () => {
     const firstKey = "sk-first-abcdefghijklmnopqrstuvwxyz0123456789";
     const replacementKey = "sk-replacement-abcdefghijklmnopqrstuvwxyz0123456789";
     const route = (credential: string, credentialRevision: number) => ({
+      adapterRegistryVersion: "organization-model-registry-v2" as const,
       credential,
       credentialRevision,
       expansionStyle: "brief" as const,
+      modelId: "gpt-5.6-terra" as const,
+      modelSelection: "auto" as const,
       provider: "openai" as const,
       routingEffort: "standard" as const,
+      settingsRevision: 1,
       source: "byok" as const
     });
     const resolve = vi
@@ -285,7 +336,7 @@ describe("OpenAI organizer embedding provider", () => {
       .mockResolvedValueOnce(route(firstKey, 1))
       .mockResolvedValueOnce(route(replacementKey, 2));
     const providerCredential = createOrganizerProviderCredentialAccess({
-      appDefaultApiKey: API_KEY,
+      appDefaultApiKeys: { openai: API_KEY },
       resolve
     });
     const fetchImplementation = vi

@@ -1,31 +1,51 @@
 import { OrganizerProviderError, OrganizerUnavailableError } from "./errors.js";
+import {
+  ORGANIZER_MODEL_REGISTRY_VERSION,
+  isOrganizerModelId,
+  isOrganizerModelSelection,
+  isOrganizerProvider,
+  isOrganizerRoutingEffort,
+  modelIdBelongsToProvider,
+  resolveOrganizerModelId,
+  type OrganizerModelId,
+  type OrganizerModelSelection,
+  type OrganizerProvider,
+  type OrganizerRoutingEffort
+} from "./model-registry.js";
 
-export type OrganizerProvider = "openai";
+export type { OrganizerProvider, OrganizerRoutingEffort } from "./model-registry.js";
 export type OrganizerProviderSource = "app_default" | "byok";
-export type OrganizerRoutingEffort = "economical" | "standard" | "thorough";
 export type OrganizerExpansionStyle = "off" | "brief" | "detailed";
 
-export type OrganizerProviderCredential = Readonly<{
-  credentialRevision: number | null;
+/** Immutable job settings that every provider request must be bound to. */
+export type OrganizerProviderRouteBinding = Readonly<{
+  adapterRegistryVersion: typeof ORGANIZER_MODEL_REGISTRY_VERSION;
   expansionStyle: OrganizerExpansionStyle;
+  modelId: OrganizerModelId;
+  modelSelection: OrganizerModelSelection;
   provider: OrganizerProvider;
   routingEffort: OrganizerRoutingEffort;
-  source: OrganizerProviderSource;
-  close(): void;
-  withApiKey<T>(operation: (apiKey: string) => Promise<T>): Promise<T>;
+  settingsRevision: number;
 }>;
 
-export type LeaseBoundOrganizerProviderRoute = Readonly<{
-  credential: string | null;
-  credentialRevision: number | null;
-  expansionStyle: OrganizerExpansionStyle;
-  provider: OrganizerProvider;
-  routingEffort: OrganizerRoutingEffort;
-  source: OrganizerProviderSource;
-}>;
+export type OrganizerProviderCredential = OrganizerProviderRouteBinding &
+  Readonly<{
+    credentialRevision: number | null;
+    source: OrganizerProviderSource;
+    close(): void;
+    withApiKey<T>(operation: (apiKey: string) => Promise<T>): Promise<T>;
+  }>;
+
+export type LeaseBoundOrganizerProviderRoute = OrganizerProviderRouteBinding &
+  Readonly<{
+    credential: string | null;
+    credentialRevision: number | null;
+    source: OrganizerProviderSource;
+  }>;
 
 export type OrganizerProviderSelection = Readonly<{
   credentialRevision: number | null;
+  modelId: OrganizerModelId;
   provider: OrganizerProvider;
   source: OrganizerProviderSource;
 }>;
@@ -34,6 +54,12 @@ export type OrganizerProviderCredentialAccess = Readonly<{
   lastSelection(): OrganizerProviderSelection | null;
   use<T>(operation: (credential: OrganizerProviderCredential) => Promise<T>): Promise<T>;
 }>;
+
+/**
+ * Operator-funded app-default credentials. The database snapshots app-default
+ * jobs as OpenAI only, so the free BYOK-only beta runs with an empty record.
+ */
+export type OrganizerAppDefaultApiKeys = Readonly<{ openai?: string }>;
 
 function assertApiKey(value: string): void {
   let hasUnsafeCharacter = false;
@@ -46,22 +72,72 @@ function assertApiKey(value: string): void {
   }
 }
 
+/** Rejects any binding whose provider, model, effort, and registry pin disagree. */
+export function assertOrganizerProviderRouteBinding(binding: OrganizerProviderRouteBinding): void {
+  // Re-validate as untrusted data: the static type does not prove what a database row or
+  // test double actually contained.
+  const raw: Readonly<Record<string, unknown>> = binding;
+  if (
+    !isOrganizerProvider(raw.provider) ||
+    !isOrganizerModelId(raw.modelId) ||
+    !isOrganizerModelSelection(raw.modelSelection) ||
+    !isOrganizerRoutingEffort(raw.routingEffort) ||
+    (raw.expansionStyle !== "off" &&
+      raw.expansionStyle !== "brief" &&
+      raw.expansionStyle !== "detailed") ||
+    raw.adapterRegistryVersion !== ORGANIZER_MODEL_REGISTRY_VERSION ||
+    !Number.isSafeInteger(raw.settingsRevision) ||
+    Number(raw.settingsRevision) < 1 ||
+    !modelIdBelongsToProvider(raw.provider, raw.modelId) ||
+    resolveOrganizerModelId(raw.provider, raw.modelSelection, raw.routingEffort) !== raw.modelId
+  ) {
+    throw new OrganizerUnavailableError();
+  }
+}
+
+export function sameOrganizerProviderRouteBinding(
+  left: OrganizerProviderRouteBinding,
+  right: OrganizerProviderRouteBinding
+): boolean {
+  const leftRegistry: string = left.adapterRegistryVersion;
+  return (
+    leftRegistry === right.adapterRegistryVersion &&
+    left.expansionStyle === right.expansionStyle &&
+    left.modelId === right.modelId &&
+    left.modelSelection === right.modelSelection &&
+    left.provider === right.provider &&
+    left.routingEffort === right.routingEffort &&
+    left.settingsRevision === right.settingsRevision
+  );
+}
+
+function routeBinding(input: OrganizerProviderRouteBinding): OrganizerProviderRouteBinding {
+  return Object.freeze({
+    adapterRegistryVersion: input.adapterRegistryVersion,
+    expansionStyle: input.expansionStyle,
+    modelId: input.modelId,
+    modelSelection: input.modelSelection,
+    provider: input.provider,
+    routingEffort: input.routingEffort,
+    settingsRevision: input.settingsRevision
+  });
+}
+
 /**
  * Holds provider material in an erasable byte buffer and only decodes it at the
  * outbound request boundary. JavaScript strings cannot be zeroed, so callers
  * must not retain, log, cache, or return the callback value.
  */
 export function createOrganizerProviderCredential(
-  input: Readonly<{
-    apiKey: string;
-    credentialRevision: number | null;
-    expansionStyle: OrganizerExpansionStyle;
-    provider: OrganizerProvider;
-    routingEffort: OrganizerRoutingEffort;
-    source: OrganizerProviderSource;
-  }>
+  input: OrganizerProviderRouteBinding &
+    Readonly<{
+      apiKey: string;
+      credentialRevision: number | null;
+      source: OrganizerProviderSource;
+    }>
 ): OrganizerProviderCredential {
   assertApiKey(input.apiKey);
+  assertOrganizerProviderRouteBinding(input);
   if (
     (input.source === "byok" && input.credentialRevision === null) ||
     (input.source === "app_default" && input.credentialRevision !== null)
@@ -72,10 +148,8 @@ export function createOrganizerProviderCredential(
   let closed = false;
   let active = 0;
   return Object.freeze({
+    ...routeBinding(input),
     credentialRevision: input.credentialRevision,
-    expansionStyle: input.expansionStyle,
-    provider: input.provider,
-    routingEffort: input.routingEffort,
     source: input.source,
     close() {
       if (closed) return;
@@ -96,32 +170,41 @@ export function createOrganizerProviderCredential(
   });
 }
 
+/**
+ * A BYOK route carries the user's live Vault credential. An app-default route
+ * carries no secret and may be served only by the operator key for exactly that
+ * provider; a BYOK-only deployment without one fails closed and non-retryably.
+ */
 export function materializeLeaseBoundProviderCredential(
   route: LeaseBoundOrganizerProviderRoute,
-  appDefaultApiKey: string
+  appDefaultApiKeys: OrganizerAppDefaultApiKeys
 ): OrganizerProviderCredential {
-  const apiKey = route.source === "byok" ? route.credential : appDefaultApiKey;
+  assertOrganizerProviderRouteBinding(route);
   if (
-    apiKey === null ||
-    (route.source === "byok" && route.credentialRevision === null) ||
+    (route.source === "byok" && (route.credential === null || route.credentialRevision === null)) ||
     (route.source === "app_default" &&
       (route.credential !== null || route.credentialRevision !== null))
   ) {
     throw new OrganizerUnavailableError();
   }
+  const apiKey =
+    route.source === "byok"
+      ? route.credential
+      : route.provider === "openai"
+        ? (appDefaultApiKeys.openai ?? null)
+        : null;
+  if (apiKey === null) throw new OrganizerProviderError("provider_unavailable", false);
   return createOrganizerProviderCredential({
+    ...routeBinding(route),
     apiKey,
     credentialRevision: route.credentialRevision,
-    expansionStyle: route.expansionStyle,
-    provider: route.provider,
-    routingEffort: route.routingEffort,
     source: route.source
   });
 }
 
 export function createOrganizerProviderCredentialAccess(
   input: Readonly<{
-    appDefaultApiKey: string;
+    appDefaultApiKeys: OrganizerAppDefaultApiKeys;
     resolve(): Promise<LeaseBoundOrganizerProviderRoute>;
   }>
 ): OrganizerProviderCredentialAccess {
@@ -132,9 +215,10 @@ export function createOrganizerProviderCredentialAccess(
     },
     async use<T>(operation: (credential: OrganizerProviderCredential) => Promise<T>): Promise<T> {
       const route = await input.resolve();
-      const credential = materializeLeaseBoundProviderCredential(route, input.appDefaultApiKey);
+      const credential = materializeLeaseBoundProviderCredential(route, input.appDefaultApiKeys);
       lastSelection = Object.freeze({
         credentialRevision: credential.credentialRevision,
+        modelId: credential.modelId,
         provider: credential.provider,
         source: credential.source
       });

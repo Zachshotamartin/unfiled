@@ -18,7 +18,10 @@ xcuserdata
 *.tfstate
 *.tfstate.*
 terraform.tfvars
+*.tfbackend
+!*.tfbackend.example
 supabase/.branches
 supabase/.temp
 supabase/.env
 *.log
+.vercel

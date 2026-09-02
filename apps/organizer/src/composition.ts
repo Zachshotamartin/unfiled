@@ -4,17 +4,23 @@ import { createProductionOrganizerCipher } from "./cipher.js";
 import type { OrganizerConfig } from "./config.js";
 import { createOrganizerRepository } from "./database.js";
 import { createOrganizerDrain, type OrganizerCipher } from "./drain.js";
-import { createOpenAIOrganizerEmbeddingProvider } from "./embedding-provider.js";
+import {
+  createLocalHashOrganizerEmbeddingProvider,
+  createOpenAIOrganizerEmbeddingProvider
+} from "./embedding-provider.js";
 import { createOrganizerApp, type OrganizerApp } from "./http.js";
 import { createVercelTrustedSourcesInvocationAuth } from "./invocation-auth.js";
-import { createOrganizerKeyManagementAdapter } from "./key-management.js";
-import { createOpenAIOrganizerPlanner } from "./openai-planner.js";
+import {
+  createOrganizerKeyManagementAdapter,
+  managedKeyRecordParserForOrganizerBoundary
+} from "./key-management.js";
 import {
   createDeterministicFirstOrganizerPlanner,
   unavailableProductionPlanner,
   type OrganizerPlanner
 } from "./planner.js";
 import { createPostgresOrganizerExecutor } from "./postgres.js";
+import { createOrganizerProviderPlanner } from "./provider-multiplexer.js";
 import { createOrganizerCandidateRetrieval } from "./retrieval.js";
 
 export type OrganizerComposition = Readonly<{ app: OrganizerApp; close(): Promise<void> }>;
@@ -49,22 +55,28 @@ export function createOrganizerComposition(
     });
   }
   const postgres = createPostgresOrganizerExecutor(config.pipeline.database);
-  const repository = createOrganizerRepository(postgres.executor);
+  const repository = createOrganizerRepository(
+    postgres.executor,
+    managedKeyRecordParserForOrganizerBoundary(config.keyBoundary)
+  );
   const planner =
     overrides.planner ??
-    (config.planner.kind === "openai-responses"
-      ? createDeterministicFirstOrganizerPlanner(createOpenAIOrganizerPlanner({}))
+    (config.planner.kind === "lease-bound-provider-registry-v2"
+      ? createDeterministicFirstOrganizerPlanner(createOrganizerProviderPlanner())
       : unavailableProductionPlanner);
   const retrieval =
-    config.planner.kind === "openai-responses"
-      ? createOrganizerCandidateRetrieval({
-          embeddingProvider: createOpenAIOrganizerEmbeddingProvider({}),
+    config.embedding.kind === "disabled"
+      ? undefined
+      : createOrganizerCandidateRetrieval({
+          embeddingProvider:
+            config.embedding.kind === "local-hash-v1"
+              ? createLocalHashOrganizerEmbeddingProvider()
+              : createOpenAIOrganizerEmbeddingProvider({}),
           repository
-        })
-      : undefined;
+        });
   const drain = createOrganizerDrain({
-    ...(config.planner.kind === "openai-responses"
-      ? { appDefaultProviderApiKey: config.planner.apiKey }
+    ...(config.planner.kind === "lease-bound-provider-registry-v2"
+      ? { appDefaultProviderApiKeys: config.planner.appDefaultApiKeys }
       : {}),
     cipher: overrides.cipher ?? createProductionOrganizerCipher(),
     claimLimit: config.pipeline.claimLimit,

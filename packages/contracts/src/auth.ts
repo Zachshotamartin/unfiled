@@ -2,25 +2,23 @@ import { z } from "zod";
 
 export const NormalizedEmailSchema = z.string().trim().toLowerCase().max(254).pipe(z.email());
 
-export const OtpCodeSchema = z.string().regex(/^\d{6}$/u, "Enter the six-digit code");
+/** Length bounds only; the identity provider applies its own policy and hashing. */
+export const PasswordSchema = z
+  .string()
+  .min(8, "Use at least 8 characters")
+  .max(72, "Use at most 72 characters");
 
-export const AuthOtpRequestSchema = z.strictObject({ email: NormalizedEmailSchema });
-export type AuthOtpRequest = z.infer<typeof AuthOtpRequestSchema>;
-
-export const AuthOtpAcceptedResponseSchema = z.strictObject({
-  accepted: z.literal(true),
-  retryAfterSeconds: z.number().int().positive()
-});
-export type AuthOtpAcceptedResponse = z.infer<typeof AuthOtpAcceptedResponseSchema>;
-
-export const AuthOtpVerifyRequestSchema = z.strictObject({
+export const AuthPasswordSignUpRequestSchema = z.strictObject({
   email: NormalizedEmailSchema,
-  code: OtpCodeSchema
+  password: PasswordSchema
 });
-export type AuthOtpVerifyRequest = z.infer<typeof AuthOtpVerifyRequestSchema>;
+export type AuthPasswordSignUpRequest = z.infer<typeof AuthPasswordSignUpRequestSchema>;
 
-export const AuthVerifyRequestSchema = AuthOtpVerifyRequestSchema;
-export type AuthVerifyRequest = AuthOtpVerifyRequest;
+export const AuthPasswordSignInRequestSchema = z.strictObject({
+  email: NormalizedEmailSchema,
+  password: PasswordSchema
+});
+export type AuthPasswordSignInRequest = z.infer<typeof AuthPasswordSignInRequestSchema>;
 
 export const AuthUserSchema = z.strictObject({ id: z.uuid(), email: NormalizedEmailSchema });
 export type AuthUser = z.infer<typeof AuthUserSchema>;
@@ -32,9 +30,6 @@ export const AuthSessionSchema = z.strictObject({
   user: AuthUserSchema
 });
 export type AuthSession = z.infer<typeof AuthSessionSchema>;
-
-export const AuthVerifyResponseSchema = AuthSessionSchema;
-export type AuthVerifyResponse = AuthSession;
 
 export const AuthSessionResponseSchema = z.strictObject({ user: AuthUserSchema });
 export type AuthSessionResponse = z.infer<typeof AuthSessionResponseSchema>;

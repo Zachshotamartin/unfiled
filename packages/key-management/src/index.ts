@@ -22,6 +22,19 @@ export {
   type VercelOidcKmsTransportOptions
 } from "./aws-transport.js";
 export {
+  createVercelSensitiveEnvironmentKmsTransport,
+  vercelSensitiveEnvironmentKeyConfiguration,
+  type VercelSensitiveEnvironmentKmsTransportOptions
+} from "./vercel-sensitive-environment-transport.js";
+export {
+  createVercelSensitiveEnvironmentEnvelopeCustodian,
+  type VercelSensitiveEnvironmentEnvelopeCustodianOptions,
+  type VercelSensitiveEnvironmentIndexWorkerEnvelopeCustodianOptions,
+  type VercelSensitiveEnvironmentInteractiveEnvelopeCustodianOptions,
+  type VercelSensitiveEnvironmentOrganizationWorkerEnvelopeCustodianOptions,
+  type VercelSensitiveEnvironmentSearchWorkerEnvelopeCustodianOptions
+} from "./vercel-sensitive-environment-custodian.js";
+export {
   assertAiAssistedKmsReadiness,
   assertIndexWorkerKmsReadiness,
   type AiAssistedKmsReadinessOptions,
@@ -44,12 +57,13 @@ export {
   type KeyCustodyPrivateDenialEvidence
 } from "./custody-probe.js";
 export { createManagedKeyResolver, type ManagedKeyResolverOptions } from "./managed-resolver.js";
-export { kmsEncryptionContextForKey } from "./kms-context.js";
+export { keyEnvelopeContextForKey, kmsEncryptionContextForKey } from "./kms-context.js";
 export {
   KEY_CLASSES,
   KEY_PURPOSES,
   KEY_STATUSES,
   KEY_WORKLOADS,
+  VERCEL_DEPLOYMENT_ENVIRONMENTS,
   KeyManagementError,
   KeyManagementErrorCode,
   type AiAssistedRetiredRootKeySet,
@@ -68,11 +82,15 @@ export {
   type KeyPurpose,
   type KeyReference,
   type KeyRotationMetadata,
+  type KeyRotationMetadataV2,
   type KeySelector,
   type KeyStatus,
   type KeyWorkload,
   type ManagedContentMacKey,
+  type ManagedKeyRecord,
+  type ManagedKeyRecordParser,
   type ManagedKeyRecordV1,
+  type ManagedKeyRecordV2,
   type ManagedKeyStore,
   type ManagedObjectWrappingKey,
   type OwnerBoundKeyResolver,
@@ -81,6 +99,19 @@ export {
   type RootKeySet,
   type SearchWorkerRetiredRootKeySet,
   type SearchWorkerRootKeySet,
+  type VercelDeploymentEnvironment,
+  type VercelSensitiveEnvironmentAiAssistedRetiredRootKeySet,
+  type VercelSensitiveEnvironmentAiAssistedRootKeySet,
+  type VercelSensitiveEnvironmentDecryptOnlyIntermediateKeyCustodian,
+  type VercelSensitiveEnvironmentIndexWorkerRetiredRootKeySet,
+  type VercelSensitiveEnvironmentIndexWorkerRootKeySet,
+  type VercelSensitiveEnvironmentInteractiveKeyCustodian,
+  type VercelSensitiveEnvironmentIntermediateKeyCustodian,
+  type VercelSensitiveEnvironmentRetiredRootKeySet,
+  type VercelSensitiveEnvironmentRootKeySet,
+  type VercelSensitiveEnvironmentSearchWorkerRetiredRootKeySet,
+  type VercelSensitiveEnvironmentSearchWorkerRootKeySet,
+  type VercelSensitiveEnvironmentWorkloadRootKeySet,
   type WorkloadRootKeySet
 } from "./types.js";
 export {
@@ -90,6 +121,7 @@ export {
   assertAwsRoleArn,
   assertIsoTimestamp,
   assertKmsKeyArn,
+  assertVercelSensitiveEnvironmentRootKeyId,
   assertWorkloadCanAccess,
   isDecryptableStatus,
   normalizeCreateIntermediateKeyRequest,
@@ -97,10 +129,16 @@ export {
   parseKeyBinding,
   parseKeyReference,
   parseKeySelector,
+  parseAnyManagedKeyRecord,
   parseManagedKeyRecord,
+  parseManagedKeyRecordV1,
+  parseManagedKeyRecordV2,
   parseRetiredRootKeySet,
   parseRootKeySet,
   parseWorkloadRootKeySet,
+  parseVercelSensitiveEnvironmentRetiredRootKeySet,
+  parseVercelSensitiveEnvironmentRootKeySet,
+  parseVercelSensitiveEnvironmentWorkloadRootKeySet,
   sameBinding,
   sameSelector
 } from "./validation.js";

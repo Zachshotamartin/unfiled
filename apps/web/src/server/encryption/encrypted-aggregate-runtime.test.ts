@@ -1,7 +1,11 @@
 import { generateKeyEncryptionKey } from "@unfiled/content-crypto";
 import { manualNoteFixtures } from "@unfiled/contracts";
 import type { ObjectWrapReservation } from "@unfiled/encrypted-aggregate";
-import type { InteractiveKeyCustodian, OwnerBoundKeyResolver } from "@unfiled/key-management";
+import type {
+  InteractiveKeyCustodian,
+  OwnerBoundKeyResolver,
+  VercelSensitiveEnvironmentInteractiveKeyCustodian
+} from "@unfiled/key-management";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -26,6 +30,14 @@ function resolver(): OwnerBoundKeyResolver {
 }
 
 function custodian(): InteractiveKeyCustodian {
+  return Object.freeze({
+    rewrapIntermediateKey: vi.fn(),
+    withGeneratedIntermediateKey: vi.fn(),
+    withUnwrappedIntermediateKey: vi.fn()
+  });
+}
+
+function v2Custodian(): VercelSensitiveEnvironmentInteractiveKeyCustodian {
   return Object.freeze({
     rewrapIntermediateKey: vi.fn(),
     withGeneratedIntermediateKey: vi.fn(),
@@ -141,6 +153,47 @@ describe("owner encrypted aggregate runtime", () => {
         ({ service }) => Promise.resolve(Object.isFrozen(service))
       )
     ).resolves.toBe(true);
+    expect(scope).toHaveBeenCalledWith(abort.signal);
+    expect(rpc).toHaveBeenCalledTimes(4);
+  });
+
+  it("uses the V2 store and resolver contract for the sensitive-environment runtime", async () => {
+    const scope = vi.fn();
+    const managedCustodian = v2Custodian();
+    const runtime: InteractiveWebKeyRuntime = Object.freeze({
+      kind: "vercel-sensitive-env-v1",
+      withInteractiveCustodian<Result>(
+        signal: AbortSignal,
+        use: (value: VercelSensitiveEnvironmentInteractiveKeyCustodian) => Promise<Result>
+      ): Promise<Result> {
+        scope(signal);
+        return use(managedCustodian);
+      }
+    });
+    const rpc = vi.fn<ServiceRpcClient["rpc"]>((name, parameters) => {
+      if (name !== "get_user_content_key_status") throw new Error(`unexpected ${name}`);
+      return Promise.resolve({
+        keyClass: parameters.p_key_class,
+        keyPurpose: parameters.p_key_purpose,
+        active: {
+          keyId: `key_${String(parameters.p_key_class)}_${String(parameters.p_key_purpose)}`,
+          keyVersion: 1
+        },
+        pending: null,
+        nextVersion: 2
+      });
+    });
+    const abort = new AbortController();
+
+    await expect(
+      withOwnerEncryptedAggregateRuntime(
+        runtime,
+        Object.freeze({ rpc }),
+        OWNER_ID,
+        { signal: abort.signal },
+        () => Promise.resolve("v2")
+      )
+    ).resolves.toBe("v2");
     expect(scope).toHaveBeenCalledWith(abort.signal);
     expect(rpc).toHaveBeenCalledTimes(4);
   });
@@ -272,7 +325,8 @@ describe("owner encrypted aggregate runtime", () => {
       "reserve_content_key_operations",
       "activate_user_content_key",
       "get_user_content_key_status",
-      "register_user_content_key"
+      "register_user_content_key",
+      "register_user_content_key_v2"
     ]);
     expect(new Set(encryptedAggregateRuntimeRpcFunctions).size).toBe(
       encryptedAggregateRuntimeRpcFunctions.length

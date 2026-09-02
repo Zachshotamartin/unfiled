@@ -28,10 +28,15 @@ import { createSearchRagPayloadOpener } from "../src/rag-crypto.js";
 
 const keyMocks = vi.hoisted(() => ({ custodianForSearchAuthority: vi.fn() }));
 
-vi.mock("../src/key-management.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof SearchKeyManagementModule>()),
-  custodianForSearchAuthority: keyMocks.custodianForSearchAuthority
-}));
+vi.mock("../src/key-management.js", async (importOriginal) => {
+  const original = await importOriginal<typeof SearchKeyManagementModule>();
+  return {
+    ...original,
+    custodianForSearchAuthority: keyMocks.custodianForSearchAuthority,
+    managedKeyRecordParserForSearchAuthority: () =>
+      original.managedKeyRecordParserForSearchBoundary({ kind: "local-disabled" })
+  };
+});
 
 const OWNER_ID = "22222222-2222-4222-8222-222222222222";
 const OTHER_OWNER_ID = "33333333-3333-4333-8333-333333333333";

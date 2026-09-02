@@ -14,9 +14,9 @@ function provider(overrides: Partial<AuthProvider>): AuthProvider {
   return {
     getUser: vi.fn(() => Promise.resolve(null)),
     refresh: vi.fn(() => Promise.resolve(null)),
-    requestCode: vi.fn(() => Promise.resolve()),
+    signInWithPassword: vi.fn(() => Promise.resolve(refreshed)),
     signOut: vi.fn(() => Promise.resolve()),
-    verifyCode: vi.fn(() => Promise.resolve(refreshed)),
+    signUp: vi.fn(() => Promise.resolve(refreshed)),
     ...overrides
   };
 }

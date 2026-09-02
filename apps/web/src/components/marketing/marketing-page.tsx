@@ -9,10 +9,10 @@ import useCasesImage from "../../../../../design/brand/web/04-use-cases.png";
 import trustImage from "../../../../../design/brand/web/05-trust.png";
 import finalCtaImage from "../../../../../design/brand/web/06-final-cta.png";
 
-import { BrandLogo } from "@/components/brand-logo";
+import { SiteFooter } from "@/components/marketing/site-footer";
 import { SiteHeader } from "@/components/site-header";
 
-const waitlistHref = "mailto:hello@unfiled.app?subject=Unfiled%20waitlist";
+const signInHref = "/auth";
 
 export function MarketingPage() {
   return (
@@ -36,8 +36,8 @@ export function MarketingPage() {
               Capture a thought now. Unfiled organizes it after.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
-              <a href={waitlistHref} className="button-primary">
-                Join the waitlist
+              <a href={signInHref} className="button-primary">
+                Sign in
                 <ArrowRightIcon size={18} weight="bold" aria-hidden="true" />
               </a>
               <Link href="/app" className="button-secondary">
@@ -188,8 +188,8 @@ export function MarketingPage() {
               >
                 Write it down before it disappears.
               </h2>
-              <a href={waitlistHref} className="button-primary mt-8">
-                Join the waitlist
+              <a href={signInHref} className="button-primary mt-8">
+                Sign in
                 <ArrowRightIcon size={18} weight="bold" aria-hidden="true" />
               </a>
             </div>
@@ -205,26 +205,9 @@ export function MarketingPage() {
             </figure>
           </div>
 
-          <footer className="mt-20 border-t border-outline sm:mt-28">
-            <div className="mx-auto flex max-w-[1440px] flex-col gap-8 px-4 py-9 sm:px-6 md:flex-row md:items-center md:justify-between lg:px-10">
-              <BrandLogo />
-              <nav
-                aria-label="Footer navigation"
-                className="flex flex-wrap items-center gap-x-6 gap-y-3 text-sm text-muted-content"
-              >
-                <a href="#product" className="rounded-control py-2 hover:text-content">
-                  Product
-                </a>
-                <a href="#principles" className="rounded-control py-2 hover:text-content">
-                  Principles
-                </a>
-                <Link href="/app" className="rounded-control py-2 hover:text-content">
-                  Open app
-                </Link>
-              </nav>
-              <p className="text-sm text-muted-content">Web + iPhone</p>
-            </div>
-          </footer>
+          <div className="mt-20 sm:mt-28">
+            <SiteFooter />
+          </div>
         </section>
       </main>
     </div>

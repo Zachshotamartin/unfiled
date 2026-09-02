@@ -80,6 +80,18 @@ require_text_count() {
   fi
 }
 
+require_text_absent() {
+  local file="$1"
+  local forbidden="$2"
+  local label="$3"
+
+  if grep -Fq -- "${forbidden}" "${file}"; then
+    printf 'Generated project inspection failed (%s): forbidden value found in %s\n' \
+      "${label}" "${file}" >&2
+    exit 1
+  fi
+}
+
 generate_project() {
   require_command xcodegen
   require_xcodegen_version
@@ -99,29 +111,32 @@ inspect_project() {
   local project_file="${XCODE_PROJECT}/project.pbxproj"
   require_text "${project_file}" 'productType = "com.apple.product-type.application";' \
     'application target'
-  require_text "${project_file}" 'productType = "com.apple.product-type.app-extension";' \
-    'WidgetKit extension target'
   require_text "${project_file}" 'productType = "com.apple.product-type.bundle.unit-test";' \
     'unit-test target'
   require_text_count \
     "${project_file}" \
     'isa = PBXResourcesBuildPhase;' \
-    '2' \
-    'application and widget resource phases'
+    '1' \
+    'application resource phase'
   require_text "${project_file}" 'ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;' \
     'application icon catalog'
   require_text "${project_file}" 'PrivacyInfo.xcprivacy in Resources' \
     'packaged privacy manifests'
-  require_text_count \
+  require_text_absent \
     "${project_file}" \
-    'QuickCaptureWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile;' \
-    '1' \
-    'single embedded widget product'
+    'com.apple.product-type.app-extension' \
+    'no app extension is embedded'
   require_text "${project_file}" 'IPHONEOS_DEPLOYMENT_TARGET = 17.0;' \
     'iOS 17 deployment floor'
-  require_text "${project_file}" \
-    "PRODUCT_BUNDLE_IDENTIFIER = \"\$(UNFILED_APP_BUNDLE_IDENTIFIER).quickcapture\";" \
-    'derived widget bundle identifier'
+  require_text_count \
+    "${project_file}" \
+    'TARGETED_DEVICE_FAMILY = 1;' \
+    '9' \
+    'all project and target configurations are iPhone-only'
+  require_text_absent \
+    "${project_file}" \
+    'TARGETED_DEVICE_FAMILY = "1,2";' \
+    'no target configuration silently re-enables iPad'
   require_text "${project_file}" \
     'repositoryURL = "https://github.com/sqlcipher/GRDB.swift";' \
     'SQLCipher GRDB package source'
@@ -129,21 +144,10 @@ inspect_project() {
   require_text "${project_file}" 'Development.xcconfig' 'Development configuration'
   require_text "${project_file}" 'Preview.xcconfig' 'Preview configuration'
   require_text "${project_file}" 'Production.xcconfig' 'Production configuration'
-  require_text "${IOS_DIRECTORY}/Unfiled/Supporting/Unfiled.entitlements" \
-    "\$(UNFILED_APP_GROUP_IDENTIFIER)" 'application App Group'
-  require_text \
-    "${IOS_DIRECTORY}/QuickCaptureWidget/Supporting/QuickCaptureWidget.entitlements" \
-    "\$(UNFILED_APP_GROUP_IDENTIFIER)" 'widget App Group'
-  require_text "${IOS_DIRECTORY}/QuickCaptureWidget/Supporting/Info.plist" \
-    'com.apple.widgetkit-extension' 'WidgetKit extension point'
-  require_text "${IOS_DIRECTORY}/QuickCaptureWidget/QuickCaptureWidget.swift" \
-    'Button(intent: OpenQuickCaptureIntent())' 'App Intent action'
-  require_text "${IOS_DIRECTORY}/QuickCaptureWidget/QuickCaptureWidget.swift" \
-    '.accessoryCircular' 'circular Lock Screen family'
-  require_text "${IOS_DIRECTORY}/QuickCaptureWidget/QuickCaptureWidget.swift" \
-    '.accessoryRectangular' 'rectangular Lock Screen family'
+  require_text_absent "${IOS_DIRECTORY}/Unfiled/Supporting/Unfiled.entitlements" \
+    'application-groups' 'no App Group entitlement remains'
 
-  printf 'Generated iOS targets, identifiers, entitlements, package, and widget surface verified.\n'
+  printf 'Generated iOS targets, identifiers, entitlements, and package verified.\n'
 }
 
 resolve_packages() {

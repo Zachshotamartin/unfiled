@@ -167,3 +167,65 @@ describe("readJsonObject", () => {
     expect(String(reason)).not.toContain("private-canary");
   });
 });
+
+describe("errorResponse server-side failure log", () => {
+  it("records one content-free line for 5xx responses and nothing for 4xx", () => {
+    const sink = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const request = new Request(
+        "https://unfiled.test/api/internal/captures/drain?secret=do-not-log",
+        {
+          method: "GET"
+        }
+      );
+      const wrapped = new HttpError(
+        503,
+        ApiErrorCode.PROVIDER_UNAVAILABLE,
+        "The encrypted organizer is unavailable."
+      );
+      const cause = new TypeError("fetch failed: private-detail") as TypeError & { reason: string };
+      cause.reason = "oidc_token";
+      wrapped.cause = cause;
+      errorResponse(wrapped, request);
+      expect(sink).toHaveBeenCalledTimes(1);
+      const line = String(sink.mock.calls[0]?.[0]);
+      expect(JSON.parse(line)).toEqual({
+        event: "web.request_failed",
+        service: "unfiled-web",
+        status: 503,
+        code: ApiErrorCode.PROVIDER_UNAVAILABLE,
+        errorClass: "HttpError",
+        causeClass: "TypeError",
+        causeReason: "oidc_token",
+        method: "GET",
+        path: "/api/internal/captures/drain"
+      });
+      expect(line).not.toContain("do-not-log");
+      expect(line).not.toContain("private-detail");
+      expect(line).not.toContain("organizer is unavailable");
+      errorResponse(new HttpError(400, ApiErrorCode.VALIDATION_FAILED, "bad"), request);
+      expect(sink).toHaveBeenCalledTimes(1);
+      errorResponse(new Error("unexpected"), request);
+      expect(sink).toHaveBeenCalledTimes(2);
+      expect(JSON.parse(String(sink.mock.calls[1]?.[0]))).toMatchObject({
+        status: 500,
+        errorClass: "Error"
+      });
+      const coded = new HttpError(
+        503,
+        ApiErrorCode.PROVIDER_UNAVAILABLE,
+        "Encrypted storage failed."
+      );
+      coded.cause = Object.assign(new Error("service detail"), { code: "key_unavailable" });
+      errorResponse(coded, request);
+      const codedLine = String(sink.mock.calls[2]?.[0]);
+      expect(JSON.parse(codedLine)).toMatchObject({
+        causeClass: "Error",
+        causeCode: "key_unavailable"
+      });
+      expect(codedLine).not.toContain("service detail");
+    } finally {
+      sink.mockRestore();
+    }
+  });
+});

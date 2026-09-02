@@ -22,21 +22,24 @@ const trusted: VercelTrustedSource = {
   teamSlug: "team-example"
 };
 
-function tokenResult(overrides: Record<string, unknown> = {}) {
+function tokenResult(
+  overrides: Record<string, unknown> = {},
+  source: VercelTrustedSource = trusted
+) {
   const now = Math.floor(Date.now() / 1_000);
   return {
     payload: {
-      aud: trusted.audience,
-      environment: "production",
+      aud: source.audience,
+      environment: source.environment,
       exp: now + 300,
       iat: now,
-      iss: trusted.issuer,
+      iss: source.issuer,
       nbf: now,
-      owner: trusted.teamSlug,
-      owner_id: trusted.ownerId,
-      project: trusted.projectName,
-      project_id: trusted.projectId,
-      sub: trusted.expectedSubject,
+      owner: source.teamSlug,
+      owner_id: source.ownerId,
+      project: source.projectName,
+      project_id: source.projectId,
+      sub: source.expectedSubject,
       ...overrides
     },
     protectedHeader: { alg: "RS256" }
@@ -82,6 +85,34 @@ describe("verifier invocation authentication", () => {
       projectId: trusted.projectId,
       subject: trusted.expectedSubject
     });
+  });
+
+  it("issues an opaque Preview authority only for the exact Preview source", async () => {
+    const previewSource: VercelTrustedSource = {
+      ...trusted,
+      environment: "preview",
+      expectedSubject: "owner:team-example:project:unfiled-web:environment:preview"
+    };
+    mocks.verify.mockResolvedValue(tokenResult({}, previewSource));
+
+    const capability = await createProductionInvocationAuth(previewSource).authorize(
+      proof(),
+      new AbortController().signal
+    );
+
+    expect(
+      isVerifiedVerifierInvocation(capability, { requestId: "request-1", runtime: "preview" })
+    ).toBe(true);
+    expect(
+      isVerifiedVerifierInvocation(capability, { requestId: "request-1", runtime: "production" })
+    ).toBe(false);
+    expect(mocks.verify).toHaveBeenCalledWith(
+      "header.payload.signature",
+      expect.objectContaining({
+        environment: "preview",
+        subject: previewSource.expectedSubject
+      })
+    );
   });
 
   it.each([

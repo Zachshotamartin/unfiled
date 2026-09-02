@@ -58,6 +58,57 @@ export function jsonResponse(
   return new Response(JSON.stringify(value), { ...responseInit, headers });
 }
 
+/**
+ * Server-side only. Failures that surface as 5xx are otherwise invisible in platform logs, so one
+ * content-free line records the error class, its cause class, the API code, and the request
+ * method and path. Messages, bodies, query strings, and headers are never logged.
+ */
+function reportServerFailure(
+  reason: unknown,
+  request: Request,
+  status: number,
+  code: string
+): void {
+  if (status < 500) return;
+  const errorClass = reason instanceof Error ? reason.name : typeof reason;
+  const cause = reason instanceof Error ? reason.cause : undefined;
+  const causeClass = cause instanceof Error ? cause.name : undefined;
+  const causeReason =
+    cause instanceof Error &&
+    "reason" in cause &&
+    typeof cause.reason === "string" &&
+    /^[a-z_]{1,40}$/u.test(cause.reason)
+      ? cause.reason
+      : undefined;
+  const causeCode =
+    cause instanceof Error &&
+    "code" in cause &&
+    typeof cause.code === "string" &&
+    /^[a-z_]{1,40}$/u.test(cause.code)
+      ? cause.code
+      : undefined;
+  let path = "unknown";
+  try {
+    path = new URL(request.url).pathname;
+  } catch {
+    // Keep the placeholder when the request URL cannot be parsed.
+  }
+  console.error(
+    JSON.stringify({
+      event: "web.request_failed",
+      service: "unfiled-web",
+      status,
+      code,
+      errorClass,
+      ...(causeClass === undefined ? {} : { causeClass }),
+      ...(causeReason === undefined ? {} : { causeReason }),
+      ...(causeCode === undefined ? {} : { causeCode }),
+      method: request.method,
+      path
+    })
+  );
+}
+
 export function errorResponse(reason: unknown, request: Request): Response {
   const id = requestId(request);
   if (reason instanceof HttpError) {
@@ -70,6 +121,7 @@ export function errorResponse(reason: unknown, request: Request): Response {
         ? {}
         : { retryAfterSeconds: reason.retryAfterSeconds })
     };
+    reportServerFailure(reason, request, reason.status, reason.code);
     return jsonResponse(body, {
       status: reason.status,
       headers:
@@ -84,6 +136,7 @@ export function errorResponse(reason: unknown, request: Request): Response {
     message: "Unfiled could not complete that request. Try again.",
     requestId: id
   };
+  reportServerFailure(reason, request, 500, body.code);
   return jsonResponse(body, { status: 500, headers: { "x-request-id": id } });
 }
 

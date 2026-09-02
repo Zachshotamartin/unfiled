@@ -34,6 +34,9 @@ e2e_e4_assert_response() {
   if [[ "$actual_status" != "$expected_status" ]]; then
     printf 'E4 %s expected HTTP %s but received %s.\n' \
       "$label" "$expected_status" "$actual_status" >&2
+    # Error envelopes carry only a code, a safe message, and a request ID.
+    head -c 400 "$e2e_tmp_dir/e4-$label.json" >&2 2>/dev/null || true
+    printf '\n' >&2
     return 1
   fi
   if ! assert_private_response_headers "$e2e_tmp_dir/e4-$label.headers"; then
@@ -77,6 +80,7 @@ e2e_e4_initial_settings_revision="$({
     if (
       settings.providerMode !== "app_default" ||
       settings.byokProvider !== null ||
+      settings.modelSelection !== "auto" ||
       settings.byokFallbackToApp !== false
     ) fail();
     process.stdout.write(String(settings.settingsRevision));
@@ -117,6 +121,7 @@ e2e_e4_snapshot_settings_revision="$({
       settings?.settingsRevision !== Number(process.env.E2E_EXPECTED_REVISION) ||
       settings.providerMode !== "byok" ||
       settings.byokProvider !== "openai" ||
+      settings.modelSelection !== "auto" ||
       settings.byokFallbackToApp !== false ||
       settings.routingEffort !== "thorough" ||
       settings.expansionStyle !== "detailed"
@@ -154,7 +159,7 @@ e2e_e4_status_code="$(
 e2e_e4_assert_response settings-stale 409 "$e2e_e4_status_code" stale_revision
 
 e2e_stage="e4-provider-put"
-e2e_e4_status_code="$(e2e_e4_status provider-empty GET /me/provider-key)"
+e2e_e4_status_code="$(e2e_e4_status provider-empty GET "/me/provider-key?provider=openai")"
 e2e_e4_assert_response provider-empty 200 "$e2e_e4_status_code"
 node -e '
   const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
@@ -210,7 +215,7 @@ node -e '
   }
 ' "$e2e_tmp_dir/e4-provider-put-replay.json"
 
-e2e_e4_status_code="$(e2e_e4_status provider-status GET /me/provider-key)"
+e2e_e4_status_code="$(e2e_e4_status provider-status GET "/me/provider-key?provider=openai")"
 e2e_e4_assert_response provider-status 200 "$e2e_e4_status_code"
 node -e '
   const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
@@ -235,6 +240,114 @@ curl --fail --silent --show-error "http://127.0.0.1:3101/metrics" | node -e '
     }
   });
 '
+
+e2e_stage="g-dual-provider-keys"
+e2e_e4_status_code="$(e2e_e4_status provider-anthropic-empty GET "/me/provider-key?provider=anthropic")"
+e2e_e4_assert_response provider-anthropic-empty 200 "$e2e_e4_status_code"
+node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  if (value.providerKey !== null) {
+    process.stderr.write("G empty Anthropic provider-key status contract mismatch.\n");
+    process.exit(1);
+  }
+' "$e2e_tmp_dir/e4-provider-anthropic-empty.json"
+e2e_e4_status_code="$(e2e_e4_status provider-unaddressed GET /me/provider-key)"
+e2e_e4_assert_response provider-unaddressed 400 "$e2e_e4_status_code" validation_failed
+e2e_e4_status_code="$(e2e_e4_status provider-unknown GET "/me/provider-key?provider=gemini")"
+e2e_e4_assert_response provider-unknown 400 "$e2e_e4_status_code" validation_failed
+
+e2e_g_anthropic_put_key="g-anthropic-put-$e2e_run_id"
+e2e_g_anthropic_put_body="$({
+  E2E_KEY="$e2e_g_anthropic_put_key" E2E_SECRET="$e2e_g_anthropic_key_canary" node -e '
+    process.stdout.write(JSON.stringify({
+      idempotencyKey: process.env.E2E_KEY,
+      provider: "anthropic",
+      expectedCredentialRevision: null,
+      apiKey: process.env.E2E_SECRET
+    }));
+  '
+})"
+e2e_e4_status_code="$(
+  e2e_e4_status provider-anthropic-put PUT /me/provider-key \
+    "$e2e_g_anthropic_put_body" "$e2e_g_anthropic_put_key"
+)"
+e2e_e4_assert_response provider-anthropic-put 200 "$e2e_e4_status_code"
+E2E_SECRET="$e2e_g_anthropic_key_canary" node -e '
+  const fs = require("node:fs");
+  const raw = fs.readFileSync(process.argv[1], "utf8");
+  const value = JSON.parse(raw);
+  if (
+    raw.includes(process.env.E2E_SECRET) ||
+    value.replayed !== false ||
+    value.providerKey?.provider !== "anthropic" ||
+    value.providerKey?.status !== "active" ||
+    value.providerKey?.credentialRevision !== 1 ||
+    value.providerKey?.lastFour !== "5Kp2"
+  ) {
+    process.stderr.write("G Anthropic provider-key PUT contract mismatch.\n");
+    process.exit(1);
+  }
+' "$e2e_tmp_dir/e4-provider-anthropic-put.json"
+for e2e_g_provider in openai anthropic; do
+  e2e_e4_status_code="$(e2e_e4_status "provider-both-$e2e_g_provider" GET "/me/provider-key?provider=$e2e_g_provider")"
+  e2e_e4_assert_response "provider-both-$e2e_g_provider" 200 "$e2e_e4_status_code"
+  E2E_PROVIDER="$e2e_g_provider" node -e '
+    const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+    if (
+      value.providerKey?.provider !== process.env.E2E_PROVIDER ||
+      value.providerKey?.status !== "active" ||
+      value.providerKey?.credentialRevision !== 1
+    ) {
+      process.stderr.write("G coexisting provider-key status mismatch for " + process.env.E2E_PROVIDER + ".\n");
+      process.exit(1);
+    }
+  ' "$e2e_tmp_dir/e4-provider-both-$e2e_g_provider.json"
+done
+curl --fail --silent --show-error "http://127.0.0.1:3101/metrics" | node -e '
+  let input = "";
+  process.stdin.on("data", (chunk) => (input += chunk));
+  process.stdin.on("end", () => {
+    const metrics = JSON.parse(input);
+    if (metrics.validations !== 1 || metrics.anthropicValidations !== 1 || metrics.crossProviderLeaks !== 0) {
+      process.stderr.write("G provider validator routing mismatch: " + JSON.stringify(metrics) + "\n");
+      process.exit(1);
+    }
+  });
+'
+e2e_g_anthropic_delete_key="g-anthropic-delete-$e2e_run_id"
+e2e_g_anthropic_delete_body="$({
+  E2E_KEY="$e2e_g_anthropic_delete_key" node -e '
+    process.stdout.write(JSON.stringify({
+      idempotencyKey: process.env.E2E_KEY,
+      provider: "anthropic",
+      expectedCredentialRevision: 1
+    }));
+  '
+})"
+e2e_e4_status_code="$(
+  e2e_e4_status provider-anthropic-delete DELETE /me/provider-key \
+    "$e2e_g_anthropic_delete_body" "$e2e_g_anthropic_delete_key"
+)"
+e2e_e4_assert_response provider-anthropic-delete 200 "$e2e_e4_status_code"
+node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  if (
+    value.provider !== "anthropic" || value.deleted !== true ||
+    value.deletedCredentialRevision !== 1 || value.replayed !== false
+  ) {
+    process.stderr.write("G Anthropic provider-key delete contract mismatch.\n");
+    process.exit(1);
+  }
+' "$e2e_tmp_dir/e4-provider-anthropic-delete.json"
+e2e_e4_status_code="$(e2e_e4_status provider-openai-intact GET "/me/provider-key?provider=openai")"
+e2e_e4_assert_response provider-openai-intact 200 "$e2e_e4_status_code"
+node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  if (value.providerKey?.provider !== "openai" || value.providerKey?.credentialRevision !== 1) {
+    process.stderr.write("G deleting the Claude key disturbed the OpenAI key.\n");
+    process.exit(1);
+  }
+' "$e2e_tmp_dir/e4-provider-openai-intact.json"
 
 e2e_stage="e4-platform-vault-denial"
 e2e_e4_vault_accept_status="$({
@@ -359,7 +472,8 @@ begin
       and provider_mode = 'byok' and selected_provider = 'openai'
       and not byok_fallback_to_app
       and routing_effort = 'thorough' and expansion_style = 'detailed'
-      and adapter_registry_version = 'organization-model-registry-v1'
+      and model_selection = 'auto' and model_id = 'gpt-5.6-sol'
+      and adapter_registry_version = 'organization-model-registry-v2'
   ) or exists (
     select 1 from information_schema.columns
     where table_schema = 'public'
@@ -444,6 +558,11 @@ e2e_e4_lease_token="$({
       job?.jobId !== process.env.E2E_JOB_ID ||
       job.routingEffort !== "thorough" ||
       job.expansionStyle !== "detailed" ||
+      job.selectedProvider !== "openai" ||
+      job.modelSelection !== "auto" ||
+      job.modelId !== "gpt-5.6-sol" ||
+      job.adapterRegistryVersion !== "organization-model-registry-v2" ||
+      !Number.isInteger(job.settingsRevision) || job.settingsRevision < 1 ||
       job.controls?.expansionDisabled !== false ||
       !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(job.leaseToken)
     ) {
@@ -462,7 +581,11 @@ E2E_ROUTE="$e2e_e4_route" E2E_SECRET="$e2e_e4_provider_key_canary" node -e '
   if (
     value.provider !== "openai" || value.source !== "byok" ||
     value.credential !== process.env.E2E_SECRET || value.credentialRevision !== 1 ||
-    value.routingEffort !== "thorough" || value.expansionStyle !== "detailed"
+    value.routingEffort !== "thorough" || value.expansionStyle !== "detailed" ||
+    value.modelSelection !== "auto" || value.modelId !== "gpt-5.6-sol" ||
+    value.adapterRegistryVersion !== "organization-model-registry-v2" ||
+    !Number.isInteger(value.settingsRevision) || value.settingsRevision < 1 ||
+    Object.keys(value).length !== 10
   ) {
     process.stderr.write("E4 live Vault route contract mismatch.\n");
     process.exit(1);
@@ -508,7 +631,7 @@ node -e '
     process.exit(1);
   }
 ' "$e2e_tmp_dir/e4-provider-delete-replay.json"
-e2e_e4_status_code="$(e2e_e4_status provider-after-delete GET /me/provider-key)"
+e2e_e4_status_code="$(e2e_e4_status provider-after-delete GET "/me/provider-key?provider=openai")"
 e2e_e4_assert_response provider-after-delete 200 "$e2e_e4_status_code"
 node -e '
   const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
@@ -690,7 +813,7 @@ node -e '
   }
 ' "$e2e_tmp_dir/e4-provider-recreate-delete.json"
 
-e2e_e4_status_code="$(e2e_e4_status provider-final-empty GET /me/provider-key)"
+e2e_e4_status_code="$(e2e_e4_status provider-final-empty GET "/me/provider-key?provider=openai")"
 e2e_e4_assert_response provider-final-empty 200 "$e2e_e4_status_code"
 node -e '
   const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
@@ -733,6 +856,93 @@ psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
 e2e_e4_worker_login_active="0"
 e2e_e4_worker_password=""
 
+e2e_stage="g-provider-model-selection"
+e2e_e4_status_code="$(e2e_e4_status settings-current GET /me/settings)"
+e2e_e4_assert_response settings-current 200 "$e2e_e4_status_code"
+e2e_g_settings_revision="$({
+  node -e '
+    const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+    process.stdout.write(String(value.settings.settingsRevision));
+  ' "$e2e_tmp_dir/e4-settings-current.json"
+})"
+e2e_g_switch_key="g-settings-anthropic-$e2e_run_id"
+e2e_g_switch_body="$({
+  E2E_REVISION="$e2e_g_settings_revision" E2E_KEY="$e2e_g_switch_key" node -e '
+    process.stdout.write(JSON.stringify({
+      expectedSettingsRevision: Number(process.env.E2E_REVISION),
+      idempotencyKey: process.env.E2E_KEY,
+      byokProvider: "anthropic",
+      modelSelection: "claude-opus-5",
+      routingEffort: "standard"
+    }));
+  '
+})"
+e2e_e4_status_code="$(
+  e2e_e4_status settings-anthropic PATCH /me/settings \
+    "$e2e_g_switch_body" "$e2e_g_switch_key"
+)"
+e2e_e4_assert_response settings-anthropic 200 "$e2e_e4_status_code"
+e2e_g_settings_revision="$({
+  E2E_EXPECTED_REVISION="$((e2e_g_settings_revision + 1))" node -e '
+    const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+    const settings = value.settings;
+    if (
+      value.replayed !== false ||
+      settings?.settingsRevision !== Number(process.env.E2E_EXPECTED_REVISION) ||
+      settings.providerMode !== "byok" ||
+      settings.byokProvider !== "anthropic" ||
+      settings.modelSelection !== "claude-opus-5" ||
+      settings.routingEffort !== "standard"
+    ) {
+      process.stderr.write("G Anthropic provider/model settings contract mismatch.\n");
+      process.exit(1);
+    }
+    process.stdout.write(String(settings.settingsRevision));
+  ' "$e2e_tmp_dir/e4-settings-anthropic.json"
+})"
+e2e_g_cross_key="g-settings-cross-$e2e_run_id"
+e2e_g_cross_body="$({
+  E2E_REVISION="$e2e_g_settings_revision" E2E_KEY="$e2e_g_cross_key" node -e '
+    process.stdout.write(JSON.stringify({
+      expectedSettingsRevision: Number(process.env.E2E_REVISION),
+      idempotencyKey: process.env.E2E_KEY,
+      modelSelection: "gpt-5.6-luna"
+    }));
+  '
+})"
+e2e_e4_status_code="$(
+  e2e_e4_status settings-cross PATCH /me/settings \
+    "$e2e_g_cross_body" "$e2e_g_cross_key"
+)"
+e2e_e4_assert_response settings-cross 400 "$e2e_e4_status_code" validation_failed
+e2e_g_back_key="g-settings-openai-$e2e_run_id"
+e2e_g_back_body="$({
+  E2E_REVISION="$e2e_g_settings_revision" E2E_KEY="$e2e_g_back_key" node -e '
+    process.stdout.write(JSON.stringify({
+      expectedSettingsRevision: Number(process.env.E2E_REVISION),
+      idempotencyKey: process.env.E2E_KEY,
+      byokProvider: "openai"
+    }));
+  '
+})"
+e2e_e4_status_code="$(
+  e2e_e4_status settings-openai PATCH /me/settings \
+    "$e2e_g_back_body" "$e2e_g_back_key"
+)"
+e2e_e4_assert_response settings-openai 200 "$e2e_e4_status_code"
+E2E_EXPECTED_REVISION="$((e2e_g_settings_revision + 1))" node -e '
+  const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  const settings = value.settings;
+  if (
+    settings?.settingsRevision !== Number(process.env.E2E_EXPECTED_REVISION) ||
+    settings.byokProvider !== "openai" ||
+    settings.modelSelection !== "auto"
+  ) {
+    process.stderr.write("G provider switch did not reset the incompatible model to Automatic.\n");
+    process.exit(1);
+  }
+' "$e2e_tmp_dir/e4-settings-openai.json"
+
 e2e_stage="e4-plaintext-canary"
 if grep --recursive --fixed-strings --quiet -- \
   "$e2e_e4_provider_key_canary" "$e2e_tmp_dir"; then
@@ -742,6 +952,11 @@ fi
 if grep --recursive --fixed-strings --quiet -- \
   "$e2e_e4_provider_recreate_canary" "$e2e_tmp_dir"; then
   echo "The E4 recreated-key plaintext escaped into a response or test log." >&2
+  exit 1
+fi
+if grep --recursive --fixed-strings --quiet -- \
+  "$e2e_g_anthropic_key_canary" "$e2e_tmp_dir"; then
+  echo "The G Claude-key plaintext escaped into a response or test log." >&2
   exit 1
 fi
 if grep --fixed-strings --quiet -- \

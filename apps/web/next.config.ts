@@ -1,5 +1,10 @@
 import type { NextConfig } from "next";
 
+import {
+  loadWebReleaseIdentity,
+  releaseIdentityHeaderEntries
+} from "./src/server/release/release-identity";
+
 const securityHeaders = [
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -26,7 +31,32 @@ const nextConfig: NextConfig = {
     return config;
   },
   async headers() {
-    return [{ source: "/(.*)", headers: [...securityHeaders] }];
+    const releaseHeaders = releaseIdentityHeaderEntries(loadWebReleaseIdentity(process.env));
+    const publicInformationCache = {
+      key: "Cache-Control",
+      value: "public, max-age=0, must-revalidate"
+    };
+    return [
+      { source: "/(.*)", headers: [...securityHeaders, ...releaseHeaders] },
+      ...["privacy", "terms", "security", "support", "account-deletion"].map((route) => ({
+        source: `/${route}`,
+        headers: [publicInformationCache]
+      })),
+      { source: "/robots.txt", headers: [publicInformationCache] },
+      { source: "/sitemap.xml", headers: [publicInformationCache] },
+      {
+        source: "/.well-known/security.txt",
+        headers: [{ key: "Cache-Control", value: "public, max-age=3600" }]
+      }
+    ];
+  },
+  async rewrites() {
+    return [
+      {
+        source: "/.well-known/security.txt",
+        destination: "/security.txt"
+      }
+    ];
   }
 };
 

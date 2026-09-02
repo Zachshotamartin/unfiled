@@ -215,7 +215,7 @@ export function createEncryptedUserSearchClient(
               credentials: "omit",
               headers: {
                 "content-type": "application/json",
-                "x-vercel-trusted-oidc-idp-token": oidcToken
+                "x-unfiled-trusted-oidc-idp-token": oidcToken
               },
               method: "POST",
               redirect: "error",

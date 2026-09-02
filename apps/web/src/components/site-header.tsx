@@ -3,11 +3,11 @@ import Link from "next/link";
 
 import { BrandLogo } from "@/components/brand-logo";
 
-const waitlistHref = "mailto:hello@unfiled.app?subject=Unfiled%20waitlist";
+const signInHref = "/auth";
 
 const navigation = [
-  { href: "#product", label: "Product" },
-  { href: "#principles", label: "Principles" }
+  { href: "/#product", label: "Product" },
+  { href: "/#principles", label: "Principles" }
 ] as const;
 
 export function SiteHeader() {
@@ -32,8 +32,8 @@ export function SiteHeader() {
           >
             Open app
           </Link>
-          <a href={waitlistHref} className="button-primary text-sm">
-            Join the waitlist
+          <a href={signInHref} className="button-primary text-sm">
+            Sign in
             <ArrowRightIcon size={17} weight="bold" aria-hidden="true" />
           </a>
         </nav>
@@ -62,8 +62,8 @@ export function SiteHeader() {
             >
               Open app
             </Link>
-            <a href={waitlistHref} className="button-primary mt-1 text-sm">
-              Join the waitlist
+            <a href={signInHref} className="button-primary mt-1 text-sm">
+              Sign in
             </a>
           </nav>
         </details>

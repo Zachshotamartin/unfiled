@@ -194,6 +194,23 @@ describe("Milestone C capture contracts", () => {
     ).toBe(false);
     expect(
       CaptureDetailResponseSchema.safeParse({
+        capture: { ...captureV1DetailFixture.capture, receipt: null, status: "failed" }
+      }).success
+    ).toBe(true);
+    expect(
+      CaptureListResponseSchema.safeParse({
+        ...captureV1ListFixture,
+        items: [{ ...captureV1ListFixture.items[0], receiptAvailable: false, status: "failed" }]
+      }).success
+    ).toBe(true);
+    expect(
+      CaptureListResponseSchema.safeParse({
+        ...captureV1ListFixture,
+        items: [{ ...captureV1ListFixture.items[0], receiptAvailable: false, status: "done" }]
+      }).success
+    ).toBe(false);
+    expect(
+      CaptureDetailResponseSchema.safeParse({
         capture: { ...captureV1DetailFixture.capture, receipt: null, status: "processing" }
       }).success
     ).toBe(true);

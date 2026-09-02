@@ -59,6 +59,13 @@ function jsonResponse(
   return new Response(JSON.stringify(value), { headers, status });
 }
 
+function attachReleaseIdentity(response: Response, config: WorkerConfig): void {
+  if (config.releaseIdentity === null) return;
+  response.headers.set("x-unfiled-deployment", config.releaseIdentity.deployment);
+  response.headers.set("x-unfiled-commit", config.releaseIdentity.commit);
+  response.headers.set("x-unfiled-environment", config.releaseIdentity.environment);
+}
+
 function requestId(request: Request): string {
   const candidate = request.headers.get("x-request-id")?.trim();
   return candidate !== undefined && REQUEST_ID_PATTERN.test(candidate) ? candidate : randomUUID();
@@ -291,7 +298,7 @@ export function createWorkerApp(dependencies: WorkerAppDependencies): WorkerApp 
         const result = await withDeadline(request, config.requestTimeoutMs, async (signal) => {
           let invocation;
           if (config.invocationAuth.kind === "bearer") {
-            if (config.runtime === "production") {
+            if (config.runtime !== "local") {
               throw new WorkerError(503, "provider_unavailable", "Invalid auth composition.", {
                 retryable: true
               });
@@ -299,7 +306,7 @@ export function createWorkerApp(dependencies: WorkerAppDependencies): WorkerApp 
             invocation = authorizeLocalWorkerInvocation({
               authorizationHeader: request.headers.get("authorization"),
               requestId: id,
-              runtime: config.runtime,
+              runtime: "local",
               secret: config.invocationAuth.secret
             });
           } else {
@@ -308,7 +315,7 @@ export function createWorkerApp(dependencies: WorkerAppDependencies): WorkerApp 
                 authorizationHeader: request.headers.get("authorization"),
                 protectionBypassHeader: request.headers.get("x-vercel-protection-bypass"),
                 requestId: id,
-                trustedSourceToken: request.headers.get("x-vercel-trusted-oidc-idp-token")
+                trustedSourceToken: request.headers.get("x-unfiled-trusted-oidc-idp-token")
               },
               signal
             );
@@ -341,6 +348,8 @@ export function createWorkerApp(dependencies: WorkerAppDependencies): WorkerApp 
       reportedError = error;
       response = errorResponse(error, id, config.invocationAuth.kind);
     }
+
+    attachReleaseIdentity(response, config);
 
     const classified = reportedError === undefined ? undefined : classifyWorkerError(reportedError);
     logger.log({

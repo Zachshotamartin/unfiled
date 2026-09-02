@@ -8,25 +8,85 @@ final class AISettingsTests: XCTestCase {
         super.tearDown()
     }
 
-    func testPublicProviderContractRejectsAnthropicEverywhere() throws {
-        XCTAssertEqual(AIProvider.allCases, [.openai])
+    func testPublicProviderContractAcceptsBothProvidersAndRejectsUnknownOnes() throws {
+        XCTAssertEqual(AIProvider.allCases, [.openai, .anthropic])
+        let decoder = APIJSON.makeDecoder()
+
+        let anthropic = try decoder.decode(
+            UserSettingsResponse.self,
+            from: Data(Self.anthropicSettingsResponseJSON.utf8)
+        )
+        XCTAssertEqual(anthropic.settings.byokProvider, .anthropic)
+        XCTAssertEqual(anthropic.settings.modelSelection, .claudeOpus5)
+
         XCTAssertThrowsError(
-            try APIJSON.makeDecoder().decode(
+            try decoder.decode(
                 UserSettingsResponse.self,
                 from: Data(Self.byokSettingsResponseJSON.replacingOccurrences(
                     of: #""byokProvider":"openai""#,
-                    with: #""byokProvider":"anthropic""#
+                    with: #""byokProvider":"google""#
                 ).utf8)
             )
         )
         XCTAssertThrowsError(
-            try APIJSON.makeDecoder().decode(
+            try decoder.decode(
                 ProviderKeyResponse.self,
                 from: Data(Self.providerKeyResponseJSON.replacingOccurrences(
                     of: #""provider":"openai""#,
-                    with: #""provider":"anthropic""#
+                    with: #""provider":"google""#
                 ).utf8)
             )
+        )
+    }
+
+    func testModelRegistryMirrorsContractCatalogV2() {
+        XCTAssertEqual(AIModelRegistry.version, "organization-model-registry-v2")
+        XCTAssertEqual(
+            AIModelSelection.allCases.map(\.rawValue),
+            ["auto", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "claude-sonnet-5", "claude-opus-5"]
+        )
+        XCTAssertEqual(
+            AIModelRegistry.selections(for: .openai),
+            [.automatic, .gpt56Luna, .gpt56Terra, .gpt56Sol]
+        )
+        XCTAssertEqual(
+            AIModelRegistry.selections(for: .anthropic),
+            [.automatic, .claudeSonnet5, .claudeOpus5]
+        )
+
+        XCTAssertEqual(AIModelRegistry.automaticModel(for: .openai, effort: .economical), .gpt56Luna)
+        XCTAssertEqual(AIModelRegistry.automaticModel(for: .openai, effort: .standard), .gpt56Terra)
+        XCTAssertEqual(AIModelRegistry.automaticModel(for: .openai, effort: .thorough), .gpt56Sol)
+        XCTAssertEqual(
+            AIModelRegistry.automaticModel(for: .anthropic, effort: .economical),
+            .claudeSonnet5
+        )
+        XCTAssertEqual(
+            AIModelRegistry.automaticModel(for: .anthropic, effort: .standard),
+            .claudeSonnet5
+        )
+        XCTAssertEqual(
+            AIModelRegistry.automaticModel(for: .anthropic, effort: .thorough),
+            .claudeOpus5
+        )
+
+        for provider in AIProvider.allCases {
+            for model in AIModelRegistry.selections(for: provider) {
+                XCTAssertTrue(model.isCompatible(with: provider), "\(model) should suit \(provider)")
+            }
+        }
+        XCTAssertFalse(AIModelSelection.claudeOpus5.isCompatible(with: .openai))
+        XCTAssertFalse(AIModelSelection.gpt56Luna.isCompatible(with: .anthropic))
+        XCTAssertTrue(AIModelSelection.automatic.isCompatible(with: .anthropic))
+
+        XCTAssertEqual(
+            AIModelSelection.allCases.filter(AIModelRegistry.isHigherCost),
+            [.gpt56Sol, .claudeOpus5]
+        )
+        XCTAssertEqual(AIModelRegistry.label(for: .automatic), "Automatic")
+        XCTAssertEqual(
+            Set(AIModelSelection.allCases.map(AIModelRegistry.label(for:))).count,
+            AIModelSelection.allCases.count
         )
     }
 
@@ -35,6 +95,8 @@ final class AISettingsTests: XCTestCase {
         var draft = AISettingsDraft(settings: current)
         draft.organizationMode = .automatic
         draft.providerMode = .byok
+        draft.byokProvider = .anthropic
+        draft.modelSelection = .claudeOpus5
         draft.byokFallbackToApp = true
         draft.routingEffort = .thorough
         draft.expansionStyle = .off
@@ -42,14 +104,15 @@ final class AISettingsTests: XCTestCase {
         draft.locale = "en-GB"
 
         let request = try XCTUnwrap(
-            draft.makeUpdateRequest(comparedTo: current, idempotencyKey: "settings-cas-1")
+            draft.makeUpdateRequest(comparedTo: current, idempotencyKey: "settings-cas-1", managedFallbackAvailable: true)
         )
         let body = try Self.jsonObject(request)
         XCTAssertEqual(body["expectedSettingsRevision"] as? Int, 4)
         XCTAssertEqual(body["idempotencyKey"] as? String, "settings-cas-1")
         XCTAssertEqual(body["organizationMode"] as? String, "automatic")
         XCTAssertEqual(body["providerMode"] as? String, "byok")
-        XCTAssertEqual(body["byokProvider"] as? String, "openai")
+        XCTAssertEqual(body["byokProvider"] as? String, "anthropic")
+        XCTAssertEqual(body["modelSelection"] as? String, "claude-opus-5")
         XCTAssertEqual(body["byokFallbackToApp"] as? Bool, true)
         XCTAssertEqual(body["routingEffort"] as? String, "thorough")
         XCTAssertEqual(body["expansionStyle"] as? String, "off")
@@ -57,23 +120,169 @@ final class AISettingsTests: XCTestCase {
         XCTAssertEqual(body["locale"] as? String, "en-GB")
 
         let byokCurrent = try Self.decodeSettings(Self.byokSettingsJSON)
-        var appDraft = AISettingsDraft(settings: byokCurrent)
-        appDraft.providerMode = .appDefault
-        appDraft.byokFallbackToApp = true
+        let appDraft = AISettingsDraft(settings: byokCurrent).selectingProviderMode(.appDefault)
         let appRequest = try XCTUnwrap(
-            appDraft.makeUpdateRequest(comparedTo: byokCurrent, idempotencyKey: "settings-cas-2")
+            appDraft.makeUpdateRequest(comparedTo: byokCurrent, idempotencyKey: "settings-cas-2", managedFallbackAvailable: true)
         )
         let appBody = try Self.jsonObject(appRequest)
         XCTAssertEqual(appBody["providerMode"] as? String, "app_default")
         XCTAssertTrue(appBody["byokProvider"] is NSNull)
+        XCTAssertEqual(appBody["modelSelection"] as? String, "auto")
         XCTAssertEqual(appBody["byokFallbackToApp"] as? Bool, false)
+    }
+
+    func testSettingsDraftPatchContainsOnlyChangedFields() throws {
+        let current = try Self.decodeSettings(Self.byokSettingsJSON)
+        var modelOnly = AISettingsDraft(settings: current)
+        modelOnly.modelSelection = .gpt56Sol
+        let modelRequest = try XCTUnwrap(
+            modelOnly.makeUpdateRequest(comparedTo: current, idempotencyKey: "settings-patch-1", managedFallbackAvailable: true)
+        )
+        let modelBody = try Self.jsonObject(modelRequest)
+        XCTAssertEqual(
+            Set(modelBody.keys),
+            ["expectedSettingsRevision", "idempotencyKey", "modelSelection"]
+        )
+        XCTAssertEqual(modelBody["modelSelection"] as? String, "gpt-5.6-sol")
+        XCTAssertEqual(modelBody["expectedSettingsRevision"] as? Int, 7)
+
+        var effortOnly = AISettingsDraft(settings: current)
+        effortOnly.routingEffort = .economical
+        let effortBody = try Self.jsonObject(XCTUnwrap(
+            effortOnly.makeUpdateRequest(comparedTo: current, idempotencyKey: "settings-patch-2", managedFallbackAvailable: true)
+        ))
+        XCTAssertEqual(
+            Set(effortBody.keys),
+            ["expectedSettingsRevision", "idempotencyKey", "routingEffort"]
+        )
+
+        XCTAssertNil(
+            try AISettingsDraft(settings: current)
+                .makeUpdateRequest(comparedTo: current, idempotencyKey: "settings-patch-noop", managedFallbackAvailable: true)
+        )
+    }
+
+    func testSwitchingProviderResetsIncompatibleModelToAutomaticAndKeepsCompatibleChoices() throws {
+        let current = try Self.decodeSettings(Self.byokSettingsJSON)
+        let draft = AISettingsDraft(settings: current)
+        XCTAssertEqual(draft.modelSelection, .gpt56Terra)
+
+        let switched = draft.selectingProvider(.anthropic)
+        XCTAssertEqual(switched.byokProvider, .anthropic)
+        XCTAssertEqual(switched.modelSelection, .automatic)
+        XCTAssertEqual(
+            draft.modelSelection,
+            .gpt56Terra,
+            "Selecting a provider returns a new draft and leaves the original untouched"
+        )
+        XCTAssertEqual(draft.selectingProvider(.openai).modelSelection, .gpt56Terra)
+
+        var exactClaude = switched
+        exactClaude.modelSelection = .claudeSonnet5
+        XCTAssertEqual(exactClaude.selectingProvider(.anthropic).modelSelection, .claudeSonnet5)
+        XCTAssertEqual(exactClaude.selectingProvider(.openai).modelSelection, .automatic)
+
+        let request = try XCTUnwrap(
+            switched.makeUpdateRequest(comparedTo: current, idempotencyKey: "settings-switch-1", managedFallbackAvailable: true)
+        )
+        let body = try Self.jsonObject(request)
+        XCTAssertEqual(body["byokProvider"] as? String, "anthropic")
+        XCTAssertEqual(body["modelSelection"] as? String, "auto")
+        XCTAssertNil(body["providerMode"])
+        XCTAssertEqual(
+            Set(body.keys),
+            ["expectedSettingsRevision", "idempotencyKey", "byokProvider", "modelSelection"],
+            "A provider switch is a settings patch and never carries credential fields"
+        )
+    }
+
+    func testAppDefaultModeForcesAutomaticModelAndDisablesFallback() throws {
+        let current = try Self.decodeSettings(Self.byokSettingsJSON)
+        let draft = AISettingsDraft(settings: current).selectingProviderMode(.appDefault)
+        XCTAssertEqual(draft.modelSelection, .automatic)
+        XCTAssertFalse(draft.byokFallbackToApp)
+        XCTAssertEqual(
+            draft.selectingProviderMode(.byok).modelSelection,
+            .automatic,
+            "Returning to BYOK does not resurrect the previous exact model"
+        )
+
+        XCTAssertThrowsError(
+            try UserSettingsUpdateRequest(
+                expectedSettingsRevision: 1,
+                idempotencyKey: "settings-app-default-model",
+                providerMode: .appDefault,
+                byokProvider: .null,
+                modelSelection: .gpt56Terra
+            )
+        )
+        XCTAssertNoThrow(
+            try UserSettingsUpdateRequest(
+                expectedSettingsRevision: 1,
+                idempotencyKey: "settings-app-default-auto",
+                providerMode: .appDefault,
+                byokProvider: .null,
+                modelSelection: .automatic
+            )
+        )
+        XCTAssertThrowsError(
+            try Self.decodeSettings(Self.appDefaultSettingsJSON.replacingOccurrences(
+                of: #""modelSelection":"auto""#,
+                with: #""modelSelection":"gpt-5.6-luna""#
+            ))
+        )
+    }
+
+    func testDraftRejectsCrossProviderModelBeforeBuildingARequest() throws {
+        let current = try Self.decodeSettings(Self.byokSettingsJSON)
+        var draft = AISettingsDraft(settings: current)
+        draft.modelSelection = .claudeOpus5
+        XCTAssertThrowsError(
+            try draft.makeUpdateRequest(comparedTo: current, idempotencyKey: "settings-cross-1", managedFallbackAvailable: true)
+        )
+        XCTAssertThrowsError(
+            try UserSettingsUpdateRequest(
+                expectedSettingsRevision: 1,
+                idempotencyKey: "settings-cross-2",
+                byokProvider: .value(.openai),
+                modelSelection: .claudeSonnet5
+            )
+        )
+        XCTAssertNoThrow(
+            try UserSettingsUpdateRequest(
+                expectedSettingsRevision: 1,
+                idempotencyKey: "settings-cross-3",
+                byokProvider: .value(.anthropic),
+                modelSelection: .claudeSonnet5
+            )
+        )
+    }
+
+    func testAutomaticModelPreviewFollowsProviderAndEffort() throws {
+        let current = try Self.decodeSettings(Self.byokSettingsJSON)
+        var openAI = AISettingsDraft(settings: current)
+        openAI.modelSelection = .automatic
+        openAI.routingEffort = .economical
+        XCTAssertEqual(openAI.resolvedAutomaticModel, .gpt56Luna)
+        openAI.routingEffort = .standard
+        XCTAssertEqual(openAI.resolvedAutomaticModel, .gpt56Terra)
+        openAI.routingEffort = .thorough
+        XCTAssertEqual(openAI.resolvedAutomaticModel, .gpt56Sol)
+
+        var claude = openAI.selectingProvider(.anthropic)
+        claude.routingEffort = .economical
+        XCTAssertEqual(claude.resolvedAutomaticModel, .claudeSonnet5)
+        claude.routingEffort = .standard
+        XCTAssertEqual(claude.resolvedAutomaticModel, .claudeSonnet5)
+        claude.routingEffort = .thorough
+        XCTAssertEqual(claude.resolvedAutomaticModel, .claudeOpus5)
     }
 
     func testSettingsDraftRejectsInvalidTimezoneAndLocaleAndOmitsNoop() throws {
         let current = try Self.decodeSettings(Self.appDefaultSettingsJSON)
         var draft = AISettingsDraft(settings: current)
         XCTAssertNil(
-            try draft.makeUpdateRequest(comparedTo: current, idempotencyKey: "settings-noop-1")
+            try draft.makeUpdateRequest(comparedTo: current, idempotencyKey: "settings-noop-1", managedFallbackAvailable: true)
         )
 
         draft.timezone = "Los Angeles"
@@ -82,7 +291,7 @@ final class AISettingsTests: XCTestCase {
             "Enter a valid IANA timezone, such as America/Los_Angeles."
         )
         XCTAssertThrowsError(
-            try draft.makeUpdateRequest(comparedTo: current, idempotencyKey: "settings-invalid-1")
+            try draft.makeUpdateRequest(comparedTo: current, idempotencyKey: "settings-invalid-1", managedFallbackAvailable: true)
         )
 
         draft.timezone = "UTC"
@@ -224,6 +433,15 @@ final class AISettingsTests: XCTestCase {
         XCTAssertFalse(
             AISettingsMutationContract.accepts(valid, replacing: current, with: mismatched)
         )
+
+        var differentModel = draft
+        differentModel.providerMode = .byok
+        differentModel.byokProvider = .openai
+        differentModel.modelSelection = .gpt56Luna
+        XCTAssertFalse(
+            AISettingsMutationContract.accepts(valid, replacing: current, with: differentModel),
+            "A response whose model selection differs from the draft is not the requested snapshot"
+        )
     }
 
     func testProviderKeyInputIsStrictAndRequestDescriptionIsAlwaysRedacted() throws {
@@ -239,115 +457,27 @@ final class AISettingsTests: XCTestCase {
         XCTAssertFalse(ProviderKeyInputRules.isValid(String(repeating: "k", count: 19)))
         XCTAssertFalse(ProviderKeyInputRules.isValid(String(repeating: "k", count: 501)))
 
-        let request = try ProviderKeyPutRequest(
-            idempotencyKey: "key-put-redaction-1",
-            provider: .openai,
-            expectedCredentialRevision: 7,
-            apiKey: secret
-        )
-        let body = try Self.jsonObject(request)
-        XCTAssertEqual(body["expectedCredentialRevision"] as? Int, 7)
-        XCTAssertEqual(body["apiKey"] as? String, secret)
-        XCTAssertEqual(String(describing: request), "ProviderKeyPutRequest(<redacted>)")
-        XCTAssertFalse(String(describing: request).contains(secret))
-        XCTAssertFalse(String(reflecting: request).contains(secret))
+        for provider in AIProvider.allCases {
+            let request = try ProviderKeyPutRequest(
+                idempotencyKey: "key-put-redaction-\(provider.rawValue)",
+                provider: provider,
+                expectedCredentialRevision: 7,
+                apiKey: secret
+            )
+            let body = try Self.jsonObject(request)
+            XCTAssertEqual(body["provider"] as? String, provider.rawValue)
+            XCTAssertEqual(body["expectedCredentialRevision"] as? Int, 7)
+            XCTAssertEqual(body["apiKey"] as? String, secret)
+            XCTAssertEqual(String(describing: request), "ProviderKeyPutRequest(<redacted>)")
+            XCTAssertFalse(String(describing: request).contains(secret))
+            XCTAssertFalse(String(reflecting: request).contains(secret))
+        }
         XCTAssertThrowsError(
             try ProviderKeyPutRequest(
                 idempotencyKey: "invalid retry key",
                 provider: .openai,
                 expectedCredentialRevision: nil,
                 apiKey: secret
-            )
-        )
-    }
-
-    func testProviderPutMutationChecksRevisionStatusValidationAndLastFour() throws {
-        let secret = Self.syntheticProviderKey("12345678901234567890")
-        let valid = try APIJSON.makeDecoder().decode(
-            ProviderKeyPutResponse.self,
-            from: Data(Self.providerPutResponseJSON.utf8)
-        )
-        XCTAssertTrue(
-            AISettingsMutationContract.accepts(
-                valid,
-                expectedCredentialRevision: 7,
-                submittedKey: secret
-            )
-        )
-
-        let invalidStatus = try APIJSON.makeDecoder().decode(
-            ProviderKeyPutResponse.self,
-            from: Data(Self.providerPutResponseJSON.replacingOccurrences(
-                of: #""status":"active""#,
-                with: #""status":"invalid""#
-            ).utf8)
-        )
-        XCTAssertFalse(
-            AISettingsMutationContract.accepts(
-                invalidStatus,
-                expectedCredentialRevision: 7,
-                submittedKey: secret
-            )
-        )
-        XCTAssertFalse(
-            AISettingsMutationContract.accepts(
-                valid,
-                expectedCredentialRevision: 6,
-                submittedKey: secret
-            )
-        )
-        XCTAssertFalse(
-            AISettingsMutationContract.accepts(
-                valid,
-                expectedCredentialRevision: 7,
-                submittedKey: Self.syntheticProviderKey("12345678901234561111")
-            ),
-            "An idempotent replay must not bind old last-four metadata to a changed key body"
-        )
-
-        XCTAssertTrue(
-            AISettingsMutationContract.accepts(
-                valid,
-                expectedCredentialRevision: nil,
-                submittedKey: secret
-            ),
-            "A create after deletion uses the owner's monotonic counter and need not restart at one"
-        )
-    }
-
-    func testProviderDeleteUsesCredentialCASAndStrictConfirmation() async throws {
-        let tokenProvider = APITokenProviderStub()
-        let request = try ProviderKeyDeleteRequest(
-            idempotencyKey: "provider-delete-1",
-            provider: .openai,
-            expectedCredentialRevision: 8
-        )
-        APIURLProtocolStub.install { urlRequest in
-            XCTAssertEqual(urlRequest.httpMethod, "DELETE")
-            XCTAssertEqual(urlRequest.url?.path, "/api/v1/me/provider-key")
-            XCTAssertEqual(urlRequest.value(forHTTPHeaderField: "Idempotency-Key"), "provider-delete-1")
-            let body = try XCTUnwrap(
-                JSONSerialization.jsonObject(with: apiRequestBody(urlRequest)) as? [String: Any]
-            )
-            XCTAssertEqual(body["provider"] as? String, "openai")
-            XCTAssertEqual(body["expectedCredentialRevision"] as? Int, 8)
-            return apiResponse(
-                for: urlRequest,
-                json: Self.providerDeleteResponseJSON,
-                privateNoStore: true
-            )
-        }
-
-        let response = try await makeStubbedAPIClient(tokenProvider: tokenProvider)
-            .deleteProviderKey(request)
-        XCTAssertTrue(
-            AISettingsMutationContract.accepts(response, expectedCredentialRevision: 8)
-        )
-        XCTAssertThrowsError(
-            try ProviderKeyDeleteRequest(
-                idempotencyKey: "provider-delete-invalid",
-                provider: .openai,
-                expectedCredentialRevision: 0
             )
         )
     }
@@ -377,7 +507,7 @@ final class AISettingsTests: XCTestCase {
 
         await XCTAssertAISettingsThrowsAsync(
             try await makeStubbedAPIClient(tokenProvider: tokenProvider)
-                .getProviderKeyMetadata()
+                .getProviderKeyMetadata(provider: .openai)
         ) { error in
             XCTAssertEqual(error as? APIClientError, .malformedResponse(status: 200))
         }
@@ -400,32 +530,48 @@ final class AISettingsTests: XCTestCase {
     }
 
     func testSettingsAccessibilityIdentifiersAreStableAndUnique() {
-        let values = [
+        let shared = [
             AISettingsAccessibilityIdentifier.screen,
             AISettingsAccessibilityIdentifier.loading,
             AISettingsAccessibilityIdentifier.settingsError,
-            AISettingsAccessibilityIdentifier.organizationMode,
             AISettingsAccessibilityIdentifier.providerMode,
-            AISettingsAccessibilityIdentifier.fallback,
+            AISettingsAccessibilityIdentifier.provider,
+            AISettingsAccessibilityIdentifier.model,
             AISettingsAccessibilityIdentifier.routingEffort,
+            AISettingsAccessibilityIdentifier.organizationMode,
             AISettingsAccessibilityIdentifier.expansionStyle,
+            AISettingsAccessibilityIdentifier.fallback,
             AISettingsAccessibilityIdentifier.timezone,
             AISettingsAccessibilityIdentifier.locale,
             AISettingsAccessibilityIdentifier.save,
-            AISettingsAccessibilityIdentifier.settingsRetryDiscard,
+            AISettingsAccessibilityIdentifier.settingsRetryDiscard
+        ]
+        let keyBases = [
+            AISettingsAccessibilityIdentifier.keySection,
             AISettingsAccessibilityIdentifier.keyStatus,
             AISettingsAccessibilityIdentifier.keyInput,
+            AISettingsAccessibilityIdentifier.keyError,
             AISettingsAccessibilityIdentifier.keySave,
             AISettingsAccessibilityIdentifier.keyRetryDiscard,
             AISettingsAccessibilityIdentifier.keyDelete
         ]
+        let scoped = AIProvider.allCases.flatMap { provider in
+            keyBases.map { AISettingsAccessibilityIdentifier.scoped($0, provider) }
+        }
+        let values = shared + keyBases + scoped
         XCTAssertEqual(Set(values).count, values.count)
         XCTAssertTrue(values.allSatisfy { $0.hasPrefix("settings.ai.") })
+        XCTAssertEqual(
+            AISettingsAccessibilityIdentifier.scoped(AISettingsAccessibilityIdentifier.keySave, .anthropic),
+            "settings.ai.key-save.anthropic"
+        )
     }
 
     func testCredentialControlsHaveIntentionalSpacingAndAccessibleHitTargets() {
         XCTAssertGreaterThanOrEqual(AISettingsControlLayout.credentialFieldActionGap, 12)
         XCTAssertGreaterThanOrEqual(AISettingsControlLayout.credentialActionSpacing, 8)
+        XCTAssertGreaterThanOrEqual(AISettingsControlLayout.fieldHelpSpacing, 4)
+        XCTAssertGreaterThanOrEqual(AISettingsControlLayout.optionSpacing, 8)
         XCTAssertGreaterThanOrEqual(
             AISettingsControlLayout.credentialActionMinimumHeight,
             UnfiledTheme.minimumTouchTarget
@@ -467,14 +613,14 @@ final class AISettingsTests: XCTestCase {
         "s" + "k-test-" + suffix
     }
 
-    private static let appDefaultSettingsJSON = #"{"settingsRevision":4,"organizationMode":"balanced","providerMode":"app_default","byokProvider":null,"byokFallbackToApp":false,"routingEffort":"standard","expansionStyle":"brief","timezone":"America/Los_Angeles","locale":"en-US","updatedAt":"2026-09-01T12:00:00Z"}"#
-    private static let byokSettingsJSON = #"{"settingsRevision":7,"organizationMode":"balanced","providerMode":"byok","byokProvider":"openai","byokFallbackToApp":true,"routingEffort":"standard","expansionStyle":"brief","timezone":"America/Los_Angeles","locale":"en-US","updatedAt":"2026-09-01T12:00:00Z"}"#
+    private static let appDefaultSettingsJSON = #"{"settingsRevision":4,"organizationMode":"balanced","providerMode":"app_default","byokProvider":null,"modelSelection":"auto","byokFallbackToApp":false,"routingEffort":"standard","expansionStyle":"brief","timezone":"America/Los_Angeles","locale":"en-US","updatedAt":"2026-09-01T12:00:00Z"}"#
+    private static let byokSettingsJSON = #"{"settingsRevision":7,"organizationMode":"balanced","providerMode":"byok","byokProvider":"openai","modelSelection":"gpt-5.6-terra","byokFallbackToApp":true,"routingEffort":"standard","expansionStyle":"brief","timezone":"America/Los_Angeles","locale":"en-US","updatedAt":"2026-09-01T12:00:00Z"}"#
+    private static let anthropicSettingsJSON = #"{"settingsRevision":9,"organizationMode":"cautious","providerMode":"byok","byokProvider":"anthropic","modelSelection":"claude-opus-5","byokFallbackToApp":false,"routingEffort":"thorough","expansionStyle":"detailed","timezone":"Europe/London","locale":"en-GB","updatedAt":"2026-09-01T12:00:00Z"}"#
     private static let byokSettingsResponseJSON = #"{"settings":\#(byokSettingsJSON)}"#
-    private static let updatedSettingsResponseJSON = #"{"settings":{"settingsRevision":5,"organizationMode":"cautious","providerMode":"app_default","byokProvider":null,"byokFallbackToApp":false,"routingEffort":"economical","expansionStyle":"detailed","timezone":"America/Los_Angeles","locale":"en-US","updatedAt":"2026-09-01T12:01:00Z"},"replayed":false}"#
-    private static let updatedSettingsSnapshotJSON = #"{"settings":{"settingsRevision":5,"organizationMode":"cautious","providerMode":"app_default","byokProvider":null,"byokFallbackToApp":false,"routingEffort":"economical","expansionStyle":"detailed","timezone":"America/Los_Angeles","locale":"en-US","updatedAt":"2026-09-01T12:01:00Z"}}"#
+    private static let anthropicSettingsResponseJSON = #"{"settings":\#(anthropicSettingsJSON)}"#
+    private static let updatedSettingsResponseJSON = #"{"settings":{"settingsRevision":5,"organizationMode":"cautious","providerMode":"app_default","byokProvider":null,"modelSelection":"auto","byokFallbackToApp":false,"routingEffort":"economical","expansionStyle":"detailed","timezone":"America/Los_Angeles","locale":"en-US","updatedAt":"2026-09-01T12:01:00Z"},"replayed":false}"#
+    private static let updatedSettingsSnapshotJSON = #"{"settings":{"settingsRevision":5,"organizationMode":"cautious","providerMode":"app_default","byokProvider":null,"modelSelection":"auto","byokFallbackToApp":false,"routingEffort":"economical","expansionStyle":"detailed","timezone":"America/Los_Angeles","locale":"en-US","updatedAt":"2026-09-01T12:01:00Z"}}"#
     private static let providerKeyResponseJSON = #"{"providerKey":{"provider":"openai","lastFour":"7890","status":"active","credentialRevision":8,"validatedAt":"2026-09-01T12:00:00Z","updatedAt":"2026-09-01T12:00:01Z"}}"#
-    private static let providerPutResponseJSON = #"{"providerKey":{"provider":"openai","lastFour":"7890","status":"active","credentialRevision":8,"validatedAt":"2026-09-01T12:00:00Z","updatedAt":"2026-09-01T12:00:01Z"},"replayed":false}"#
-    private static let providerDeleteResponseJSON = #"{"provider":"openai","deleted":true,"deletedCredentialRevision":8,"replayed":false}"#
 }
 
 private func XCTAssertAISettingsThrowsAsync<T>(

@@ -1,7 +1,8 @@
 import {
   ApiErrorCode,
   MAX_AI_SETTINGS_RESPONSE_BYTES,
-  MAX_PROVIDER_KEY_RESPONSE_BYTES
+  MAX_PROVIDER_KEY_RESPONSE_BYTES,
+  type PublicByokProvider
 } from "@unfiled/contracts";
 
 import { HttpError } from "@/server/api/errors";
@@ -13,10 +14,7 @@ import {
   throwIfServiceOperationAborted
 } from "@/server/encryption/service-rpc-client";
 
-import {
-  createOpenAiProviderKeyValidator,
-  type ProviderKeyValidator
-} from "./provider-key-validator";
+import { createProviderKeyValidator, type ProviderKeyValidator } from "./provider-key-validator";
 import type { AiSettingsRepository, AiSettingsRepositoryContext } from "./repository";
 import { createOwnerAiSettingsRpcAdapter, ownerAiSettingsRpcFunctions } from "./rpc-adapter";
 
@@ -83,7 +81,7 @@ export class ProductionAiSettingsRepository implements AiSettingsRepository {
   public constructor(private readonly options: ProductionAiSettingsRepositoryOptions = {}) {
     this.providerKeyValidator =
       options.providerKeyValidator ??
-      createOpenAiProviderKeyValidator(options.fetch === undefined ? {} : { fetch: options.fetch });
+      createProviderKeyValidator(options.fetch === undefined ? {} : { fetch: options.fetch });
   }
 
   private async scoped<Result>(
@@ -134,9 +132,9 @@ export class ProductionAiSettingsRepository implements AiSettingsRepository {
     );
   }
 
-  public getProviderKey(context: AiSettingsRepositoryContext) {
+  public getProviderKey(context: AiSettingsRepositoryContext, provider: PublicByokProvider) {
     return this.scoped(context, "provider key", (adapter, ownerId) =>
-      adapter.getProviderKey(ownerId)
+      adapter.getProviderKey(ownerId, provider)
     );
   }
 

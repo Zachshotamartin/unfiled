@@ -2,13 +2,23 @@ import { DecryptCommand, KMSClient, type KMSClientConfig } from "@aws-sdk/client
 import { importKeyEncryptionKey, type KeyEncryptionKey } from "@unfiled/content-crypto";
 import {
   assertCanonicalEncryptedKeyMaterial,
+  createVercelSensitiveEnvironmentEnvelopeCustodian,
+  createVercelSensitiveEnvironmentKmsTransport,
   kmsEncryptionContextForKey,
-  parseManagedKeyRecord,
-  type ManagedKeyRecordV1
+  parseManagedKeyRecordV1,
+  parseManagedKeyRecordV2,
+  type ManagedKeyRecord,
+  type ManagedKeyRecordParser,
+  type ManagedKeyRecordV1,
+  type ManagedKeyRecordV2
 } from "@unfiled/key-management";
 import { awsCredentialsProvider } from "@vercel/oidc-aws-credentials-provider";
 
-import type { VerifierKmsConfig } from "./config.js";
+import type {
+  AwsVerifierKmsConfig,
+  VerifierKmsConfig,
+  VercelSensitiveEnvironmentVerifierKeyConfig
+} from "./config.js";
 import { GenerationVerificationError, VerifierUnavailableError } from "./errors.js";
 import {
   isVerifiedVerifierInvocation,
@@ -24,7 +34,7 @@ export type VerifierKmsClient = Readonly<{
 }>;
 
 export type VerifierKeySession = Readonly<{
-  keyFor(record: ManagedKeyRecordV1, signal: AbortSignal): Promise<KeyEncryptionKey>;
+  keyFor(record: ManagedKeyRecord, signal: AbortSignal): Promise<KeyEncryptionKey>;
 }>;
 
 export type VerifierKmsAdapter = Readonly<{
@@ -33,7 +43,7 @@ export type VerifierKmsAdapter = Readonly<{
     proof: Readonly<{
       invocation: VerifiedVerifierInvocation;
       requestId: string;
-      runtime: "production";
+      runtime: "preview" | "production";
     }>,
     signal: AbortSignal,
     use: (session: VerifierKeySession) => Promise<Result>
@@ -43,23 +53,27 @@ export type VerifierKmsAdapter = Readonly<{
 type VerifierKmsProof = Readonly<{
   invocation: VerifiedVerifierInvocation;
   requestId: string;
-  runtime: "production";
+  runtime: "preview" | "production";
 }>;
 
 type KmsClientFactory = (configuration: KMSClientConfig) => VerifierKmsClient;
 
-function keyIdentity(record: ManagedKeyRecordV1): string {
+function assertNotAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw new VerifierUnavailableError();
+}
+
+function keyIdentity(record: ManagedKeyRecord): string {
   return `${record.ownerId}:${record.keyId}:${record.keyVersion}`;
 }
 
-function keyCryptographicFingerprint(record: ManagedKeyRecordV1): string {
+function keyCryptographicFingerprint(record: ManagedKeyRecord): string {
   return JSON.stringify([
     record.ownerId,
     record.keyClass,
     record.purpose,
     record.keyId,
     record.keyVersion,
-    record.rootKeyArn,
+    record.schemaVersion === 1 ? record.rootKeyArn : record.rootKeyId,
     record.encryptedKeyMaterial
   ]);
 }
@@ -77,7 +91,7 @@ function decodeEncryptedKeyMaterial(record: ManagedKeyRecordV1): Uint8Array {
   return bytes;
 }
 
-function allowedRoot(config: VerifierKmsConfig, rootKeyArn: string): boolean {
+function allowedRoot(config: AwsVerifierKmsConfig, rootKeyArn: string): boolean {
   return (
     rootKeyArn === config.activeObjectWrapRootArn ||
     config.retiredObjectWrapRootArns.includes(rootKeyArn)
@@ -94,12 +108,12 @@ function isInvalidCiphertextError(error: unknown): boolean {
 }
 
 function parseVerifierKeyRecord(
-  value: ManagedKeyRecordV1,
-  config: VerifierKmsConfig
+  value: ManagedKeyRecord,
+  config: AwsVerifierKmsConfig
 ): ManagedKeyRecordV1 {
   let record: ManagedKeyRecordV1;
   try {
-    record = parseManagedKeyRecord(value);
+    record = parseManagedKeyRecordV1(value);
   } catch {
     try {
       assertCanonicalEncryptedKeyMaterial(value.encryptedKeyMaterial);
@@ -117,6 +131,134 @@ function parseVerifierKeyRecord(
     throw new VerifierUnavailableError();
   }
   return record;
+}
+
+export function managedKeyRecordParserForVerifierConfig(
+  config: VerifierKmsConfig
+): ManagedKeyRecordParser {
+  return config.kind === "vercel-sensitive-env-v1"
+    ? parseManagedKeyRecordV2
+    : parseManagedKeyRecordV1;
+}
+
+function parseSensitiveVerifierKeyRecord(
+  value: ManagedKeyRecord,
+  config: VercelSensitiveEnvironmentVerifierKeyConfig
+): ManagedKeyRecordV2 {
+  let record: ManagedKeyRecordV2;
+  try {
+    record = parseManagedKeyRecordV2(value);
+  } catch {
+    throw new VerifierUnavailableError();
+  }
+  if (
+    record.keyClass !== "ai_assisted" ||
+    record.purpose !== "object_wrap" ||
+    (record.status !== "active" && record.status !== "retired") ||
+    (record.rootKeyId !== config.activeObjectWrapRootKeyId &&
+      !config.retiredObjectWrapRootKeyIds.includes(record.rootKeyId))
+  ) {
+    throw new VerifierUnavailableError();
+  }
+  return record;
+}
+
+async function withSensitiveKeySession<Result>(
+  config: VercelSensitiveEnvironmentVerifierKeyConfig,
+  proof: VerifierKmsProof,
+  signal: AbortSignal,
+  use: (session: VerifierKeySession) => Promise<Result>
+): Promise<Result> {
+  if (
+    signal.aborted ||
+    config.deploymentEnvironment !== proof.runtime ||
+    !isVerifiedVerifierInvocation(proof.invocation, {
+      requestId: proof.requestId,
+      runtime: proof.runtime
+    })
+  ) {
+    throw new VerifierUnavailableError();
+  }
+  let transport:
+    Awaited<ReturnType<typeof createVercelSensitiveEnvironmentKmsTransport>> | undefined;
+  const cache = new Map<string, Promise<KeyEncryptionKey>>();
+  const fingerprints = new Map<string, string>();
+  let open = true;
+  try {
+    transport = await createVercelSensitiveEnvironmentKmsTransport({
+      expectedRootKeyIds: [config.activeObjectWrapRootKeyId, ...config.retiredObjectWrapRootKeyIds]
+    });
+    assertNotAborted(signal);
+    const custodian = createVercelSensitiveEnvironmentEnvelopeCustodian({
+      activeRoots: {
+        ai_assisted: { object_wrap: config.activeObjectWrapRootKeyId }
+      },
+      deploymentEnvironment: config.deploymentEnvironment,
+      retiredRoots: {
+        ai_assisted: { object_wrap: config.retiredObjectWrapRootKeyIds }
+      },
+      transport,
+      workload: "search_worker"
+    });
+    const session: VerifierKeySession = Object.freeze({
+      keyFor(value, operationSignal) {
+        if (!open || signal.aborted || operationSignal.aborted) {
+          return Promise.reject(new VerifierUnavailableError());
+        }
+        let record: ManagedKeyRecordV2;
+        try {
+          record = parseSensitiveVerifierKeyRecord(value, config);
+        } catch {
+          return Promise.reject(new VerifierUnavailableError());
+        }
+        const identity = keyIdentity(record);
+        const fingerprint = keyCryptographicFingerprint(record);
+        const knownFingerprint = fingerprints.get(identity);
+        if (knownFingerprint !== undefined && knownFingerprint !== fingerprint) {
+          return Promise.reject(new VerifierUnavailableError());
+        }
+        const existing = cache.get(identity);
+        if (existing !== undefined) return existing;
+        if (cache.size >= config.maxKeyRecords) {
+          return Promise.reject(new GenerationVerificationError());
+        }
+        fingerprints.set(identity, fingerprint);
+        const combinedSignal = AbortSignal.any([
+          signal,
+          operationSignal,
+          AbortSignal.timeout(config.timeoutMs)
+        ]);
+        const pending = custodian.withUnwrappedIntermediateKey(
+          record,
+          async (bytes) => {
+            if (combinedSignal.aborted || bytes.byteLength !== INTERMEDIATE_KEY_BYTES) {
+              throw new VerifierUnavailableError();
+            }
+            const copy = new Uint8Array(bytes);
+            try {
+              return await importKeyEncryptionKey(record.keyId, copy);
+            } finally {
+              copy.fill(0);
+            }
+          },
+          { signal: combinedSignal }
+        );
+        cache.set(identity, pending);
+        return pending;
+      }
+    });
+    return await use(session);
+  } catch (error: unknown) {
+    if (error instanceof GenerationVerificationError || error instanceof VerifierUnavailableError) {
+      throw error;
+    }
+    throw new VerifierUnavailableError();
+  } finally {
+    open = false;
+    cache.clear();
+    fingerprints.clear();
+    transport?.destroy();
+  }
 }
 
 function defaultKmsClientFactory(configuration: KMSClientConfig): VerifierKmsClient {
@@ -196,8 +338,16 @@ export function createVerifierKmsAdapter(
       signal: AbortSignal,
       use: (session: VerifierKeySession) => Promise<Result>
     ): Promise<Result> {
+      if (config.kind === "vercel-sensitive-env-v1") {
+        return withSensitiveKeySession(config, proof, signal, use);
+      }
+      const boundaryEnvironment =
+        /^owner:[^:]+:project:[^:]+:environment:(preview|production)$/u.exec(
+          config.expectedOidcSubject
+        )?.[1];
       if (
         signal.aborted ||
+        boundaryEnvironment !== proof.runtime ||
         !isVerifiedVerifierInvocation(proof.invocation, {
           requestId: proof.requestId,
           runtime: proof.runtime
@@ -250,7 +400,7 @@ export function createVerifierKmsAdapter(
       signal.addEventListener("abort", closeOnAbort, { once: true });
 
       const keyFor = async (
-        value: ManagedKeyRecordV1,
+        value: ManagedKeyRecord,
         operationSignal: AbortSignal
       ): Promise<KeyEncryptionKey> => {
         if (!open || signal.aborted || operationSignal.aborted) {

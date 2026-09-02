@@ -15,12 +15,16 @@ the lease.
 The runtime intentionally has:
 
 - five database RPCs and no table, private-schema, service-role, or write access;
-- AWS `Decrypt`/`DescribeKey` access only to active and retired AI-assisted
-  object-wrap roots;
+- unwrap-only access to the active and retired AI-assisted object-wrap roots
+  of the one selected custodian (`aws-kms`: KMS `Decrypt`/`DescribeKey`;
+  `vercel-sensitive-env-v1`: an unwrap-only environment custodian);
 - no key generation, encrypt, re-encrypt, grant, content-MAC, private-manual,
   organizer, verifier, or index-worker authority;
-- one fixed provider project/key, model (`text-embedding-3-small`), and 1,536
-  dimensions;
+- one fixed query-embedding profile selected by
+  `UNFILED_SEARCH_EMBEDDING_PROVIDER`: `local-hash-v1` (`unfiled-local-hash-v1`,
+  512 dimensions, no provider key) in the free beta, or `openai`
+  (`text-embedding-3-small`, 1,536 dimensions, one dedicated
+  `UNFILED_SEARCH_OPENAI_API_KEY`);
 - no query/content logging, durable plaintext, or cross-request plaintext
   cache.
 
@@ -31,7 +35,73 @@ lexical-only results.
 
 Use `.env.example` and the account-controlled procedure in `HUMAN_SETUP.md`.
 Local mode exposes only the route/health surface; it deliberately cannot open
-encrypted indexes.
+encrypted indexes. Preview and Production require Vercel's exact injected
+deployment ID, lowercase full commit SHA, and environment. Every managed
+response returns only a SHA-256 deployment-ID digest plus the exact commit and
+environment in `x-unfiled-deployment`, `x-unfiled-commit`, and
+`x-unfiled-environment`; the raw deployment ID is never returned. For the
+private beta, both managed scopes deliberately use the same remote Supabase
+project and search-only login, which is not database environment isolation.
+
+## Key custodian modes
+
+`UNFILED_KEY_CUSTODIAN` must be exactly `vercel-sensitive-env-v1` (the $0
+beta) or `aws-kms` (preserved as deferred paid hardening; not required). The
+value is compared without trimming. Both modes require
+`UNFILED_SEARCH_PROJECT_ID` (`^prj_[A-Za-z0-9]{6,100}$`, byte-identical to the
+injected `VERCEL_PROJECT_ID`), the `UNFILED_SEARCH_TRUSTED_SOURCE_*` caller
+identity, and the database values.
+
+In `vercel-sensitive-env-v1` mode the service accepts exactly:
+
+- `UNFILED_SEARCH_AI_OBJECT_WRAP_ROOT_KEY_ID`, one root ID matching
+  `^urn:unfiled:key-root:vercel-sensitive-env-v1:(preview|production):<RFC-4122 UUID>$`
+  whose environment segment equals `UNFILED_SEARCH_ENV`;
+- `UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1` (Sensitive), at most 32,768
+  bytes of canonical JSON `{"deploymentEnvironment","projectId","roots","version":1}`
+  bound to the injected `VERCEL_ENV` and `VERCEL_PROJECT_ID`, whose `roots`
+  contain exactly the active plus retired IDs, each with a distinct 32-byte
+  base64url `keyMaterial`;
+- optional `UNFILED_SEARCH_RETIRED_AI_OBJECT_WRAP_ROOT_KEY_IDS_JSON`, default
+  `[]`: a canonical JSON array of at most 20 distinct same-environment root IDs
+  excluding the active root.
+
+That mode rejects `UNFILED_SEARCH_PROJECT_TEAM_SLUG`,
+`UNFILED_SEARCH_PROJECT_NAME`, `UNFILED_SEARCH_EXPECTED_OIDC_SUBJECT`,
+`UNFILED_AWS_REGION`, `UNFILED_SEARCH_AWS_ROLE_ARN`,
+`UNFILED_SEARCH_AI_OBJECT_WRAP_KMS_KEY_ARN`, and
+`UNFILED_SEARCH_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON`; `aws-kms` mode rejects the
+three `vercel-sensitive-env-v1` variables in return. At ring-open time the
+environment custodian also requires `NODE_ENV=production` and rejects
+`AWS_ROLE_ARN`, any `UNFILED_*_AWS_ROLE_ARN`, `UNFILED_LOCAL_KEY_RING_V1`, and
+`NEXT_PUBLIC_*` names that look like key material. No `x-vercel-oidc-token`
+workload header is used in this mode; if one is handed to the adapter it fails
+closed. The request-scoped authority exposes only
+`withUnwrappedIntermediateKey`; there is no generate or rewrap method, so this
+service cannot mint keys under either custodian. Records are schema V2 in this
+mode and V1 in `aws-kms` mode; the two are never mixed.
+
+Honest limits: in `vercel-sensitive-env-v1` mode the root material is an
+exportable environment value present in the function process, with no HSM,
+per-call audit record, or IAM denial between workloads. Neither mode is
+end-to-end encryption or zero knowledge: this service decrypts AI-assisted
+index documents by design.
+
+## Query embedding modes
+
+`UNFILED_SEARCH_EMBEDDING_PROVIDER` must be exactly `local-hash-v1` or
+`openai`. In `local-hash-v1` mode `UNFILED_SEARCH_OPENAI_API_KEY` is rejected,
+so no provider key exists in the process and query text never leaves it. The
+query vector is the same deterministic feature hash the index worker used
+(`unfiled-local-hash-v1`, 512 dimensions): normalized words, adjacent-word
+pairs, and character trigrams in signed buckets of an L2-normalized float32
+vector. It is a lexical retrieval signal, not an AI semantic embedding, so a
+query matches a note only through shared wording; synonyms and paraphrases do
+not match, and its relevance is weaker than a semantic embedding. The
+repository refuses a generation whose recorded model ID or dimensions differ
+from the configured profile, so a profile change requires a new generation.
+`openai` mode requires the dedicated key and uses the fixed
+`text-embedding-3-small`/1,536 profile.
 
 ## Credential-free trust-domain composition gate
 

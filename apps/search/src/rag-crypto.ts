@@ -7,9 +7,9 @@ import {
 } from "@unfiled/encrypted-aggregate";
 import {
   createManagedKeyResolver,
-  parseManagedKeyRecord,
   type IntermediateKeyCustodian,
-  type ManagedKeyRecordV1,
+  type ManagedKeyRecord,
+  type ManagedKeyRecordParser,
   type ManagedKeyStore,
   type ManagedObjectWrappingKey,
   type OwnerBoundKeyResolver
@@ -23,7 +23,11 @@ import {
 
 import type { SearchRagRecord } from "./database.js";
 import { unavailable } from "./errors.js";
-import { custodianForSearchAuthority, type SearchKeyAuthority } from "./key-management.js";
+import {
+  custodianForSearchAuthority,
+  managedKeyRecordParserForSearchAuthority,
+  type SearchKeyAuthority
+} from "./key-management.js";
 
 const INDEX_ID_PATTERN = /^irw_[0-9A-HJKMNP-TV-Z]{26}$/u;
 const MIN_ENCRYPTED_PAYLOAD_BYTES = 16;
@@ -53,12 +57,12 @@ function exact(value: unknown, keys: readonly string[]): Readonly<Record<string,
   return row;
 }
 
-function matchingStore(key: ManagedKeyRecordV1): ManagedKeyStore {
+function matchingStore(key: ManagedKeyRecord): ManagedKeyStore {
   return Object.freeze({
     findActive(): Promise<null> {
       return Promise.resolve(null);
     },
-    findById(selector): Promise<ManagedKeyRecordV1 | null> {
+    findById(selector): Promise<ManagedKeyRecord | null> {
       return Promise.resolve(
         selector.ownerId === key.ownerId &&
           selector.keyClass === key.keyClass &&
@@ -71,27 +75,8 @@ function matchingStore(key: ManagedKeyRecordV1): ManagedKeyStore {
   });
 }
 
-function sameManagedKeyRecord(left: ManagedKeyRecordV1, right: ManagedKeyRecordV1): boolean {
-  return (
-    left.ownerId === right.ownerId &&
-    left.keyClass === right.keyClass &&
-    left.purpose === right.purpose &&
-    left.keyId === right.keyId &&
-    left.keyVersion === right.keyVersion &&
-    left.status === right.status &&
-    left.encryptedKeyMaterial === right.encryptedKeyMaterial &&
-    left.rootKeyArn === right.rootKeyArn &&
-    left.createdAt === right.createdAt &&
-    left.activatedAt === right.activatedAt &&
-    left.retiredAt === right.retiredAt &&
-    left.revokedAt === right.revokedAt &&
-    left.wrapOperations === right.wrapOperations &&
-    left.wrapOperationLimit === right.wrapOperationLimit &&
-    left.rotation.predecessorKeyId === right.rotation.predecessorKeyId &&
-    left.rotation.previousRootKeyArn === right.rotation.previousRootKeyArn &&
-    left.rotation.rootRewrapCount === right.rotation.rootRewrapCount &&
-    left.rotation.lastRootRewrappedAt === right.rotation.lastRootRewrappedAt
-  );
+function sameManagedKeyRecord(left: ManagedKeyRecord, right: ManagedKeyRecord): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function resolverForKey(key: ManagedObjectWrappingKey): OwnerBoundKeyResolver {
@@ -120,6 +105,7 @@ function resolverForKey(key: ManagedObjectWrappingKey): OwnerBoundKeyResolver {
 
 function encryptedRecord(
   ownerId: string,
+  parseRecord: ManagedKeyRecordParser,
   item: Readonly<{
     ciphertextBytes: number;
     indexId: string;
@@ -127,7 +113,7 @@ function encryptedRecord(
     record: SearchRagRecord;
   }>
 ): Readonly<{
-  key: ManagedKeyRecordV1;
+  key: ManagedKeyRecord;
   record: EncryptedAggregateRecord<"note_rag_index">;
 }> {
   const projected = exact(item.record, [
@@ -156,10 +142,10 @@ function encryptedRecord(
     "keyPurpose",
     "keyVersion"
   ]);
-  let key: ManagedKeyRecordV1;
+  let key: ManagedKeyRecord;
   let envelope: ReturnType<typeof parseContentEnvelope>;
   try {
-    key = parseManagedKeyRecord(projected.key);
+    key = parseRecord(projected.key);
     envelope = parseContentEnvelope(serializeContentEnvelope(cipher.envelope));
   } catch {
     unavailable();
@@ -226,13 +212,14 @@ export function createSearchRagPayloadOpener(
   authority: SearchKeyAuthority
 ): SearchRagPayloadOpener {
   const decryptOnlyCustodian = custodianForSearchAuthority(authority);
-  const records = new Map<string, ManagedKeyRecordV1>();
+  const parseRecord = managedKeyRecordParserForSearchAuthority(authority);
+  const records = new Map<string, ManagedKeyRecord>();
   const keys = new Map<string, Promise<ManagedObjectWrappingKey>>();
   let open = true;
   const sessionIsOpen = (): boolean => open;
 
   const keyFor = (
-    record: ManagedKeyRecordV1,
+    record: ManagedKeyRecord,
     signal: AbortSignal | undefined
   ): Promise<ManagedObjectWrappingKey> => {
     if (!sessionIsOpen()) unavailable();
@@ -251,6 +238,7 @@ export function createSearchRagPayloadOpener(
         // Its broader historical type is narrowed at the authority boundary
         // and the search facade has no generation member at runtime.
         custodian: decryptOnlyCustodian as IntermediateKeyCustodian,
+        parseRecord,
         store: matchingStore(record),
         workload: "search_worker"
       });
@@ -277,7 +265,7 @@ export function createSearchRagPayloadOpener(
       assertActive(input.signal);
       try {
         if (!sessionIsOpen()) unavailable();
-        const bound = encryptedRecord(input.ownerId, input.item);
+        const bound = encryptedRecord(input.ownerId, parseRecord, input.item);
         const key = await keyFor(bound.key, input.signal);
         const aggregate = createEncryptedAggregateService({
           keyResolver: resolverForKey(key),

@@ -1,349 +1,62 @@
-import { randomUUID } from "node:crypto";
-
 import { OrganizerPlannerReviewError, OrganizerProviderError } from "./errors.js";
+import {
+  OPENAI_MODEL_IDS,
+  ORGANIZER_MODEL_REGISTRY_VERSION,
+  providerNativeEffort,
+  type OrganizerRoutingEffort
+} from "./model-registry.js";
 import {
   OPENAI_ORGANIZATION_PLAN_SCHEMA,
   OPENAI_ORGANIZATION_PLAN_SCHEMA_NAME
 } from "./openai-schema.js";
-import {
-  inferOrganizerCaptureKind,
-  resolveDeterministicDestination,
-  sameOrganizerCaptureControls,
-  type DeterministicDestinationMatch,
-  type OrganizerPlanner,
-  type PlannerInput
-} from "./planner.js";
+import type { OrganizerPlanner } from "./planner.js";
 import {
   ORGANIZER_PROMPT_VERSION,
   ORGANIZER_ROUTING_PROMPT,
   ORGANIZER_SCHEMA_VERSION
 } from "./prompt.js";
+import {
+  PROVIDER_ROUTING_PROFILE,
+  createProviderRegistryPlanner,
+  type OrganizerProviderAdapter,
+  type OrganizerProviderPlannerOptions
+} from "./provider-planner.js";
+import { isRecord } from "./provider-transport.js";
 
-const OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses";
-const CAPTURE_ID = /^cap_[0-9A-HJKMNP-TV-Z]{26}$/u;
-const NOTE_ID = /^note_[0-9A-HJKMNP-TV-Z]{26}$/u;
-const EPHEMERAL_CANDIDATE_ID = /^candidate_[0-9a-f]{32}$/u;
-const NOTE_TYPES = new Set(["generic", "list", "log", "principle", "project"]);
-const MAX_CAPTURE_CHARACTERS = 10_000;
-const MAX_CANDIDATES = 8;
-const MAX_CANDIDATE_BODY_CHARACTERS = 200_000;
-const MAX_TITLE_CHARACTERS = 200;
-const MAX_HEADING_CHARACTERS = 200;
-const MAX_SNIPPET_CHARACTERS = 200;
-const MAX_USER_INPUT_BYTES = 64 * 1_024;
-const MAX_RESPONSE_BYTES = 256 * 1_024;
+export const OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses" as const;
 
+/**
+ * Code-pinned OpenAI routing profile. The exact model is no longer a single
+ * pin: the immutable job snapshot carries one `organization-model-registry-v2`
+ * OpenAI model resolved by the database, and this adapter refuses any other.
+ */
 export const OPENAI_ROUTING_PROFILE = Object.freeze({
-  deadlineMs: 20_000,
+  deadlineMs: PROVIDER_ROUTING_PROFILE.deadlineMs,
   maxOutputTokens: 12_288,
-  maxRetries: 1,
-  model: "gpt-5.4-mini-2026-03-17",
+  maxRetries: PROVIDER_ROUTING_PROFILE.maxRetries,
+  models: OPENAI_MODEL_IDS,
   promptVersion: ORGANIZER_PROMPT_VERSION,
-  reasoningEffort: "none",
+  registryVersion: ORGANIZER_MODEL_REGISTRY_VERSION,
   schemaVersion: ORGANIZER_SCHEMA_VERSION
 } as const);
 
 export const OPENAI_ROUTING_EFFORT_PROFILES = Object.freeze({
-  economical: Object.freeze({ maxOutputTokens: 8_192, reasoningEffort: "none" as const }),
+  economical: Object.freeze({ maxOutputTokens: 8_192, reasoningEffort: "low" as const }),
   standard: Object.freeze({
     maxOutputTokens: OPENAI_ROUTING_PROFILE.maxOutputTokens,
-    reasoningEffort: OPENAI_ROUTING_PROFILE.reasoningEffort
+    reasoningEffort: "medium" as const
   }),
-  thorough: Object.freeze({ maxOutputTokens: 16_384, reasoningEffort: "low" as const })
+  thorough: Object.freeze({ maxOutputTokens: 16_384, reasoningEffort: "high" as const })
 });
 
-export type OpenAIOrganizerPlannerOptions = Readonly<{
-  apiKey?: string;
-  fetchImplementation?: typeof fetch;
-}>;
+export type OpenAIOrganizerPlannerOptions = OrganizerProviderPlannerOptions;
 
-type EphemeralCandidateId = `candidate_${string}`;
-
-type ProviderCandidate = Readonly<{
-  candidateId: EphemeralCandidateId;
-  headings: readonly string[];
-  isOpen: true;
-  latestSnippet: string;
-  noteType: "generic" | "list" | "log" | "principle" | "project";
-  title: string;
-}>;
-
-type ProviderInput = Readonly<{
-  candidates: readonly ProviderCandidate[];
-  capture: Readonly<{ inferredKind: string; text: string }>;
-  contract: "unfiled.routing.input.v1";
-  controls: Readonly<{
-    expansionDisabled: boolean;
-    expansionStyle: "off" | "brief" | "detailed";
-    explicitDestinationCandidateId: EphemeralCandidateId | null;
-  }>;
-}>;
-
-type PreparedProviderInput = Readonly<{
-  ephemeralToInternalCandidateId: ReadonlyMap<EphemeralCandidateId, string>;
-  internalToEphemeralCandidateId: ReadonlyMap<string, EphemeralCandidateId>;
-  serialized: string;
-}>;
-
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function characterLength(value: string): number {
-  return Array.from(value).length;
-}
-
-function truncateCharacters(value: string, maximum: number, fromEnd = false): string {
-  const characters = Array.from(value);
-  return (fromEnd ? characters.slice(-maximum) : characters.slice(0, maximum)).join("");
-}
-
-function normalizeExcerpt(value: string): string {
-  return value.replace(/\s+/gu, " ").trim();
-}
-
-function candidateHeadings(bodyMarkdown: string): readonly string[] {
-  const headings: string[] = [];
-  for (const line of bodyMarkdown.split(/\r?\n/u)) {
-    const match = /^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/u.exec(line);
-    const heading = match?.[1] === undefined ? "" : normalizeExcerpt(match[1]);
-    if (heading.length > 0) headings.push(truncateCharacters(heading, MAX_HEADING_CHARACTERS));
-    if (headings.length === 3) break;
-  }
-  return Object.freeze(headings);
-}
-
-function candidateSnippet(bodyMarkdown: string): string {
-  return truncateCharacters(normalizeExcerpt(bodyMarkdown), MAX_SNIPPET_CHARACTERS, true);
-}
-
-function inputBoundsFailure(): never {
-  throw new OrganizerPlannerReviewError("input_bounds");
-}
-
-function effectiveExpansionStyle(input: PlannerInput): "off" | "brief" | "detailed" {
-  if (input.controls.expansionDisabled) return "off";
-  const expansionStyle = input.expansionStyle ?? "brief";
-  if (expansionStyle === "off") inputBoundsFailure();
-  return expansionStyle;
-}
-
-function createEphemeralCandidateId(seen: ReadonlySet<string>): EphemeralCandidateId {
-  for (;;) {
-    const candidateId: EphemeralCandidateId = `candidate_${randomUUID().replaceAll("-", "")}`;
-    if (!seen.has(candidateId)) return candidateId;
-  }
-}
-
-function buildProviderInput(
-  input: PlannerInput,
-  deterministicDestination: DeterministicDestinationMatch | null
-): PreparedProviderInput {
-  if (
-    input.promptVersion !== OPENAI_ROUTING_PROFILE.promptVersion ||
-    input.schemaVersion !== OPENAI_ROUTING_PROFILE.schemaVersion
-  ) {
+function effortProfile(routingEffort: OrganizerRoutingEffort) {
+  const profile = OPENAI_ROUTING_EFFORT_PROFILES[routingEffort];
+  if (profile.reasoningEffort !== providerNativeEffort(routingEffort)) {
     throw new OrganizerProviderError("validation_failed", false);
   }
-  if (input.signal.aborted) throw new OrganizerProviderError("provider_unavailable", true);
-  if (
-    !CAPTURE_ID.test(input.captureId) ||
-    typeof input.capture.rawContent !== "string" ||
-    characterLength(input.capture.rawContent) < 1 ||
-    characterLength(input.capture.rawContent) > MAX_CAPTURE_CHARACTERS ||
-    input.candidates.length > MAX_CANDIDATES ||
-    !sameOrganizerCaptureControls(input.capture.controls, input.controls) ||
-    (input.controls.explicitDestinationNoteId === null && input.controls.ruleMatch !== null)
-  ) {
-    inputBoundsFailure();
-  }
-
-  const seenCandidateIds = new Set<string>();
-  const seenNoteIds = new Set<string>();
-  const seenEphemeralCandidateIds = new Set<string>();
-  const ephemeralToInternalCandidateId = new Map<EphemeralCandidateId, string>();
-  const internalToEphemeralCandidateId = new Map<string, EphemeralCandidateId>();
-  const candidates: ProviderCandidate[] = [];
-  for (const candidate of input.candidates) {
-    if (
-      !NOTE_ID.test(candidate.candidateId) ||
-      !NOTE_ID.test(candidate.noteId) ||
-      seenCandidateIds.has(candidate.candidateId) ||
-      seenNoteIds.has(candidate.noteId) ||
-      !candidate.isOpen ||
-      !NOTE_TYPES.has(candidate.noteType) ||
-      !Number.isSafeInteger(candidate.revision) ||
-      candidate.revision < 1 ||
-      typeof candidate.title !== "string" ||
-      characterLength(candidate.title.trim()) < 1 ||
-      characterLength(candidate.title) > MAX_TITLE_CHARACTERS ||
-      typeof candidate.bodyMarkdown !== "string" ||
-      characterLength(candidate.bodyMarkdown) > MAX_CANDIDATE_BODY_CHARACTERS
-    ) {
-      inputBoundsFailure();
-    }
-    seenCandidateIds.add(candidate.candidateId);
-    seenNoteIds.add(candidate.noteId);
-    const ephemeralCandidateId = createEphemeralCandidateId(seenEphemeralCandidateIds);
-    seenEphemeralCandidateIds.add(ephemeralCandidateId);
-    ephemeralToInternalCandidateId.set(ephemeralCandidateId, candidate.candidateId);
-    internalToEphemeralCandidateId.set(candidate.candidateId, ephemeralCandidateId);
-    candidates.push(
-      Object.freeze({
-        candidateId: ephemeralCandidateId,
-        headings: candidateHeadings(candidate.bodyMarkdown),
-        isOpen: true,
-        latestSnippet: candidateSnippet(candidate.bodyMarkdown),
-        noteType: candidate.noteType,
-        title: candidate.title
-      })
-    );
-  }
-
-  const explicitNoteId = input.controls.explicitDestinationNoteId;
-  if (explicitNoteId !== null && !NOTE_ID.test(explicitNoteId)) inputBoundsFailure();
-  if (explicitNoteId !== null && deterministicDestination?.source !== "explicit_control")
-    inputBoundsFailure();
-
-  const explicitDestinationCandidateId =
-    deterministicDestination === null
-      ? null
-      : (internalToEphemeralCandidateId.get(deterministicDestination.candidateId) ?? null);
-  if (deterministicDestination !== null && explicitDestinationCandidateId === null)
-    inputBoundsFailure();
-  const expansionStyle = effectiveExpansionStyle(input);
-
-  const providerInput: ProviderInput = Object.freeze({
-    candidates: Object.freeze(candidates),
-    capture: Object.freeze({
-      inferredKind: inferOrganizerCaptureKind(input.capture.rawContent),
-      text: input.capture.rawContent
-    }),
-    contract: "unfiled.routing.input.v1",
-    controls: Object.freeze({
-      expansionDisabled: input.controls.expansionDisabled,
-      expansionStyle,
-      explicitDestinationCandidateId
-    })
-  });
-  const serialized = JSON.stringify(providerInput);
-  if (new TextEncoder().encode(serialized).byteLength > MAX_USER_INPUT_BYTES) inputBoundsFailure();
-  return Object.freeze({
-    ephemeralToInternalCandidateId,
-    internalToEphemeralCandidateId,
-    serialized
-  });
-}
-
-function assertApiKey(apiKey: string): void {
-  let hasUnsafeCharacter = false;
-  for (let index = 0; index < apiKey.length; index += 1) {
-    const codeUnit = apiKey.charCodeAt(index);
-    if (codeUnit <= 0x20 || codeUnit === 0x7f) hasUnsafeCharacter = true;
-  }
-  if (apiKey.length < 20 || apiKey.length > 512 || apiKey.trim() !== apiKey || hasUnsafeCharacter) {
-    throw new OrganizerProviderError("provider_key_invalid", false);
-  }
-}
-
-function responseFailure(status: number): OrganizerProviderError {
-  if (status === 401 || status === 403)
-    return new OrganizerProviderError("provider_key_invalid", false, status);
-  if (status === 429) return new OrganizerProviderError("rate_limited", true, status);
-  if (status === 408 || status === 409 || status >= 500)
-    return new OrganizerProviderError("provider_unavailable", true, status);
-  return new OrganizerProviderError("validation_failed", false, status);
-}
-
-async function discardResponse(response: Response): Promise<void> {
-  try {
-    await response.body?.cancel();
-  } catch {
-    // Provider error bodies are deliberately neither retained nor logged.
-  }
-}
-
-async function readBoundedJson(response: Response, signal: AbortSignal): Promise<unknown> {
-  if (response.body === null) throw new OrganizerProviderError("provider_unavailable", true, 200);
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  let readCompleted = false;
-  try {
-    for (;;) {
-      const part = await readStreamPart(reader, signal);
-      if (part.done) break;
-      total += part.value.byteLength;
-      if (total > MAX_RESPONSE_BYTES) {
-        part.value.fill(0);
-        await reader.cancel();
-        throw new OrganizerPlannerReviewError("invalid_output");
-      }
-      chunks.push(part.value);
-    }
-    readCompleted = true;
-  } finally {
-    try {
-      reader.releaseLock();
-    } catch {
-      // A non-conforming transport may leave a read pending after cancellation.
-    }
-    if (!readCompleted) for (const chunk of chunks) chunk.fill(0);
-  }
-
-  const bytes = new Uint8Array(total);
-  try {
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
-  } catch (error: unknown) {
-    if (error instanceof OrganizerPlannerReviewError) throw error;
-    throw new OrganizerProviderError("provider_unavailable", true, 200);
-  } finally {
-    bytes.fill(0);
-    for (const chunk of chunks) chunk.fill(0);
-  }
-}
-
-function readStreamPart(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  signal: AbortSignal
-): Promise<ReadableStreamReadResult<Uint8Array>> {
-  if (signal.aborted) {
-    return Promise.reject(new OrganizerProviderError("provider_unavailable", true));
-  }
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const cleanup = (): void => signal.removeEventListener("abort", aborted);
-    const aborted = (): void => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      void reader.cancel().catch(() => undefined);
-      reject(new OrganizerProviderError("provider_unavailable", true));
-    };
-    signal.addEventListener("abort", aborted, { once: true });
-    void reader.read().then(
-      (part) => {
-        if (settled) {
-          part.value?.fill(0);
-          return;
-        }
-        settled = true;
-        cleanup();
-        resolve(part);
-      },
-      () => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(new OrganizerProviderError("provider_unavailable", true));
-      }
-    );
-  });
+  return profile;
 }
 
 function parseCompletedResponse(value: unknown): unknown {
@@ -379,249 +92,53 @@ function parseCompletedResponse(value: unknown): unknown {
   }
 }
 
-function enforceDeterministicDestination(
-  plan: unknown,
-  destinationCandidateId: EphemeralCandidateId | null
-): unknown {
-  if (destinationCandidateId === null || !isRecord(plan) || plan.decision !== "append_to_note")
-    return plan;
-  return Object.freeze({
-    ...plan,
-    destination: Object.freeze({ candidateId: destinationCandidateId, newNote: null })
-  });
-}
-
-function enforceExpansionPreference(
-  plan: unknown,
-  expansionStyle: "off" | "brief" | "detailed"
-): unknown {
-  if (!isRecord(plan) || plan.generatedExpansion === null) return plan;
-  if (expansionStyle === "off") return Object.freeze({ ...plan, generatedExpansion: null });
-  if (
-    expansionStyle === "brief" &&
-    isRecord(plan.generatedExpansion) &&
-    typeof plan.generatedExpansion.text === "string" &&
-    characterLength(plan.generatedExpansion.text) > 200
-  ) {
-    return Object.freeze({ ...plan, generatedExpansion: null });
-  }
-  return plan;
-}
-
-function translateCandidateId(
-  value: unknown,
-  ephemeralToInternalCandidateId: ReadonlyMap<EphemeralCandidateId, string>
-): string {
-  if (typeof value !== "string" || !EPHEMERAL_CANDIDATE_ID.test(value))
-    throw new OrganizerPlannerReviewError("invalid_output");
-  const internalCandidateId = ephemeralToInternalCandidateId.get(value as EphemeralCandidateId);
-  if (internalCandidateId === undefined) throw new OrganizerPlannerReviewError("invalid_output");
-  return internalCandidateId;
-}
-
-function translateProviderCandidateIds(
-  plan: unknown,
-  ephemeralToInternalCandidateId: ReadonlyMap<EphemeralCandidateId, string>
-): unknown {
-  if (!isRecord(plan)) throw new OrganizerPlannerReviewError("invalid_output");
-
-  let destination = plan.destination;
-  if (isRecord(destination) && destination.candidateId !== null) {
-    destination = Object.freeze({
-      ...destination,
-      candidateId: translateCandidateId(destination.candidateId, ephemeralToInternalCandidateId)
-    });
-  }
-
-  let alternatives = plan.alternatives;
-  if (Array.isArray(alternatives)) {
-    alternatives = Object.freeze(
-      alternatives.map((candidateId) =>
-        translateCandidateId(candidateId, ephemeralToInternalCandidateId)
-      )
-    );
-  }
-
-  let operations = plan.operations;
-  if (Array.isArray(operations)) {
-    const providerOperations: readonly unknown[] = operations;
-    operations = Object.freeze(
-      providerOperations.map((operation) => {
-        if (!isRecord(operation) || operation.type !== "add_relation") return operation;
-        return Object.freeze({
-          ...operation,
-          toCandidateId: translateCandidateId(
-            operation.toCandidateId,
-            ephemeralToInternalCandidateId
-          )
-        });
-      })
-    );
-  }
-
-  return Object.freeze({ ...plan, alternatives, destination, operations });
-}
-
-function fetchWithAbort(
-  fetchImplementation: typeof fetch,
-  body: string,
-  apiKey: string,
-  signal: AbortSignal
-): Promise<Response> {
-  if (signal.aborted)
-    return Promise.reject(new DOMException("The operation was aborted", "AbortError"));
-  return new Promise<Response>((resolve, reject) => {
-    let settled = false;
-    const aborted = (): void => {
-      if (settled) return;
-      settled = true;
-      reject(new DOMException("The operation was aborted", "AbortError"));
-    };
-    signal.addEventListener("abort", aborted, { once: true });
-    void fetchImplementation(OPENAI_RESPONSES_ENDPOINT, {
-      body,
-      cache: "no-store",
-      credentials: "omit",
-      headers: {
-        accept: "application/json",
-        authorization: `Bearer ${apiKey}`,
-        "content-type": "application/json"
-      },
-      method: "POST",
-      redirect: "error",
-      referrerPolicy: "no-referrer",
-      signal
-    }).then(
-      (response) => {
-        signal.removeEventListener("abort", aborted);
-        if (settled || signal.aborted) {
-          settled = true;
-          void discardResponse(response);
-          return;
-        }
-        settled = true;
-        resolve(response);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", aborted);
-        if (settled) return;
-        settled = true;
-        reject(
-          error instanceof Error ? error : new OrganizerProviderError("provider_unavailable", true)
-        );
-      }
-    );
-  });
-}
-
-function requestBody(
-  userInput: string,
-  routingEffort: "economical" | "standard" | "thorough"
-): string {
-  const effort = OPENAI_ROUTING_EFFORT_PROFILES[routingEffort];
-  return JSON.stringify({
-    background: false,
-    input: [
-      {
-        content: [{ text: userInput, type: "input_text" }],
-        role: "user"
-      }
-    ],
-    instructions: ORGANIZER_ROUTING_PROMPT,
-    max_output_tokens: effort.maxOutputTokens,
-    model: OPENAI_ROUTING_PROFILE.model,
-    parallel_tool_calls: false,
-    reasoning: { effort: effort.reasoningEffort },
-    store: false,
-    stream: false,
-    text: {
-      format: {
-        name: OPENAI_ORGANIZATION_PLAN_SCHEMA_NAME,
-        schema: OPENAI_ORGANIZATION_PLAN_SCHEMA,
-        strict: true,
-        type: "json_schema"
-      }
-    },
-    tool_choice: "none",
-    tools: [],
-    truncation: "disabled"
-  });
-}
-
-function retryable(error: unknown, attempt: number, signal: AbortSignal): boolean {
-  if (attempt >= OPENAI_ROUTING_PROFILE.maxRetries || signal.aborted) return false;
-  if (error instanceof OrganizerPlannerReviewError) return false;
-  return !(error instanceof OrganizerProviderError) || error.retryable;
-}
-
-function networkFailure(error: unknown): OrganizerProviderError | OrganizerPlannerReviewError {
-  if (error instanceof OrganizerProviderError || error instanceof OrganizerPlannerReviewError)
-    return error;
-  return new OrganizerProviderError("provider_unavailable", true);
-}
-
-export function createOpenAIOrganizerPlanner(
-  options: OpenAIOrganizerPlannerOptions
-): OrganizerPlanner {
-  if (options.apiKey !== undefined) assertApiKey(options.apiKey);
-  const fetchImplementation = options.fetchImplementation ?? fetch;
-  return Object.freeze({
-    async plan(input): Promise<unknown> {
-      if (input.controls.explicitDestinationNoteId === null && input.controls.ruleMatch !== null) {
-        throw new OrganizerPlannerReviewError("input_bounds");
-      }
-      const deterministicDestination = resolveDeterministicDestination({
-        candidates: input.candidates,
-        capture: input.capture
-      });
-      const preparedInput = buildProviderInput(input, deterministicDestination);
-      const deterministicEphemeralCandidateId =
-        deterministicDestination === null
-          ? null
-          : (preparedInput.internalToEphemeralCandidateId.get(
-              deterministicDestination.candidateId
-            ) ?? null);
-      if (deterministicDestination !== null && deterministicEphemeralCandidateId === null)
-        inputBoundsFailure();
-      const body = requestBody(preparedInput.serialized, input.routingEffort ?? "standard");
-      const expansionStyle = effectiveExpansionStyle(input);
-      const deadline = AbortSignal.timeout(OPENAI_ROUTING_PROFILE.deadlineMs);
-      const signal = AbortSignal.any([input.signal, deadline]);
-      const executeOnce = async (apiKey: string): Promise<unknown> => {
-        assertApiKey(apiKey);
-        const response = await fetchWithAbort(fetchImplementation, body, apiKey, signal);
-        if (!response.ok) {
-          const failure = responseFailure(response.status);
-          await discardResponse(response);
-          throw failure;
-        }
-        const parsed = parseCompletedResponse(await readBoundedJson(response, signal));
-        if (signal.aborted) throw new OrganizerProviderError("provider_unavailable", true);
-        return translateProviderCandidateIds(
-          enforceExpansionPreference(
-            enforceDeterministicDestination(parsed, deterministicEphemeralCandidateId),
-            expansionStyle
-          ),
-          preparedInput.ephemeralToInternalCandidateId
-        );
-      };
-      let attempt = 0;
-      for (;;) {
-        try {
-          if (input.providerCredential !== undefined) {
-            return await input.providerCredential.use((credential) => {
-              return credential.withApiKey(executeOnce);
-            });
+export const OPENAI_PROVIDER_ADAPTER: OrganizerProviderAdapter = Object.freeze({
+  provider: "openai",
+  buildRequest(input) {
+    const effort = effortProfile(input.routingEffort);
+    return Object.freeze({
+      body: JSON.stringify({
+        background: false,
+        input: [
+          {
+            content: [{ text: input.serializedInput, type: "input_text" }],
+            role: "user"
           }
-          if (options.apiKey === undefined)
-            throw new OrganizerProviderError("provider_unavailable", true);
-          return await executeOnce(options.apiKey);
-        } catch (error: unknown) {
-          const safe = networkFailure(error);
-          if (!retryable(safe, attempt, signal)) throw safe;
-          attempt += 1;
-        }
-      }
-    }
-  });
+        ],
+        instructions: ORGANIZER_ROUTING_PROMPT,
+        max_output_tokens: effort.maxOutputTokens,
+        model: input.modelId,
+        parallel_tool_calls: false,
+        reasoning: { effort: effort.reasoningEffort },
+        store: false,
+        stream: false,
+        text: {
+          format: {
+            name: OPENAI_ORGANIZATION_PLAN_SCHEMA_NAME,
+            schema: OPENAI_ORGANIZATION_PLAN_SCHEMA,
+            strict: true,
+            type: "json_schema"
+          }
+        },
+        tool_choice: "none",
+        tools: [],
+        truncation: "disabled"
+      }),
+      endpoint: OPENAI_RESPONSES_ENDPOINT,
+      headers: (apiKey) =>
+        Object.freeze({
+          accept: "application/json",
+          authorization: `Bearer ${apiKey}`,
+          "content-type": "application/json"
+        })
+    });
+  },
+  parseResponse: parseCompletedResponse
+});
+
+/** Strict OpenAI Responses planner. It only ever serves OpenAI credentials and OpenAI models. */
+export function createOpenAIOrganizerPlanner(
+  options: OpenAIOrganizerPlannerOptions = {}
+): OrganizerPlanner {
+  return createProviderRegistryPlanner([OPENAI_PROVIDER_ADAPTER], options);
 }

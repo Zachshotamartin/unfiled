@@ -1,3 +1,10 @@
+import { createHash } from "node:crypto";
+import {
+  LOCAL_HASH_EMBEDDING_DIMENSIONS,
+  LOCAL_HASH_EMBEDDING_MODEL_ID,
+  MAX_LOCAL_HASH_EMBEDDING_INPUT_BYTES
+} from "@unfiled/search";
+
 import { WorkerConfigurationError } from "./errors.js";
 
 const DEFAULT_MAX_REQUEST_BYTES = 1_024;
@@ -23,8 +30,15 @@ const MAX_DATABASE_CA_BYTES = 32_768;
 const MAX_DATABASE_URL_LENGTH = 4_096;
 const MAX_PROVIDER_KEY_LENGTH = 512;
 const RETIRED_OBJECT_WRAP_ROOTS_VARIABLE = "UNFILED_RETIRED_AI_OBJECT_WRAP_ROOTS_JSON";
+const KEY_CUSTODIAN_VARIABLE = "UNFILED_KEY_CUSTODIAN";
+const VERCEL_SENSITIVE_KEY_RING_VARIABLE = "UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1";
+const VERCEL_OBJECT_WRAP_ROOT_VARIABLE = "UNFILED_WORKER_AI_OBJECT_WRAP_ROOT_KEY_ID";
+const VERCEL_RETIRED_OBJECT_WRAP_ROOTS_VARIABLE =
+  "UNFILED_WORKER_RETIRED_AI_OBJECT_WRAP_ROOT_KEY_IDS_JSON";
 const KMS_KEY_ARN_PATTERN =
   /^arn:(aws(?:-us-gov|-cn)?):kms:([a-z0-9-]+):(\d{12}):key\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const VERCEL_ROOT_KEY_ID_PATTERN =
+  /^urn:unfiled:key-root:vercel-sensitive-env-v1:(preview|production):[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 export const AWS_OIDC_AUDIENCE = "sts.amazonaws.com" as const;
 export const VERCEL_OIDC_ISSUER_ORIGIN = "https://oidc.vercel.com" as const;
@@ -77,9 +91,15 @@ const GENERIC_DATABASE_CAPABILITY_PATTERN =
 export type WorkerRuntime = "local" | "preview" | "production";
 export type WorkerEnvironment = Readonly<Record<string, string | undefined>>;
 
+export type WorkerReleaseIdentity = Readonly<{
+  commit: string;
+  deployment: `sha256:${string}`;
+  environment: "preview" | "production";
+}>;
+
 export type VercelTrustedSource = Readonly<{
   audience: string;
-  environment: "production";
+  environment: "preview" | "production";
   expectedSubject: string;
   issuer: string;
   ownerId: string;
@@ -111,6 +131,18 @@ export type AwsWorkerKeyBoundary = Readonly<{
   vercelProjectId: string;
 }>;
 
+export type VercelSensitiveEnvironmentWorkerKeyBoundary = Readonly<{
+  aiObjectWrapRootKeyId: string;
+  deploymentEnvironment: "preview" | "production";
+  kind: "vercel-sensitive-env-v1";
+  keyClass: "ai_assisted";
+  retiredRoots: AiAssistedRetiredRoots;
+  vercelProjectId: string;
+}>;
+
+export type WorkerKeyBoundary =
+  LocalWorkerKeyBoundary | AwsWorkerKeyBoundary | VercelSensitiveEnvironmentWorkerKeyBoundary;
+
 export type WorkerInvocationAuth =
   | Readonly<{ kind: "bearer"; secret: string }>
   | Readonly<{ kind: "production-verifier"; trustedSource: VercelTrustedSource }>;
@@ -128,13 +160,22 @@ export type WorkerIndexingConfig =
         statementTimeoutMs: number;
         url: string;
       }>;
-      embedding: Readonly<{
-        apiKey: string;
-        dimensions: number;
-        maxInputBytes: number;
-        modelId: string;
-        timeoutMs: number;
-      }>;
+      embedding:
+        | Readonly<{
+            apiKey: string;
+            dimensions: number;
+            kind: "openai";
+            maxInputBytes: number;
+            modelId: string;
+            timeoutMs: number;
+          }>
+        | Readonly<{
+            dimensions: typeof LOCAL_HASH_EMBEDDING_DIMENSIONS;
+            kind: "local-hash-v1";
+            maxInputBytes: number;
+            modelId: typeof LOCAL_HASH_EMBEDDING_MODEL_ID;
+            timeoutMs: number;
+          }>;
       kind: "enabled";
       leaseSeconds: number;
       recoveryLimit: number;
@@ -143,9 +184,10 @@ export type WorkerIndexingConfig =
 export type WorkerConfig = Readonly<{
   indexing: WorkerIndexingConfig;
   invocationAuth: WorkerInvocationAuth;
-  keyBoundary: LocalWorkerKeyBoundary | AwsWorkerKeyBoundary;
+  keyBoundary: WorkerKeyBoundary;
   maxRequestBytes: number;
   port: number;
+  releaseIdentity: WorkerReleaseIdentity | null;
   requestTimeoutMs: number;
   runtime: WorkerRuntime;
 }>;
@@ -272,31 +314,32 @@ function parseIndexingConfig(
   runtime: WorkerRuntime,
   requestTimeoutMs: number
 ): WorkerIndexingConfig {
-  const requiredNames = [
+  const baseNames = [
     "UNFILED_WORKER_DATABASE_URL",
     "UNFILED_WORKER_DATABASE_EXPECTED_HOST",
     "UNFILED_WORKER_DATABASE_PROJECT_REF",
     "UNFILED_WORKER_DATABASE_CA_PEM_BASE64",
+    "UNFILED_WORKER_EMBEDDING_PROVIDER"
+  ] as const;
+  const providerNames = [
     "UNFILED_OPENAI_EMBEDDING_API_KEY",
     "UNFILED_EMBEDDING_MODEL_ID",
     "UNFILED_EMBEDDING_DIMENSIONS"
   ] as const;
-  const present = requiredNames.filter((name) => hasValue(environment, name));
-  if (runtime !== "production") {
+  const present = [...baseNames, ...providerNames].filter((name) => hasValue(environment, name));
+  if (runtime === "local") {
     if (present.length > 0) throw new WorkerConfigurationError(present);
     return { kind: "disabled" };
   }
-  if (present.length !== requiredNames.length) {
-    throw new WorkerConfigurationError(
-      requiredNames.filter((name) => !hasValue(environment, name))
-    );
+  const missingBase = baseNames.filter((name) => !hasValue(environment, name));
+  if (missingBase.length > 0) {
+    throw new WorkerConfigurationError(missingBase);
   }
 
   const url = required(environment, "UNFILED_WORKER_DATABASE_URL");
   const expectedHost = required(environment, "UNFILED_WORKER_DATABASE_EXPECTED_HOST").toLowerCase();
   const projectRef = required(environment, "UNFILED_WORKER_DATABASE_PROJECT_REF");
-  const apiKey = required(environment, "UNFILED_OPENAI_EMBEDDING_API_KEY");
-  const modelId = required(environment, "UNFILED_EMBEDDING_MODEL_ID");
+  const embeddingProvider = required(environment, "UNFILED_WORKER_EMBEDDING_PROVIDER");
   const invalid: string[] = [];
   if (url.length > MAX_DATABASE_URL_LENGTH) invalid.push("UNFILED_WORKER_DATABASE_URL");
   if (
@@ -308,18 +351,58 @@ function parseIndexingConfig(
   if (!/^[a-z0-9]{20}$/u.test(projectRef)) {
     invalid.push("UNFILED_WORKER_DATABASE_PROJECT_REF");
   }
-  if (
-    apiKey.length < 20 ||
-    apiKey.length > MAX_PROVIDER_KEY_LENGTH ||
-    apiKey.trim() !== apiKey ||
-    hasAsciiControlOrSpace(apiKey)
-  ) {
-    invalid.push("UNFILED_OPENAI_EMBEDDING_API_KEY");
-  }
-  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(modelId)) {
-    invalid.push("UNFILED_EMBEDDING_MODEL_ID");
-  }
+  if (embeddingProvider !== "openai" && embeddingProvider !== "local-hash-v1")
+    invalid.push("UNFILED_WORKER_EMBEDDING_PROVIDER");
   if (invalid.length > 0) throw new WorkerConfigurationError(invalid);
+
+  let embedding: Extract<WorkerIndexingConfig, { kind: "enabled" }>["embedding"];
+  const embeddingTimeoutMs = parseInteger(
+    environment,
+    "UNFILED_EMBEDDING_TIMEOUT_MS",
+    10_000,
+    1_000,
+    30_000
+  );
+  const maxInputBytes = parseInteger(
+    environment,
+    "UNFILED_EMBEDDING_MAX_INPUT_BYTES",
+    24_576,
+    1_024,
+    MAX_LOCAL_HASH_EMBEDDING_INPUT_BYTES
+  );
+  if (embeddingProvider === "openai") {
+    const missing = providerNames.filter((name) => !hasValue(environment, name));
+    if (missing.length > 0) throw new WorkerConfigurationError(missing);
+    const apiKey = required(environment, "UNFILED_OPENAI_EMBEDDING_API_KEY");
+    const modelId = required(environment, "UNFILED_EMBEDDING_MODEL_ID");
+    if (
+      apiKey.length < 20 ||
+      apiKey.length > MAX_PROVIDER_KEY_LENGTH ||
+      apiKey.trim() !== apiKey ||
+      hasAsciiControlOrSpace(apiKey)
+    )
+      invalid.push("UNFILED_OPENAI_EMBEDDING_API_KEY");
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(modelId))
+      invalid.push("UNFILED_EMBEDDING_MODEL_ID");
+    if (invalid.length > 0) throw new WorkerConfigurationError(invalid);
+    embedding = Object.freeze({
+      apiKey,
+      dimensions: parseInteger(environment, "UNFILED_EMBEDDING_DIMENSIONS", 1_536, 1, 4_096),
+      kind: "openai" as const,
+      maxInputBytes,
+      modelId,
+      timeoutMs: embeddingTimeoutMs
+    });
+  } else {
+    rejectCapabilities(environment, providerNames);
+    embedding = Object.freeze({
+      dimensions: LOCAL_HASH_EMBEDDING_DIMENSIONS,
+      kind: "local-hash-v1" as const,
+      maxInputBytes,
+      modelId: LOCAL_HASH_EMBEDDING_MODEL_ID,
+      timeoutMs: embeddingTimeoutMs
+    });
+  }
 
   const claimLimit = parseInteger(environment, "UNFILED_INDEX_CLAIM_LIMIT", 2, 1, 4);
   const concurrency = parseInteger(environment, "UNFILED_INDEX_CONCURRENCY", 2, 1, 4);
@@ -338,13 +421,6 @@ function parseIndexingConfig(
     "UNFILED_WORKER_DATABASE_STATEMENT_TIMEOUT_MS",
     500,
     250,
-    30_000
-  );
-  const embeddingTimeoutMs = parseInteger(
-    environment,
-    "UNFILED_EMBEDDING_TIMEOUT_MS",
-    10_000,
-    1_000,
     30_000
   );
   const leaseSeconds = parseInteger(environment, "UNFILED_INDEX_LEASE_SECONDS", 120, 30, 900);
@@ -391,19 +467,7 @@ function parseIndexingConfig(
       statementTimeoutMs,
       url
     }),
-    embedding: Object.freeze({
-      apiKey,
-      dimensions: parseInteger(environment, "UNFILED_EMBEDDING_DIMENSIONS", 1_536, 1, 4_096),
-      maxInputBytes: parseInteger(
-        environment,
-        "UNFILED_EMBEDDING_MAX_INPUT_BYTES",
-        24_576,
-        1_024,
-        100_000
-      ),
-      modelId,
-      timeoutMs: embeddingTimeoutMs
-    }),
+    embedding,
     kind: "enabled",
     leaseSeconds,
     recoveryLimit: parseInteger(environment, "UNFILED_INDEX_RECOVERY_LIMIT", 100, 1, 100)
@@ -417,22 +481,47 @@ function parseRuntime(environment: WorkerEnvironment): WorkerRuntime {
   }
 
   const vercelEnvironment = environment.VERCEL_ENV?.trim();
-  const allowedVercelEnvironment =
-    runtime === "production" ? "production" : runtime === "preview" ? "preview" : "development";
   if (
-    (runtime === "production" && vercelEnvironment !== allowedVercelEnvironment) ||
-    (runtime !== "production" &&
-      vercelEnvironment !== undefined &&
-      vercelEnvironment !== allowedVercelEnvironment)
+    (runtime === "local" &&
+      (environment.VERCEL !== undefined || environment.VERCEL_ENV !== undefined)) ||
+    (runtime !== "local" && (environment.VERCEL !== "1" || vercelEnvironment !== runtime))
   ) {
     throw new WorkerConfigurationError(["UNFILED_WORKER_ENV", "VERCEL_ENV"]);
   }
   return runtime;
 }
 
+function parseReleaseIdentity(
+  environment: WorkerEnvironment,
+  runtime: WorkerRuntime
+): WorkerReleaseIdentity | null {
+  if (runtime === "local") {
+    rejectCapabilities(environment, ["VERCEL_DEPLOYMENT_ID", "VERCEL_GIT_COMMIT_SHA"]);
+    return null;
+  }
+  const deploymentId = environment.VERCEL_DEPLOYMENT_ID?.trim();
+  const commit = environment.VERCEL_GIT_COMMIT_SHA;
+  const invalid: string[] = [];
+  if (deploymentId === undefined || !/^[A-Za-z0-9_-]{1,128}$/u.test(deploymentId)) {
+    invalid.push("VERCEL_DEPLOYMENT_ID");
+  }
+  if (commit === undefined || !/^[0-9a-f]{40}$/u.test(commit)) {
+    invalid.push("VERCEL_GIT_COMMIT_SHA");
+  }
+  if (invalid.length > 0 || deploymentId === undefined || commit === undefined) {
+    throw new WorkerConfigurationError(invalid);
+  }
+  return Object.freeze({
+    commit,
+    deployment: `sha256:${createHash("sha256").update(deploymentId, "utf8").digest("hex")}`,
+    environment: runtime
+  });
+}
+
 function parseTrustedSource(
   environment: WorkerEnvironment,
-  workerBoundary: AwsWorkerKeyBoundary
+  workerProjectId: string,
+  runtime: "preview" | "production"
 ): VercelTrustedSource {
   const teamSlug = required(environment, "UNFILED_TRUSTED_SOURCE_TEAM_SLUG");
   const ownerId = required(environment, "UNFILED_TRUSTED_SOURCE_OWNER_ID");
@@ -441,27 +530,19 @@ function parseTrustedSource(
   const expectedSubject = required(environment, "UNFILED_TRUSTED_SOURCE_EXPECTED_OIDC_SUBJECT");
   const issuer = `${VERCEL_OIDC_ISSUER_ORIGIN}/${teamSlug}`;
   const audience = `${VERCEL_OIDC_AUDIENCE_ORIGIN}/${teamSlug}`;
-  const derivedSubject = `owner:${teamSlug}:project:${projectName}:environment:production`;
-  const workerSubject = /^owner:([^:]+):project:([^:]+):environment:production$/u.exec(
-    workerBoundary.expectedOidcSubject
-  );
-  const workerTeamSlug = workerSubject?.[1];
-  const workerProjectName = workerSubject?.[2];
+  const derivedSubject = `owner:${teamSlug}:project:${projectName}:environment:${runtime}`;
   const invalid: string[] = [];
 
-  if (!/^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/u.test(teamSlug) || teamSlug !== workerTeamSlug) {
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/u.test(teamSlug)) {
     invalid.push("UNFILED_TRUSTED_SOURCE_TEAM_SLUG");
   }
   if (!/^team_[A-Za-z0-9]+$/u.test(ownerId)) {
     invalid.push("UNFILED_TRUSTED_SOURCE_OWNER_ID");
   }
-  if (!/^prj_[A-Za-z0-9]+$/u.test(projectId) || projectId === workerBoundary.vercelProjectId) {
+  if (!/^prj_[A-Za-z0-9]+$/u.test(projectId) || projectId === workerProjectId) {
     invalid.push("UNFILED_TRUSTED_SOURCE_WEB_PROJECT_ID");
   }
-  if (
-    !/^[a-z0-9](?:[a-z0-9_-]{0,98}[a-z0-9])?$/u.test(projectName) ||
-    projectName === workerProjectName
-  ) {
+  if (!/^[a-z0-9](?:[a-z0-9_-]{0,98}[a-z0-9])?$/u.test(projectName)) {
     invalid.push("UNFILED_TRUSTED_SOURCE_WEB_PROJECT_NAME");
   }
   if (expectedSubject !== derivedSubject) {
@@ -471,7 +552,7 @@ function parseTrustedSource(
 
   return {
     audience,
-    environment: "production",
+    environment: runtime,
     expectedSubject,
     issuer,
     ownerId,
@@ -484,17 +565,17 @@ function parseTrustedSource(
 function parseInvocationAuth(
   environment: WorkerEnvironment,
   runtime: WorkerRuntime,
-  keyBoundary: LocalWorkerKeyBoundary | AwsWorkerKeyBoundary
+  keyBoundary: WorkerKeyBoundary
 ): WorkerInvocationAuth {
-  if (runtime === "production") {
+  if (runtime !== "local") {
     const forbidden = ["CRON_SECRET", "UNFILED_WORKER_DRAIN_SECRET"].filter((name) =>
       hasValue(environment, name)
     );
     if (forbidden.length > 0) throw new WorkerConfigurationError(forbidden);
-    if (keyBoundary.kind !== "aws-oidc") throw new WorkerConfigurationError([]);
+    if (keyBoundary.kind === "local-synthetic") throw new WorkerConfigurationError([]);
     return {
       kind: "production-verifier",
-      trustedSource: parseTrustedSource(environment, keyBoundary)
+      trustedSource: parseTrustedSource(environment, keyBoundary.vercelProjectId, runtime)
     };
   }
   if (hasValue(environment, "CRON_SECRET")) throw new WorkerConfigurationError(["CRON_SECRET"]);
@@ -554,7 +635,10 @@ function parseRetiredAiObjectWrapRoots(
   };
 }
 
-function awsKeyBoundary(environment: WorkerEnvironment): AwsWorkerKeyBoundary {
+function awsKeyBoundary(
+  environment: WorkerEnvironment,
+  runtime: "preview" | "production"
+): AwsWorkerKeyBoundary {
   const region = required(environment, "UNFILED_AWS_REGION");
   const roleArn = required(environment, "UNFILED_AWS_ROLE_ARN");
   const aiObjectWrapKmsKeyArn = required(environment, "UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN");
@@ -563,9 +647,12 @@ function awsKeyBoundary(environment: WorkerEnvironment): AwsWorkerKeyBoundary {
 
   const role = /^arn:(aws(?:-us-gov|-cn)?):iam::(\d{12}):role\/[A-Za-z0-9+=,.@_/-]+$/.exec(roleArn);
   const objectWrapArn = KMS_KEY_ARN_PATTERN.exec(aiObjectWrapKmsKeyArn);
+  const subject = /^owner:([^:]+):project:([^:]+):environment:(preview|production)$/u.exec(
+    expectedOidcSubject
+  );
   const validSubject =
     expectedOidcSubject.length <= 512 &&
-    expectedOidcSubject.endsWith(":environment:production") &&
+    subject?.[3] === runtime &&
     !expectedOidcSubject.includes(":project:prj_") &&
     /^[A-Za-z0-9_./:@-]+$/.test(expectedOidcSubject);
   const actualProjectId = environment.VERCEL_PROJECT_ID?.trim();
@@ -619,6 +706,116 @@ function awsKeyBoundary(environment: WorkerEnvironment): AwsWorkerKeyBoundary {
   };
 }
 
+function exactSensitiveValue(environment: WorkerEnvironment, name: string): string {
+  const raw = environment[name];
+  if (raw === undefined || raw.length === 0 || raw.trim() !== raw) {
+    throw new WorkerConfigurationError([name]);
+  }
+  return raw;
+}
+
+function parseVercelRetiredAiObjectWrapRoots(
+  environment: WorkerEnvironment,
+  activeRootKeyId: string,
+  runtime: "preview" | "production"
+): AiAssistedRetiredRoots {
+  const raw = environment[VERCEL_RETIRED_OBJECT_WRAP_ROOTS_VARIABLE] ?? "[]";
+  if (
+    raw.trim() !== raw ||
+    new TextEncoder().encode(raw).byteLength > MAX_RETIRED_ROOT_REGISTRY_BYTES
+  ) {
+    throw new WorkerConfigurationError([VERCEL_RETIRED_OBJECT_WRAP_ROOTS_VARIABLE]);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new WorkerConfigurationError([VERCEL_RETIRED_OBJECT_WRAP_ROOTS_VARIABLE]);
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length > MAX_RETIRED_AI_OBJECT_WRAP_ROOTS ||
+    JSON.stringify(parsed) !== raw
+  ) {
+    throw new WorkerConfigurationError([VERCEL_RETIRED_OBJECT_WRAP_ROOTS_VARIABLE]);
+  }
+  const roots: string[] = [];
+  const seen = new Set<string>([activeRootKeyId]);
+  for (const entry of parsed) {
+    if (
+      typeof entry !== "string" ||
+      VERCEL_ROOT_KEY_ID_PATTERN.exec(entry)?.[1] !== runtime ||
+      seen.has(entry)
+    ) {
+      throw new WorkerConfigurationError([VERCEL_RETIRED_OBJECT_WRAP_ROOTS_VARIABLE]);
+    }
+    seen.add(entry);
+    roots.push(entry);
+  }
+  return Object.freeze({
+    ai_assisted: Object.freeze({ object_wrap: Object.freeze(roots) })
+  });
+}
+
+function vercelSensitiveEnvironmentKeyBoundary(
+  environment: WorkerEnvironment,
+  runtime: "preview" | "production"
+): VercelSensitiveEnvironmentWorkerKeyBoundary {
+  const vercelProjectId = exactSensitiveValue(environment, "UNFILED_WORKER_PROJECT_ID");
+  const activeRootKeyId = exactSensitiveValue(environment, VERCEL_OBJECT_WRAP_ROOT_VARIABLE);
+  const ring = exactSensitiveValue(environment, VERCEL_SENSITIVE_KEY_RING_VARIABLE);
+  const invalid: string[] = [];
+  if (
+    !/^prj_[A-Za-z0-9]+$/u.test(vercelProjectId) ||
+    environment.VERCEL_PROJECT_ID !== vercelProjectId
+  ) {
+    invalid.push("UNFILED_WORKER_PROJECT_ID", "VERCEL_PROJECT_ID");
+  }
+  if (VERCEL_ROOT_KEY_ID_PATTERN.exec(activeRootKeyId)?.[1] !== runtime) {
+    invalid.push(VERCEL_OBJECT_WRAP_ROOT_VARIABLE);
+  }
+  if (new TextEncoder().encode(ring).byteLength > 32_768) {
+    invalid.push(VERCEL_SENSITIVE_KEY_RING_VARIABLE);
+  }
+  if (invalid.length > 0) throw new WorkerConfigurationError([...new Set(invalid)]);
+  return Object.freeze({
+    aiObjectWrapRootKeyId: activeRootKeyId,
+    deploymentEnvironment: runtime,
+    kind: "vercel-sensitive-env-v1",
+    keyClass: "ai_assisted",
+    retiredRoots: parseVercelRetiredAiObjectWrapRoots(environment, activeRootKeyId, runtime),
+    vercelProjectId
+  });
+}
+
+function managedKeyBoundary(
+  environment: WorkerEnvironment,
+  runtime: "preview" | "production"
+): AwsWorkerKeyBoundary | VercelSensitiveEnvironmentWorkerKeyBoundary {
+  const mode = exactSensitiveValue(environment, KEY_CUSTODIAN_VARIABLE);
+  const awsOnly = [
+    "UNFILED_AWS_REGION",
+    "UNFILED_AWS_ROLE_ARN",
+    "UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN",
+    RETIRED_OBJECT_WRAP_ROOTS_VARIABLE,
+    "UNFILED_WORKER_EXPECTED_OIDC_SUBJECT"
+  ] as const;
+  const sensitiveOnly = [
+    VERCEL_SENSITIVE_KEY_RING_VARIABLE,
+    VERCEL_OBJECT_WRAP_ROOT_VARIABLE,
+    VERCEL_RETIRED_OBJECT_WRAP_ROOTS_VARIABLE
+  ] as const;
+  if (mode === "aws-kms") {
+    rejectCapabilities(environment, sensitiveOnly);
+    return awsKeyBoundary(environment, runtime);
+  }
+  if (mode === "vercel-sensitive-env-v1") {
+    rejectCapabilities(environment, awsOnly);
+    return vercelSensitiveEnvironmentKeyBoundary(environment, runtime);
+  }
+  throw new WorkerConfigurationError([KEY_CUSTODIAN_VARIABLE]);
+}
+
 export function loadWorkerConfig(environment: WorkerEnvironment = process.env): WorkerConfig {
   rejectCapabilities(environment, STATIC_AWS_CREDENTIALS);
   rejectCapabilities(environment, PRIVATE_MANUAL_CAPABILITIES);
@@ -629,10 +826,29 @@ export function loadWorkerConfig(environment: WorkerEnvironment = process.env): 
   rejectAmbientDatabaseCapabilities(environment);
 
   const runtime = parseRuntime(environment);
-  const keyBoundary =
-    runtime === "production"
-      ? awsKeyBoundary(environment)
-      : ({ kind: "local-synthetic", keyClass: "ai_assisted" } as const);
+  let keyBoundary: WorkerKeyBoundary;
+  if (runtime === "local") {
+    rejectCapabilities(environment, [
+      KEY_CUSTODIAN_VARIABLE,
+      VERCEL_SENSITIVE_KEY_RING_VARIABLE,
+      VERCEL_OBJECT_WRAP_ROOT_VARIABLE,
+      VERCEL_RETIRED_OBJECT_WRAP_ROOTS_VARIABLE,
+      "UNFILED_AWS_REGION",
+      "UNFILED_AWS_ROLE_ARN",
+      "UNFILED_AI_OBJECT_WRAP_KMS_KEY_ARN",
+      RETIRED_OBJECT_WRAP_ROOTS_VARIABLE,
+      "UNFILED_WORKER_EXPECTED_OIDC_SUBJECT",
+      "UNFILED_WORKER_PROJECT_ID",
+      "UNFILED_WORKER_DATABASE_URL",
+      "UNFILED_WORKER_DATABASE_EXPECTED_HOST",
+      "UNFILED_WORKER_DATABASE_PROJECT_REF",
+      "UNFILED_WORKER_DATABASE_CA_PEM_BASE64",
+      "UNFILED_OPENAI_EMBEDDING_API_KEY"
+    ]);
+    keyBoundary = { kind: "local-synthetic", keyClass: "ai_assisted" };
+  } else {
+    keyBoundary = managedKeyBoundary(environment, runtime);
+  }
   const requestTimeoutMs = parseInteger(
     environment,
     "UNFILED_WORKER_TIMEOUT_MS",
@@ -652,6 +868,7 @@ export function loadWorkerConfig(environment: WorkerEnvironment = process.env): 
       MAX_REQUEST_BYTES
     ),
     port: parseInteger(environment, "PORT", DEFAULT_PORT, 1, 65_535),
+    releaseIdentity: parseReleaseIdentity(environment, runtime),
     requestTimeoutMs,
     runtime
   };

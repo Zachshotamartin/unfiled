@@ -7,9 +7,9 @@ enum AppPhase: Equatable {
     case failed(String)
 }
 
-enum AuthStep: Equatable {
-    case email
-    case code(email: String, retryAfterSeconds: Int)
+enum AuthMode: Equatable {
+    case signIn
+    case signUp
 }
 
 enum AppRoute: Hashable {

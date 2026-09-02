@@ -89,7 +89,10 @@ export const CaptureSummarySchema = z
   })
   .superRefine((capture, context) => {
     const isTerminal = capture.status !== "queued" && capture.status !== "processing";
-    if (capture.receiptAvailable !== isTerminal) {
+    // A failed job records its error code without an organization receipt unless a later
+    // organizer run produced one, so either value is consistent for a failed capture.
+    const receiptOptional = capture.status === "failed";
+    if (!receiptOptional && capture.receiptAvailable !== isTerminal) {
       context.addIssue({
         code: "custom",
         message: "Receipt availability must match the terminal processing state",
@@ -326,6 +329,8 @@ export const CaptureDetailSchema = CaptureSchema.extend({
     return;
   }
   const expectedOutcomes = expectedOutcomeByState[capture.status];
+  // A failed job may carry no receipt: the organizer records the error code without one.
+  if (capture.receipt === null && capture.status === "failed") return;
   if (
     capture.receipt === null ||
     !expectedOutcomes.some((outcome) => outcome === capture.receipt?.outcome)

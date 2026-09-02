@@ -30,14 +30,14 @@ export default function AuthPage() {
       </section>
       <section className="auth-panel" aria-label="Sign in form">
         <div className="w-full max-w-sm">
-          <p className="eyebrow">Passwordless sign in</p>
+          <p className="eyebrow">Sign in</p>
           <h2 className="mt-4 text-3xl font-semibold tracking-[-0.04em]">Continue to your notes</h2>
           <p className="mt-3 leading-7 text-muted-content">
-            We’ll email a short-lived code. No password to remember.
+            Use your email address and password. New here? Create an account in a few seconds.
           </p>
           <AuthForm />
           <p className="mt-8 border-t border-outline pt-5 text-sm leading-6 text-muted-content">
-            By continuing, you agree to keep access to this email secure.{" "}
+            By continuing, you agree to keep your password private.{" "}
             <Link href="/" className="text-content underline decoration-outline underline-offset-4">
               Back home
             </Link>

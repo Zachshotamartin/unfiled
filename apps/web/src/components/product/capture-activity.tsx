@@ -87,8 +87,9 @@ export function CaptureActivity({
       </div>
       {providerUnavailable ? (
         <p className="capture-outage-banner" role="status">
-          The AI service is unavailable. Encrypted captures remain queued or safe in Inbox and will
-          be retried.
+          The AI provider is unavailable. Encrypted captures remain queued or safe in Inbox. If you
+          have not added an OpenAI or Claude key yet, add one in{" "}
+          <Link href="/app/settings">Settings</Link>; otherwise captures will be retried.
         </p>
       ) : null}
       {error === null ? null : (

@@ -4,6 +4,7 @@ import type {
   KeyBinding,
   KeyPurpose,
   ManagedKeyRecordV1,
+  ManagedKeyRecordV2,
   ManagedKeyStore
 } from "@unfiled/key-management";
 import { describe, expect, it, vi } from "vitest";
@@ -15,6 +16,14 @@ import { ServiceRpcError } from "./service-rpc-client";
 const OWNER_ID = "11111111-1111-4111-8111-111111111111";
 const CREATED_AT = "2026-08-30T12:00:00.000Z";
 const ROOT_ARN = "arn:aws:kms:us-west-2:123456789012:key/11111111-2222-3333-4444-555555555555";
+const ROOT_ID =
+  "urn:unfiled:key-root:vercel-sensitive-env-v1:production:11111111-2222-4222-8222-222222222222";
+
+function v2Envelope(): string {
+  return Buffer.from([0x55, 0x46, 0x45, 0x4b, 0x01, ...new Uint8Array(60).fill(9)]).toString(
+    "base64url"
+  );
+}
 
 interface MutableStatus {
   active: Readonly<{ keyId: string; keyVersion: number }> | null;
@@ -51,6 +60,37 @@ function keyRecord(
   };
 }
 
+function keyRecordV2(
+  binding: KeyBinding,
+  keyId: string,
+  keyVersion: number,
+  status: "active" | "pending"
+): ManagedKeyRecordV2 {
+  return {
+    schemaVersion: 2,
+    custodyProvider: "vercel_sensitive_environment_v1",
+    ...binding,
+    keyId,
+    keyVersion,
+    status,
+    encryptedKeyMaterial: v2Envelope(),
+    rootKeyId: ROOT_ID,
+    wrapAlgorithm: "AES-256-GCM",
+    createdAt: CREATED_AT,
+    activatedAt: status === "active" ? CREATED_AT : null,
+    retiredAt: null,
+    revokedAt: null,
+    wrapOperations: 0,
+    wrapOperationLimit: 16_777_216,
+    rotation: {
+      predecessorKeyId: null,
+      previousRootKeyId: null,
+      rootRewrapCount: 0,
+      lastRootRewrappedAt: null
+    }
+  };
+}
+
 function allStatuses(initial: "active" | "empty"): Map<string, MutableStatus> {
   const statuses = new Map<string, MutableStatus>();
   for (const keyClass of ["ai_assisted", "private_manual"] as const) {
@@ -79,7 +119,7 @@ function rpcHarness(statuses: Map<string, MutableStatus>): Readonly<{
       if (status === undefined) throw new Error("unexpected status binding");
       return Promise.resolve({ keyClass, keyPurpose: purpose, ...status });
     }
-    if (name === "register_user_content_key") {
+    if (name === "register_user_content_key" || name === "register_user_content_key_v2") {
       const key = `${String(keyClass)}/${String(purpose)}`;
       const status = statuses.get(key);
       if (status === undefined) throw new Error("unexpected register binding");
@@ -123,6 +163,34 @@ function rpcHarness(statuses: Map<string, MutableStatus>): Readonly<{
     throw new Error(`unexpected rpc ${name}`);
   });
   return { client: Object.freeze({ rpc }), rpc };
+}
+
+function generatedV2Custodian(
+  generated: CreateIntermediateKeyRequest[]
+): IntermediateKeyCustodian<ManagedKeyRecordV2> {
+  return Object.freeze({
+    async withGeneratedIntermediateKey<Result>(
+      request: CreateIntermediateKeyRequest,
+      use: (keyBytes: Uint8Array, record: ManagedKeyRecordV2) => Promise<Result>
+    ): Promise<Result> {
+      generated.push(request);
+      return use(
+        new Uint8Array(32).fill(7),
+        keyRecordV2(
+          { ownerId: request.ownerId, keyClass: request.keyClass, purpose: request.purpose },
+          request.keyId,
+          request.keyVersion,
+          "pending"
+        )
+      );
+    },
+    async withUnwrappedIntermediateKey<Result>(
+      value: unknown,
+      use: (keyBytes: Uint8Array, record: ManagedKeyRecordV2) => Promise<Result>
+    ): Promise<Result> {
+      return use(new Uint8Array(32).fill(8), value as ManagedKeyRecordV2);
+    }
+  });
 }
 
 function generatedCustodian(
@@ -208,6 +276,33 @@ describe("owner content-key bootstrap", () => {
     ).toBe(true);
   });
 
+  it("registers V2 envelope records only through the provider-neutral RPC", async () => {
+    const statuses = allStatuses("empty");
+    const { client, rpc } = rpcHarness(statuses);
+    const generated: CreateIntermediateKeyRequest[] = [];
+    let sequence = 0;
+
+    await ensureOwnerContentKeys(client, generatedV2Custodian(generated), emptyStore(), OWNER_ID, {
+      createKeyId: () => `key_v2_${(sequence += 1)}`,
+      now: () => CREATED_AT,
+      schemaVersion: 2
+    });
+
+    expect(generated).toHaveLength(4);
+    expect(rpc.mock.calls.filter(([name]) => name === "register_user_content_key_v2")).toHaveLength(
+      4
+    );
+    expect(rpc.mock.calls.some(([name]) => name === "register_user_content_key")).toBe(false);
+    const registration = rpc.mock.calls.find(([name]) => name === "register_user_content_key_v2");
+    expect(registration?.[1]).toMatchObject({
+      p_owner_id: OWNER_ID,
+      p_root_key_id: ROOT_ID,
+      p_wrap_algorithm: "AES-256-GCM",
+      p_wrapped_intermediate_key: `\\x${Buffer.from(v2Envelope(), "base64url").toString("hex")}`
+    });
+    expect(registration?.[1]).not.toHaveProperty("p_kms_key_id");
+  });
+
   it("proves an existing pending key under KMS before activation", async () => {
     const statuses = allStatuses("active");
     const target = statuses.get("private_manual/content_mac");
@@ -285,7 +380,8 @@ describe("owner content-key bootstrap", () => {
     expect(managedKeyBootstrapRpcFunctions).toEqual([
       "activate_user_content_key",
       "get_user_content_key_status",
-      "register_user_content_key"
+      "register_user_content_key",
+      "register_user_content_key_v2"
     ]);
   });
 

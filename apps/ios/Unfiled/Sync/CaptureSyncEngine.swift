@@ -23,7 +23,6 @@ actor CaptureSyncEngine {
     private let api: APIClient
     private let profileAuthorizer: any CaptureProfileAuthorizing
     private let idGenerator: PrefixedULIDGenerator
-    private let widgetSnapshotStore: WidgetSnapshotStore
     private let clock: Clock
     private let retryPollInterval: Duration
     private let retryDelay: RetryDelay
@@ -36,7 +35,6 @@ actor CaptureSyncEngine {
         api: APIClient,
         profileAuthorizer: any CaptureProfileAuthorizing,
         idGenerator: PrefixedULIDGenerator = PrefixedULIDGenerator(),
-        widgetSnapshotStore: WidgetSnapshotStore = WidgetSnapshotStore(),
         clock: @escaping Clock = { Date() },
         retryPollInterval: Duration = .seconds(15),
         retryDelay: @escaping RetryDelay = {
@@ -47,7 +45,6 @@ actor CaptureSyncEngine {
         self.api = api
         self.profileAuthorizer = profileAuthorizer
         self.idGenerator = idGenerator
-        self.widgetSnapshotStore = widgetSnapshotStore
         self.clock = clock
         self.retryPollInterval = retryPollInterval
         self.retryDelay = retryDelay
@@ -88,7 +85,6 @@ actor CaptureSyncEngine {
             composerGeneration: composerGeneration,
             now: encodedNow
         )
-        try await publishPendingCount(profileID: draft.profileID)
         return captureID
     }
 
@@ -169,7 +165,6 @@ actor CaptureSyncEngine {
                     profileID: profileID,
                     leaseToken: leaseToken
                 )
-                try? await publishPendingCount(profileID: normalizedProfileID)
                 if !shouldContinue { break }
             } catch {
                 break
@@ -192,7 +187,6 @@ actor CaptureSyncEngine {
             captureID: captureID,
             now: now
         )
-        try await publishPendingCount(profileID: normalizedProfileID)
         await drain(profileID: profileID)
     }
 
@@ -340,10 +334,6 @@ actor CaptureSyncEngine {
         }
     }
 
-    private func publishPendingCount(profileID: String) async throws {
-        let count = try await database.pendingCount(profileID: profileID)
-        widgetSnapshotStore.publish(pendingCaptureCount: count)
-    }
 
     private func apiSource(_ source: LocalCaptureSource) -> CaptureSource {
         switch source {

@@ -6,6 +6,8 @@ import { WorkerError, WorkerUnavailableError } from "./errors.js";
 
 const MAX_TRUSTED_SOURCE_TOKEN_LENGTH = 16_384;
 const CLOCK_TOLERANCE_SECONDS = 5;
+/** Vercel issues runtime OIDC tokens that expire after 12 hours; anything longer is not a Vercel token. */
+const MAX_TOKEN_LIFETIME_SECONDS = 12 * 3_600;
 const JWT_PATTERN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u;
 
 declare const verifiedWorkerInvocationBrand: unique symbol;
@@ -45,7 +47,7 @@ export function authorizeLocalWorkerInvocation(
   input: Readonly<{
     authorizationHeader: string | null;
     requestId: string;
-    runtime: "local" | "preview";
+    runtime: "local";
     secret: string;
   }>
 ): VerifiedWorkerInvocation {
@@ -107,7 +109,7 @@ function exactVerifiedClaims(
     nbf <= nowEpochSeconds + CLOCK_TOLERANCE_SECONDS &&
     exp > iat &&
     nbf <= exp &&
-    exp - iat <= 3_600 + CLOCK_TOLERANCE_SECONDS;
+    exp - iat <= MAX_TOKEN_LIFETIME_SECONDS + CLOCK_TOLERANCE_SECONDS;
 
   return (
     protectedHeader.alg === "RS256" &&
@@ -171,7 +173,10 @@ export function createVercelTrustedSourcesInvocationAuth(
       if (!exactVerifiedClaims(result, options.trustedSource, Math.floor(Date.now() / 1_000))) {
         throw unauthorizedInvocation();
       }
-      return issueVerifiedInvocation({ requestId: proof.requestId, runtime: "production" });
+      return issueVerifiedInvocation({
+        requestId: proof.requestId,
+        runtime: options.trustedSource.environment
+      });
     }
   });
 }

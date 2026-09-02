@@ -4,6 +4,7 @@ import type {
   ProviderKeyPutRequest,
   ProviderKeyPutResponse,
   ProviderKeyResponse,
+  PublicByokProvider,
   UserSettingsResponse,
   UserSettingsUpdateRequest,
   UserSettingsUpdateResponse
@@ -20,7 +21,10 @@ export interface AiSettingsRepository {
     context: AiSettingsRepositoryContext,
     request: UserSettingsUpdateRequest
   ): Promise<UserSettingsUpdateResponse>;
-  getProviderKey(context: AiSettingsRepositoryContext): Promise<ProviderKeyResponse>;
+  getProviderKey(
+    context: AiSettingsRepositoryContext,
+    provider: PublicByokProvider
+  ): Promise<ProviderKeyResponse>;
   putProviderKey(
     context: AiSettingsRepositoryContext,
     request: ProviderKeyPutRequest

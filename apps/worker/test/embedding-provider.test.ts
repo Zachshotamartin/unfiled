@@ -1,6 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  LOCAL_HASH_EMBEDDING_DIMENSIONS,
+  LOCAL_HASH_EMBEDDING_MODEL_ID,
+  MAX_LOCAL_HASH_EMBEDDING_INPUT_BYTES
+} from "@unfiled/search";
 
-import { createOpenAiEmbeddingProvider, EmbeddingProviderError } from "../src/embedding-provider";
+import {
+  createLocalHashEmbeddingProvider,
+  createOpenAiEmbeddingProvider,
+  EmbeddingProviderError
+} from "../src/embedding-provider";
 
 const API_KEY = "sk-test-key-with-enough-random-looking-characters";
 
@@ -25,6 +34,54 @@ function success(overrides: Record<string, unknown> = {}): Response {
     ...overrides
   });
 }
+
+describe("provider-free local hash embedding boundary", () => {
+  it("uses only the pinned local profile", async () => {
+    const vector = await createLocalHashEmbeddingProvider().embed({
+      dimensions: LOCAL_HASH_EMBEDDING_DIMENSIONS,
+      modelId: LOCAL_HASH_EMBEDDING_MODEL_ID,
+      signal: new AbortController().signal,
+      text: "gym bench press five sets"
+    });
+
+    expect(vector).toHaveLength(LOCAL_HASH_EMBEDDING_DIMENSIONS);
+  });
+
+  it("rejects profile drift, cancellation, and oversized input", async () => {
+    const provider = createLocalHashEmbeddingProvider();
+    for (const value of [
+      {
+        dimensions: 1_536,
+        modelId: LOCAL_HASH_EMBEDDING_MODEL_ID,
+        signal: new AbortController().signal,
+        text: "private text"
+      },
+      {
+        dimensions: LOCAL_HASH_EMBEDDING_DIMENSIONS,
+        modelId: "text-embedding-3-small",
+        signal: new AbortController().signal,
+        text: "private text"
+      },
+      {
+        dimensions: LOCAL_HASH_EMBEDDING_DIMENSIONS,
+        modelId: LOCAL_HASH_EMBEDDING_MODEL_ID,
+        signal: AbortSignal.abort(),
+        text: "private text"
+      },
+      {
+        dimensions: LOCAL_HASH_EMBEDDING_DIMENSIONS,
+        modelId: LOCAL_HASH_EMBEDDING_MODEL_ID,
+        signal: new AbortController().signal,
+        text: "x".repeat(MAX_LOCAL_HASH_EMBEDDING_INPUT_BYTES + 1)
+      }
+    ]) {
+      await expect(provider.embed(value)).rejects.toMatchObject({
+        safeCode: "validation_failed",
+        retryable: false
+      });
+    }
+  });
+});
 
 describe("OpenAI embedding provider boundary", () => {
   it("sends one bounded, non-stored embedding request and parses finite float32", async () => {

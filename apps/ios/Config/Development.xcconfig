@@ -1,7 +1,6 @@
 #include "Base.xcconfig"
 
 UNFILED_APP_BUNDLE_IDENTIFIER = com.zachshotamartin.unfiled.dev
-UNFILED_APP_GROUP_IDENTIFIER = group.com.zachshotamartin.unfiled.dev
-UNFILED_URL_SCHEME = unfiled-dev
 UNFILED_DISPLAY_NAME = Unfiled Dev
 UNFILED_API_BASE_URL = http:/$()/127.0.0.1:3000/api/v1
+UNFILED_MANAGED_AI_FALLBACK_AVAILABLE = NO

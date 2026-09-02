@@ -1,5 +1,7 @@
 export type OrganizerRoute = "health" | "internal_drain" | "unknown";
 export type OrganizerOperationalEvent = Readonly<{
+  causeName?: string;
+  origin?: string;
   durationMs: number;
   errorClass?: "configuration" | "http" | "timeout" | "unknown" | "unavailable";
   event: "request.completed";
@@ -14,7 +16,9 @@ export type OrganizerOperationalEvent = Readonly<{
 }>;
 export type OrganizerLogger = Readonly<{ log(event: OrganizerOperationalEvent): void }>;
 const SAFE_FIELDS = [
+  "causeName",
   "durationMs",
+  "origin",
   "errorClass",
   "event",
   "level",

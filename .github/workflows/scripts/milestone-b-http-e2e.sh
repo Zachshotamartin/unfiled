@@ -156,7 +156,9 @@ if [[ ! "$e2e_run_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$ ]]; then
 fi
 e2e_e4_provider_key_canary="sk-e4-http-$e2e_run_id-VaultCanary7Qz9"
 e2e_e4_provider_recreate_canary="sk-e4-http-recreate-$e2e_run_id-ABA2Canary3Lm8"
-e2e_e4_validation_url="http://127.0.0.1:3101/v1/models/gpt-5.4-mini-2026-03-17"
+e2e_g_anthropic_key_canary="sk-ant-g-http-$e2e_run_id-ClaudeCanary5Kp2"
+e2e_e4_validation_url="http://127.0.0.1:3101/v1/models/gpt-5.6-terra"
+e2e_g_anthropic_validation_url="http://127.0.0.1:3101/v1/models?limit=1"
 e2e_standalone_dir="$e2e_tmp_dir/standalone"
 
 case "$e2e_supabase_url" in
@@ -415,18 +417,30 @@ node -e '
   fs.writeFileSync(path, source.replace(anchor, replacement));
 ' "$e2e_standalone_dir/apps/web/server.js"
 
+# A stale listener on the mock port would silently answer validations with
+# foreign expectations; refuse to start on top of one.
+if curl --silent --output /dev/null "http://127.0.0.1:3101/health"; then
+  echo "Port 3101 is already in use; stop the other listener before running the HTTP E2E." >&2
+  exit 1
+fi
+
 E2E_PROVIDER_KEY="$e2e_e4_provider_key_canary" \
-E2E_PROVIDER_RECREATE_KEY="$e2e_e4_provider_recreate_canary" node -e '
+E2E_PROVIDER_RECREATE_KEY="$e2e_e4_provider_recreate_canary" \
+E2E_ANTHROPIC_KEY="$e2e_g_anthropic_key_canary" node -e '
   const http = require("node:http");
   const expectedKeys = new Set([
     process.env.E2E_PROVIDER_KEY,
     process.env.E2E_PROVIDER_RECREATE_KEY
   ]);
+  const anthropicKey = process.env.E2E_ANTHROPIC_KEY;
   if (
     expectedKeys.size !== 2 ||
-    [...expectedKeys].some((value) => typeof value !== "string" || value.length < 20)
+    [...expectedKeys].some((value) => typeof value !== "string" || value.length < 20) ||
+    typeof anthropicKey !== "string" || anthropicKey.length < 20 || expectedKeys.has(anthropicKey)
   ) process.exit(1);
   let validations = 0;
+  let anthropicValidations = 0;
+  let crossProviderLeaks = 0;
   const server = http.createServer((request, response) => {
     response.setHeader("cache-control", "no-store");
     response.setHeader("pragma", "no-cache");
@@ -436,15 +450,35 @@ E2E_PROVIDER_RECREATE_KEY="$e2e_e4_provider_recreate_canary" node -e '
     }
     if (request.method === "GET" && request.url === "/metrics") {
       response.setHeader("content-type", "application/json; charset=utf-8");
-      response.writeHead(200).end(JSON.stringify({ validations }));
+      response.writeHead(200).end(JSON.stringify({ validations, anthropicValidations, crossProviderLeaks }));
+      return;
+    }
+    if (request.method === "GET" && request.url === "/v1/models?limit=1") {
+      anthropicValidations += 1;
+      const credential = request.headers["x-api-key"];
+      if (expectedKeys.has(credential)) crossProviderLeaks += 1;
+      const accepted =
+        credential === anthropicKey &&
+        request.headers["anthropic-version"] === "2023-06-01" &&
+        request.headers.authorization === undefined &&
+        request.headers.accept === "application/json" &&
+        request.headers["cache-control"] === "no-store" &&
+        request.headers.pragma === "no-cache" &&
+        request.headers.cookie === undefined &&
+        request.headers.referer === undefined;
+      response.setHeader("content-type", "application/json; charset=utf-8");
+      response.writeHead(accepted ? 200 : 401).end(
+        accepted ? JSON.stringify({ data: [{ id: "claude-sonnet-5", type: "model" }], has_more: false }) : JSON.stringify({ type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } })
+      );
       return;
     }
     if (
       request.method === "GET" &&
-      request.url === "/v1/models/gpt-5.4-mini-2026-03-17"
+      request.url === "/v1/models/gpt-5.6-terra"
     ) {
       validations += 1;
       const credential = request.headers.authorization?.replace(/^Bearer /u, "");
+      if (credential === anthropicKey || request.headers["x-api-key"] !== undefined) crossProviderLeaks += 1;
       const accepted =
         typeof credential === "string" &&
         expectedKeys.has(credential) &&
@@ -488,6 +522,7 @@ ACCOUNT_DELETION_REPLAY_RATE_LIMIT_PEPPER="ci-account-deletion-replay-pepper-000
 CI="true" \
 UNFILED_ALLOW_TEST_PROVIDER_VALIDATION_OVERRIDE="1" \
 UNFILED_TEST_OPENAI_VALIDATION_URL="$e2e_e4_validation_url" \
+UNFILED_TEST_ANTHROPIC_VALIDATION_URL="$e2e_g_anthropic_validation_url" \
 UNFILED_ALLOW_INSECURE_LOCAL_SUPABASE_E2E="1" \
 UNFILED_E1_HTTP_DIAGNOSTICS="1" \
 UNFILED_KEY_CUSTODIAN="local" \

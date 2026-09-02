@@ -1,7 +1,6 @@
 #include "Base.xcconfig"
 
 UNFILED_APP_BUNDLE_IDENTIFIER = com.zachshotamartin.unfiled
-UNFILED_APP_GROUP_IDENTIFIER = group.com.zachshotamartin.unfiled
-UNFILED_URL_SCHEME = unfiled
 UNFILED_DISPLAY_NAME = Unfiled
-UNFILED_API_BASE_URL = https:/$()/unfiled.app/api/v1
+UNFILED_API_BASE_URL = https:/$()/unfiled-web.vercel.app/api/v1
+UNFILED_MANAGED_AI_FALLBACK_AVAILABLE = NO

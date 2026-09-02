@@ -7,6 +7,7 @@ import type {
 } from "@unfiled/key-management";
 
 import type { SearchConfig, SearchTrustedSource } from "../src/config.js";
+import type { SearchDecryptOnlyCustodian } from "../src/key-management.js";
 
 const keyMocks = vi.hoisted(() => ({
   createCustodian: vi.fn(),
@@ -16,7 +17,9 @@ const keyMocks = vi.hoisted(() => ({
 
 vi.mock("@unfiled/key-management", () => ({
   createAwsKmsEnvelopeCustodian: keyMocks.createCustodian,
-  createVercelOidcKmsTransport: keyMocks.createTransport
+  createVercelOidcKmsTransport: keyMocks.createTransport,
+  parseManagedKeyRecordV1: (value: unknown) => value,
+  parseManagedKeyRecordV2: (value: unknown) => value
 }));
 vi.mock("@vercel/oidc", () => ({ verifyVercelOidcToken: keyMocks.verifyOidc }));
 
@@ -131,7 +134,7 @@ describe("decrypt-only search key-management authority", () => {
       keyMocks.createTransport.mockResolvedValue(transport);
       keyMocks.createCustodian.mockReturnValue(raw.custodian);
       let retainedAuthority: Parameters<typeof custodianForSearchAuthority>[0] | undefined;
-      let retainedCustodian: DecryptOnlyIntermediateKeyCustodian | undefined;
+      let retainedCustodian: SearchDecryptOnlyCustodian | undefined;
 
       const result = await createSearchKeyManagementAdapter().withAiAssistedSearchAuthority(
         boundary(runtime),
@@ -144,13 +147,12 @@ describe("decrypt-only search key-management authority", () => {
         new AbortController().signal,
         async (authority) => {
           retainedAuthority = authority;
-          retainedCustodian = custodianForSearchAuthority(authority);
-          expect(Object.keys(retainedCustodian)).toEqual(["withUnwrappedIntermediateKey"]);
-          expect("withGeneratedIntermediateKey" in retainedCustodian).toBe(false);
-          expect("rewrapIntermediateKey" in retainedCustodian).toBe(false);
-          return await retainedCustodian.withUnwrappedIntermediateKey({}, () =>
-            Promise.resolve("opened")
-          );
+          const custodian = custodianForSearchAuthority(authority);
+          retainedCustodian = custodian;
+          expect(Object.keys(custodian)).toEqual(["withUnwrappedIntermediateKey"]);
+          expect("withGeneratedIntermediateKey" in custodian).toBe(false);
+          expect("rewrapIntermediateKey" in custodian).toBe(false);
+          return await custodian.withUnwrappedIntermediateKey({}, () => Promise.resolve("opened"));
         }
       );
 

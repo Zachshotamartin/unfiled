@@ -98,7 +98,7 @@ describe("isolated encrypted user-search client", () => {
       credentials: "omit",
       headers: {
         "content-type": "application/json",
-        "x-vercel-trusted-oidc-idp-token": TOKEN
+        "x-unfiled-trusted-oidc-idp-token": TOKEN
       },
       method: "POST",
       redirect: "error",
@@ -106,7 +106,7 @@ describe("isolated encrypted user-search client", () => {
     });
     expect(Object.keys(init.headers as Record<string, string>).sort()).toEqual([
       "content-type",
-      "x-vercel-trusted-oidc-idp-token"
+      "x-unfiled-trusted-oidc-idp-token"
     ]);
     expect(init.body as string).not.toContain("ownerId");
     expect(init.body as string).not.toContain("Authorization");

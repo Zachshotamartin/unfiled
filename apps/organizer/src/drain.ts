@@ -16,11 +16,19 @@ import type { OrganizationPlan } from "@unfiled/contracts";
 import { createHash } from "node:crypto";
 
 import type { OrganizerKeyAuthority } from "./key-management.js";
+import type {
+  OrganizerModelId,
+  OrganizerModelSelection,
+  OrganizerProvider
+} from "./model-registry.js";
 import {
   createOrganizerProviderCredentialAccess,
+  sameOrganizerProviderRouteBinding,
   type LeaseBoundOrganizerProviderRoute,
+  type OrganizerAppDefaultApiKeys,
   type OrganizerExpansionStyle,
   type OrganizerProviderCredentialAccess,
+  type OrganizerProviderRouteBinding,
   type OrganizerProviderSource,
   type OrganizerRoutingEffort
 } from "./provider-credential.js";
@@ -57,6 +65,7 @@ export type EncryptedProjection = Readonly<{
 }>;
 export type ClaimedOrganizerJob = Readonly<{
   accountCaptureOrdinal: number;
+  adapterRegistryVersion: OrganizerProviderRouteBinding["adapterRegistryVersion"];
   attempt: number;
   captureId: `cap_${string}`;
   clientTimezone: string;
@@ -64,7 +73,10 @@ export type ClaimedOrganizerJob = Readonly<{
   jobId: string;
   leaseExpiresAt: string;
   leaseToken: string;
-  modelId: string;
+  modelId: OrganizerModelId;
+  modelSelection: OrganizerModelSelection;
+  selectedProvider: OrganizerProvider;
+  settingsRevision: number;
   occurredAt: string;
   ownerId: string;
   promptVersion: string;
@@ -648,7 +660,8 @@ function assertCommandBinding(
 
 export function createOrganizerDrain(
   options: Readonly<{
-    appDefaultProviderApiKey?: string;
+    /** Present in managed runtimes (possibly empty); absent disables provider credential access. */
+    appDefaultProviderApiKeys?: OrganizerAppDefaultApiKeys;
     candidateLimit?: number;
     claimLimit: number;
     concurrency: number;
@@ -667,21 +680,29 @@ export function createOrganizerDrain(
     authority: OrganizerKeyAuthority,
     signal: AbortSignal
   ): Promise<"completed" | "failed" | "retry"> {
+    const jobBinding: OrganizerProviderRouteBinding = Object.freeze({
+      adapterRegistryVersion: job.adapterRegistryVersion,
+      expansionStyle: job.expansionStyle,
+      modelId: job.modelId,
+      modelSelection: job.modelSelection,
+      provider: job.selectedProvider,
+      routingEffort: job.routingEffort,
+      settingsRevision: job.settingsRevision
+    });
+    const appDefaultApiKeys = options.appDefaultProviderApiKeys;
     const providerCredential =
-      options.appDefaultProviderApiKey === undefined
+      appDefaultApiKeys === undefined
         ? undefined
         : createOrganizerProviderCredentialAccess({
-            appDefaultApiKey: options.appDefaultProviderApiKey,
+            appDefaultApiKeys,
             async resolve() {
               const route = await options.repository.providerRoute({
                 jobId: job.jobId,
                 leaseToken: job.leaseToken,
                 signal
               });
-              if (
-                route.routingEffort !== job.routingEffort ||
-                route.expansionStyle !== job.expansionStyle
-              )
+              // The live route must match the immutable claim snapshot exactly.
+              if (!sameOrganizerProviderRouteBinding(route, jobBinding))
                 throw new OrganizerUnavailableError();
               return route;
             }

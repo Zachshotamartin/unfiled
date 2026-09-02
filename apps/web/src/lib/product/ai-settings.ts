@@ -1,19 +1,23 @@
 import type {
+  AiModelSelection,
   ExpansionStyle,
   OrganizationMode,
   ProviderKeyMetadata,
   ProviderKeyPutRequest,
+  PublicByokProvider,
   RoutingEffort,
   UserSettingsDto,
   UserSettingsResponse,
   UserSettingsUpdateRequest
 } from "@unfiled/contracts";
+import { AI_MODEL_CATALOG, isAiModelSelectionForProvider } from "@unfiled/contracts";
 
 export type AiSettingsDraft = Readonly<{
   settingsRevision: number;
   organizationMode: OrganizationMode;
   providerMode: "app_default" | "byok";
-  byokProvider: "openai" | null;
+  byokProvider: PublicByokProvider | null;
+  modelSelection: AiModelSelection;
   byokFallbackToApp: boolean;
   routingEffort: RoutingEffort;
   expansionStyle: ExpansionStyle;
@@ -22,6 +26,7 @@ export type AiSettingsDraft = Readonly<{
 }>;
 
 export type ProviderKeyRetryAttempt = Readonly<{
+  provider: PublicByokProvider;
   expectedCredentialRevision: number | null;
   idempotencyKey: string;
 }>;
@@ -32,6 +37,13 @@ export type AiSettingsRetryReconciliation = Readonly<{
   dirty: false;
   draft: AiSettingsDraft;
 }>;
+
+export type AiSettingsRequestOptions = Readonly<{
+  /** True only when this deployment provides an app-funded provider credential. */
+  managedFallbackAvailable: boolean;
+}>;
+
+export type ProviderKeyDisplayState = "active" | "invalid" | "missing" | "revoked";
 
 export const ORGANIZATION_MODE_OPTIONS = Object.freeze([
   {
@@ -58,12 +70,12 @@ export const ORGANIZATION_MODE_OPTIONS = Object.freeze([
 export const ROUTING_EFFORT_OPTIONS = Object.freeze([
   {
     value: "economical",
-    label: "Economical",
+    label: "Efficient",
     detail: "Lowest BYOK cost. Best for short, familiar jots."
   },
   {
     value: "standard",
-    label: "Standard",
+    label: "Balanced",
     detail: "A practical balance of reasoning time, latency, and BYOK cost."
   },
   {
@@ -73,6 +85,23 @@ export const ROUTING_EFFORT_OPTIONS = Object.freeze([
   }
 ] as const satisfies readonly Readonly<{
   value: RoutingEffort;
+  label: string;
+  detail: string;
+}>[]);
+
+export const AI_PROVIDER_OPTIONS = Object.freeze([
+  {
+    value: "openai",
+    label: "OpenAI",
+    detail: "Use your own OpenAI API key and choose a GPT-5.6 model."
+  },
+  {
+    value: "anthropic",
+    label: "Claude",
+    detail: "Use your own Anthropic API key and choose a Claude 5 model."
+  }
+] as const satisfies readonly Readonly<{
+  value: PublicByokProvider;
   label: string;
   detail: string;
 }>[]);
@@ -95,12 +124,60 @@ export const EXPANSION_STYLE_OPTIONS = Object.freeze([
   detail: string;
 }>[]);
 
+export function aiProviderLabel(provider: PublicByokProvider): string {
+  return provider === "openai" ? "OpenAI" : "Claude";
+}
+
+function catalogEntry(provider: PublicByokProvider) {
+  const entry = AI_MODEL_CATALOG.providers.find((candidate) => candidate.provider === provider);
+  if (entry === undefined) throw new TypeError("Unsupported AI provider");
+  return entry;
+}
+
+export function aiModelOptionsFor(provider: PublicByokProvider) {
+  return catalogEntry(provider).models;
+}
+
+/** The exact model Automatic resolves to for a provider at the given effort. */
+export function autoModelFor(
+  provider: PublicByokProvider,
+  effort: RoutingEffort
+): AiModelSelection {
+  return catalogEntry(provider).autoByEffort[effort];
+}
+
+export function aiModelLabel(provider: PublicByokProvider, model: AiModelSelection): string {
+  const option = catalogEntry(provider).models.find((candidate) => candidate.value === model);
+  return option?.label ?? model;
+}
+
+/**
+ * Whether an exact model costs more than the model Automatic would choose at this effort.
+ * Catalog order within a provider runs from the most economical to the most capable model.
+ */
+export function isHigherCostThanAuto(
+  provider: PublicByokProvider,
+  effort: RoutingEffort,
+  model: AiModelSelection
+): boolean {
+  if (model === "auto") return false;
+  const order = catalogEntry(provider).models.map((candidate) => candidate.value);
+  return order.indexOf(model) > order.indexOf(autoModelFor(provider, effort));
+}
+
+export function providerKeyDisplayState(
+  providerKey: ProviderKeyMetadata | null
+): ProviderKeyDisplayState {
+  return providerKey === null ? "missing" : providerKey.status;
+}
+
 export function aiSettingsDraftFor(settings: UserSettingsDto): AiSettingsDraft {
   return Object.freeze({
     settingsRevision: settings.settingsRevision,
     organizationMode: settings.organizationMode,
     providerMode: settings.providerMode,
     byokProvider: settings.byokProvider,
+    modelSelection: settings.modelSelection,
     byokFallbackToApp: settings.byokFallbackToApp,
     routingEffort: settings.routingEffort,
     expansionStyle: settings.expansionStyle,
@@ -109,18 +186,39 @@ export function aiSettingsDraftFor(settings: UserSettingsDto): AiSettingsDraft {
   });
 }
 
+/**
+ * Switches the BYOK provider in a draft. An exact model that the new provider cannot run resets
+ * to Automatic; a compatible choice (including Automatic) is preserved. Keys are never touched.
+ */
+export function aiSettingsDraftForProvider(
+  draft: AiSettingsDraft,
+  provider: PublicByokProvider
+): AiSettingsDraft {
+  return Object.freeze({
+    ...draft,
+    providerMode: "byok",
+    byokProvider: provider,
+    modelSelection: isAiModelSelectionForProvider(provider, draft.modelSelection)
+      ? draft.modelSelection
+      : "auto"
+  });
+}
+
 export function aiSettingsRequestFor(
   draft: AiSettingsDraft,
-  idempotencyKey: string
+  idempotencyKey: string,
+  options: AiSettingsRequestOptions = { managedFallbackAvailable: false }
 ): UserSettingsUpdateRequest {
   const appDefault = draft.providerMode === "app_default";
+  const fallbackOffered = !appDefault && options.managedFallbackAvailable;
   return {
     expectedSettingsRevision: draft.settingsRevision,
     idempotencyKey,
     organizationMode: draft.organizationMode,
     providerMode: draft.providerMode,
-    byokProvider: appDefault ? null : "openai",
-    byokFallbackToApp: appDefault ? false : draft.byokFallbackToApp,
+    byokProvider: appDefault ? null : draft.byokProvider,
+    modelSelection: appDefault ? "auto" : draft.modelSelection,
+    byokFallbackToApp: fallbackOffered ? draft.byokFallbackToApp : false,
     routingEffort: draft.routingEffort,
     expansionStyle: draft.expansionStyle,
     timezone: draft.timezone,
@@ -133,6 +231,17 @@ export function isSettingsDraftLocked(
   ambiguousAttempt: UserSettingsUpdateRequest | null
 ): boolean {
   return pending || ambiguousAttempt !== null;
+}
+
+export function isSettingsDraftSubmittable(draft: AiSettingsDraft): boolean {
+  if (draft.timezone.trim().length === 0 || draft.locale.trim().length < 2) return false;
+  if (draft.providerMode === "byok") {
+    return (
+      draft.byokProvider !== null &&
+      isAiModelSelectionForProvider(draft.byokProvider, draft.modelSelection)
+    );
+  }
+  return draft.modelSelection === "auto";
 }
 
 export async function reconcileAiSettingsRetry(
@@ -151,15 +260,22 @@ export async function reconcileAiSettingsRetry(
   });
 }
 
-export function isProviderKeyUsable(providerKey: ProviderKeyMetadata | null): boolean {
-  return providerKey?.provider === "openai" && providerKey.status === "active";
+export function isProviderKeyUsable(
+  providerKey: ProviderKeyMetadata | null,
+  provider?: PublicByokProvider
+): boolean {
+  return (
+    providerKey?.status === "active" &&
+    (provider === undefined || providerKey.provider === provider)
+  );
 }
 
 export function providerKeyRetryAttempt(
+  provider: PublicByokProvider,
   expectedCredentialRevision: number | null,
   idempotencyKey: string
 ): ProviderKeyRetryAttempt {
-  return Object.freeze({ expectedCredentialRevision, idempotencyKey });
+  return Object.freeze({ provider, expectedCredentialRevision, idempotencyKey });
 }
 
 export function providerKeyPutRequestFor(
@@ -168,7 +284,7 @@ export function providerKeyPutRequestFor(
 ): ProviderKeyPutRequest {
   return {
     idempotencyKey: attempt.idempotencyKey,
-    provider: "openai",
+    provider: attempt.provider,
     expectedCredentialRevision: attempt.expectedCredentialRevision,
     apiKey
   };

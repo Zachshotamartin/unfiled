@@ -4,6 +4,7 @@
 - Date: 2026-08-30
 - Narrows: ADR-0001 decision 3; Supabase remains selected, but persisted plaintext `pgvector` and full-text note indexes are not part of the accepted storage design
 - Decision drivers: protect note content and derived search material from a database or backup disclosure; retain server-side organization, typed mutations, search, export, and recovery; prevent cross-tenant and private-note retrieval; ship an auditable step before Milestone D.
+- Amended 2026-09-02: decision 2 named AWS KMS as the required production custodian and decision 3 assumed a provider embedding. [ADR-0016](./ADR-0016-free-beta-vercel-sensitive-key-custody-and-local-hash-retrieval.md) selects the `vercel-sensitive-env-v1` root ring (four independent root families, per-workload subsets, project/environment binding) and `unfiled-local-hash-v1` retrieval for the free private beta, and defers AWS KMS as paid hardening. The envelope format, key classes, per-user intermediate keys, and retrieval gates below are unchanged.
 
 ## Context
 

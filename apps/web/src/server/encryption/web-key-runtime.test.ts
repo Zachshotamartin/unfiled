@@ -2,10 +2,13 @@ import {
   createAwsKmsEnvelopeCustodian,
   createLocalEnvironmentKeyResolver,
   createVercelOidcKmsTransport,
+  createVercelSensitiveEnvironmentEnvelopeCustodian,
+  createVercelSensitiveEnvironmentKmsTransport,
   type AwsKmsTransport,
   type InteractiveKeyCustodian,
   type KeyCustodyOperationOptions,
   type ManagedKeyRecordV1,
+  type ManagedKeyRecordV2,
   type OwnerBoundKeyResolver
 } from "@unfiled/key-management";
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
@@ -21,13 +24,21 @@ import {
 vi.mock("@unfiled/key-management", () => ({
   createAwsKmsEnvelopeCustodian: vi.fn(),
   createLocalEnvironmentKeyResolver: vi.fn(),
-  createVercelOidcKmsTransport: vi.fn()
+  createVercelOidcKmsTransport: vi.fn(),
+  createVercelSensitiveEnvironmentEnvelopeCustodian: vi.fn(),
+  createVercelSensitiveEnvironmentKmsTransport: vi.fn(),
+  parseVercelSensitiveEnvironmentRetiredRootKeySet: vi.fn((value: unknown): unknown => value),
+  parseVercelSensitiveEnvironmentRootKeySet: vi.fn((value: unknown): unknown => value)
 }));
 
 const ACCOUNT_ID = "123456789012";
 const REGION = "us-west-2";
 const ROLE_ARN = `arn:aws:iam::${ACCOUNT_ID}:role/unfiled-production-web`;
+const PREVIEW_ROLE_ARN = `arn:aws:iam::${ACCOUNT_ID}:role/unfiled-preview-web`;
 const CONFIGURATION_CANARY = "root-configuration-canary";
+const VERCEL_PROJECT_ID = "prj_UnfiledWeb123456";
+const VERCEL_SENSITIVE_MODE = "vercel-sensitive-env-v1";
+const VERCEL_SENSITIVE_PROVIDER = "vercel_sensitive_environment_v1";
 
 const PAIRS = [
   ["ai_assisted", "object_wrap"],
@@ -51,11 +62,14 @@ interface TerraformRegistryEntry {
 type TerraformRegistry = Record<string, TerraformRegistryEntry>;
 
 const MANAGED_KEY_RECORD = Object.freeze({}) as ManagedKeyRecordV1;
+const MANAGED_KEY_RECORD_V2 = Object.freeze({}) as ManagedKeyRecordV2;
 const LOCAL_RESOLVER = Object.freeze({}) as OwnerBoundKeyResolver;
 
 const createAwsCustodianMock = vi.mocked(createAwsKmsEnvelopeCustodian);
 const createLocalResolverMock = vi.mocked(createLocalEnvironmentKeyResolver);
 const createTransportMock = vi.mocked(createVercelOidcKmsTransport);
+const createSensitiveTransportMock = vi.mocked(createVercelSensitiveEnvironmentKmsTransport);
+const createSensitiveCustodianMock = vi.mocked(createVercelSensitiveEnvironmentEnvelopeCustodian);
 
 let destroyTransport: Mock<() => void>;
 let transport: AwsKmsTransport;
@@ -134,6 +148,55 @@ function productionEnvironment(
   };
 }
 
+function previewEnvironment(
+  registry: TerraformRegistry = activeRegistry(11)
+): WebKeyRuntimeEnvironment {
+  return {
+    ...productionEnvironment(registry),
+    UNFILED_AWS_ROLE_ARN: PREVIEW_ROLE_ARN,
+    VERCEL_ENV: "preview"
+  };
+}
+
+function sensitiveRootId(pairIndex: number, generation: number): string {
+  const suffix = String(pairIndex * 1_000 + generation).padStart(12, "0");
+  return `urn:unfiled:key-root:vercel-sensitive-env-v1:production:00000000-0000-4000-8000-${suffix}`;
+}
+
+function sensitiveRegistry(generation = 1): Readonly<Record<string, unknown>> {
+  return {
+    version: 2,
+    custodyProvider: VERCEL_SENSITIVE_PROVIDER,
+    projectId: VERCEL_PROJECT_ID,
+    deploymentEnvironment: "production",
+    roots: Object.fromEntries(
+      PAIRS.map(([keyClass, purpose], pairIndex) => [
+        registryId(keyClass, purpose, generation),
+        {
+          generation,
+          keyClass,
+          purpose,
+          rootKeyId: sensitiveRootId(pairIndex, generation),
+          status: "active"
+        }
+      ])
+    )
+  };
+}
+
+function sensitiveEnvironment(): WebKeyRuntimeEnvironment {
+  const metadata = sensitiveRegistry();
+  return {
+    NODE_ENV: "production",
+    UNFILED_KEY_CUSTODIAN: VERCEL_SENSITIVE_MODE,
+    UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1: CONFIGURATION_CANARY,
+    UNFILED_WEB_ROOT_KEY_REGISTRY_V2_JSON: JSON.stringify(metadata),
+    VERCEL: "1",
+    VERCEL_ENV: "production",
+    VERCEL_PROJECT_ID
+  };
+}
+
 function passthroughCustodian(): InteractiveKeyCustodian {
   return Object.freeze({
     async rewrapIntermediateKey(
@@ -163,6 +226,28 @@ function passthroughCustodian(): InteractiveKeyCustodian {
       void record;
       void options;
       return await use(new Uint8Array(32), MANAGED_KEY_RECORD);
+    }
+  });
+}
+
+function passthroughV2Custodian(): InteractiveKeyCustodian<ManagedKeyRecordV2> {
+  return Object.freeze({
+    async rewrapIntermediateKey(): Promise<ManagedKeyRecordV2> {
+      return await Promise.resolve(MANAGED_KEY_RECORD_V2);
+    },
+    async withGeneratedIntermediateKey<Result>(
+      _request: Parameters<
+        InteractiveKeyCustodian<ManagedKeyRecordV2>["withGeneratedIntermediateKey"]
+      >[0],
+      use: (keyBytes: Uint8Array, record: ManagedKeyRecordV2) => Promise<Result>
+    ): Promise<Result> {
+      return await use(new Uint8Array(32), MANAGED_KEY_RECORD_V2);
+    },
+    async withUnwrappedIntermediateKey<Result>(
+      _record: unknown,
+      use: (keyBytes: Uint8Array, record: ManagedKeyRecordV2) => Promise<Result>
+    ): Promise<Result> {
+      return await use(new Uint8Array(32), MANAGED_KEY_RECORD_V2);
     }
   });
 }
@@ -205,7 +290,9 @@ beforeEach(() => {
     reEncryptDataKey: vi.fn()
   });
   createTransportMock.mockResolvedValue(transport);
+  createSensitiveTransportMock.mockResolvedValue(transport);
   createAwsCustodianMock.mockReturnValue(passthroughCustodian());
+  createSensitiveCustodianMock.mockReturnValue(passthroughV2Custodian());
   createLocalResolverMock.mockResolvedValue(LOCAL_RESOLVER);
 });
 
@@ -259,6 +346,89 @@ describe("interactive web key runtime", () => {
     for (const arn of stagedArns) expect(JSON.stringify(options)).not.toContain(arn);
     expect(createLocalResolverMock).not.toHaveBeenCalled();
     expect(destroyTransport).toHaveBeenCalledOnce();
+  });
+
+  it("composes Preview with its separately configured managed role and roots", async () => {
+    const environment = previewEnvironment();
+    const runtime = await createAwsRuntime(environment);
+
+    await expect(
+      runtime.withInteractiveCustodian(new AbortController().signal, () =>
+        Promise.resolve("preview-result")
+      )
+    ).resolves.toBe("preview-result");
+
+    expect(createTransportMock).toHaveBeenCalledWith({
+      environment,
+      region: REGION,
+      roleArn: PREVIEW_ROLE_ARN,
+      workload: "interactive_api"
+    });
+    expect(createLocalResolverMock).not.toHaveBeenCalled();
+  });
+
+  it("composes the explicit Production-only Vercel sensitive-environment V2 custodian", async () => {
+    const environment = sensitiveEnvironment();
+    const crypto = {} as Crypto;
+    const runtime = await createInteractiveWebKeyRuntime({ crypto, environment });
+    expect(runtime.kind).toBe("vercel-sensitive-env-v1");
+    if (runtime.kind !== "vercel-sensitive-env-v1") throw new Error("Expected V2 runtime");
+
+    await expect(
+      runtime.withInteractiveCustodian(new AbortController().signal, () =>
+        Promise.resolve("v2-result")
+      )
+    ).resolves.toBe("v2-result");
+
+    const expectedRootKeyIds = PAIRS.map((_pair, index) => sensitiveRootId(index, 1));
+    expect(createSensitiveTransportMock).toHaveBeenCalledWith({
+      crypto,
+      environment,
+      expectedRootKeyIds
+    });
+    expect(createSensitiveCustodianMock).toHaveBeenCalledWith({
+      activeRoots: {
+        ai_assisted: {
+          content_mac: sensitiveRootId(1, 1),
+          object_wrap: sensitiveRootId(0, 1)
+        },
+        private_manual: {
+          content_mac: sensitiveRootId(3, 1),
+          object_wrap: sensitiveRootId(2, 1)
+        }
+      },
+      deploymentEnvironment: "production",
+      retiredRoots: {
+        ai_assisted: { content_mac: [], object_wrap: [] },
+        private_manual: { content_mac: [], object_wrap: [] }
+      },
+      transport,
+      workload: "interactive_api"
+    });
+    expect(createTransportMock).not.toHaveBeenCalled();
+    expect(createAwsCustodianMock).not.toHaveBeenCalled();
+    expect(createLocalResolverMock).not.toHaveBeenCalled();
+    expect(destroyTransport).toHaveBeenCalledOnce();
+  });
+
+  it("never infers or previews the Vercel sensitive-environment custody path", async () => {
+    const exact = sensitiveEnvironment();
+    const invalid = [
+      { ...exact, VERCEL_ENV: "preview" },
+      { ...exact, UNFILED_KEY_CUSTODIAN: undefined },
+      { ...exact, UNFILED_KEY_CUSTODIAN: `${VERCEL_SENSITIVE_MODE} ` },
+      { ...exact, UNFILED_AWS_REGION: REGION },
+      { ...exact, UNFILED_AWS_ROLE_ARN: ROLE_ARN },
+      { ...exact, UNFILED_WEB_ROOT_KEY_REGISTRY_JSON: JSON.stringify(activeRegistry()) },
+      { ...exact, UNFILED_LOCAL_KEY_RING_V1: CONFIGURATION_CANARY }
+    ];
+
+    for (const environment of invalid) {
+      await expectConfigurationFailure(environment, CONFIGURATION_CANARY);
+    }
+    expect(createSensitiveTransportMock).not.toHaveBeenCalled();
+    expect(createSensitiveCustodianMock).not.toHaveBeenCalled();
+    expect(createTransportMock).not.toHaveBeenCalled();
   });
 
   it("revokes the callback-scoped facade and destroys its transport on normal completion", async () => {
@@ -392,10 +562,9 @@ describe("interactive web key runtime", () => {
     expect(createAwsCustodianMock).not.toHaveBeenCalled();
   });
 
-  it("rejects preview, Vercel-local, and partial production runtime identities", async () => {
+  it("rejects non-cloud Vercel and partial managed runtime identities", async () => {
     const exactProduction = productionEnvironment();
     const invalidEnvironments: WebKeyRuntimeEnvironment[] = [
-      { ...exactProduction, VERCEL_ENV: "preview" },
       { ...exactProduction, VERCEL_ENV: "development" },
       { ...exactProduction, VERCEL: "0" },
       { ...exactProduction, VERCEL: undefined },
@@ -437,6 +606,8 @@ describe("interactive web key runtime", () => {
       "UNFILED_OTHER_KEY_MATERIAL",
       "NEXT_PUBLIC_UNFILED_AWS_ROLE_ARN",
       "NEXT_PUBLIC_UNFILED_WEB_ROOT_KEY_REGISTRY_JSON",
+      "NEXT_PUBLIC_UNFILED_WEB_ROOT_KEY_REGISTRY_V2_JSON",
+      "NEXT_PUBLIC_UNFILED_VERCEL_SENSITIVE_ENV_ROOT_KEY_RING_V1",
       "NEXT_PUBLIC_UNFILED_ROOT_KEY_BYTES"
     ];
 

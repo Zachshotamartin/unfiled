@@ -67,6 +67,13 @@ function json(
   return new Response(JSON.stringify(value), { headers, status });
 }
 
+function attachReleaseIdentity(response: Response, config: SearchConfig): void {
+  if (config.releaseIdentity === null) return;
+  response.headers.set("x-unfiled-deployment", config.releaseIdentity.deployment);
+  response.headers.set("x-unfiled-commit", config.releaseIdentity.commit);
+  response.headers.set("x-unfiled-environment", config.releaseIdentity.environment);
+}
+
 function requestMethod(request: Request): string {
   const value = request.method.toUpperCase();
   return METHOD.test(value) ? value : "OTHER";
@@ -266,7 +273,9 @@ export function createSearchApp(dependencies: SearchAppDependencies): SearchApp 
         if (selectedMethod !== "GET" && selectedMethod !== "HEAD") {
           throw new SearchServiceError(405, "method_not_allowed");
         }
-        response = json({ service: "unfiled-search", status: "ok" }, 200, requestId);
+        response = json({ service: "unfiled-search", status: "ok" }, 200, requestId, {
+          allow: "GET, HEAD"
+        });
         if (selectedMethod === "HEAD") response = new Response(null, response);
       } else if (selectedRoute === "internal_query") {
         if (selectedMethod !== "POST") {
@@ -290,7 +299,7 @@ export function createSearchApp(dependencies: SearchAppDependencies): SearchApp 
                       authorizationHeader: request.headers.get("authorization"),
                       protectionBypassHeader: request.headers.get("x-vercel-protection-bypass"),
                       requestId,
-                      trustedSourceToken: request.headers.get("x-vercel-trusted-oidc-idp-token")
+                      trustedSourceToken: request.headers.get("x-unfiled-trusted-oidc-idp-token")
                     },
                     signal
                   );
@@ -332,6 +341,7 @@ export function createSearchApp(dependencies: SearchAppDependencies): SearchApp 
         response.headers.set("allow", selectedRoute === "health" ? "GET, HEAD" : "POST");
       }
     }
+    attachReleaseIdentity(response, config);
     const classified = reported === undefined ? undefined : classifySearchError(reported);
     logger.log({
       durationMs: Math.max(0, clock.now() - started),

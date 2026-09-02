@@ -6,8 +6,10 @@ const mocks = vi.hoisted(() => ({
   createCrypto: vi.fn(),
   createDrain: vi.fn(),
   createEmbedding: vi.fn(),
+  createLocalEmbedding: vi.fn(),
   createInvocationAuth: vi.fn(),
   createKeyManagement: vi.fn(),
+  keyParser: vi.fn(() => (value: unknown) => value),
   createPostgres: vi.fn(),
   createRepository: vi.fn(),
   createWorkerApp: vi.fn()
@@ -15,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../src/http", () => ({ createWorkerApp: mocks.createWorkerApp }));
 vi.mock("../src/embedding-provider", () => ({
+  createLocalHashEmbeddingProvider: mocks.createLocalEmbedding,
   createOpenAiEmbeddingProvider: mocks.createEmbedding
 }));
 vi.mock("../src/index-crypto", () => ({
@@ -26,7 +29,8 @@ vi.mock("../src/invocation-auth-adapter", () => ({
   createVercelTrustedSourcesInvocationAuth: mocks.createInvocationAuth
 }));
 vi.mock("../src/key-management-adapter", () => ({
-  createWorkerKeyManagementAdapter: mocks.createKeyManagement
+  createWorkerKeyManagementAdapter: mocks.createKeyManagement,
+  managedKeyRecordParserForWorkerBoundary: mocks.keyParser
 }));
 vi.mock("../src/postgres-index-executor", () => ({
   createPostgresIndexExecutor: mocks.createPostgres
@@ -44,6 +48,7 @@ function config(indexing: WorkerConfig["indexing"]): WorkerConfig {
     keyBoundary: { keyClass: "ai_assisted", kind: "local-synthetic" },
     maxRequestBytes: 1_024,
     port: 8_788,
+    releaseIdentity: null,
     requestTimeoutMs: 25_000,
     runtime: "local"
   };
@@ -58,9 +63,40 @@ describe("worker production composition", () => {
     mocks.createKeyManagement.mockReturnValue({ key: true });
     mocks.createInvocationAuth.mockReturnValue({ auth: true });
     mocks.createEmbedding.mockReturnValue({ embed: vi.fn() });
+    mocks.createLocalEmbedding.mockReturnValue({ embed: vi.fn() });
     mocks.createPostgres.mockReturnValue({ close: mocks.close, executor: { query: vi.fn() } });
     mocks.createRepository.mockReturnValue({ claim: vi.fn() });
     mocks.createDrain.mockReturnValue({ drain: vi.fn() });
+  });
+
+  it("wires the local hash embedder without an OpenAI credential", () => {
+    const indexing: Extract<WorkerConfig["indexing"], { kind: "enabled" }> = {
+      claimLimit: 1,
+      concurrency: 1,
+      database: {
+        caPem: "test-ca",
+        connectTimeoutMs: 5_000,
+        expectedHost: "db.example.supabase.co",
+        projectRef: "abcdefghijklmnopqrst",
+        statementTimeoutMs: 5_000,
+        url: "redacted-url"
+      },
+      embedding: {
+        dimensions: 512,
+        kind: "local-hash-v1",
+        maxInputBytes: 24_576,
+        modelId: "unfiled-local-hash-v1",
+        timeoutMs: 5_000
+      },
+      kind: "enabled",
+      leaseSeconds: 120,
+      recoveryLimit: 100
+    };
+
+    createWorkerComposition({ ...config(indexing), runtime: "production" });
+
+    expect(mocks.createLocalEmbedding).toHaveBeenCalledOnce();
+    expect(mocks.createEmbedding).not.toHaveBeenCalled();
   });
 
   it("keeps local health available while drain remains fail closed when indexing is disabled", async () => {
@@ -91,6 +127,7 @@ describe("worker production composition", () => {
       embedding: {
         apiKey: "redacted-key",
         dimensions: 1_536,
+        kind: "openai",
         maxInputBytes: 24_576,
         modelId: "text-embedding-3-small",
         timeoutMs: 15_000
@@ -142,6 +179,7 @@ describe("worker production composition", () => {
       embedding: {
         apiKey: "redacted-key",
         dimensions: 1_536,
+        kind: "openai",
         maxInputBytes: 24_576,
         modelId: "text-embedding-3-small",
         timeoutMs: 5_000

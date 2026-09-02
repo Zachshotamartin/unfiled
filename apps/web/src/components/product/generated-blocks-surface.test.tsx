@@ -16,7 +16,7 @@ const proposed: GeneratedBlockDto = Object.freeze({
   content: "Try grouping these entries by week.",
   state: "proposed",
   stateRevision: 1,
-  modelId: "gpt-5.4-mini-2026-03-17",
+  modelId: "gpt-5.6-terra",
   promptVersion: "routing-v1",
   createdAt: "2026-09-01T18:00:00.000Z",
   resolvedAt: null

@@ -1,15 +1,18 @@
 import {
   KEY_CLASSES,
   KEY_PURPOSES,
-  parseManagedKeyRecord,
   type IntermediateKeyCustodian,
   type KeyBinding,
   type KeyClass,
   type KeyPurpose,
-  type ManagedKeyRecordV1,
+  type ManagedKeyRecord,
   type ManagedKeyStore
 } from "@unfiled/key-management";
 
+import {
+  parseManagedKeyRecordForSchema,
+  type ManagedKeyRecordSchemaVersion
+} from "./managed-key-record";
 import type { ServiceRpcClient } from "./service-rpc-client";
 import { ServiceRpcError, ServiceRpcErrorCode } from "./service-rpc-client";
 
@@ -124,13 +127,14 @@ function parseMutation(
   });
 }
 
-function assertStoredRecord(
+function assertStoredRecord<Record extends ManagedKeyRecord>(
   value: unknown,
-  expected: KeyBinding & Readonly<{ keyId: string; keyVersion: number }>
-): ManagedKeyRecordV1 {
-  let record: ManagedKeyRecordV1;
+  expected: KeyBinding & Readonly<{ keyId: string; keyVersion: number }>,
+  schemaVersion: Record["schemaVersion"]
+): Record {
+  let record: ManagedKeyRecord;
   try {
-    record = parseManagedKeyRecord(value);
+    record = parseManagedKeyRecordForSchema(value, schemaVersion);
   } catch {
     return failClosed();
   }
@@ -143,7 +147,7 @@ function assertStoredRecord(
   ) {
     return failClosed();
   }
-  return record;
+  return record as Record;
 }
 
 function postgresByteaFromBase64Url(value: string): string {
@@ -170,18 +174,23 @@ async function statusFor(
   );
 }
 
-async function provePendingKey(
-  custodian: IntermediateKeyCustodian,
+async function provePendingKey<Record extends ManagedKeyRecord>(
+  custodian: IntermediateKeyCustodian<Record>,
   store: ManagedKeyStore,
   binding: KeyBinding,
   pending: KeyStatusReference,
+  schemaVersion: Record["schemaVersion"],
   signal?: AbortSignal
 ): Promise<void> {
-  const stored = assertStoredRecord(await store.findById({ ...binding, keyId: pending.keyId }), {
-    ...binding,
-    keyId: pending.keyId,
-    keyVersion: pending.keyVersion
-  });
+  const stored = assertStoredRecord<Record>(
+    await store.findById({ ...binding, keyId: pending.keyId }),
+    {
+      ...binding,
+      keyId: pending.keyId,
+      keyVersion: pending.keyVersion
+    },
+    schemaVersion
+  );
   if (stored.status !== "pending") failClosed();
   await custodian.withUnwrappedIntermediateKey(
     stored,
@@ -214,13 +223,14 @@ async function activate(
   );
 }
 
-async function createAndActivate(
+async function createAndActivate<Record extends ManagedKeyRecord>(
   client: ServiceRpcClient,
-  custodian: IntermediateKeyCustodian,
+  custodian: IntermediateKeyCustodian<Record>,
   binding: KeyBinding,
   nextVersion: number,
   keyId: string,
   createdAt: string,
+  schemaVersion: Record["schemaVersion"],
   signal?: AbortSignal
 ): Promise<void> {
   await custodian.withGeneratedIntermediateKey(
@@ -233,22 +243,37 @@ async function createAndActivate(
     },
     async (keyBytes, record): Promise<void> => {
       if (keyBytes.byteLength !== INTERMEDIATE_KEY_BYTES) failClosed();
-      const generated = assertStoredRecord(record, {
-        ...binding,
-        keyId,
-        keyVersion: nextVersion
-      });
+      const generated = assertStoredRecord<Record>(
+        record,
+        {
+          ...binding,
+          keyId,
+          keyVersion: nextVersion
+        },
+        schemaVersion
+      );
       if (generated.status !== "pending") failClosed();
       parseMutation(
-        await client.rpc("register_user_content_key", {
-          p_owner_id: binding.ownerId,
-          p_key_id: generated.keyId,
-          p_key_class: generated.keyClass,
-          p_key_purpose: generated.purpose,
-          p_key_version: generated.keyVersion,
-          p_kms_key_id: generated.rootKeyArn,
-          p_wrapped_intermediate_key: postgresByteaFromBase64Url(generated.encryptedKeyMaterial)
-        }),
+        await (generated.schemaVersion === 1
+          ? client.rpc("register_user_content_key", {
+              p_owner_id: binding.ownerId,
+              p_key_id: generated.keyId,
+              p_key_class: generated.keyClass,
+              p_key_purpose: generated.purpose,
+              p_key_version: generated.keyVersion,
+              p_kms_key_id: generated.rootKeyArn,
+              p_wrapped_intermediate_key: postgresByteaFromBase64Url(generated.encryptedKeyMaterial)
+            })
+          : client.rpc("register_user_content_key_v2", {
+              p_owner_id: binding.ownerId,
+              p_key_id: generated.keyId,
+              p_key_class: generated.keyClass,
+              p_key_purpose: generated.purpose,
+              p_key_version: generated.keyVersion,
+              p_root_key_id: generated.rootKeyId,
+              p_wrap_algorithm: generated.wrapAlgorithm,
+              p_wrapped_intermediate_key: postgresByteaFromBase64Url(generated.encryptedKeyMaterial)
+            })),
         { ...binding, keyId, keyVersion: nextVersion },
         "pending"
       );
@@ -258,13 +283,14 @@ async function createAndActivate(
   );
 }
 
-async function ensureBinding(
+async function ensureBinding<Record extends ManagedKeyRecord>(
   client: ServiceRpcClient,
-  custodian: IntermediateKeyCustodian,
+  custodian: IntermediateKeyCustodian<Record>,
   store: ManagedKeyStore,
   binding: KeyBinding,
   createKeyId: () => string,
   now: () => string,
+  schemaVersion: Record["schemaVersion"],
   signal?: AbortSignal
 ): Promise<void> {
   let lastFailure: unknown;
@@ -274,7 +300,7 @@ async function ensureBinding(
     if (status.active !== null) return;
     try {
       if (status.pending !== null) {
-        await provePendingKey(custodian, store, binding, status.pending, signal);
+        await provePendingKey(custodian, store, binding, status.pending, schemaVersion, signal);
         await activate(client, binding, status.pending);
       } else {
         const keyId = createKeyId();
@@ -286,6 +312,7 @@ async function ensureBinding(
           status.nextVersion,
           keyId,
           now(),
+          schemaVersion,
           signal
         );
       }
@@ -305,6 +332,7 @@ async function ensureBinding(
 export type ManagedKeyBootstrapOptions = Readonly<{
   createKeyId?: () => string;
   now?: () => string;
+  schemaVersion?: ManagedKeyRecordSchemaVersion;
   signal?: AbortSignal;
 }>;
 
@@ -314,9 +342,9 @@ export type ManagedKeyBootstrapOptions = Readonly<{
  * may be activated; concurrent registration races are reconciled by rereading
  * authoritative database state.
  */
-export async function ensureOwnerContentKeys(
+export async function ensureOwnerContentKeys<Record extends ManagedKeyRecord>(
   client: ServiceRpcClient,
-  custodian: IntermediateKeyCustodian,
+  custodian: IntermediateKeyCustodian<Record>,
   store: ManagedKeyStore,
   ownerId: string,
   options: ManagedKeyBootstrapOptions = {}
@@ -324,6 +352,7 @@ export async function ensureOwnerContentKeys(
   const createKeyId =
     options.createKeyId ?? (() => `key_${crypto.randomUUID().replaceAll("-", "")}`);
   const now = options.now ?? (() => new Date().toISOString());
+  const schemaVersion = (options.schemaVersion ?? 1) as Record["schemaVersion"];
   for (const keyClass of KEY_CLASSES) {
     for (const purpose of KEY_PURPOSES) {
       await ensureBinding(
@@ -333,6 +362,7 @@ export async function ensureOwnerContentKeys(
         { ownerId, keyClass, purpose },
         createKeyId,
         now,
+        schemaVersion,
         options.signal
       );
     }
@@ -342,5 +372,6 @@ export async function ensureOwnerContentKeys(
 export const managedKeyBootstrapRpcFunctions = Object.freeze([
   "activate_user_content_key",
   "get_user_content_key_status",
-  "register_user_content_key"
+  "register_user_content_key",
+  "register_user_content_key_v2"
 ] as const);

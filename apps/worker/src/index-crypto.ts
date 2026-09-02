@@ -8,12 +8,15 @@ import {
 } from "@unfiled/encrypted-aggregate";
 import {
   createManagedKeyResolver,
-  type ManagedKeyRecordV1,
+  type ManagedKeyRecord,
   type ManagedKeyStore
 } from "@unfiled/key-management";
 
 import type { AiAssistedKeyAuthority } from "./key-management-adapter.js";
-import { custodianForAiAssistedAuthority } from "./key-management-adapter.js";
+import {
+  custodianForAiAssistedAuthority,
+  managedKeyRecordParserForAiAssistedAuthority
+} from "./key-management-adapter.js";
 
 export type IndexCryptoJob = Readonly<{
   indexResourceId: string;
@@ -27,7 +30,7 @@ export type IndexCryptoJob = Readonly<{
     operationCount: 1;
     reservationId: string;
   }>;
-  sourceKey: ManagedKeyRecordV1;
+  sourceKey: ManagedKeyRecord;
   sourceNoteCipher: Readonly<{
     envelope: ContentEnvelopeV1;
     keyClass: "ai_assisted";
@@ -35,7 +38,7 @@ export type IndexCryptoJob = Readonly<{
     keyPurpose: "object_wrap";
     keyVersion: number;
   }>;
-  targetKey: ManagedKeyRecordV1;
+  targetKey: ManagedKeyRecord;
   targetRevision: number;
   userId: string;
 }>;
@@ -53,7 +56,7 @@ export type IndexCryptoFactory = Readonly<{
 }>;
 
 function sameSelector(
-  record: ManagedKeyRecordV1,
+  record: ManagedKeyRecord,
   selector: Readonly<{ ownerId: string; keyClass: string; purpose: string; keyId: string }>
 ): boolean {
   return (
@@ -65,7 +68,7 @@ function sameSelector(
 }
 
 function sameBinding(
-  record: ManagedKeyRecordV1,
+  record: ManagedKeyRecord,
   binding: Readonly<{ ownerId: string; keyClass: string; purpose: string }>
 ): boolean {
   return (
@@ -127,12 +130,14 @@ export function createManagedIndexCryptoFactory(
   authority: AiAssistedKeyAuthority
 ): IndexCryptoFactory {
   const custodian = custodianForAiAssistedAuthority(authority);
+  const parseRecord = managedKeyRecordParserForAiAssistedAuthority(authority);
   return Object.freeze({
     forJob(job): IndexCryptoSession {
       assertJobBindings(job);
       let reservationIssued = false;
       const resolver = createManagedKeyResolver({
         custodian,
+        parseRecord,
         store: keyStore(job),
         workload: "index_worker"
       });

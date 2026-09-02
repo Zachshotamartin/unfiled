@@ -3,8 +3,9 @@ import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  OPENAI_GPT_5_4_MINI_EVALUATION_PRICING,
+  OPENAI_ROUTING_EVALUATION_PRICING_METADATA,
   createOpenAIEvaluationInstrumentation,
+  openAiEvaluationPricingForModel,
   requireExplicitLiveOpenAIEvaluationKey,
   summarizeOpenAIEvaluationTelemetry,
   type OpenAIEvaluationAttempt
@@ -19,6 +20,8 @@ import {
 
 const LIVE_SAMPLES_PER_CASE = 3 as const;
 const EVALUATION_KEY_ENV = "UNFILED_ROUTING_EVAL_OPENAI_API_KEY";
+const EVALUATION_MODEL_ENV = "UNFILED_ROUTING_EVAL_OPENAI_MODEL";
+const DEFAULT_EVALUATION_MODEL = "gpt-5.6-terra";
 const REPORT_PATH_ENV = "UNFILED_ROUTING_EVAL_REPORT_PATH";
 
 type OrganizerPlanner = Readonly<{
@@ -26,14 +29,15 @@ type OrganizerPlanner = Readonly<{
 }>;
 
 type OrganizerPlannerFactory = (
-  options: Readonly<{ apiKey: string; fetchImplementation: typeof fetch }>
+  options: Readonly<{ apiKey: string; fetchImplementation: typeof fetch; modelId: string }>
 ) => OrganizerPlanner;
 
 type DeterministicFirstOrganizerPlannerFactory = (fallback: OrganizerPlanner) => OrganizerPlanner;
 
 type OrganizerRoutingProfile = Readonly<{
-  model: string;
+  models: readonly string[];
   promptVersion: string;
+  registryVersion: string;
   schemaVersion: number;
 }>;
 
@@ -69,16 +73,19 @@ function deterministicFirstPlannerFactory(
 function routingProfile(value: unknown): OrganizerRoutingProfile {
   if (
     !isRecord(value) ||
-    typeof value.model !== "string" ||
+    !Array.isArray(value.models) ||
+    !value.models.every((model) => typeof model === "string") ||
     typeof value.promptVersion !== "string" ||
+    typeof value.registryVersion !== "string" ||
     typeof value.schemaVersion !== "number" ||
     !Number.isSafeInteger(value.schemaVersion)
   ) {
     throw new Error("organizer_routing_profile_unavailable");
   }
   return Object.freeze({
-    model: value.model,
+    models: Object.freeze([...(value.models as readonly string[])]),
     promptVersion: value.promptVersion,
+    registryVersion: value.registryVersion,
     schemaVersion: value.schemaVersion
   });
 }
@@ -110,6 +117,18 @@ async function organizerPlannerModule(): Promise<
   });
 }
 
+/** The evaluated model must be one exact registry-v2 OpenAI model with pinned pricing. */
+function evaluationModel(profile: OrganizerRoutingProfile): string {
+  const configured = process.env[EVALUATION_MODEL_ENV];
+  const model =
+    configured === undefined || configured.length === 0 ? DEFAULT_EVALUATION_MODEL : configured;
+  if (!profile.models.includes(model)) throw new Error("live_evaluation_model_not_in_registry");
+  if (openAiEvaluationPricingForModel(model) === null) {
+    throw new Error("live_evaluation_model_has_no_pinned_pricing");
+  }
+  return model;
+}
+
 function outputPath(): string | null {
   const configured = process.env[REPORT_PATH_ENV];
   if (configured === undefined || configured.length === 0) return null;
@@ -135,9 +154,7 @@ try {
   const apiKey = requireExplicitLiveOpenAIEvaluationKey(process.env[EVALUATION_KEY_ENV]);
   const { createDeterministicFirstPlanner, createPlanner, profile } =
     await organizerPlannerModule();
-  if (profile.model !== OPENAI_GPT_5_4_MINI_EVALUATION_PRICING.model) {
-    throw new Error("live_evaluation_model_has_no_pinned_pricing");
-  }
+  const model = evaluationModel(profile);
   const telemetry = createOpenAIEvaluationInstrumentation({
     candidateAlgorithmVersion: PRODUCTION_PIPELINE_VERSIONS.candidateAlgorithm,
     candidateFixtureVersion: PRODUCTION_PIPELINE_VERSIONS.candidateFixtures,
@@ -146,11 +163,12 @@ try {
   });
   const providerPlanner = createPlanner({
     apiKey,
-    fetchImplementation: telemetry.fetchImplementation
+    fetchImplementation: telemetry.fetchImplementation,
+    modelId: model
   });
   const planner = createDeterministicFirstPlanner(providerPlanner);
   const adapter: ProductionPipelineModelAdapter = Object.freeze({
-    id: `organizer-deterministic-first+openai:${profile.model}`,
+    id: `organizer-deterministic-first+openai:${model}`,
     plan(input) {
       return planner.plan(
         projectProductionPipelineOrganizerPlannerInput(input, {
@@ -197,7 +215,10 @@ try {
     inputScope: "synthetic frozen fixtures only" as const,
     generatedAt: new Date().toISOString(),
     passed: failedSamples.length === 0,
-    pricing: OPENAI_GPT_5_4_MINI_EVALUATION_PRICING,
+    pricing: Object.freeze({
+      ...openAiEvaluationPricingForModel(model),
+      ...OPENAI_ROUTING_EVALUATION_PRICING_METADATA
+    }),
     provider: "OpenAI",
     samples: Object.freeze(samples),
     samplesPerCase: LIVE_SAMPLES_PER_CASE,
@@ -211,8 +232,9 @@ try {
     versions: Object.freeze({
       candidateAlgorithm: PRODUCTION_PIPELINE_VERSIONS.candidateAlgorithm,
       candidateFixtures: PRODUCTION_PIPELINE_VERSIONS.candidateFixtures,
-      model: profile.model,
+      model,
       prompt: profile.promptVersion,
+      registry: profile.registryVersion,
       schema: profile.schemaVersion
     }),
     worstOf: Object.freeze({
@@ -231,6 +253,7 @@ try {
       executed: false,
       passed: false,
       requiredKeyEnvironmentVariable: EVALUATION_KEY_ENV,
+      optionalModelEnvironmentVariable: EVALUATION_MODEL_ENV,
       samplesPerCase: LIVE_SAMPLES_PER_CASE
     })}\n`
   );

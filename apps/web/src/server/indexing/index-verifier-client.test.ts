@@ -40,7 +40,7 @@ function success(target: IndexVerificationTarget = TARGET) {
 
 describe("encrypted index verifier caller", () => {
   it("sends only the exact target and short-lived trusted-source token", async () => {
-    const request = vi.fn().mockResolvedValue(json(success()));
+    const request = vi.fn().mockImplementation(() => Promise.resolve(json(success())));
     const getOidcToken = vi.fn().mockResolvedValue(TOKEN);
     const client = createIndexVerifierClient({
       fetchImplementation: request,
@@ -57,14 +57,14 @@ describe("encrypted index verifier caller", () => {
       cache: "no-store",
       headers: {
         "content-type": "application/json",
-        "x-vercel-trusted-oidc-idp-token": TOKEN
+        "x-unfiled-trusted-oidc-idp-token": TOKEN
       },
       method: "POST",
       redirect: "error"
     });
     expect(Object.keys(init.headers as Record<string, string>).sort()).toEqual([
       "content-type",
-      "x-vercel-trusted-oidc-idp-token"
+      "x-unfiled-trusted-oidc-idp-token"
     ]);
   });
 
@@ -128,12 +128,13 @@ describe("encrypted index verifier caller", () => {
     ).toThrow(ConfigurationError);
   });
 
-  it("requires an independent exact verifier origin in Vercel production", async () => {
-    const request = vi.fn().mockResolvedValue(json(success()));
+  it("requires an independent exact verifier origin in a matching managed-cloud runtime", async () => {
+    const request = vi.fn().mockImplementation(() => Promise.resolve(json(success())));
     const client = createEnvironmentIndexVerifierClient(
       {
         UNFILED_INDEX_WORKER_ORIGIN: "https://unfiled-worker.vercel.app",
         UNFILED_RAG_VERIFIER_ORIGIN: ORIGIN,
+        UNFILED_VERIFIER_ENV: "production",
         VERCEL: "1",
         VERCEL_ENV: "production",
         VERCEL_PROJECT_ID: "prj_web12345"
@@ -141,11 +142,24 @@ describe("encrypted index verifier caller", () => {
       { fetchImplementation: request, getOidcToken: () => Promise.resolve(TOKEN) }
     );
     await expect(client.verify(TARGET)).resolves.toEqual(success());
+    const previewClient = createEnvironmentIndexVerifierClient(
+      {
+        UNFILED_INDEX_WORKER_ORIGIN: "https://unfiled-worker-preview.vercel.app",
+        UNFILED_RAG_VERIFIER_ORIGIN: ORIGIN,
+        UNFILED_VERIFIER_ENV: "preview",
+        VERCEL: "1",
+        VERCEL_ENV: "preview",
+        VERCEL_PROJECT_ID: "prj_web12345"
+      },
+      { fetchImplementation: request, getOidcToken: () => Promise.resolve(TOKEN) }
+    );
+    await expect(previewClient.verify(TARGET)).resolves.toEqual(success());
 
     for (const environment of [
       {},
       {
         UNFILED_RAG_VERIFIER_ORIGIN: ORIGIN,
+        UNFILED_VERIFIER_ENV: "production",
         VERCEL: "1",
         VERCEL_ENV: "preview",
         VERCEL_PROJECT_ID: "prj_web12345"
@@ -153,12 +167,14 @@ describe("encrypted index verifier caller", () => {
       {
         UNFILED_INDEX_WORKER_ORIGIN: ORIGIN,
         UNFILED_RAG_VERIFIER_ORIGIN: ORIGIN,
+        UNFILED_VERIFIER_ENV: "production",
         VERCEL: "1",
         VERCEL_ENV: "production",
         VERCEL_PROJECT_ID: "prj_web12345"
       },
       {
         UNFILED_RAG_VERIFIER_ORIGIN: ORIGIN,
+        UNFILED_VERIFIER_ENV: "production",
         VERCEL: "1",
         VERCEL_ENV: "production",
         VERCEL_PROJECT_ID: "invalid"

@@ -17,7 +17,7 @@
     "esbuild": "0.28.2"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && esbuild src/server.ts --bundle --platform=node --format=esm --target=node22.18 --sourcemap --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" --outfile=dist/server.js --external:pg --external:@vercel/oidc",
+    "build": "tsc -p tsconfig.build.json && esbuild src/server.ts --bundle --platform=node --format=esm --target=node22.18 --sourcemap --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" --outfile=dist/server.js --external:pg --external:@vercel/oidc && esbuild src/entrypoint.ts --bundle --platform=node --format=esm --target=node22.18 --sourcemap --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" --outfile=dist/entrypoint.js --external:pg --external:@vercel/oidc",
     "dev": "tsx src/server.ts",
     "lint": "eslint api scripts src test --max-warnings=0",
     "start": "node dist/server.js",

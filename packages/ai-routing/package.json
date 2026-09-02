@@ -26,6 +26,7 @@
     "eval": "tsx src/evaluation/run.ts",
     "eval:pipeline": "tsx src/evaluation/run-production-pipeline.ts",
     "eval:live": "tsx src/evaluation/run-live-openai.ts",
+    "eval:live:anthropic": "tsx src/evaluation/run-live-anthropic.ts",
     "lint": "eslint src test",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",

@@ -155,8 +155,10 @@ const AGGREGATE_HTTP_MAPPING = {
   }
 } as const satisfies Record<EncryptedAggregateErrorCodeValue, HttpMapping>;
 
-function httpError(mapping: HttpMapping): HttpError {
-  return new HttpError(mapping.status, mapping.code, mapping.message);
+function httpError(mapping: HttpMapping, cause: Error): HttpError {
+  const error = new HttpError(mapping.status, mapping.code, mapping.message);
+  error.cause = cause;
+  return error;
 }
 
 export function mappedServiceRpcHttpError(
@@ -170,9 +172,9 @@ export function mappedServiceRpcHttpError(
       `This ${subject} changed somewhere else. Review the latest version.`
     );
   }
-  return httpError(SERVICE_RPC_HTTP_MAPPING[error.code]);
+  return httpError(SERVICE_RPC_HTTP_MAPPING[error.code], error);
 }
 
 export function mappedEncryptedAggregateHttpError(error: EncryptedAggregateError): HttpError {
-  return httpError(AGGREGATE_HTTP_MAPPING[error.code]);
+  return httpError(AGGREGATE_HTTP_MAPPING[error.code], error);
 }

@@ -5,6 +5,8 @@ import { VerifierError, VerifierUnavailableError } from "./errors.js";
 
 const MAX_OIDC_TOKEN_LENGTH = 16_384;
 const CLOCK_TOLERANCE_SECONDS = 5;
+/** Vercel issues runtime OIDC tokens that expire after 12 hours; anything longer is not a Vercel token. */
+const MAX_TOKEN_LIFETIME_SECONDS = 12 * 3_600;
 const JWT_PATTERN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u;
 
 declare const verifiedVerifierInvocationBrand: unique symbol;
@@ -15,7 +17,7 @@ export type VerifiedVerifierInvocation = Readonly<{
 
 type InvocationMetadata = Readonly<{
   requestId: string;
-  runtime: "production";
+  runtime: "preview" | "production";
 }>;
 
 const verifiedInvocations = new WeakMap<object, InvocationMetadata>();
@@ -32,7 +34,7 @@ export function isVerifiedVerifierInvocation(
 ): value is VerifiedVerifierInvocation {
   if (value === null || typeof value !== "object") return false;
   const metadata = verifiedInvocations.get(value);
-  return metadata?.requestId === expected.requestId;
+  return metadata?.requestId === expected.requestId && metadata.runtime === expected.runtime;
 }
 
 export type ProductionInvocationProof = Readonly<{
@@ -87,7 +89,7 @@ function hasExactClaims(
     nbf <= nowEpochSeconds + CLOCK_TOLERANCE_SECONDS &&
     exp > iat &&
     nbf <= exp &&
-    exp - iat <= 3_600 + CLOCK_TOLERANCE_SECONDS;
+    exp - iat <= MAX_TOKEN_LIFETIME_SECONDS + CLOCK_TOLERANCE_SECONDS;
   return (
     protectedHeader.alg === "RS256" &&
     payload.iss === trustedSource.issuer &&
@@ -139,7 +141,10 @@ export function createProductionInvocationAuth(
       if (!hasExactClaims(result, trustedSource, Math.floor(Date.now() / 1_000))) {
         throw unauthorized();
       }
-      return issueVerifiedInvocation({ requestId: proof.requestId, runtime: "production" });
+      return issueVerifiedInvocation({
+        requestId: proof.requestId,
+        runtime: trustedSource.environment
+      });
     }
   });
 }
