@@ -187,4 +187,45 @@ describe("organizer invocation authentication", () => {
       unconfiguredProductionInvocationAuth.authorize(proof(), new AbortController().signal)
     ).rejects.toBeInstanceOf(OrganizerUnavailableError);
   });
+  it("logs a content-free rejection reason naming the failing claims only", async () => {
+    const sink = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const adapter = createVercelTrustedSourcesInvocationAuth({ trustedSource: trusted });
+      vi.mocked(verifyVercelOidcToken).mockResolvedValueOnce(
+        verified({ environment: "development", owner_id: "team_other" })
+      );
+      await expect(adapter.authorize(proof(), new AbortController().signal)).rejects.toMatchObject({
+        code: "unauthorized"
+      });
+      expect(sink).toHaveBeenCalledTimes(1);
+      const line = String(sink.mock.calls[0]?.[0]);
+      expect(JSON.parse(line)).toEqual({
+        event: "organizer.trusted_source_rejected",
+        service: "unfiled-organizer",
+        reason: "claims:owner_id,environment"
+      });
+      expect(line).not.toContain(token);
+      expect(line).not.toContain("team_other");
+      expect(line).not.toContain("development");
+      const failure = Object.assign(new Error("signature verification failed"), {
+        code: "ERR_JWS_SIGNATURE_VERIFICATION_FAILED"
+      });
+      vi.mocked(verifyVercelOidcToken).mockRejectedValueOnce(failure);
+      await expect(adapter.authorize(proof(), new AbortController().signal)).rejects.toMatchObject({
+        code: "unauthorized"
+      });
+      expect(JSON.parse(String(sink.mock.calls[1]?.[0]))).toMatchObject({
+        reason: "verification:ERR_JWS_SIGNATURE_VERIFICATION_FAILED"
+      });
+      await expect(
+        adapter.authorize(
+          proof({ authorizationHeader: "Bearer ambient" }),
+          new AbortController().signal
+        )
+      ).rejects.toMatchObject({ code: "unauthorized" });
+      expect(JSON.parse(String(sink.mock.calls[2]?.[0]))).toMatchObject({ reason: "proof_shape" });
+    } finally {
+      sink.mockRestore();
+    }
+  });
 });

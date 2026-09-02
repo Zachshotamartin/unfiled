@@ -60,15 +60,36 @@ export type ProductionInvocationAuthAdapter = Readonly<{
 }>;
 type TrustedPayload = VercelOidcPayload & Readonly<{ owner: string; project: string }>;
 
-function unauthorized(): OrganizerError {
+/**
+ * Server-side only. A rejected trusted-source call is otherwise invisible in
+ * platform logs; the reason names the failing verification step or claim
+ * names, never token material or claim values.
+ */
+function unauthorized(reason: string): OrganizerError {
+  console.error(
+    JSON.stringify({
+      event: "organizer.trusted_source_rejected",
+      service: "unfiled-organizer",
+      reason
+    })
+  );
   return new OrganizerError(401, "unauthorized", "Trusted source identity is invalid.");
 }
 
-function exactClaims(
+function verificationReason(error: unknown): string {
+  if (error instanceof Error) {
+    const code = "code" in error && typeof error.code === "string" ? error.code : error.name;
+    const claim = "claim" in error && typeof error.claim === "string" ? `:${error.claim}` : "";
+    return `verification:${code.replaceAll(/[^A-Za-z0-9_]/gu, "_")}${claim.replaceAll(/[^A-Za-z0-9_:]/gu, "_")}`;
+  }
+  return "verification:unknown";
+}
+
+function claimMismatches(
   result: Readonly<{ payload: TrustedPayload; protectedHeader: Readonly<{ alg?: string }> }>,
   trusted: VercelTrustedSource,
   now: number
-): boolean {
+): readonly string[] {
   const { payload, protectedHeader } = result;
   const { exp, iat, nbf } = payload;
   const lifetime =
@@ -84,18 +105,19 @@ function exactClaims(
     exp > iat &&
     nbf <= exp &&
     exp - iat <= MAX_TOKEN_LIFETIME_SECONDS + CLOCK_TOLERANCE_SECONDS;
-  return (
-    protectedHeader.alg === "RS256" &&
-    payload.iss === trusted.issuer &&
-    payload.aud === trusted.audience &&
-    payload.sub === trusted.expectedSubject &&
-    payload.owner === trusted.teamSlug &&
-    payload.owner_id === trusted.ownerId &&
-    payload.project === trusted.projectName &&
-    payload.project_id === trusted.projectId &&
-    payload.environment === trusted.environment &&
-    lifetime
-  );
+  const checks: readonly (readonly [string, boolean])[] = [
+    ["alg", protectedHeader.alg === "RS256"],
+    ["iss", payload.iss === trusted.issuer],
+    ["aud", payload.aud === trusted.audience],
+    ["sub", payload.sub === trusted.expectedSubject],
+    ["owner", payload.owner === trusted.teamSlug],
+    ["owner_id", payload.owner_id === trusted.ownerId],
+    ["project", payload.project === trusted.projectName],
+    ["project_id", payload.project_id === trusted.projectId],
+    ["environment", payload.environment === trusted.environment],
+    ["lifetime", lifetime]
+  ];
+  return checks.filter(([, ok]) => !ok).map(([name]) => name);
 }
 
 async function verifyWithAbort(
@@ -145,18 +167,22 @@ export function createVercelTrustedSourcesInvocationAuth(
         token !== token.trim() ||
         !JWT_PATTERN.test(token)
       ) {
-        throw unauthorized();
+        throw unauthorized("proof_shape");
       }
       let result: Awaited<ReturnType<typeof verifyWithAbort>>;
       try {
         result = await verifyWithAbort(token, options.trustedSource, signal);
       } catch (error: unknown) {
         if (error instanceof OrganizerUnavailableError) throw error;
-        throw unauthorized();
+        throw unauthorized(verificationReason(error));
       }
       if (signal.aborted) throw new OrganizerUnavailableError();
-      if (!exactClaims(result, options.trustedSource, Math.floor(Date.now() / 1_000)))
-        throw unauthorized();
+      const mismatches = claimMismatches(
+        result,
+        options.trustedSource,
+        Math.floor(Date.now() / 1_000)
+      );
+      if (mismatches.length > 0) throw unauthorized(`claims:${mismatches.join(",")}`);
       return issue({ requestId: proof.requestId, runtime: options.trustedSource.environment });
     }
   });
