@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { createVerifierComposition } from "./composition.js";
 import { loadVerifierConfig } from "./config.js";
+import { VerifierConfigurationError } from "./errors.js";
 import type { VerifierApp } from "./http.js";
 
 let application: VerifierApp | undefined;
@@ -29,11 +30,25 @@ function unavailableResponse(request: Request): Response {
   );
 }
 
+/** Server-side only: configuration failures name the offending variables, never their values. */
+function reportStartupFailure(error: unknown): void {
+  const detail =
+    error instanceof VerifierConfigurationError
+      ? error.message
+      : error instanceof Error
+        ? error.name
+        : "unknown";
+  console.error(
+    JSON.stringify({ event: "verifier.startup_failed", service: "unfiled-verifier", detail })
+  );
+}
+
 export function handleVerifierRequest(request: Request): Promise<Response> {
   try {
     application ??= createVerifierComposition(loadVerifierConfig()).app;
     return application(request);
-  } catch {
+  } catch (error) {
+    reportStartupFailure(error);
     return Promise.resolve(unavailableResponse(request));
   }
 }

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { createOrganizerComposition } from "./composition.js";
 import { loadOrganizerConfig } from "./config.js";
+import { OrganizerConfigurationError } from "./errors.js";
 import type { OrganizerApp } from "./http.js";
 
 let application: OrganizerApp | undefined;
@@ -22,11 +23,25 @@ function unavailable(): Response {
     }
   );
 }
+/** Server-side only: configuration failures name the offending variables, never their values. */
+function reportStartupFailure(error: unknown): void {
+  const detail =
+    error instanceof OrganizerConfigurationError
+      ? error.message
+      : error instanceof Error
+        ? error.name
+        : "unknown";
+  console.error(
+    JSON.stringify({ event: "organizer.startup_failed", service: "unfiled-organizer", detail })
+  );
+}
+
 export function handleOrganizerRequest(request: Request): Promise<Response> {
   try {
     application ??= createOrganizerComposition(loadOrganizerConfig()).app;
     return application(request);
-  } catch {
+  } catch (error) {
+    reportStartupFailure(error);
     return Promise.resolve(unavailable());
   }
 }
