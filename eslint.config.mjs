@@ -24,7 +24,13 @@ export default tseslint.config(
     }
   },
   {
-    files: ["**/*.config.js", "**/*.config.mjs", "**/*.config.ts", "scripts/**/*.ts"],
+    files: [
+      "**/*.config.js",
+      "**/*.config.mjs",
+      "**/*.config.ts",
+      "scripts/**/*.ts",
+      "apps/*/api/**/*.js"
+    ],
     extends: [tseslint.configs.disableTypeChecked]
   }
 );
