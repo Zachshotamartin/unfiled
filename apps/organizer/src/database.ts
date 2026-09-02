@@ -1332,11 +1332,30 @@ function appendPreparationResult(
     : Object.freeze({ outcome: "prepared" as const, preparation: parsed });
 }
 
+/** Content-free failure identity (driver error code or error class) carried as the cause for logs. */
+function failureIdentity(code: unknown, error: unknown): Error {
+  const identity =
+    typeof code === "string" && /^[A-Za-z0-9_]{1,40}$/u.test(code)
+      ? code
+      : error instanceof Error
+        ? error.name
+        : "unknown";
+  const cause = new Error("database failure");
+  cause.name = identity;
+  return cause;
+}
+
+function unavailableBecause(code: unknown, error: unknown): OrganizerUnavailableError {
+  const unavailable = new OrganizerUnavailableError();
+  unavailable.cause = failureIdentity(code, error);
+  return unavailable;
+}
+
 function normalizeDatabaseFailure(error: unknown): never {
   if (error instanceof OrganizerDatabaseContractError || error instanceof OrganizerUnavailableError)
     throw error;
   if (error instanceof DOMException && error.name === "AbortError")
-    throw new OrganizerUnavailableError();
+    throw unavailableBecause("AbortError", error);
   const code =
     typeof error === "object" && error !== null && "code" in error
       ? (error as Readonly<{ code?: unknown }>).code
@@ -1359,10 +1378,10 @@ function normalizeDatabaseFailure(error: unknown): never {
       code === "57014" ||
       /^57P0[123]$/u.test(code))
   )
-    throw new OrganizerUnavailableError();
+    throw unavailableBecause(code, error);
   if (code === "22023" || code === "42501" || code === "P0001")
     throw new OrganizerDatabaseContractError("contract_violation");
-  throw new OrganizerUnavailableError();
+  throw unavailableBecause(code, error);
 }
 
 async function execute(

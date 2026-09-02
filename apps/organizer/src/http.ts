@@ -337,9 +337,16 @@ export function createOrganizerApp(dependencies: OrganizerAppDependencies): Orga
     }
     attachReleaseIdentity(response, config);
     const classified = reported === undefined ? undefined : classifyOrganizerError(reported);
+    const causeName =
+      reported instanceof Error &&
+      reported.cause instanceof Error &&
+      /^[A-Za-z0-9_]{1,40}$/u.test(reported.cause.name)
+        ? reported.cause.name
+        : undefined;
     logger.log({
       durationMs: Math.max(0, clock.now() - started),
       ...(classified === undefined ? {} : { errorClass: classified.errorClass }),
+      ...(causeName === undefined ? {} : { causeName }),
       event: "request.completed",
       level: response.status >= 500 ? "error" : response.status >= 400 ? "warn" : "info",
       method: selectedMethod,
