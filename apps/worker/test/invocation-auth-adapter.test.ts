@@ -135,7 +135,7 @@ describe("Vercel Trusted Sources invocation authentication", () => {
     ["missing not-before", { nbf: undefined }],
     ["future issuance", { iat: NOW_SECONDS + 60 }],
     ["future not-before", { nbf: NOW_SECONDS + 60 }],
-    ["overlong production lifetime", { exp: NOW_SECONDS + 7_200 }]
+    ["overlong production lifetime", { exp: NOW_SECONDS + 12 * 3_600 + 120 }]
   ])("rejects a cryptographically returned token with the wrong %s", async (_label, claims) => {
     oidcMocks.verify.mockResolvedValue(tokenResult(claims));
     await expect(adapter().authorize(proof(), new AbortController().signal)).rejects.toMatchObject({

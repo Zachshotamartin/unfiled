@@ -6,6 +6,8 @@ import { OrganizerError, OrganizerUnavailableError } from "./errors.js";
 
 const MAX_TOKEN_LENGTH = 16_384;
 const CLOCK_TOLERANCE_SECONDS = 5;
+/** Vercel issues runtime OIDC tokens that expire after 12 hours; anything longer is not a Vercel token. */
+const MAX_TOKEN_LIFETIME_SECONDS = 12 * 3_600;
 const JWT_PATTERN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u;
 declare const verifiedOrganizerInvocationBrand: unique symbol;
 
@@ -81,7 +83,7 @@ function exactClaims(
     nbf <= now + CLOCK_TOLERANCE_SECONDS &&
     exp > iat &&
     nbf <= exp &&
-    exp - iat <= 3_600 + CLOCK_TOLERANCE_SECONDS;
+    exp - iat <= MAX_TOKEN_LIFETIME_SECONDS + CLOCK_TOLERANCE_SECONDS;
   return (
     protectedHeader.alg === "RS256" &&
     payload.iss === trusted.issuer &&

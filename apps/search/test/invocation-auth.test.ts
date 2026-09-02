@@ -117,7 +117,7 @@ describe("search invocation authentication", () => {
       { exp: now + 300, iat: now + 6, nbf: now },
       { exp: now + 300, iat: now, nbf: now + 6 },
       { exp: now + 100, iat: now, nbf: now + 101 },
-      { exp: now + 3_606, iat: now, nbf: now },
+      { exp: now + 12 * 3_600 + 120, iat: now, nbf: now },
       { exp: now + 300.5, iat: now, nbf: now },
       { exp: now + 300, iat: now, nbf: undefined }
     ];
