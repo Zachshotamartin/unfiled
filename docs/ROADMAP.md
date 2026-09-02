@@ -42,7 +42,9 @@ Today an owner with no saved provider key gets each capture saved and marked `fa
 prompt and a retry, and no note exists until a key is saved. The organizer produces no
 `kept_in_inbox` receipt today. Deliver: an `inbox` commit outcome in the organizer SQL that
 seals a `kept_in_inbox` receipt with reason `provider_key_missing` and sets the capture to
-`inbox`, client rendering for that state, and an e2e stage that runs a no-key owner end to end.
+`inbox`, client rendering for that state, and an e2e stage that runs a no-key owner end to end. Include
+unorganized captures in the account export: today the archive holds notes and a manifest, so a
+capture that has not become a note is visible in Capture activity but absent from the export.
 
 ### G2. Prove the hosted topology
 
