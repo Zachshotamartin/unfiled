@@ -261,6 +261,7 @@ describe("managed encrypted owner-interaction repository", () => {
       ...encryptedAggregateRuntimeRpcFunctions,
       ...encryptedOwnerInteractionRpcFunctions,
       "get_encrypted_capture_detail",
+      "get_encrypted_generated_blocks",
       "list_encrypted_library_objects",
       ...encryptedRoutingRuleRpcFunctions
     ]);

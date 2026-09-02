@@ -33,6 +33,10 @@ struct ReviewQueueGeneration: Equatable, Sendable {
     func accepts(_ requestGeneration: UInt64) -> Bool {
         requestGeneration == value
     }
+
+    func accepted<Value>(_ result: Value, for requestGeneration: UInt64) -> Value? {
+        accepts(requestGeneration) ? result : nil
+    }
 }
 
 struct PaginationIdentityValidator: Equatable, Sendable {
@@ -46,6 +50,81 @@ struct PaginationIdentityValidator: Equatable, Sendable {
         }
         seen.formUnion(pageIdentifiers)
     }
+}
+
+struct GeneratedBlockPaginationState: Equatable, Sendable {
+    static let maximumPageCount = 20
+    static let maximumItemCount = 1_000
+
+    private(set) var items: [GeneratedBlock] = []
+    private(set) var nextCursor: String?
+    private(set) var pageCount = 0
+    private var seenItemIDs = Set<String>()
+    private var seenCursors = Set<String>()
+
+    init(first page: GeneratedBlockListResponse) throws {
+        try append(page, after: nil)
+    }
+
+    var canLoadMore: Bool {
+        nextCursor != nil && pageCount < Self.maximumPageCount
+    }
+
+    var reachedDisplayLimit: Bool {
+        nextCursor != nil && pageCount >= Self.maximumPageCount
+    }
+
+    mutating func append(
+        _ page: GeneratedBlockListResponse,
+        after requestedCursor: String?
+    ) throws {
+        guard pageCount < Self.maximumPageCount,
+              (pageCount == 0 && requestedCursor == nil) ||
+              (pageCount > 0 && requestedCursor != nil && requestedCursor == nextCursor),
+              items.count <= Self.maximumItemCount - page.items.count else {
+            throw PaginationError.pageLimitExceeded
+        }
+
+        let pageIDs = page.items.map { $0.id.rawValue }
+        let pageIDSet = Set(pageIDs)
+        guard pageIDSet.count == pageIDs.count,
+              seenItemIDs.isDisjoint(with: pageIDSet),
+              requestedCursor.map({ cursor in pageIDs.allSatisfy { $0 > cursor } }) ?? true
+        else {
+            throw PaginationError.duplicateItemIdentifier
+        }
+
+        var updatedCursors = seenCursors
+        let nextCursor = try AppModel.validatedNextCursor(
+            page.pageInfo,
+            seen: &updatedCursors
+        )
+        var updatedIDs = seenItemIDs
+        updatedIDs.formUnion(pageIDSet)
+        items.append(contentsOf: page.items)
+        seenItemIDs = updatedIDs
+        seenCursors = updatedCursors
+        self.nextCursor = nextCursor
+        pageCount += 1
+    }
+
+    mutating func replace(_ block: GeneratedBlock) {
+        guard let index = items.firstIndex(where: { $0.id == block.id }),
+              items[index].noteId == block.noteId else { return }
+        items[index] = block
+    }
+
+    @discardableResult
+    mutating func remove(_ blockID: BlockID) -> Bool {
+        guard let index = items.firstIndex(where: { $0.id == blockID }) else { return false }
+        items.remove(at: index)
+        return true
+    }
+}
+
+struct GeneratedBlockLookup: Hashable, Sendable {
+    let blockID: BlockID
+    let noteID: NoteID
 }
 
 @MainActor
@@ -73,6 +152,12 @@ final class AppModel: ObservableObject {
         case remove(revision: Int, request: RoutingRuleDeleteRequest)
     }
 
+    private struct GeneratedBlockAttempt: Sendable {
+        let noteID: NoteID
+        let resolution: GeneratedBlockResolution
+        let request: GeneratedBlockResolveRequest
+    }
+
     @Published private(set) var phase: AppPhase = .booting
     @Published var authStep: AuthStep = .email
     @Published private(set) var currentUser: AuthUser?
@@ -82,6 +167,13 @@ final class AppModel: ObservableObject {
     @Published private(set) var receipts: [ReceiptPresentation] = []
     @Published private(set) var captureDetails: [String: ReceiptPresentation] = [:]
     @Published private(set) var reviewItems: [ReviewPresentation] = []
+    @Published private(set) var generatedBlocksByNoteID: [String: [GeneratedBlockPresentation]] = [:]
+    @Published private(set) var generatedBlockLoadingNoteIDs: Set<String> = []
+    @Published private(set) var generatedBlockErrors: [String: String] = [:]
+    @Published private(set) var generatedBlockLoadingMoreNoteIDs: Set<String> = []
+    @Published private(set) var generatedBlockLoadMoreErrors: [String: String] = [:]
+    @Published private(set) var generatedBlockHasMoreNoteIDs: Set<String> = []
+    @Published private(set) var generatedBlockPaginationNotices: [String: String] = [:]
     @Published private(set) var routingRules: [RoutingRule] = []
     @Published private(set) var searchResults: [SearchResultPresentation] = []
     @Published private(set) var archiveNotes: [NotePresentation] = []
@@ -117,6 +209,10 @@ final class AppModel: ObservableObject {
     private var reviewCapturesByID: [String: CaptureDetail] = [:]
     private var captureDetailEpochs: [String: UInt64] = [:]
     private var reviewItemsByID: [String: ReviewItem] = [:]
+    private var generatedBlocksByID: [String: GeneratedBlock] = [:]
+    private var generatedBlockPagesByNoteID: [String: GeneratedBlockPaginationState] = [:]
+    private var reviewGeneratedBlocksByID: [String: GeneratedBlock] = [:]
+    private var generatedBlockEpochs: [String: UInt64] = [:]
     private var routingRuleCollection = RoutingRuleCollection()
     private var routingRulesEpoch: UInt64 = 0
     private var reviewQueueGeneration = ReviewQueueGeneration()
@@ -124,6 +220,7 @@ final class AppModel: ObservableObject {
     private var reviewAttempts: [String: ReviewResolveRequest] = [:]
     private var undoAttempts: [String: MutationUndoRequest] = [:]
     private var routingRuleAttempts: [String: RoutingRuleAttempt] = [:]
+    private var generatedBlockAttempts: [String: GeneratedBlockAttempt] = [:]
     private var didBootstrap = false
     private var accountEpoch: UInt64 = 0
     private var refreshEpoch: UInt64 = 0
@@ -444,13 +541,21 @@ final class AppModel: ObservableObject {
                     captureIDs,
                     api: runtime.authenticatedAPI
                 )
+                let generatedBlocks = await Self.fetchReviewGeneratedBlocks(
+                    for: items,
+                    api: runtime.authenticatedAPI
+                )
                 guard isCurrent(context),
                       refreshEpoch == operationEpoch,
-                      reviewQueueGeneration.accepts(reviewOperationGeneration) else { return }
+                      let generatedBlocks = reviewQueueGeneration.accepted(
+                          generatedBlocks,
+                          for: reviewOperationGeneration
+                      ) else { return }
                 let currentDetails = details.filter {
                     captureDetailEpochs[$0.id.rawValue, default: 0]
                         == detailEpochSnapshot[$0.id.rawValue]
                 }
+                applyReviewGeneratedBlocks(generatedBlocks)
                 for detail in currentDetails {
                     _ = applyCaptureDetail(detail)
                 }
@@ -1063,7 +1168,8 @@ final class AppModel: ObservableObject {
         guard let item = reviewItemsByID[reviewID] else { return }
         let allowed = PresentationMapping.reviewAllowedActions(
             for: item,
-            capture: reviewCapture(for: item)
+            capture: reviewCapture(for: item),
+            generatedBlock: reviewGeneratedBlock(for: item)
         )
         guard (initialMode == .existing && allowed.contains(.route)) ||
               (initialMode == .newNote && allowed.contains(.create)) else { return }
@@ -1101,7 +1207,8 @@ final class AppModel: ObservableObject {
         guard let item = reviewItemsByID[reviewID] else { return }
         let allowed = PresentationMapping.reviewAllowedActions(
             for: item,
-            capture: reviewCapture(for: item)
+            capture: reviewCapture(for: item),
+            generatedBlock: reviewGeneratedBlock(for: item)
         )
         switch action {
         case let .route(noteID):
@@ -1122,6 +1229,14 @@ final class AppModel: ObservableObject {
         case .keepBoth:
             guard allowed.contains(.keepBoth) else { return }
             await performReviewResolution(reviewID: reviewID, resolution: .keepBoth)
+        case .acceptExpansion:
+            guard allowed.contains(.acceptExpansion),
+                  let block = reviewGeneratedBlock(for: item) else { return }
+            await resolveGeneratedBlock(blockID: block.id.rawValue, resolution: .accept)
+        case .rejectExpansion:
+            guard allowed.contains(.rejectExpansion),
+                  let block = reviewGeneratedBlock(for: item) else { return }
+            await resolveGeneratedBlock(blockID: block.id.rawValue, resolution: .reject)
         }
     }
 
@@ -1248,6 +1363,198 @@ final class AppModel: ObservableObject {
                 spaces: Array(spacesByID.values)
             )
             return note
+        }
+    }
+
+    func loadGeneratedBlocks(noteID rawNoteID: String, force: Bool = false) async {
+        guard let runtime,
+              let user = currentUser,
+              let noteID = NoteID(rawValue: rawNoteID),
+              force || !generatedBlockLoadingNoteIDs.contains(rawNoteID) else { return }
+        let context = currentAccountContext(for: user)
+        let requestEpoch = generatedBlockEpochs[rawNoteID, default: 0] &+ 1
+        generatedBlockEpochs[rawNoteID] = requestEpoch
+        generatedBlockLoadingNoteIDs.insert(rawNoteID)
+        generatedBlockLoadingMoreNoteIDs.remove(rawNoteID)
+        generatedBlockErrors.removeValue(forKey: rawNoteID)
+        generatedBlockLoadMoreErrors.removeValue(forKey: rawNoteID)
+        defer {
+            if isCurrent(context), generatedBlockEpochs[rawNoteID] == requestEpoch {
+                generatedBlockLoadingNoteIDs.remove(rawNoteID)
+            }
+        }
+        do {
+            let page = try await runtime.authenticatedAPI.listGeneratedBlocks(
+                noteId: noteID
+            )
+            let state = try GeneratedBlockPaginationState(first: page)
+            guard isCurrent(context), generatedBlockEpochs[rawNoteID] == requestEpoch else {
+                return
+            }
+            applyGeneratedBlockPaginationState(state, noteID: noteID)
+        } catch {
+            guard isCurrent(context), generatedBlockEpochs[rawNoteID] == requestEpoch else {
+                return
+            }
+            generatedBlockErrors[rawNoteID] =
+                "AI-generated additions could not be loaded. Your note text is unchanged."
+        }
+    }
+
+    func loadMoreGeneratedBlocks(noteID rawNoteID: String) async {
+        guard let runtime,
+              let user = currentUser,
+              let noteID = NoteID(rawValue: rawNoteID),
+              !generatedBlockLoadingNoteIDs.contains(rawNoteID),
+              !generatedBlockLoadingMoreNoteIDs.contains(rawNoteID),
+              let currentState = generatedBlockPagesByNoteID[rawNoteID],
+              currentState.canLoadMore,
+              let cursor = currentState.nextCursor else { return }
+        let context = currentAccountContext(for: user)
+        let requestEpoch = generatedBlockEpochs[rawNoteID, default: 0] &+ 1
+        generatedBlockEpochs[rawNoteID] = requestEpoch
+        generatedBlockLoadingMoreNoteIDs.insert(rawNoteID)
+        generatedBlockLoadMoreErrors.removeValue(forKey: rawNoteID)
+        defer {
+            if isCurrent(context), generatedBlockEpochs[rawNoteID] == requestEpoch {
+                generatedBlockLoadingMoreNoteIDs.remove(rawNoteID)
+            }
+        }
+
+        do {
+            let page = try await runtime.authenticatedAPI.listGeneratedBlocks(
+                noteId: noteID,
+                after: cursor
+            )
+            var updatedState = currentState
+            try updatedState.append(page, after: cursor)
+            guard isCurrent(context),
+                  generatedBlockEpochs[rawNoteID] == requestEpoch,
+                  generatedBlockPagesByNoteID[rawNoteID] == currentState else { return }
+            applyGeneratedBlockPaginationState(updatedState, noteID: noteID)
+        } catch {
+            guard isCurrent(context), generatedBlockEpochs[rawNoteID] == requestEpoch else {
+                return
+            }
+            generatedBlockLoadMoreErrors[rawNoteID] =
+                "More AI-generated additions could not be loaded. The additions already shown are unchanged."
+        }
+    }
+
+    func resolveGeneratedBlock(
+        blockID rawBlockID: String,
+        resolution: GeneratedBlockResolution
+    ) async {
+        guard let runtime,
+              let user = currentUser,
+              let blockID = BlockID(rawValue: rawBlockID),
+              let current = generatedBlocksByID[rawBlockID],
+              current.id == blockID,
+              current.state == .proposed else { return }
+        let operationID = "generated-block.\(rawBlockID)"
+        guard beginInteraction(operationID) else { return }
+        let context = currentAccountContext(for: user)
+        let intentID = Self.generatedBlockIntentID(
+            blockID: rawBlockID,
+            resolution: resolution
+        )
+        defer { endInteraction(operationID, context: context) }
+
+        do {
+            let request: GeneratedBlockResolveRequest
+            if let existing = generatedBlockAttempts[intentID],
+               existing.noteID == current.noteId,
+               existing.resolution == resolution,
+               existing.request.expectedStateRevision == current.stateRevision {
+                request = existing.request
+            } else {
+                request = try GeneratedBlockResolveRequest(
+                    expectedStateRevision: current.stateRevision,
+                    idempotencyKey: UUID().uuidString.lowercased(),
+                    resolution: resolution
+                )
+                generatedBlockAttempts[intentID] = GeneratedBlockAttempt(
+                    noteID: current.noteId,
+                    resolution: resolution,
+                    request: request
+                )
+            }
+
+            let response = try await runtime.authenticatedAPI.resolveGeneratedBlock(
+                blockID,
+                request: request
+            )
+            guard isCurrent(context),
+                  let resolvedBlock = Self.generatedBlockResolutionResult(
+                      response,
+                      matches: current,
+                      request: request
+                  ) else {
+                throw APIClientError.malformedResponse(status: 200)
+            }
+
+            // The resolve response is already ID-, revision-, state-, content-, and lineage-bound.
+            // Applying it also handles replayed rejects, which are intentionally hidden from the
+            // exact-read endpoint and would otherwise turn a successful retry into a false 404.
+            applyGeneratedBlockMutation(resolvedBlock)
+            guard isCurrent(context) else { return }
+            generatedBlockAttempts.removeValue(forKey: intentID)
+            interactionErrors.removeValue(forKey: operationID)
+            reviewQueueGeneration.invalidate()
+            await refreshReviewQueue(runtime: runtime, context: context)
+            guard isCurrent(context) else { return }
+            requestedReviewFocusID = reviewItems.first?.id
+            bannerMessage = resolution == .accept
+                ? "Accepted as an AI-generated addition. Your note text was not rewritten."
+                : "Rejected. Your note text was not changed."
+            announce(bannerMessage ?? "AI-generated proposal updated.")
+        } catch {
+            guard isCurrent(context) else { return }
+            if Self.isStaleRevisionFailure(error) {
+                generatedBlockAttempts.removeValue(forKey: intentID)
+                do {
+                    let disappearedFromVisibleReads: Bool
+                    do {
+                        try await refreshGeneratedBlock(
+                            blockID: blockID,
+                            noteID: current.noteId,
+                            api: runtime.authenticatedAPI,
+                            context: context
+                        )
+                        disappearedFromVisibleReads = false
+                    } catch where Self.isGeneratedBlockVisibilityNotFound(error) {
+                        guard isCurrent(context) else { return }
+                        removeGeneratedBlock(blockID, noteID: current.noteId)
+                        disappearedFromVisibleReads = true
+                    }
+                    guard isCurrent(context) else { return }
+                    // A stale CAS means the note-scoped visible collection and Review queue may
+                    // both have changed. Reconcile both even when exact-read correctly hides a
+                    // rejection with 404; local removal prevents the stale action surviving a
+                    // transient list-refresh failure.
+                    await loadGeneratedBlocks(noteID: current.noteId.rawValue, force: true)
+                    guard isCurrent(context) else { return }
+                    reviewQueueGeneration.invalidate()
+                    await refreshReviewQueue(runtime: runtime, context: context)
+                    interactionErrors[operationID] =
+                        disappearedFromVisibleReads
+                            ? "This proposal changed on another device and is no longer pending."
+                            : "This proposal changed on another device. The latest decision is shown."
+                } catch {
+                    interactionErrors[operationID] =
+                        "This proposal changed, but its latest state could not be loaded. Refresh and try again."
+                }
+            } else {
+                if !Self.isAmbiguousInteractionFailure(error) {
+                    generatedBlockAttempts.removeValue(forKey: intentID)
+                }
+                interactionErrors[operationID] = Self.interactionFailureMessage(
+                    error,
+                    fallback: "This proposal could not be updated. Try the same action again."
+                )
+            }
+            bannerMessage = interactionErrors[operationID]
+            announce("The AI-generated proposal could not be confirmed.")
         }
     }
 
@@ -1627,7 +1934,8 @@ final class AppModel: ObservableObject {
               let item = reviewItemsByID[reviewID],
               PresentationMapping.reviewAllowedActions(
                   for: item,
-                  capture: reviewCapture(for: item)
+                  capture: reviewCapture(for: item),
+                  generatedBlock: reviewGeneratedBlock(for: item)
               ).contains(.route) else { return }
         let intentID = "review.\(reviewID)|route|\(noteID)"
         let resolution: ReviewResolution
@@ -1870,12 +2178,20 @@ final class AppModel: ObservableObject {
                 captureIDs,
                 api: runtime.authenticatedAPI
             )
+            let generatedBlocks = await Self.fetchReviewGeneratedBlocks(
+                for: items,
+                api: runtime.authenticatedAPI
+            )
             guard isCurrent(context),
-                  reviewQueueGeneration.accepts(operationGeneration) else { return }
+                  let generatedBlocks = reviewQueueGeneration.accepted(
+                      generatedBlocks,
+                      for: operationGeneration
+                  ) else { return }
             let currentDetails = details.filter {
                 captureDetailEpochs[$0.id.rawValue, default: 0]
                     == detailEpochSnapshot[$0.id.rawValue]
             }
+            applyReviewGeneratedBlocks(generatedBlocks)
             for detail in currentDetails {
                 _ = applyCaptureDetail(detail)
             }
@@ -1906,10 +2222,177 @@ final class AppModel: ObservableObject {
             PresentationMapping.review(
                 $0,
                 notesByID: notesByID,
-                capturesByID: reviewCapturesByID
+                capturesByID: reviewCapturesByID,
+                generatedBlocksByID: generatedBlocksByID
             )
         }
         reviewError = nil
+    }
+
+    private nonisolated static func fetchReviewGeneratedBlocks(
+        for reviewItems: [ReviewItem],
+        api: APIClient
+    ) async -> [String: GeneratedBlock] {
+        let bindings = reviewItems.compactMap { item -> GeneratedBlockLookup? in
+            guard item.state == .open,
+                  item.type == .pendingExpansion,
+                  case let .generatedBlock(blockID) = item.proposal,
+                  let noteID = item.noteId else { return nil }
+            return GeneratedBlockLookup(blockID: blockID, noteID: noteID)
+        }
+        let uniqueBindings = Array(Set(bindings))
+        guard !uniqueBindings.isEmpty else { return [:] }
+
+        let blocks = await fetchExactGeneratedBlocks(uniqueBindings, api: api)
+        var expectedNoteIDs: [String: Set<NoteID>] = [:]
+        for binding in uniqueBindings {
+            expectedNoteIDs[binding.blockID.rawValue, default: []].insert(binding.noteID)
+        }
+        var exactBlocks: [String: GeneratedBlock] = [:]
+        for block in blocks
+        where expectedNoteIDs[block.id.rawValue] == [block.noteId] {
+            exactBlocks[block.id.rawValue] = block
+        }
+        return exactBlocks
+    }
+
+    private func applyReviewGeneratedBlocks(_ exactBlocks: [String: GeneratedBlock]) {
+        reviewGeneratedBlocksByID = exactBlocks
+        rebuildGeneratedBlockIndex()
+    }
+
+    private func applyGeneratedBlockPaginationState(
+        _ state: GeneratedBlockPaginationState,
+        noteID: NoteID,
+        republishReview: Bool = true
+    ) {
+        guard state.items.allSatisfy({ $0.noteId == noteID }),
+              Set(state.items.map(\.id)).count == state.items.count else { return }
+        let rawNoteID = noteID.rawValue
+        generatedBlockPagesByNoteID[rawNoteID] = state
+        generatedBlockLoadingNoteIDs.remove(rawNoteID)
+        generatedBlockLoadingMoreNoteIDs.remove(rawNoteID)
+        generatedBlockLoadMoreErrors.removeValue(forKey: rawNoteID)
+        if state.canLoadMore {
+            generatedBlockHasMoreNoteIDs.insert(rawNoteID)
+        } else {
+            generatedBlockHasMoreNoteIDs.remove(rawNoteID)
+        }
+        if state.reachedDisplayLimit {
+            generatedBlockPaginationNotices[rawNoteID] =
+                "Showing the first 1,000 generated additions. Open Unfiled on the web to browse the remaining additions."
+        } else {
+            generatedBlockPaginationNotices.removeValue(forKey: rawNoteID)
+        }
+        for item in state.items {
+            if item.state != .proposed {
+                generatedBlockAttempts.removeValue(
+                    forKey: Self.generatedBlockIntentID(
+                        blockID: item.id.rawValue,
+                        resolution: .accept
+                    )
+                )
+                generatedBlockAttempts.removeValue(
+                    forKey: Self.generatedBlockIntentID(
+                        blockID: item.id.rawValue,
+                        resolution: .reject
+                    )
+                )
+            }
+        }
+        generatedBlocksByNoteID[rawNoteID] = state.items.map(PresentationMapping.generatedBlock)
+        rebuildGeneratedBlockIndex()
+        if republishReview { republishReviewItems() }
+    }
+
+    private func applyGeneratedBlockMutation(_ block: GeneratedBlock) {
+        let rawNoteID = block.noteId.rawValue
+        generatedBlockEpochs[rawNoteID, default: 0] &+= 1
+        generatedBlockLoadingNoteIDs.remove(rawNoteID)
+        generatedBlockLoadingMoreNoteIDs.remove(rawNoteID)
+        if var pageState = generatedBlockPagesByNoteID[rawNoteID] {
+            pageState.replace(block)
+            generatedBlockPagesByNoteID[rawNoteID] = pageState
+            generatedBlocksByNoteID[rawNoteID] = pageState.items.map(
+                PresentationMapping.generatedBlock
+            )
+        }
+        if reviewGeneratedBlocksByID[block.id.rawValue] != nil {
+            reviewGeneratedBlocksByID[block.id.rawValue] = block
+        }
+        rebuildGeneratedBlockIndex()
+        republishReviewItems()
+    }
+
+    private func removeGeneratedBlock(_ blockID: BlockID, noteID: NoteID) {
+        let rawNoteID = noteID.rawValue
+        generatedBlockEpochs[rawNoteID, default: 0] &+= 1
+        generatedBlockLoadingNoteIDs.remove(rawNoteID)
+        generatedBlockLoadingMoreNoteIDs.remove(rawNoteID)
+        if var pageState = generatedBlockPagesByNoteID[rawNoteID] {
+            pageState.remove(blockID)
+            generatedBlockPagesByNoteID[rawNoteID] = pageState
+            generatedBlocksByNoteID[rawNoteID] = pageState.items.map(
+                PresentationMapping.generatedBlock
+            )
+        }
+        reviewGeneratedBlocksByID.removeValue(forKey: blockID.rawValue)
+        rebuildGeneratedBlockIndex()
+        republishReviewItems()
+    }
+
+    private func refreshGeneratedBlock(
+        blockID: BlockID,
+        noteID: NoteID,
+        api: APIClient,
+        context: AccountContext
+    ) async throws {
+        let rawNoteID = noteID.rawValue
+        let requestEpoch = generatedBlockEpochs[rawNoteID, default: 0] &+ 1
+        generatedBlockEpochs[rawNoteID] = requestEpoch
+        let block = try await api.getGeneratedBlock(
+            blockID,
+            expectedNoteId: noteID
+        ).block
+        guard isCurrent(context), generatedBlockEpochs[rawNoteID] == requestEpoch else {
+            throw AuthenticationError.signedOut
+        }
+        applyGeneratedBlockMutation(block)
+        generatedBlockErrors.removeValue(forKey: rawNoteID)
+    }
+
+    private func rebuildGeneratedBlockIndex() {
+        var blocks: [String: GeneratedBlock] = [:]
+        for state in generatedBlockPagesByNoteID.values {
+            for block in state.items { blocks[block.id.rawValue] = block }
+        }
+        for (blockID, block) in reviewGeneratedBlocksByID {
+            if blocks[blockID].map({ $0.stateRevision > block.stateRevision }) != true {
+                blocks[blockID] = block
+            }
+        }
+        generatedBlocksByID = blocks
+    }
+
+    private func republishReviewItems() {
+        reviewItems = reviewItems.compactMap { current in
+            guard let item = reviewItemsByID[current.id] else { return nil }
+            return PresentationMapping.review(
+                item,
+                notesByID: notesByID,
+                capturesByID: reviewCapturesByID,
+                generatedBlocksByID: generatedBlocksByID
+            )
+        }
+    }
+
+    private func reviewGeneratedBlock(for item: ReviewItem) -> GeneratedBlock? {
+        guard case let .generatedBlock(blockID) = item.proposal,
+              let noteID = item.noteId,
+              let block = generatedBlocksByID[blockID.rawValue],
+              block.id == blockID,
+              block.noteId == noteID else { return nil }
+        return block
     }
 
     private func reviewCapture(for item: ReviewItem) -> CaptureDetail? {
@@ -2023,6 +2506,48 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private static func generatedBlockIntentID(
+        blockID: String,
+        resolution: GeneratedBlockResolution
+    ) -> String {
+        "generated-block.\(blockID)|\(resolution.rawValue)"
+    }
+
+    nonisolated static func generatedBlockResolutionResponse(
+        _ response: GeneratedBlockResolveResponse,
+        matches current: GeneratedBlock,
+        request: GeneratedBlockResolveRequest
+    ) -> Bool {
+        let expectedState: GeneratedBlockState = request.resolution == .accept
+            ? .accepted
+            : .rejected
+        let block = response.block
+        return request.expectedStateRevision == current.stateRevision
+            && block.id == current.id
+            && block.noteId == current.noteId
+            && block.decisionId == current.decisionId
+            && block.kind == current.kind
+            && block.content == current.content
+            && block.modelId == current.modelId
+            && block.promptVersion == current.promptVersion
+            && block.createdAt == current.createdAt
+            && block.state == expectedState
+            && block.stateRevision == current.stateRevision + 1
+    }
+
+    nonisolated static func generatedBlockResolutionResult(
+        _ response: GeneratedBlockResolveResponse,
+        matches current: GeneratedBlock,
+        request: GeneratedBlockResolveRequest
+    ) -> GeneratedBlock? {
+        guard generatedBlockResolutionResponse(
+            response,
+            matches: current,
+            request: request
+        ) else { return nil }
+        return response.block
+    }
+
     private static func correctionResponse(
         _ response: DecisionCorrectionResponse,
         matches request: DecisionCorrectionRequest,
@@ -2078,7 +2603,8 @@ final class AppModel: ObservableObject {
         guard let action else { return false }
         return PresentationMapping.reviewAllowedActions(
             for: item,
-            capture: reviewCapture(for: item)
+            capture: reviewCapture(for: item),
+            generatedBlock: reviewGeneratedBlock(for: item)
         ).contains(action)
     }
 
@@ -2102,9 +2628,18 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private static func isStaleRoutingRuleFailure(_ error: Error) -> Bool {
+    private static func isStaleRevisionFailure(_ error: Error) -> Bool {
         guard case let APIClientError.http(_, code, _, _) = error else { return false }
         return code == .staleRevision
+    }
+
+    nonisolated static func isGeneratedBlockVisibilityNotFound(_ error: Error) -> Bool {
+        guard case let APIClientError.http(status, _, _, _) = error else { return false }
+        return status == 404
+    }
+
+    private static func isStaleRoutingRuleFailure(_ error: Error) -> Bool {
+        isStaleRevisionFailure(error)
     }
 
     private nonisolated static func shouldFocusReviewAfterUndo(for error: Error) -> Bool {
@@ -2282,6 +2817,13 @@ final class AppModel: ObservableObject {
         receipts = []
         captureDetails = [:]
         reviewItems = []
+        generatedBlocksByNoteID = [:]
+        generatedBlockLoadingNoteIDs = []
+        generatedBlockErrors = [:]
+        generatedBlockLoadingMoreNoteIDs = []
+        generatedBlockLoadMoreErrors = [:]
+        generatedBlockHasMoreNoteIDs = []
+        generatedBlockPaginationNotices = [:]
         routingRules = []
         searchResults = []
         archiveNotes = []
@@ -2296,6 +2838,10 @@ final class AppModel: ObservableObject {
         reviewCapturesByID = [:]
         captureDetailEpochs = [:]
         reviewItemsByID = [:]
+        generatedBlocksByID = [:]
+        generatedBlockPagesByNoteID = [:]
+        reviewGeneratedBlocksByID = [:]
+        generatedBlockEpochs = [:]
         routingRuleCollection = RoutingRuleCollection()
         routingRulesEpoch &+= 1
         reviewQueueGeneration.invalidate()
@@ -2303,6 +2849,7 @@ final class AppModel: ObservableObject {
         reviewAttempts = [:]
         undoAttempts = [:]
         routingRuleAttempts = [:]
+        generatedBlockAttempts = [:]
         navigationPath = []
         captureSheet = nil
         editorSheet = nil
@@ -2414,6 +2961,40 @@ final class AppModel: ObservableObject {
             }
             return values
         }
+    }
+
+    private nonisolated static func fetchExactGeneratedBlocks(
+        _ lookups: [GeneratedBlockLookup],
+        api: APIClient
+    ) async -> [GeneratedBlock] {
+        var blocks: [GeneratedBlock] = []
+        for start in stride(from: 0, to: lookups.count, by: 12) {
+            guard !Task.isCancelled else { break }
+            let end = min(start + 12, lookups.count)
+            let batch = await withTaskGroup(
+                of: GeneratedBlock?.self,
+                returning: [GeneratedBlock].self
+            ) { group in
+                for lookup in lookups[start ..< end] {
+                    group.addTask {
+                        guard let block = try? await api.getGeneratedBlock(
+                            lookup.blockID,
+                            expectedNoteId: lookup.noteID
+                        ).block,
+                        block.id == lookup.blockID,
+                        block.noteId == lookup.noteID else { return nil }
+                        return block
+                    }
+                }
+                var values: [GeneratedBlock] = []
+                for await value in group {
+                    if let value { values.append(value) }
+                }
+                return values
+            }
+            blocks.append(contentsOf: batch)
+        }
+        return blocks
     }
 
     private nonisolated static func fetchCaptureDetails(

@@ -473,7 +473,7 @@ export function CaptureDetailView({ captureId }: Readonly<{ captureId: EntityId<
                 className="receipt-content-item"
               >
                 {content.type === "ai_generated" ? (
-                  <span className="receipt-generated-label">AI-generated</span>
+                  <span className="receipt-generated-label">AI-generated proposal</span>
                 ) : null}
                 {content.content}
               </div>

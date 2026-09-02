@@ -1,10 +1,16 @@
 import {
   DecisionCorrectionResponseSchema,
+  GeneratedBlockDetailResponseSchema,
+  GeneratedBlockListResponseSchema,
+  GeneratedBlockResolveResponseSchema,
   MutationBatchUndoResponseSchema,
   ReviewResolveResponseSchema,
+  VisibleGeneratedBlockDtoSchema,
   manualNoteFixtures,
   type DecisionCorrectionRequest,
   type DecisionCorrectionResponse,
+  type GeneratedBlockResolveRequest,
+  type GeneratedBlockResolveResponse,
   type MutationBatchUndoResponse,
   type MutationUndoRequest,
   type ReviewResolveRequest,
@@ -23,6 +29,7 @@ const NOTE_A = "note_01J6M9Q7G4BMKB33GSG3NJ6D1X";
 const NOTE_B = "note_01J6M9Q7G4BMKB33GSG3NJ6D1Y";
 const DECISION_ID = "dec_01J6M9Q7G4BMKB33GSG3NJ6D1X";
 const REVIEW_ID = "rvw_01J6M9Q7G4BMKB33GSG3NJ6D1X";
+const BLOCK_ID = "blk_01J6M9Q7G4BMKB33GSG3NJ6D1X";
 const MUTATION_A = "mut_01J6M9Q7G4BMKB33GSG3NJ6D1X";
 const MUTATION_B = "mut_01J6M9Q7G4BMKB33GSG3NJ6D1Y";
 const NOW = "2026-09-01T18:30:00.000Z";
@@ -83,6 +90,31 @@ const batchResponse: MutationBatchUndoResponse = {
   replayed: false
 };
 
+const proposedBlock = VisibleGeneratedBlockDtoSchema.parse({
+  id: BLOCK_ID,
+  noteId: NOTE_A,
+  decisionId: DECISION_ID,
+  kind: "suggestion" as const,
+  content: "A separate encrypted suggestion",
+  state: "proposed" as const,
+  stateRevision: 1,
+  modelId: "gpt-test",
+  promptVersion: "organizer-v1",
+  createdAt: NOW,
+  resolvedAt: null
+});
+
+const blockResolveRequest: GeneratedBlockResolveRequest = {
+  expectedStateRevision: 1,
+  idempotencyKey: "block-resolve-01",
+  resolution: "accept" as const
+};
+
+const blockResolveResponse: GeneratedBlockResolveResponse = {
+  block: { ...proposedBlock, state: "accepted" as const, stateRevision: 2, resolvedAt: NOW },
+  replayed: false
+};
+
 function authenticated(): Promise<AuthenticatedRequest> {
   return Promise.resolve({
     accessToken: "test-access-token",
@@ -112,13 +144,25 @@ type RepositoryOverrides = Partial<{
 
 function repository(overrides: RepositoryOverrides = {}) {
   return {
-    correctDecision: vi.fn(
+    listGeneratedBlocks: vi.fn<OwnerInteractionRepository["listGeneratedBlocks"]>(
+      overrides.listGeneratedBlocks ??
+        (() => Promise.resolve({ items: [], pageInfo: { hasMore: false, nextCursor: null } }))
+    ),
+    getGeneratedBlock: vi.fn<OwnerInteractionRepository["getGeneratedBlock"]>(
+      overrides.getGeneratedBlock ?? (() => Promise.resolve({ block: proposedBlock }))
+    ),
+    resolveGeneratedBlock: vi.fn<OwnerInteractionRepository["resolveGeneratedBlock"]>(
+      overrides.resolveGeneratedBlock ?? (() => Promise.resolve(blockResolveResponse))
+    ),
+    correctDecision: vi.fn<OwnerInteractionRepository["correctDecision"]>(
       overrides.correctDecision ?? (() => Promise.resolve(correctionResponse))
     ),
-    resolveReviewItem: vi.fn(
+    resolveReviewItem: vi.fn<OwnerInteractionRepository["resolveReviewItem"]>(
       overrides.resolveReviewItem ?? (() => Promise.resolve(reviewResponse))
     ),
-    undoMutationBatch: vi.fn(overrides.undoMutationBatch ?? (() => Promise.resolve(batchResponse)))
+    undoMutationBatch: vi.fn<OwnerInteractionRepository["undoMutationBatch"]>(
+      overrides.undoMutationBatch ?? (() => Promise.resolve(batchResponse))
+    )
   };
 }
 
@@ -186,6 +230,79 @@ describe("owner interaction route handlers", () => {
     );
     expectPrivate(resolved);
     expectPrivate(undone);
+  });
+
+  it("lists and atomically resolves generated blocks without scheduling note indexing", async () => {
+    const ownerRepository = repository({
+      listGeneratedBlocks: vi.fn(() =>
+        Promise.resolve({
+          items: [proposedBlock],
+          pageInfo: { hasMore: false, nextCursor: null }
+        })
+      )
+    });
+    const scheduleIndexDrain = vi.fn();
+    const handlers = createOwnerInteractionHandlers({
+      authenticate: authenticated,
+      repository: ownerRepository,
+      scheduleIndexDrain
+    });
+    const listed = await handlers.listGeneratedBlocks(
+      new Request(
+        `https://unfiled.test/api/v1/notes/${NOTE_A}/generated-blocks?cursor=${BLOCK_ID}`
+      ),
+      { noteId: NOTE_A }
+    );
+    const loaded = await handlers.getGeneratedBlock(
+      new Request(`https://unfiled.test/api/v1/generated-blocks/${BLOCK_ID}`),
+      { blockId: BLOCK_ID }
+    );
+    const resolved = await handlers.resolveGeneratedBlock(
+      request(`/api/v1/generated-blocks/${BLOCK_ID}/resolve`, blockResolveRequest),
+      { blockId: BLOCK_ID }
+    );
+
+    expect(GeneratedBlockListResponseSchema.safeParse(await listed.json()).success).toBe(true);
+    expect(GeneratedBlockDetailResponseSchema.safeParse(await loaded.json()).success).toBe(true);
+    expect(GeneratedBlockResolveResponseSchema.safeParse(await resolved.json()).success).toBe(true);
+    expect(ownerRepository.listGeneratedBlocks).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: USER_ID }),
+      NOTE_A,
+      { cursor: BLOCK_ID }
+    );
+    expect(ownerRepository.getGeneratedBlock).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: USER_ID }),
+      BLOCK_ID
+    );
+    expect(ownerRepository.resolveGeneratedBlock).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: USER_ID }),
+      BLOCK_ID,
+      blockResolveRequest
+    );
+    expect(scheduleIndexDrain).not.toHaveBeenCalled();
+    expectPrivate(listed);
+    expectPrivate(loaded);
+    expectPrivate(resolved);
+  });
+
+  it("rejects unknown, duplicate, and malformed generated-block cursors before storage", async () => {
+    const ownerRepository = repository();
+    const handlers = createOwnerInteractionHandlers({
+      authenticate: authenticated,
+      repository: ownerRepository
+    });
+    const requests = [
+      `https://unfiled.test/api/v1/notes/${NOTE_A}/generated-blocks?limit=50`,
+      `https://unfiled.test/api/v1/notes/${NOTE_A}/generated-blocks?cursor=${BLOCK_ID}&cursor=${BLOCK_ID}`,
+      `https://unfiled.test/api/v1/notes/${NOTE_A}/generated-blocks?cursor=nope`
+    ];
+
+    for (const url of requests) {
+      const response = await handlers.listGeneratedBlocks(new Request(url), { noteId: NOTE_A });
+      expect(response.status).toBe(400);
+      expectPrivate(response);
+    }
+    expect(ownerRepository.listGeneratedBlocks).not.toHaveBeenCalled();
   });
 
   it("rejects malformed identifiers and mismatched idempotency before storage", async () => {

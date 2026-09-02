@@ -202,8 +202,10 @@ const LIST_OPERATIONAL: Readonly<Record<EncryptedLibrarySurface, UnknownRecord>>
   generated_block: {
     noteId: IDS.note,
     decisionId: IDS.decision,
+    reviewItemId: null,
     kind: "summary",
     state: "proposed",
+    stateRevision: 1,
     modelId: "gpt-test",
     promptVersion: "v1",
     resolvedAt: null,
@@ -585,6 +587,106 @@ function expectProviderFailure(promise: Promise<unknown>): Promise<void> {
 function expectInputFailure(promise: Promise<unknown>): Promise<void> {
   return expect(promise).rejects.toMatchObject({ code: ServiceRpcErrorCode.VALIDATION_FAILED });
 }
+
+describe("encrypted generated-block note pages", () => {
+  it("calls only the note-scoped overload and binds every returned row to that note", async () => {
+    const block = await libraryRow("generated_block");
+    const { rpc, store } = rpcHarness([block]);
+
+    await expect(
+      store.listEncryptedGeneratedBlocksForNote({ ownerId: OWNER_ID, noteId: IDS.note })
+    ).resolves.toMatchObject({
+      surface: "generated_block",
+      items: [{ resourceId: IDS.block, operational: { noteId: IDS.note } }],
+      nextCursor: null
+    });
+    expect(rpc).toHaveBeenCalledWith("get_encrypted_generated_blocks", {
+      p_owner_id: OWNER_ID,
+      p_note_id: IDS.note,
+      p_after_block_id: null,
+      p_limit: 51
+    });
+
+    const wrongNote = await libraryRow("generated_block", {
+      operational: { ...LIST_OPERATIONAL.generated_block, noteId: IDS.noteTwo }
+    });
+    await expectProviderFailure(
+      rpcHarness([wrongNote]).store.listEncryptedGeneratedBlocksForNote({
+        ownerId: OWNER_ID,
+        noteId: IDS.note
+      })
+    );
+
+    const rejected = await libraryRow("generated_block", {
+      operational: {
+        ...LIST_OPERATIONAL.generated_block,
+        state: "rejected",
+        stateRevision: 2,
+        resolvedAt: TIME
+      }
+    });
+    await expectProviderFailure(
+      rpcHarness([rejected]).store.listEncryptedGeneratedBlocksForNote({
+        ownerId: OWNER_ID,
+        noteId: IDS.note
+      })
+    );
+  });
+
+  it("uses one-row lookahead for an exact, non-overlapping 50-row cursor page", async () => {
+    const rows = await Promise.all(
+      Array.from({ length: 51 }, async (_, index) => {
+        const resourceId = `blk_${String(index + 1).padStart(26, "0")}`;
+        return libraryRow("generated_block", { resourceId });
+      })
+    );
+    const { store } = rpcHarness(rows);
+    const page = await store.listEncryptedGeneratedBlocksForNote({
+      ownerId: OWNER_ID,
+      noteId: IDS.note
+    });
+
+    expect(page.items).toHaveLength(50);
+    expect(page.items.at(-1)?.resourceId).toBe(`blk_${String(50).padStart(26, "0")}`);
+    expect(page.nextCursor).toBe(page.items.at(-1)?.resourceId);
+    expect(page.items.some(({ resourceId }) => resourceId === rows[50]?.resource_id)).toBe(false);
+    expect(Object.isFrozen(page)).toBe(true);
+    expect(Object.isFrozen(page.items)).toBe(true);
+  });
+
+  it("fails closed on malformed cursors, cross-page order, and oversized projections", async () => {
+    const block = await libraryRow("generated_block");
+    const afterBlockId = `blk_${"Z".repeat(26)}`;
+    await expectInputFailure(
+      rpcHarness([]).store.listEncryptedGeneratedBlocksForNote({
+        ownerId: OWNER_ID,
+        noteId: "note_bad"
+      })
+    );
+    await expectInputFailure(
+      rpcHarness([]).store.listEncryptedGeneratedBlocksForNote({
+        ownerId: OWNER_ID,
+        noteId: IDS.note,
+        afterBlockId: "blk_bad"
+      })
+    );
+    await expectProviderFailure(
+      rpcHarness([block]).store.listEncryptedGeneratedBlocksForNote({
+        ownerId: OWNER_ID,
+        noteId: IDS.note,
+        afterBlockId
+      })
+    );
+    await expectProviderFailure(
+      rpcHarness(Array.from({ length: 52 }, () => block)).store.listEncryptedGeneratedBlocksForNote(
+        {
+          ownerId: OWNER_ID,
+          noteId: IDS.note
+        }
+      )
+    );
+  });
+});
 
 describe("encrypted library stored-object listing", () => {
   it.each(encryptedLibrarySurfaces)(

@@ -274,7 +274,10 @@ public struct ReviewItem: Codable, Equatable, Sendable {
         resolution: ReviewResolution?
     ) -> Bool {
         guard let resolution else { return true }
-        if case .dismiss = resolution { return true }
+        if case .dismiss = resolution {
+            if type == .pendingExpansion, case .generatedBlock = proposal { return false }
+            return true
+        }
 
         switch (type, resolution) {
         case (.duplicateSuggestion, .keepBoth):

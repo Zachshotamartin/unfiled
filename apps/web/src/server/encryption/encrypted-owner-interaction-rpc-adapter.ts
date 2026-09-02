@@ -1,6 +1,7 @@
 import {
   CaptureProcessingStateSchema,
   DecisionCorrectionRequestSchema,
+  GeneratedBlockResolveRequestSchema,
   MutationUndoRequestSchema,
   NoteLinkValueSchema,
   NoteTypeSchema,
@@ -11,6 +12,7 @@ import {
   parseEntityId,
   type DecisionCorrectionRequest,
   type EntityId,
+  type GeneratedBlockResolveRequest,
   type MutationUndoRequest,
   type NoteLinkValue,
   type NoteType,
@@ -37,6 +39,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import { canonicalUtcTimestampFromMicros } from "./canonical-rpc-timestamp";
 import { encryptedCaptureTimestampMicros } from "./encrypted-capture-rpc-adapter";
+import type { EncryptedGeneratedBlockRead } from "./encrypted-capture-rpc-adapter";
 import {
   createEncryptedNoteReadRpcAdapter,
   type EncryptedNoteMutationRead,
@@ -64,6 +67,7 @@ export const encryptedOwnerInteractionRpcFunctions = Object.freeze([
   "commit_encrypted_decision_correction",
   "prepare_encrypted_review_resolution",
   "commit_encrypted_review_resolution",
+  "resolve_encrypted_generated_block",
   "get_encrypted_mutation_batch",
   "undo_encrypted_mutation_batch"
 ] as const);
@@ -169,6 +173,7 @@ export type OwnerInteractionPreparedSource = Readonly<{
   review: OwnerInteractionSourceReview | null;
   receipt: OwnerInteractionSourceReceipt | null;
   capture: OwnerInteractionSourceCapture | null;
+  generatedBlock?: EncryptedGeneratedBlockRead | null;
 }>;
 
 export type OwnerInteractionCorrectionAppliedBranch = Readonly<{
@@ -187,7 +192,7 @@ export type OwnerInteractionNeedsReviewBranch = Readonly<{
 type OwnerInteractionPendingPreparation = Readonly<{
   occurredAt: string;
   completed: false;
-  replayed: false;
+  replayed: boolean;
   requestMacKey: ManagedKeyRecordV1;
   source: OwnerInteractionPreparedSource;
   members: readonly OwnerInteractionPreparedMember[];
@@ -238,6 +243,20 @@ export type PrepareReviewResolutionResult = OwnerInteractionPreparationBase &
     scope: "encrypted_review_resolution";
     action: ReviewResolveRequest["resolution"]["type"];
     ids: OwnerInteractionReviewResolutionIds;
+    reservations: readonly OwnerInteractionPreparedReservation[];
+  }>;
+
+export type GeneratedBlockResolutionAction = "accept_expansion" | "reject_expansion";
+
+export type PrepareGeneratedBlockResolutionResult = OwnerInteractionPreparationBase &
+  Readonly<{
+    scope: "encrypted_review_resolution";
+    action: GeneratedBlockResolutionAction;
+    ids: OwnerInteractionReviewResolutionIds &
+      Readonly<{
+        generatedBlockId: EntityId<"blk">;
+        stateRevision: number;
+      }>;
     reservations: readonly OwnerInteractionPreparedReservation[];
   }>;
 
@@ -333,7 +352,7 @@ export type OwnerInteractionCommitResult = Readonly<{
     | "encrypted_decision_correction"
     | "encrypted_review_resolution"
     | "encrypted_mutation_batch_undo";
-  outcome: "applied" | "needs_review" | "resolved" | "dismissed";
+  outcome: "applied" | "needs_review" | "resolved" | "dismissed" | "accepted" | "rejected";
   decisionId: EntityId<"dec"> | null;
   reviewItemId: EntityId<"rvw"> | null;
   feedbackEventId: EntityId<"fbk"> | null;
@@ -349,6 +368,16 @@ export type OwnerInteractionCommitResult = Readonly<{
   responseVerificationMac: KeyedMacRecord;
   replayed: boolean;
 }>;
+
+export type GeneratedBlockResolutionCommitResult = OwnerInteractionCommitResult &
+  Readonly<{
+    scope: "encrypted_review_resolution";
+    outcome: "accepted" | "rejected";
+    generatedBlockId: EntityId<"blk">;
+    stateRevision: number;
+    reviewItemId: EntityId<"rvw">;
+    feedbackEventId: EntityId<"fbk">;
+  }>;
 
 export type EncryptedOwnerInteractionRpcAdapter = Readonly<{
   prepareDecisionCorrection(
@@ -383,6 +412,23 @@ export type EncryptedOwnerInteractionRpcAdapter = Readonly<{
       command: OwnerInteractionCommitCommand;
     }>
   ): Promise<OwnerInteractionCommitResult>;
+  prepareGeneratedBlockResolution(
+    input: Readonly<{
+      ownerId: string;
+      blockId: EntityId<"blk">;
+      reviewItemId: EntityId<"rvw">;
+      request: GeneratedBlockResolveRequest;
+    }>
+  ): Promise<PrepareGeneratedBlockResolutionResult>;
+  commitGeneratedBlockResolution(
+    input: Readonly<{
+      ownerId: string;
+      blockId: EntityId<"blk">;
+      request: GeneratedBlockResolveRequest;
+      preparation: PrepareGeneratedBlockResolutionResult;
+      command: OwnerInteractionCommitCommand;
+    }>
+  ): Promise<GeneratedBlockResolutionCommitResult>;
   getMutationBatch(
     input: Readonly<{
       ownerId: string;
@@ -439,7 +485,7 @@ function canonicalUuid(value: unknown, failure: Failure): string {
 }
 
 type OwnerInteractionEntityKind =
-  "cap" | "dec" | "fbk" | "job" | "mut" | "note" | "rev" | "rvw" | "spc" | "tag";
+  "blk" | "cap" | "dec" | "fbk" | "job" | "mut" | "note" | "rev" | "rvw" | "spc" | "tag";
 
 function entityId<Kind extends OwnerInteractionEntityKind>(
   value: unknown,
@@ -954,17 +1000,101 @@ function parseSourceCapture(
   });
 }
 
+function parseSourceGeneratedBlock(
+  value: unknown,
+  ownerId: string,
+  failure: Failure
+): EncryptedGeneratedBlockRead | null {
+  if (value === null) return null;
+  const record = exactRecord(
+    value,
+    [
+      "blockId",
+      "noteId",
+      "decisionId",
+      "reviewItemId",
+      "kind",
+      "state",
+      "stateRevision",
+      "modelId",
+      "promptVersion",
+      "resolvedAt",
+      "createdAt",
+      "contentCipher"
+    ],
+    failure
+  );
+  const blockId = entityId(record.blockId, "blk", failure);
+  const kind =
+    record.kind === "summary" ||
+    record.kind === "interpretation" ||
+    record.kind === "suggestion" ||
+    record.kind === "label"
+      ? record.kind
+      : failure();
+  const state =
+    record.state === "proposed" || record.state === "accepted" || record.state === "rejected"
+      ? record.state
+      : failure();
+  const stateRevision = positiveInteger(record.stateRevision, failure);
+  const resolvedAt = nullableTimestamp(record.resolvedAt, failure);
+  const createdAt = timestamp(record.createdAt, failure);
+  if (
+    (state === "proposed" && (stateRevision !== 1 || resolvedAt !== null)) ||
+    (state !== "proposed" && (stateRevision < 2 || resolvedAt === null)) ||
+    (resolvedAt !== null &&
+      encryptedCaptureTimestampMicros(resolvedAt, failure) <
+        encryptedCaptureTimestampMicros(createdAt, failure))
+  ) {
+    return failure();
+  }
+  return Object.freeze({
+    blockId,
+    recordVersion: 1 as const,
+    noteId: entityId(record.noteId, "note", failure),
+    decisionId: entityId(record.decisionId, "dec", failure),
+    reviewItemId: nullableEntityId(record.reviewItemId, "rvw", failure),
+    kind,
+    state,
+    stateRevision,
+    modelId: boundedString(record.modelId, 1, 120, failure),
+    promptVersion: boundedString(record.promptVersion, 1, 120, failure),
+    resolvedAt,
+    createdAt,
+    contentCipher: parseStoredCipher(
+      record.contentCipher,
+      {
+        ownerId,
+        resourceId: blockId,
+        recordVersion: 1,
+        kind: "generated_block",
+        keyClass: "ai_assisted"
+      },
+      failure
+    )
+  });
+}
+
 function parseSource(
   value: unknown,
   ownerId: string,
   failure: Failure
 ): OwnerInteractionPreparedSource {
-  const record = exactRecord(value, ["decision", "review", "receipt", "capture"], failure);
+  if (!isRecord(value)) return failure();
+  const hasGeneratedBlock = Object.hasOwn(value, "generatedBlock");
+  const record = exactRecord(
+    value,
+    ["decision", "review", "receipt", "capture", ...(hasGeneratedBlock ? ["generatedBlock"] : [])],
+    failure
+  );
   return Object.freeze({
     decision: parseSourceDecision(record.decision, ownerId, failure),
     review: parseSourceReview(record.review, ownerId, failure),
     receipt: parseSourceReceipt(record.receipt, ownerId, failure),
-    capture: parseSourceCapture(record.capture, ownerId, failure)
+    capture: parseSourceCapture(record.capture, ownerId, failure),
+    generatedBlock: hasGeneratedBlock
+      ? parseSourceGeneratedBlock(record.generatedBlock, ownerId, failure)
+      : null
   });
 }
 
@@ -1275,23 +1405,24 @@ function selectedOutcome(value: unknown, failure: Failure): "applied" | "needs_r
   return value === null || value === "applied" || value === "needs_review" ? value : failure();
 }
 
-function assertPendingPreparationLifecycle(
+function parsePendingPreparationReplay(
   completed: unknown,
   replayed: unknown,
   selected: "applied" | "needs_review" | null,
   encryptedResponse: EncryptedAggregateRecord<"idempotency_response"> | null,
   encryptedResponseVerificationMac: unknown,
   failure: Failure
-): asserts completed is false {
+): boolean {
   if (
     completed !== false ||
-    replayed !== false ||
+    typeof replayed !== "boolean" ||
     selected !== null ||
     encryptedResponse !== null ||
     encryptedResponseVerificationMac !== null
   ) {
     return failure();
   }
+  return replayed;
 }
 
 function reservationForRole(
@@ -1754,7 +1885,7 @@ async function parseDecisionCorrectionPreparation(
     expectedClass,
     projectionFailure
   );
-  assertPendingPreparationLifecycle(
+  const replayed = parsePendingPreparationReplay(
     record.completed,
     record.replayed,
     selected,
@@ -1789,7 +1920,7 @@ async function parseDecisionCorrectionPreparation(
     scope: "encrypted_decision_correction" as const,
     occurredAt,
     completed: false as const,
-    replayed: false as const,
+    replayed,
     selectedOutcome: null,
     requestMacKey,
     ids,
@@ -1975,7 +2106,7 @@ async function parseMutationBatchPreparation(
     expectedClass,
     projectionFailure
   );
-  assertPendingPreparationLifecycle(
+  const replayed = parsePendingPreparationReplay(
     record.completed,
     record.replayed,
     selected,
@@ -2006,7 +2137,7 @@ async function parseMutationBatchPreparation(
     scope: "encrypted_mutation_batch_undo" as const,
     occurredAt,
     completed: false as const,
-    replayed: false as const,
+    replayed,
     selectedOutcome: null,
     requestMacKey,
     ids,
@@ -2116,6 +2247,11 @@ async function parseReviewResolutionPreparation(
   const members = await parseMembers(record.members, request.ownerId, projectionFailure);
   const reservations = parseReservations(record.reservations, request.ownerId, projectionFailure);
   const expectedClass = interactionKeyClass(members, source);
+  const resolvesCaptureLinkedDuplicate =
+    source.review?.type === "duplicate_suggestion" &&
+    (action === "keep_both" || action === "dismiss") &&
+    source.receipt !== null;
+  const changesReceipt = writesNote || action === "keep_inbox" || resolvesCaptureLinkedDuplicate;
 
   if (
     ids.reviewItemId !== request.reviewItemId ||
@@ -2160,7 +2296,10 @@ async function parseReviewResolutionPreparation(
     ) {
       return projectionFailure();
     }
-  } else if (action === "keep_inbox" && (source.capture === null || source.receipt === null)) {
+  } else if (
+    (action === "keep_inbox" || resolvesCaptureLinkedDuplicate) &&
+    (source.capture === null || source.receipt === null)
+  ) {
     return projectionFailure();
   }
   if (source.capture !== null && source.review.captureId !== source.capture.captureId) {
@@ -2172,7 +2311,7 @@ async function parseReviewResolutionPreparation(
     if (
       source.review.captureId !== source.receipt?.captureId ||
       source.receipt.reviewItemId !== request.reviewItemId ||
-      ((writesNote || action === "keep_inbox") && source.capture === null)
+      (changesReceipt && source.capture === null)
     ) {
       return projectionFailure();
     }
@@ -2190,7 +2329,7 @@ async function parseReviewResolutionPreparation(
     expectedClass,
     projectionFailure
   );
-  assertPendingPreparationLifecycle(
+  const replayed = parsePendingPreparationReplay(
     record.completed,
     record.replayed,
     null,
@@ -2202,7 +2341,7 @@ async function parseReviewResolutionPreparation(
   const reviewReservation = reservationForRole(reservations, "review");
   const responseReservation = reservationForRole(reservations, "response");
   const receiptReservation = reservationForRole(reservations, "receipt");
-  const writesReceipt = source.receipt !== null && (writesNote || action === "keep_inbox");
+  const writesReceipt = source.receipt !== null && changesReceipt;
   const expectedReservationCount = 2 + members.length * 3 + (writesReceipt ? 1 : 0);
   if (
     reservations.length !== expectedReservationCount ||
@@ -2231,7 +2370,198 @@ async function parseReviewResolutionPreparation(
     action,
     occurredAt,
     completed: false as const,
-    replayed: false as const,
+    replayed,
+    requestMacKey,
+    ids,
+    source,
+    members,
+    reservations,
+    encryptedResponse: null,
+    encryptedResponseVerificationMac: null
+  });
+}
+
+function generatedResolutionAction(
+  resolution: GeneratedBlockResolveRequest["resolution"]
+): GeneratedBlockResolutionAction {
+  return resolution === "accept" ? "accept_expansion" : "reject_expansion";
+}
+
+async function parseGeneratedBlockResolutionPreparation(
+  value: unknown,
+  request: Readonly<{
+    ownerId: string;
+    blockId: EntityId<"blk">;
+    reviewItemId: EntityId<"rvw">;
+    input: GeneratedBlockResolveRequest;
+  }>
+): Promise<PrepareGeneratedBlockResolutionResult> {
+  const record = exactRecord(
+    value,
+    [
+      "scope",
+      "action",
+      "occurredAt",
+      "completed",
+      "replayed",
+      "requestMacKey",
+      "ids",
+      "source",
+      "members",
+      "reservations",
+      "encryptedResponse",
+      "encryptedResponseVerificationMac"
+    ],
+    projectionFailure
+  );
+  const action = generatedResolutionAction(request.input.resolution);
+  if (record.scope !== "encrypted_review_resolution" || record.action !== action) {
+    return projectionFailure();
+  }
+  if (typeof record.completed !== "boolean" || typeof record.replayed !== "boolean") {
+    return projectionFailure();
+  }
+  const idsRecord = exactRecord(
+    record.ids,
+    [
+      "reviewItemId",
+      "destinationNoteId",
+      "destinationRevisionId",
+      "destinationMutationId",
+      "generatedBlockId",
+      "stateRevision"
+    ],
+    projectionFailure
+  );
+  const ids = Object.freeze({
+    reviewItemId: entityId(idsRecord.reviewItemId, "rvw", projectionFailure),
+    destinationNoteId: nullableEntityId(idsRecord.destinationNoteId, "note", projectionFailure),
+    destinationRevisionId: nullableEntityId(
+      idsRecord.destinationRevisionId,
+      "rev",
+      projectionFailure
+    ),
+    destinationMutationId: nullableEntityId(
+      idsRecord.destinationMutationId,
+      "mut",
+      projectionFailure
+    ),
+    generatedBlockId: entityId(idsRecord.generatedBlockId, "blk", projectionFailure),
+    stateRevision: positiveInteger(idsRecord.stateRevision, projectionFailure)
+  });
+  if (
+    ids.reviewItemId !== request.reviewItemId ||
+    ids.generatedBlockId !== request.blockId ||
+    ids.stateRevision !== request.input.expectedStateRevision ||
+    ids.destinationNoteId !== null ||
+    ids.destinationRevisionId !== null ||
+    ids.destinationMutationId !== null
+  ) {
+    return projectionFailure();
+  }
+  if (record.completed) {
+    if (!Array.isArray(record.reservations) || record.reservations.length !== 0) {
+      return projectionFailure();
+    }
+    const completed = parseCompletedResponse(
+      record,
+      request.ownerId,
+      request.input.idempotencyKey,
+      projectionFailure
+    );
+    if (completed.requestMacKey.keyClass !== "ai_assisted") return projectionFailure();
+    return Object.freeze({
+      scope: "encrypted_review_resolution" as const,
+      action,
+      ...completed,
+      completed: true as const,
+      replayed: true as const,
+      ids,
+      source: null,
+      members: Object.freeze([]),
+      reservations: Object.freeze([])
+    });
+  }
+
+  const occurredAt = timestamp(record.occurredAt, projectionFailure);
+  const source = parseSource(record.source, request.ownerId, projectionFailure);
+  const members = await parseMembers(record.members, request.ownerId, projectionFailure);
+  const reservations = parseReservations(record.reservations, request.ownerId, projectionFailure);
+  const block = source.generatedBlock;
+  const review = source.review;
+  const receipt = source.receipt;
+  const capture = source.capture;
+  if (
+    source.decision !== null ||
+    members.length !== 0 ||
+    block === null ||
+    block === undefined ||
+    review === null ||
+    receipt === null ||
+    capture === null ||
+    block.blockId !== request.blockId ||
+    block.reviewItemId !== request.reviewItemId ||
+    block.state !== "proposed" ||
+    block.stateRevision !== request.input.expectedStateRevision ||
+    block.resolvedAt !== null ||
+    review.reviewItemId !== request.reviewItemId ||
+    review.type !== "pending_expansion" ||
+    review.state !== "open" ||
+    review.noteId !== block.noteId ||
+    review.captureId !== capture.captureId ||
+    receipt.captureId !== capture.captureId ||
+    receipt.reviewItemId !== request.reviewItemId ||
+    receipt.destinationNoteId !== block.noteId ||
+    receipt.decisionId !== block.decisionId ||
+    receipt.sourcePrivacy !== "ai_assisted" ||
+    capture.privacy !== "ai_assisted" ||
+    capture.status !== "needs_review"
+  ) {
+    return projectionFailure();
+  }
+  const requestMacKey = parsePreparedKey(
+    record.requestMacKey,
+    { ownerId: request.ownerId, keyClass: "ai_assisted", purpose: "content_mac" },
+    projectionFailure
+  );
+  const encryptedResponse = parseEncryptedResponse(
+    record.encryptedResponse,
+    request.ownerId,
+    request.input.idempotencyKey,
+    "ai_assisted",
+    projectionFailure
+  );
+  const replayed = parsePendingPreparationReplay(
+    record.completed,
+    record.replayed,
+    null,
+    encryptedResponse,
+    record.encryptedResponseVerificationMac,
+    projectionFailure
+  );
+  const responseReservation = reservationForRole(reservations, "response");
+  const reviewReservation = reservationForRole(reservations, "review");
+  const receiptReservation = reservationForRole(reservations, "receipt");
+  if (
+    reservations.length !== 3 ||
+    responseReservation?.resourceId !== `idempotency:${request.input.idempotencyKey}` ||
+    responseReservation.recordVersion !== 1 ||
+    responseReservation.keyClass !== "ai_assisted" ||
+    reviewReservation?.resourceId !== request.reviewItemId ||
+    reviewReservation.recordVersion !== review.recordVersion + 1 ||
+    reviewReservation.keyClass !== "ai_assisted" ||
+    receiptReservation?.resourceId !== receipt.captureId ||
+    receiptReservation.recordVersion !== receipt.recordVersion + 1 ||
+    receiptReservation.keyClass !== "ai_assisted"
+  ) {
+    return projectionFailure();
+  }
+  return Object.freeze({
+    scope: "encrypted_review_resolution" as const,
+    action,
+    occurredAt,
+    completed: false as const,
+    replayed,
     requestMacKey,
     ids,
     source,
@@ -2785,6 +3115,81 @@ function parseCommitResult(
   });
 }
 
+function parseGeneratedBlockResolutionCommitResult(
+  value: unknown,
+  input: Readonly<{
+    ownerId: string;
+    blockId: EntityId<"blk">;
+    reviewItemId: EntityId<"rvw">;
+    idempotencyKey: string;
+    expectedStateRevision: number;
+    resolution: GeneratedBlockResolveRequest["resolution"];
+  }>,
+  failure: Failure
+): GeneratedBlockResolutionCommitResult {
+  const record = exactRecord(
+    value,
+    [
+      "scope",
+      "outcome",
+      "decisionId",
+      "reviewItemId",
+      "feedbackEventId",
+      "batchId",
+      "members",
+      "encryptedResponse",
+      "responseVerificationMac",
+      "replayed",
+      "generatedBlockId",
+      "stateRevision"
+    ],
+    failure
+  );
+  const expectedOutcome = input.resolution === "accept" ? "accepted" : "rejected";
+  const reviewItemId = entityId(record.reviewItemId, "rvw", failure);
+  const feedbackEventId = entityId(record.feedbackEventId, "fbk", failure);
+  const generatedBlockId = entityId(record.generatedBlockId, "blk", failure);
+  const stateRevision = positiveInteger(record.stateRevision, failure);
+  if (
+    record.scope !== "encrypted_review_resolution" ||
+    record.outcome !== expectedOutcome ||
+    record.decisionId !== null ||
+    reviewItemId !== input.reviewItemId ||
+    record.batchId !== null ||
+    !Array.isArray(record.members) ||
+    record.members.length !== 0 ||
+    typeof record.replayed !== "boolean" ||
+    generatedBlockId !== input.blockId ||
+    stateRevision !== input.expectedStateRevision + 1
+  ) {
+    return failure();
+  }
+  return Object.freeze({
+    scope: "encrypted_review_resolution" as const,
+    outcome: expectedOutcome,
+    decisionId: null,
+    reviewItemId,
+    feedbackEventId,
+    batchId: null,
+    members: Object.freeze([]),
+    encryptedResponse: parseStoredCipher(
+      record.encryptedResponse,
+      {
+        ownerId: input.ownerId,
+        resourceId: `idempotency:${input.idempotencyKey}`,
+        recordVersion: 1,
+        kind: "idempotency_response",
+        keyClass: "ai_assisted"
+      },
+      failure
+    ),
+    responseVerificationMac: parseStoredMac(record.responseVerificationMac, "ai_assisted", failure),
+    replayed: record.replayed,
+    generatedBlockId,
+    stateRevision
+  });
+}
+
 function correctionResultExpectation(
   preparation: PrepareDecisionCorrectionResult,
   selected: "applied" | "needs_review"
@@ -3032,12 +3437,6 @@ export function createEncryptedOwnerInteractionRpcAdapter(
       const parsed = ReviewResolveRequestSchema.safeParse(requestRecord.request);
       if (!parsed.success) return inputFailure();
       const request = parsed.data;
-      if (
-        request.resolution.type === "accept_expansion" ||
-        request.resolution.type === "reject_expansion"
-      ) {
-        return inputFailure();
-      }
       const structuralResolution =
         request.resolution.type === "create"
           ? Object.freeze({
@@ -3131,6 +3530,100 @@ export function createEncryptedOwnerInteractionRpcAdapter(
           batchId: null,
           expectedClass,
           memberExpectation
+        },
+        projectionFailure
+      );
+    },
+
+    async prepareGeneratedBlockResolution(input) {
+      const requestRecord = parseOwnerInteractionInput(input, [
+        "ownerId",
+        "blockId",
+        "reviewItemId",
+        "request"
+      ]);
+      const ownerId = canonicalOwnerId(requestRecord.ownerId, inputFailure);
+      const blockId = entityId(requestRecord.blockId, "blk", inputFailure);
+      const reviewItemId = entityId(requestRecord.reviewItemId, "rvw", inputFailure);
+      const parsed = GeneratedBlockResolveRequestSchema.safeParse(requestRecord.request);
+      if (!parsed.success) return inputFailure();
+      const request = parsed.data;
+      return parseGeneratedBlockResolutionPreparation(
+        await client.rpc("prepare_encrypted_review_resolution", {
+          p_owner_id: ownerId,
+          p_review_item_id: reviewItemId,
+          p_idempotency_key: request.idempotencyKey,
+          p_resolution: {
+            type: generatedResolutionAction(request.resolution),
+            generatedBlockId: blockId,
+            expectedStateRevision: request.expectedStateRevision
+          }
+        }),
+        { ownerId, blockId, reviewItemId, input: request }
+      );
+    },
+
+    async commitGeneratedBlockResolution(input) {
+      const requestRecord = parseOwnerInteractionInput(input, [
+        "ownerId",
+        "blockId",
+        "request",
+        "preparation",
+        "command"
+      ]);
+      const ownerId = canonicalOwnerId(requestRecord.ownerId, inputFailure);
+      const blockId = entityId(requestRecord.blockId, "blk", inputFailure);
+      const requestParsed = GeneratedBlockResolveRequestSchema.safeParse(requestRecord.request);
+      if (!requestParsed.success) return inputFailure();
+      const request = requestParsed.data;
+      const preparation = requestRecord.preparation as PrepareGeneratedBlockResolutionResult;
+      const reviewItemId = preparation.ids.reviewItemId;
+      const sourceReview = preparation.completed ? null : preparation.source.review;
+      if (
+        preparation.ids.generatedBlockId !== blockId ||
+        preparation.ids.stateRevision !== request.expectedStateRevision ||
+        preparation.action !== generatedResolutionAction(request.resolution) ||
+        (!preparation.completed && sourceReview === null)
+      ) {
+        return inputFailure();
+      }
+      const expectedClass = preparation.completed
+        ? preparation.requestMacKey.keyClass
+        : interactionKeyClass(preparation.members, preparation.source);
+      if (expectedClass !== "ai_assisted") return inputFailure();
+      const parsedCommand = preparation.completed
+        ? parseReplayCommand(requestRecord.command, null, expectedClass, inputFailure)
+        : parseCommitCommand(
+            requestRecord.command,
+            {
+              ownerId,
+              idempotencyKey: request.idempotencyKey,
+              selectedOutcome: null,
+              source: preparation.source,
+              cryptoMembers: preparation.members,
+              writeMembers: Object.freeze([]),
+              reservations: preparation.reservations,
+              reviewItemId,
+              reviewType: "pending_expansion",
+              reviewRecordVersion: (sourceReview?.recordVersion ?? inputFailure()) + 1
+            },
+            inputFailure
+          );
+      return parseGeneratedBlockResolutionCommitResult(
+        await client.rpc("resolve_encrypted_generated_block", {
+          p_owner_id: ownerId,
+          p_generated_block_id: blockId,
+          p_expected_state_revision: request.expectedStateRevision,
+          p_idempotency_key: request.idempotencyKey,
+          p_command: parsedCommand
+        }),
+        {
+          ownerId,
+          blockId,
+          reviewItemId,
+          idempotencyKey: request.idempotencyKey,
+          expectedStateRevision: request.expectedStateRevision,
+          resolution: request.resolution
         },
         projectionFailure
       );

@@ -56,7 +56,7 @@ Each component ships with all applicable states: default, hover (web), focus-vis
 - **Note card / list row**: title, type glyph, space path, updated time, pinned marker.
 - **Note editor**: title field, Markdown body, toolbar (mobile: above keyboard; web: floating), revision indicator, conflict banner.
 - **Review item card**: capture text, up to 3 destination chips + `New note`, resolve/dismiss.
-- **Generated block**: tinted background, `AI` badge, accept/reject when proposed, provenance link. This is the E3 target; D currently discards returned expansion text and must not render a fake pending block.
+- **Generated block**: tinted background, `AI` badge, accept/reject when proposed, provenance link. E3 renders the separately encrypted proposal outside editable user-authored note content; acceptance preserves its generated provenance and rejection hides it without changing the note revision.
 - **Rule row** (settings): condition, destination, source badge, last-fired, enable toggle.
 - **BYOK key panel** (settings): E4-only provider select, paste field (masked), validate state, last-four display, status pill, delete. Show only server-discovered provider/tiers whose adapter/eval gate passed; Anthropic is currently hidden.
 - **Banners**: offline, provider outage, invalid key, budget exhausted.

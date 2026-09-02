@@ -2,10 +2,10 @@
 
 set -euo pipefail
 
-trap 'echo "Milestones B–E2 HTTP E2E failed near line $LINENO." >&2' ERR
+trap 'echo "Milestones B–E3 HTTP E2E failed near line $LINENO." >&2' ERR
 
 if ! command -v psql >/dev/null 2>&1; then
-  echo "The Milestones B–E2 HTTP E2E requires the PostgreSQL psql client." >&2
+  echo "The Milestones B–E3 HTTP E2E requires the PostgreSQL psql client." >&2
   exit 1
 fi
 e2e_psql_version="$(psql --version)"
@@ -16,7 +16,7 @@ case "$e2e_psql_version" in
     exit 1
     ;;
 esac
-printf 'Milestones B–E2 HTTP E2E PostgreSQL client: %s\n' "$e2e_psql_version"
+printf 'Milestones B–E3 HTTP E2E PostgreSQL client: %s\n' "$e2e_psql_version"
 
 e2e_tmp_dir="$(mktemp -d)"
 e2e_app_pid=""
@@ -39,7 +39,7 @@ cleanup() {
       || true
   fi
   if [[ "$exit_code" -ne 0 && -f "$e2e_tmp_dir/web.log" ]]; then
-    printf 'Milestones B–E2 HTTP E2E stopped at stage: %s\n' "$e2e_stage" >&2
+    printf 'Milestones B–E3 HTTP E2E stopped at stage: %s\n' "$e2e_stage" >&2
     # Keep failure diagnostics bounded without ever echoing a plaintext test
     # canary if the application has regressed and logged one.
     tail -n 120 "$e2e_tmp_dir/web.log" | \
@@ -71,6 +71,23 @@ cleanup() {
       E2E_LOG_E2_DECLINE_CONDITION="${e2e_e2_decline_condition:-}" \
       E2E_LOG_E2_ACCEPT_DESTINATION="${e2e_e2_accept_destination_title:-}" \
       E2E_LOG_E2_DECLINE_DESTINATION="${e2e_e2_decline_destination_title:-}" \
+      E2E_LOG_E3_ACCEPT="${e2e_e3_accept_generated:-}" \
+      E2E_LOG_E3_REJECT="${e2e_e3_reject_generated:-}" \
+      E2E_LOG_E3_KEEP_EXPLANATION="${e2e_e3_keep_explanation:-}" \
+      E2E_LOG_E3_DISMISS_EXPLANATION="${e2e_e3_dismiss_explanation:-}" \
+      E2E_LOG_E3_ACCEPT_TITLE="${e2e_e3_accept_title:-}" \
+      E2E_LOG_E3_ACCEPT_BODY="${e2e_e3_accept_body:-}" \
+      E2E_LOG_E3_ACCEPT_DESTINATION="${e2e_e3_accept_destination_title:-}" \
+      E2E_LOG_E3_REJECT_TITLE="${e2e_e3_reject_title:-}" \
+      E2E_LOG_E3_REJECT_BODY="${e2e_e3_reject_body:-}" \
+      E2E_LOG_E3_REJECT_DESTINATION="${e2e_e3_reject_destination_title:-}" \
+      E2E_LOG_E3_KEEP_TITLE="${e2e_e3_keep_title:-}" \
+      E2E_LOG_E3_KEEP_BODY="${e2e_e3_keep_body:-}" \
+      E2E_LOG_E3_KEEP_DESTINATION="${e2e_e3_keep_destination_title:-}" \
+      E2E_LOG_E3_DISMISS_TITLE="${e2e_e3_dismiss_title:-}" \
+      E2E_LOG_E3_DISMISS_BODY="${e2e_e3_dismiss_body:-}" \
+      E2E_LOG_E3_DISMISS_DESTINATION="${e2e_e3_dismiss_destination_title:-}" \
+      E2E_LOG_E3_DESTINATION_BODY="${e2e_e3_destination_body:-}" \
       E2E_LOG_CAPTURE_CANARY="${e2e_capture_canary:-}" \
       E2E_LOG_SEARCH_CANARY="${e2e_private_search_canary:-}" node -e '
         let input = "";
@@ -3314,6 +3331,11 @@ for e2e_e2_canary in "${e2e_e2_log_canaries[@]}"; do
   fi
 done
 
+# E3 adds encrypted generated-block lifecycle and duplicate-suggestion HTTP
+# coverage on the same built standalone server and synthetic encrypted owner.
+# shellcheck source=.github/workflows/scripts/milestone-e3-http-e2e.sh
+source .github/workflows/scripts/milestone-e3-http-e2e.sh
+
 e2e_second_key="milestone-b-http-create-second-$e2e_run_id"
 e2e_second="$(
   request_json POST /notes \
@@ -3754,4 +3776,4 @@ request_json POST /auth/sign-out | node -e '
   });
 '
 
-echo "Milestones B–E2 local HTTP E2E passed."
+echo "Milestones B–E3 local HTTP E2E passed."

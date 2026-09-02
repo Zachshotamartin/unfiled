@@ -19,6 +19,7 @@ import type {
   EncryptedNoteRetentionReceiptCommit,
   EncryptedNoteRetentionRpcStore
 } from "./encrypted-note-retention-rpc-store";
+import { generatedExpansionReceiptProjectionMatches } from "./encrypted-receipt-projection";
 import { ServiceRpcError, ServiceRpcErrorCode } from "./service-rpc-client";
 
 export type EncryptedNoteRetentionCoordinatorDependencies = Readonly<{
@@ -64,7 +65,8 @@ function receiptMatchesProjection(
     payload.mutationId === row.mutationId &&
     payload.outcome === row.outcome &&
     payload.destination?.noteId === (row.destinationNoteId ?? undefined) &&
-    sameStrings(payload.reasonCodes, row.reasonCodes) &&
+    (sameStrings(payload.reasonCodes, row.reasonCodes) ||
+      generatedExpansionReceiptProjectionMatches(payload, row)) &&
     sameInstant(payload.createdAt, row.createdAt)
   );
 }

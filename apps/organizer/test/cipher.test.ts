@@ -65,8 +65,11 @@ const AUTO_ROUTING_DECISION = Object.freeze({
   score: 1
 });
 const IDS = Object.freeze({
+  block: "blk_01ARZ3NDEKTSV4RRFFQ69G5FAJ",
   candidate: "note_01ARZ3NDEKTSV4RRFFQ69G5FAB",
+  candidateTwo: "note_01ARZ3NDEKTSV4RRFFQ69G5FAK",
   candidateNote: "note_01ARZ3NDEKTSV4RRFFQ69G5FAA",
+  candidateNoteTwo: "note_01ARZ3NDEKTSV4RRFFQ69G5FAM",
   capture: "cap_01ARZ3NDEKTSV4RRFFQ69G5FAV",
   createdNote: "note_01ARZ3NDEKTSV4RRFFQ69G5FAV",
   decision: "dec_01ARZ3NDEKTSV4RRFFQ69G5FAC",
@@ -79,6 +82,7 @@ const IDS = Object.freeze({
 } as const);
 const RESERVATIONS = Object.freeze({
   decision: "11111111-1111-4111-8111-111111111111",
+  generatedBlock: "11111111-1111-4111-8111-111111111115",
   noteWrite: "11111111-1111-4111-8111-111111111112",
   receipt: "11111111-1111-4111-8111-111111111113",
   review: "11111111-1111-4111-8111-111111111114"
@@ -244,6 +248,7 @@ function job(
     jobId: IDS.job,
     leaseExpiresAt: "2026-08-31T20:00:00.000Z",
     leaseToken: "44444444-4444-4444-8444-444444444444",
+    modelId: "gpt-5.4-mini-2026-03-17",
     occurredAt: OCCURRED_AT,
     ownerId: OWNER_ID,
     promptVersion: "routing-v1",
@@ -269,6 +274,7 @@ function preparation(mode: "append" | "create", expectedRevision: number | null)
     expectedRevision,
     ids: Object.freeze({
       decisionId: IDS.decision,
+      generatedBlockId: IDS.block,
       mutationId: IDS.mutation,
       reviewItemId: IDS.review,
       revisionId: IDS.revision
@@ -281,6 +287,10 @@ function preparation(mode: "append" | "create", expectedRevision: number | null)
     replayed: false,
     reservations: Object.freeze({
       decision: Object.freeze({ operationCount: 1 as const, reservationId: RESERVATIONS.decision }),
+      generatedBlock: Object.freeze({
+        operationCount: 1 as const,
+        reservationId: RESERVATIONS.generatedBlock
+      }),
       noteWrite: Object.freeze({
         operationCount: 4 as const,
         reservationId: RESERVATIONS.noteWrite
@@ -292,33 +302,33 @@ function preparation(mode: "append" | "create", expectedRevision: number | null)
   } satisfies OrganizerPreparation);
 }
 
-function stableIds(kind: "append" | "create" | "review"): StableOrganizationIds {
+function stableIds(
+  kind: "append" | "create" | "review",
+  generatedExpansion = false
+): StableOrganizationIds {
   return Object.freeze({
     createdNoteId: kind === "create" ? IDS.createdNote : null,
     decisionId: IDS.decision,
-    generatedBlockId: null,
+    generatedBlockId: generatedExpansion ? IDS.block : null,
     mutationId: kind === "review" ? null : IDS.mutation,
-    reviewItemId: kind === "review" ? IDS.review : null,
+    reviewItemId: kind === "review" || generatedExpansion ? IDS.review : null,
     revisionId: kind === "review" ? null : IDS.revision
   });
 }
 
-function manifest(candidate?: DecryptedCandidate) {
+function manifest(...candidates: readonly DecryptedCandidate[]) {
   return Object.freeze({
     authorizedSpaceIds: [IDS.space],
     authorizedTagIds: [IDS.tag],
-    candidates:
-      candidate === undefined
-        ? []
-        : [
-            Object.freeze({
-              candidateId: candidate.candidateId,
-              isOpen: candidate.isOpen,
-              noteId: candidate.noteId,
-              noteType: candidate.noteType,
-              revision: candidate.revision
-            })
-          ],
+    candidates: candidates.map((candidate) =>
+      Object.freeze({
+        candidateId: candidate.candidateId,
+        isOpen: candidate.isOpen,
+        noteId: candidate.noteId,
+        noteType: candidate.noteType,
+        revision: candidate.revision
+      })
+    ),
     controls: CONTROLS,
     schemaVersion: 1 as const
   });
@@ -351,7 +361,11 @@ function createPlan(rawContent: string): MaterializedOrganizationCommand {
 
 function appendPlan(
   rawContent: string,
-  candidate: DecryptedCandidate
+  candidate: DecryptedCandidate,
+  generatedExpansion: Readonly<{
+    kind: "summary" | "interpretation" | "suggestion" | "label";
+    text: string;
+  }> | null = null
 ): MaterializedOrganizationCommand {
   return materializeAuthorizedOrganizationPlan({
     captureText: rawContent,
@@ -361,12 +375,12 @@ function appendPlan(
       captureKind: "freeform",
       decision: "append_to_note",
       destination: { candidateId: candidate.candidateId, newNote: null },
-      generatedExpansion: null,
+      generatedExpansion,
       operations: [{ content: rawContent, type: "append_raw" }],
       reasonCodes: ["semantic_match", "type_match"],
       schemaVersion: 1
     },
-    stableIds: stableIds("append")
+    stableIds: stableIds("append", generatedExpansion !== null)
   });
 }
 
@@ -1041,6 +1055,118 @@ describe("production organizer cipher", () => {
     });
   });
 
+  it("seals a routed expansion as a separate encrypted block and bound Review proposal", async () => {
+    const rawContent = "Append the original capture without generated prose.";
+    const expansionText = "Consider grouping this with the weekly plan.";
+    const encrypted = await candidateFixture(crypto);
+    const cipher = createProductionOrganizerCipher();
+    const decrypted = await cipher.openCandidate({
+      authority: AUTHORITY,
+      candidate: encrypted,
+      ownerId: OWNER_ID,
+      signal: SIGNAL
+    });
+    const plan = appendPlan(rawContent, decrypted, {
+      kind: "suggestion",
+      text: expansionText
+    });
+    const command = await cipher.sealCommand({
+      activeReplanCount: 0,
+      authority: AUTHORITY,
+      candidates: [Object.freeze({ decrypted, encrypted })],
+      capture: capture(rawContent),
+      controls: CONTROLS,
+      destination: Object.freeze({ decrypted, encrypted }),
+      job: job(),
+      plan,
+      preparation: preparation("append", 2),
+      ragGenerationId: "rag-generation-v1",
+      reviewReason: "expansion_pending",
+      routingDecision: AUTO_ROUTING_DECISION,
+      signal: SIGNAL,
+      stableIds: stableIds("append", true)
+    });
+
+    expect(command).toMatchObject({
+      outcome: "appended",
+      reviewReason: "expansion_pending",
+      generatedBlock: {
+        kind: "suggestion",
+        modelId: "gpt-5.4-mini-2026-03-17",
+        promptVersion: "routing-v1"
+      },
+      review: { type: "pending_expansion" }
+    });
+    const block = sealedSurface<"generated_block">(command.generatedBlock);
+    const review = sealedSurface<"review_item">(command.review);
+    const receipt = sealedSurface<"capture_receipt">(command.receipt);
+    expect(block.cipher.reservationId).toBe(RESERVATIONS.generatedBlock);
+    expect(review.cipher.reservationId).toBe(RESERVATIONS.review);
+    expect(JSON.stringify(command)).not.toContain(expansionText);
+
+    const openedBlock = await crypto.aggregate.openGeneratedBlock(
+      crypto.access,
+      rpcRecord(block.cipher, {
+        kind: "generated_block",
+        recordVersion: 1,
+        resourceId: IDS.block
+      }),
+      { blockId: IDS.block }
+    );
+    expect(openedBlock).toEqual({ content: expansionText, schemaVersion: 1 });
+    await expect(
+      crypto.aggregate.verifyAggregateVerificationMac(
+        crypto.access,
+        macRecord(block.verificationMac),
+        { blockId: IDS.block, payload: openedBlock, surface: "generated_block" }
+      )
+    ).resolves.toBe(true);
+    await expect(
+      crypto.aggregate.openReview(
+        crypto.access,
+        rpcRecord(review.cipher, {
+          kind: "review_item",
+          recordVersion: 1,
+          resourceId: IDS.review
+        }),
+        { recordVersion: 1, reviewId: IDS.review, sourcePrivacy: "ai_assisted" }
+      )
+    ).resolves.toMatchObject({
+      proposal: { blockId: IDS.block, type: "generated_block" },
+      resolution: null,
+      state: "open"
+    });
+    const openedReceipt = await crypto.aggregate.openCaptureReceipt(
+      crypto.access,
+      rpcRecord(receipt.cipher, {
+        kind: "capture_receipt",
+        recordVersion: 1,
+        resourceId: IDS.capture
+      }),
+      { captureId: IDS.capture, recordVersion: 1, sourcePrivacy: "ai_assisted" }
+    );
+    expect(openedReceipt.reviewItemId).toBe(IDS.review);
+    expect(openedReceipt.insertedContentReferences).toContainEqual({
+      blockId: IDS.block,
+      type: "ai_generated"
+    });
+    const decision = sealedSurface<"organization_decision">(command.decision);
+    await expect(
+      crypto.aggregate.openOrganizationDecision(
+        crypto.access,
+        rpcRecord(decision.cipher, {
+          kind: "organization_decision",
+          recordVersion: 1,
+          resourceId: IDS.decision
+        }),
+        { decisionId: IDS.decision }
+      )
+    ).resolves.toMatchObject({
+      signals: { generatedBlockId: IDS.block },
+      validatedPlan: { generatedExpansion: null }
+    });
+  });
+
   it("seals review without a note write and keeps review content encrypted", async () => {
     const rawContent = "Review cipher canary remains encrypted.";
     const command = await createProductionOrganizerCipher().sealCommand({
@@ -1115,6 +1241,95 @@ describe("production organizer cipher", () => {
         { captureId: IDS.capture, recordVersion: 1, sourcePrivacy: "ai_assisted" }
       )
     ).resolves.toMatchObject({ outcome: "needs_review", reviewItemId: IDS.review });
+  });
+
+  it("seals duplicate suspicion as a non-destructive encrypted two-note proposal", async () => {
+    const rawContent = "Potential duplicate capture stays unchanged.";
+    const firstEncrypted = await candidateFixture(crypto);
+    const secondEncrypted = await candidateFixture(crypto, {
+      candidateId: IDS.candidateTwo,
+      noteId: IDS.candidateNoteTwo,
+      revision: 4
+    });
+    const cipher = createProductionOrganizerCipher();
+    const first = await cipher.openCandidate({
+      authority: AUTHORITY,
+      candidate: firstEncrypted,
+      ownerId: OWNER_ID,
+      signal: SIGNAL
+    });
+    const second = await cipher.openCandidate({
+      authority: AUTHORITY,
+      candidate: secondEncrypted,
+      ownerId: OWNER_ID,
+      signal: SIGNAL
+    });
+    const plan = materializeAuthorizedOrganizationPlan({
+      captureText: rawContent,
+      manifest: manifest(first, second),
+      plan: {
+        alternatives: [first.candidateId, second.candidateId],
+        captureKind: "freeform",
+        decision: "needs_review",
+        destination: { candidateId: null, newNote: null },
+        generatedExpansion: null,
+        operations: [{ content: rawContent, type: "append_raw" }],
+        reasonCodes: ["ambiguous_intent", "duplicate_suspected"],
+        schemaVersion: 1
+      },
+      stableIds: stableIds("review")
+    });
+    const command = await cipher.sealCommand({
+      activeReplanCount: 0,
+      authority: AUTHORITY,
+      candidates: [
+        Object.freeze({ decrypted: first, encrypted: firstEncrypted }),
+        Object.freeze({ decrypted: second, encrypted: secondEncrypted })
+      ],
+      capture: capture(rawContent),
+      controls: CONTROLS,
+      destination: null,
+      job: job(),
+      plan,
+      preparation: preparation("create", null),
+      ragGenerationId: null,
+      reviewReason: "duplicate_suggestion",
+      routingDecision: null,
+      signal: SIGNAL,
+      stableIds: stableIds("review")
+    });
+
+    expect(command).toMatchObject({
+      generatedBlock: null,
+      noteWrite: null,
+      outcome: "review",
+      review: { type: "duplicate_suggestion" },
+      reviewReason: "duplicate_suggestion"
+    });
+    expect(JSON.stringify(command)).not.toContain("Keep both leaves every note unchanged");
+    const review = sealedSurface<"review_item">(command.review);
+    const openedReview = await crypto.aggregate.openReview(
+      crypto.access,
+      rpcRecord(review.cipher, {
+        kind: "review_item",
+        recordVersion: 1,
+        resourceId: IDS.review
+      }),
+      { recordVersion: 1, reviewId: IDS.review, sourcePrivacy: "ai_assisted" }
+    );
+    expect(openedReview).toMatchObject({
+      proposal: {
+        explanation:
+          "This capture may overlap with these notes. Keep both leaves every note unchanged.",
+        notes: [
+          { noteId: IDS.candidateNote, revision: 2 },
+          { noteId: IDS.candidateNoteTwo, revision: 4 }
+        ],
+        type: "duplicate_notes"
+      },
+      resolution: null,
+      state: "open"
+    });
   });
 
   it.each([

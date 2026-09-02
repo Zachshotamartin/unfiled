@@ -11,7 +11,7 @@ struct ReceiptContentPresentation: Equatable, Identifiable, Sendable {
     let content: String
 
     var provenanceLabel: String? {
-        kind == .aiGenerated ? "AI-generated" : nil
+        kind == .aiGenerated ? "AI-generated proposal" : nil
     }
 }
 
@@ -105,6 +105,46 @@ enum ReviewActionKind: String, Equatable, Sendable {
     case keepInbox
     case dismiss
     case keepBoth
+    case acceptExpansion
+    case rejectExpansion
+}
+
+struct GeneratedBlockPresentation: Equatable, Identifiable, Sendable {
+    let id: String
+    let noteID: String
+    let kind: GeneratedBlockKind
+    let content: String
+    let state: GeneratedBlockState
+    let stateRevision: Int
+    let modelID: String
+    let promptVersion: String
+
+    var isVisibleInNote: Bool { state != .rejected }
+    var isActionable: Bool { state == .proposed }
+    var operationID: String { "generated-block.\(id)" }
+    var provenanceLabel: String { "Model \(modelID) · Prompt \(promptVersion)" }
+
+    var reviewAccessibilityLabel: String {
+        "AI-generated \(kindLabel.lowercased()), \(stateLabel.lowercased()). " +
+            "Model \(modelID). Prompt \(promptVersion). Content: \(content)"
+    }
+
+    var kindLabel: String {
+        switch kind {
+        case .summary: "Summary"
+        case .interpretation: "Interpretation"
+        case .suggestion: "Suggestion"
+        case .label: "Label"
+        }
+    }
+
+    var stateLabel: String {
+        switch state {
+        case .proposed: "Proposed"
+        case .accepted: "Accepted"
+        case .rejected: "Rejected"
+        }
+    }
 }
 
 struct ReviewDestinationPresentation: Equatable, Identifiable, Sendable {
@@ -127,6 +167,8 @@ struct ReviewPresentation: Equatable, Identifiable, Sendable {
     let actionSummary: String
     let captureID: String?
     let noteID: String?
+    let duplicateExplanation: String?
+    let generatedBlock: GeneratedBlockPresentation?
     let suggestedDestinations: [ReviewDestinationPresentation]
     let suggestedNewNote: ReviewNewNotePresentation?
     let relatedNotes: [ReviewDestinationPresentation]
@@ -144,6 +186,8 @@ enum ReviewUserAction: Sendable {
     case keepInbox
     case dismiss
     case keepBoth
+    case acceptExpansion
+    case rejectExpansion
 }
 
 struct RevisionPresentation: Equatable, Identifiable, Sendable {

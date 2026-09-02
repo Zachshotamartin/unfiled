@@ -594,7 +594,8 @@ export function materializeAuthorizedOrganizationPlan(
 
   if (plan.decision === "append_to_note") {
     assertNull(stableIds.createdNoteId, "Created note ID");
-    assertNull(stableIds.reviewItemId, "Review item ID");
+    if (base.generatedBlock === null) assertNull(stableIds.reviewItemId, "Review item ID");
+    else requireId(stableIds.reviewItemId, "Review item ID");
     const candidateId = plan.destination.candidateId;
     if (candidateId === null) {
       fail(OrganizationMaterializationErrorCode.INVALID_DECISION, "Destination is invalid");
@@ -621,7 +622,8 @@ export function materializeAuthorizedOrganizationPlan(
   }
 
   if (plan.decision === "create_note") {
-    assertNull(stableIds.reviewItemId, "Review item ID");
+    if (base.generatedBlock === null) assertNull(stableIds.reviewItemId, "Review item ID");
+    else requireId(stableIds.reviewItemId, "Review item ID");
     const destination = plan.destination.newNote;
     if (destination === null) {
       fail(OrganizationMaterializationErrorCode.INVALID_DECISION, "Destination is invalid");

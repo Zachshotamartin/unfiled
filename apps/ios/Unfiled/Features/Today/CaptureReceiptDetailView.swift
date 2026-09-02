@@ -239,7 +239,7 @@ struct ReceiptInsertedContentRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             item.kind == .aiGenerated
-                ? "AI-generated: \(item.content)"
+                ? "AI-generated proposal: \(item.content)"
                 : item.content
         )
     }

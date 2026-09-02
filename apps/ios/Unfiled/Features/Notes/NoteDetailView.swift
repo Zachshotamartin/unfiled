@@ -12,12 +12,24 @@ struct NoteDetailView: View {
 
     let note: NoteDetailPresentation
     var isArchived = false
+    var generatedBlocks: [GeneratedBlockPresentation] = []
+    var isLoadingGeneratedBlocks = false
+    var generatedBlocksError: String?
+    var hasMoreGeneratedBlocks = false
+    var isLoadingMoreGeneratedBlocks = false
+    var generatedBlocksLoadMoreError: String?
+    var generatedBlocksPaginationNotice: String?
+    var submittingInteractionIDs: Set<String> = []
+    var interactionErrors: [String: String] = [:]
     let onEdit: @MainActor () -> Void
     let onShowRevisionHistory: @MainActor () -> Void
     let onOpenProvenance: @MainActor () -> Void
     let onToggleChecklistItem: @MainActor (String, Bool) async throws -> Void
     let onSetArchived: @MainActor (Bool) async throws -> Void
     let onDelete: @MainActor () async throws -> Void
+    var onRefreshGeneratedBlocks: @MainActor () async -> Void = {}
+    var onLoadMoreGeneratedBlocks: @MainActor () async -> Void = {}
+    var onResolveGeneratedBlock: @MainActor (String, GeneratedBlockResolution) -> Void = { _, _ in }
 
     private var progress: ChecklistProgress {
         ChecklistProgress(items: note.checklistItems, overrides: optimisticChecks)
@@ -54,6 +66,29 @@ struct NoteDetailView: View {
 
                 if !note.checklistItems.isEmpty {
                     checklist
+                    SectionRule()
+                }
+
+                GeneratedBlocksSection(
+                    blocks: generatedBlocks,
+                    isLoading: isLoadingGeneratedBlocks,
+                    loadError: generatedBlocksError,
+                    hasMore: hasMoreGeneratedBlocks,
+                    isLoadingMore: isLoadingMoreGeneratedBlocks,
+                    loadMoreError: generatedBlocksLoadMoreError,
+                    paginationNotice: generatedBlocksPaginationNotice,
+                    submittingInteractionIDs: submittingInteractionIDs,
+                    interactionErrors: interactionErrors,
+                    onRefresh: onRefreshGeneratedBlocks,
+                    onLoadMore: onLoadMoreGeneratedBlocks,
+                    onResolve: onResolveGeneratedBlock
+                )
+
+                if !GeneratedBlockVisibility.visible(generatedBlocks).isEmpty ||
+                    isLoadingGeneratedBlocks || generatedBlocksError != nil ||
+                    hasMoreGeneratedBlocks || isLoadingMoreGeneratedBlocks ||
+                    generatedBlocksLoadMoreError != nil ||
+                    generatedBlocksPaginationNotice != nil {
                     SectionRule()
                 }
 

@@ -107,6 +107,34 @@ describe("aggregate verification MACs", () => {
     expect(JSON.stringify(record)).not.toContain(privateReceipt.headline);
   });
 
+  it("authenticates a generated block under its fixed AI-assisted identity", async () => {
+    const harness = await createHarness();
+    const input = {
+      surface: "generated_block" as const,
+      blockId: IDS.block,
+      payload: { content: "Encrypted proposal canary", schemaVersion: 1 as const }
+    };
+    const record = await harness.service.createAggregateVerificationMac(harness.accessA, input);
+
+    expect(record).toMatchObject({ keyClass: "ai_assisted", keyPurpose: "content_mac" });
+    await expect(
+      harness.service.verifyAggregateVerificationMac(harness.accessA, record, input)
+    ).resolves.toBe(true);
+    await expect(
+      harness.service.verifyAggregateVerificationMac(harness.accessA, record, {
+        ...input,
+        blockId: "blk_01J6M9Q7G4BMKB33GSG3NJ6D1Y"
+      })
+    ).resolves.toBe(false);
+    await expect(
+      harness.service.verifyAggregateVerificationMac(harness.accessA, record, {
+        ...input,
+        payload: { ...input.payload, content: "tampered" }
+      })
+    ).resolves.toBe(false);
+    expect(JSON.stringify(record)).not.toContain(input.payload.content);
+  });
+
   it.each(["ai_assisted", "private_manual"] as const)(
     "derives current-note class %s from authoritative privacy and verifies the exact payload",
     async (privacy) => {

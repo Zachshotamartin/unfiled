@@ -30,6 +30,7 @@ const GENERATION = new RegExp(`^igen_${ENTITY_SUFFIX}$`, "u");
 const SPACE = new RegExp(`^spc_${ENTITY_SUFFIX}$`, "u");
 const TAG = new RegExp(`^tag_${ENTITY_SUFFIX}$`, "u");
 const DECISION = new RegExp(`^dec_${ENTITY_SUFFIX}$`, "u");
+const BLOCK = new RegExp(`^blk_${ENTITY_SUFFIX}$`, "u");
 const MUTATION = new RegExp(`^mut_${ENTITY_SUFFIX}$`, "u");
 const REVIEW = new RegExp(`^rvw_${ENTITY_SUFFIX}$`, "u");
 const REVISION = new RegExp(`^rev_${ENTITY_SUFFIX}$`, "u");
@@ -38,6 +39,7 @@ const TIMESTAMP =
   /^(\d{4})-(0[1-9]|1[0-2])-([0-2]\d|3[01])T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.(\d{1,6}))?(Z|([+-])([01]\d|2[0-3]):([0-5]\d))$/u;
 const DATE = /^\d{4}-\d{2}-\d{2}$/u;
 const MODEL_ID = /^[\x21-\x7e]{1,200}$/u;
+const ROUTING_MODEL_ID = /^[\x21-\x7e]{1,120}$/u;
 const SOURCE_BYTE_BUDGET = 8_388_608;
 const BASE64URL = /^[A-Za-z0-9_-]+$/u;
 const HEX_MAC = /^[0-9a-f]{64}$/u;
@@ -425,6 +427,7 @@ function claimResult(value: unknown, limit: number): readonly ClaimedOrganizerJo
         "jobId",
         "leaseExpiresAt",
         "leaseToken",
+        "modelId",
         "occurredAt",
         "ownerId",
         "promptVersion",
@@ -442,6 +445,7 @@ function claimResult(value: unknown, limit: number): readonly ClaimedOrganizerJo
       if (ids.has(jobId)) reject();
       ids.add(jobId);
       const promptVersion = string(row.promptVersion, /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/u);
+      const modelId = string(row.modelId, ROUTING_MODEL_ID);
       const schemaVersion = integer(row.schemaVersion, 1, 2_147_483_647);
       if (
         typeof row.clientTimezone !== "string" ||
@@ -463,6 +467,7 @@ function claimResult(value: unknown, limit: number): readonly ClaimedOrganizerJo
         jobId,
         leaseExpiresAt: timestamp(row.leaseExpiresAt),
         leaseToken: string(row.leaseToken, UUID),
+        modelId,
         occurredAt: timestamp(row.occurredAt),
         ownerId,
         promptVersion,
@@ -951,14 +956,27 @@ function preparation(
     reject();
   const targetRevision = integer(row.targetRevision, 1);
   if (targetRevision !== (expected.expectedRevision ?? 0) + 1) reject();
-  const ids = exact(row.ids, ["decisionId", "mutationId", "reviewItemId", "revisionId"]);
+  const ids = exact(row.ids, [
+    "decisionId",
+    "generatedBlockId",
+    "mutationId",
+    "reviewItemId",
+    "revisionId"
+  ]);
   const parsedIds = Object.freeze({
     decisionId: string(ids.decisionId, DECISION) as `dec_${string}`,
+    generatedBlockId: string(ids.generatedBlockId, BLOCK) as `blk_${string}`,
     mutationId: string(ids.mutationId, MUTATION) as `mut_${string}`,
     reviewItemId: string(ids.reviewItemId, REVIEW) as `rvw_${string}`,
     revisionId: string(ids.revisionId, REVISION) as `rev_${string}`
   });
-  const reservations = exact(row.reservations, ["decision", "noteWrite", "receipt", "review"]);
+  const reservations = exact(row.reservations, [
+    "decision",
+    "generatedBlock",
+    "noteWrite",
+    "receipt",
+    "review"
+  ]);
   function reservation<const Count extends 1 | 4>(value_: unknown, count: Count) {
     const value = exact(value_, ["operationCount", "reservationId"]);
     if (value.operationCount !== count) reject();
@@ -969,6 +987,7 @@ function preparation(
   }
   const parsedReservations = Object.freeze({
     decision: reservation(reservations.decision, 1),
+    generatedBlock: reservation(reservations.generatedBlock, 1),
     noteWrite: reservation(reservations.noteWrite, 4),
     receipt: reservation(reservations.receipt, 1),
     review: reservation(reservations.review, 1)
@@ -1574,6 +1593,7 @@ export function assertOrganizerSessionRows(rows: readonly unknown[]): void {
 export function isAtomicOrganizerCommand(value: unknown): value is AtomicOrganizerCommand {
   const row = record(value);
   const reviewReasons = [
+    "duplicate_suggestion",
     "explicit_destination_unavailable",
     "expansion_pending",
     "planner_ambiguity",
@@ -1581,11 +1601,19 @@ export function isAtomicOrganizerCommand(value: unknown): value is AtomicOrganiz
   ];
   return (
     Object.keys(row).sort().join(",") ===
-      "decision,noteWrite,outcome,receipt,review,reviewReason" &&
+      "decision,generatedBlock,noteWrite,outcome,receipt,review,reviewReason" &&
     (row.outcome === "appended" || row.outcome === "created" || row.outcome === "review") &&
     (row.outcome === "review"
-      ? reviewReasons.includes(row.reviewReason as never)
-      : row.reviewReason === null) &&
+      ? reviewReasons.includes(row.reviewReason as never) &&
+        row.generatedBlock === null &&
+        row.noteWrite === null &&
+        row.review !== null
+      : row.reviewReason === "expansion_pending"
+        ? row.generatedBlock !== null && row.noteWrite !== null && row.review !== null
+        : row.reviewReason === null &&
+          row.generatedBlock === null &&
+          row.noteWrite !== null &&
+          row.review === null) &&
     (() => {
       try {
         jsonBounded(value);

@@ -36,4 +36,66 @@ final class NoteDetailViewTests: XCTestCase {
             "A short note.\n\n\nKeep this paragraph."
         )
     }
+
+    func testGeneratedBlocksStayOutsideEditableBodyAndRejectedBlocksAreHidden() {
+        let proposed = block(id: "blk_proposed", state: .proposed)
+        let accepted = block(id: "blk_accepted", state: .accepted)
+        let rejected = block(id: "blk_rejected", state: .rejected)
+
+        XCTAssertEqual(
+            GeneratedBlockVisibility.visible([proposed, accepted, rejected]).map(\.id),
+            ["blk_proposed", "blk_accepted"]
+        )
+        XCTAssertEqual(proposed.operationID, "generated-block.blk_proposed")
+        XCTAssertEqual(
+            GeneratedBlockAccessibilityIdentifier.accept(proposed.id),
+            "noteDetail.generatedBlock.accept.blk_proposed"
+        )
+        XCTAssertEqual(
+            GeneratedBlockAccessibilityIdentifier.reject(proposed.id),
+            "noteDetail.generatedBlock.reject.blk_proposed"
+        )
+    }
+
+    func testGeneratedBlockLoadMoreControlHasDeliberateRetryAndLoadingSemantics() {
+        XCTAssertEqual(
+            GeneratedBlockAccessibilityIdentifier.loadMore,
+            "noteDetail.generatedBlocks.loadMore"
+        )
+        XCTAssertEqual(
+            GeneratedBlockAccessibilityIdentifier.paginationNotice,
+            "noteDetail.generatedBlocks.paginationNotice"
+        )
+        XCTAssertEqual(
+            GeneratedBlockLoadMorePresentation.buttonTitle(loadError: nil),
+            "Load more"
+        )
+        XCTAssertEqual(
+            GeneratedBlockLoadMorePresentation.buttonTitle(loadError: "Network unavailable"),
+            "Try loading more again"
+        )
+        XCTAssertEqual(
+            GeneratedBlockLoadMorePresentation.accessibilityLabel(
+                isLoading: true,
+                loadError: nil
+            ),
+            "Loading more AI-generated additions"
+        )
+    }
+
+    private func block(
+        id: String,
+        state: GeneratedBlockState
+    ) -> GeneratedBlockPresentation {
+        GeneratedBlockPresentation(
+            id: id,
+            noteID: "note_00000000000000000000000000",
+            kind: .suggestion,
+            content: "AI-generated content that is not part of bodyMarkdown.",
+            state: state,
+            stateRevision: state == .proposed ? 1 : 2,
+            modelID: "organizer-v1",
+            promptVersion: "expansion-v1"
+        )
+    }
 }

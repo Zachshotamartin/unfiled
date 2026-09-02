@@ -129,6 +129,7 @@ function claim(overrides: Record<string, unknown> = {}) {
         jobId: JOB_ID,
         leaseExpiresAt: NOW,
         leaseToken: LEASE,
+        modelId: "gpt-5.4-mini-2026-03-17",
         occurredAt: NOW,
         ownerId: OWNER_ID,
         promptVersion: "organization-v1",
@@ -301,6 +302,7 @@ function preparation(
     expectedRevision,
     ids: {
       decisionId: `dec_${ULID}`,
+      generatedBlockId: `blk_${ULID}`,
       mutationId: `mut_${ULID}`,
       reviewItemId: `rvw_${ULID}`,
       revisionId: `rev_${ULID}`
@@ -313,6 +315,10 @@ function preparation(
     replayed: false,
     reservations: {
       decision: { operationCount: 1, reservationId: "22222222-2222-4222-8222-222222222221" },
+      generatedBlock: {
+        operationCount: 1,
+        reservationId: "22222222-2222-4222-8222-222222222225"
+      },
       noteWrite: { operationCount: 4, reservationId: "22222222-2222-4222-8222-222222222222" },
       receipt: { operationCount: 1, reservationId: "22222222-2222-4222-8222-222222222223" },
       review: { operationCount: 1, reservationId: "22222222-2222-4222-8222-222222222224" }
@@ -351,10 +357,11 @@ function executor(
 const signal = new AbortController().signal;
 const command = Object.freeze({
   decision: { sealed: true },
+  generatedBlock: null,
   noteWrite: { sealed: true },
   outcome: "appended" as const,
   receipt: { sealed: true },
-  review: { sealed: true },
+  review: null,
   reviewReason: null
 });
 
@@ -1180,7 +1187,32 @@ describe("organizer database adapter", () => {
         ...command,
         noteWrite: null,
         outcome: "review",
+        review: { sealed: true },
         reviewReason: "expansion_pending"
+      })
+    ).toBe(true);
+    expect(
+      isAtomicOrganizerCommand({
+        ...command,
+        generatedBlock: { sealed: true },
+        review: { sealed: true },
+        reviewReason: "expansion_pending"
+      })
+    ).toBe(true);
+    expect(
+      isAtomicOrganizerCommand({
+        ...command,
+        generatedBlock: { sealed: true },
+        reviewReason: "expansion_pending"
+      })
+    ).toBe(false);
+    expect(
+      isAtomicOrganizerCommand({
+        ...command,
+        noteWrite: null,
+        outcome: "review",
+        review: { sealed: true },
+        reviewReason: "duplicate_suggestion"
       })
     ).toBe(true);
     expect(isAtomicOrganizerCommand({ ...command, extra: true })).toBe(false);

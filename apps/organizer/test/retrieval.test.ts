@@ -34,6 +34,7 @@ const job: ClaimedOrganizerJob = Object.freeze({
   jobId: "job_01ARZ3NDEKTSV4RRFFQ69G5FAV",
   leaseExpiresAt: "2026-08-31T20:00:00.000Z",
   leaseToken: "11111111-1111-4111-8111-111111111111",
+  modelId: "gpt-5.4-mini-2026-03-17",
   occurredAt: "2026-08-31T19:58:00.000Z",
   ownerId: OWNER_ID,
   promptVersion: "routing-v1",

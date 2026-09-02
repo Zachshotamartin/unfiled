@@ -13,6 +13,8 @@ export type PagedResponse<T> = Readonly<{
   }>;
 }>;
 
+export type PagedResourceLoader<T> = (cursor?: string) => Promise<PagedResponse<T>>;
+
 export type PagedContinuation<T> = Readonly<{
   error: string | null;
   firstPage: PagedResponse<T> | null;
@@ -78,8 +80,19 @@ export function mergePageItems<T>(
   return [...unique.values()];
 }
 
-export function usePagedResource<T>(url: string, keyOf: (item: T) => string) {
-  const first = useLiveResource<PagedResponse<T>>(url);
+export function usePagedResource<T>(
+  url: string,
+  keyOf: (item: T) => string,
+  loader?: PagedResourceLoader<T>
+) {
+  const loadFirst = useCallback(
+    () =>
+      loader === undefined
+        ? productRequest<PagedResponse<T>>(url, { cache: "no-store" })
+        : loader(),
+    [loader, url]
+  );
+  const first = useLiveResource<PagedResponse<T>>(url, loadFirst);
   const [continuation, setContinuation] = useState<PagedContinuation<T>>(() =>
     emptyPagedContinuation(url, null)
   );
@@ -96,11 +109,13 @@ export function usePagedResource<T>(url: string, keyOf: (item: T) => string) {
     const load = { firstPage: current.firstPage, items: current.items, url };
     setContinuation({ ...current, error: null, loading: true, url });
     try {
-      const separator = url.includes("?") ? "&" : "?";
-      const page = await productRequest<PagedResponse<T>>(
-        `${url}${separator}cursor=${encodeURIComponent(cursor)}`,
-        { cache: "no-store" }
-      );
+      const page =
+        loader === undefined
+          ? await productRequest<PagedResponse<T>>(
+              `${url}${url.includes("?") ? "&" : "?"}cursor=${encodeURIComponent(cursor)}`,
+              { cache: "no-store" }
+            )
+          : await loader(cursor);
       setContinuation((latest) => applyContinuationPage(latest, load, page));
     } catch (reason) {
       setContinuation((latest) =>
@@ -114,7 +129,7 @@ export function usePagedResource<T>(url: string, keyOf: (item: T) => string) {
           : latest
       );
     }
-  }, [current, pageInfo?.nextCursor, url]);
+  }, [current, loader, pageInfo?.nextCursor, url]);
 
   return {
     ...first,

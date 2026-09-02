@@ -11,6 +11,8 @@ final class ReviewViewTests: XCTestCase {
         actionSummary: "Low-confidence destination",
         captureID: "cap_00000000000000000000000000",
         noteID: "note_00000000000000000000000000",
+        duplicateExplanation: nil,
+        generatedBlock: nil,
         suggestedDestinations: [
             ReviewDestinationPresentation(
                 id: "note_00000000000000000000000000",
@@ -31,6 +33,20 @@ final class ReviewViewTests: XCTestCase {
         XCTAssertEqual(ReviewQueueSummary(count: 0).label, "Nothing awaiting review")
         XCTAssertEqual(ReviewQueueSummary(count: 1).label, "1 item awaiting review")
         XCTAssertEqual(ReviewQueueSummary(count: 4).label, "4 items awaiting review")
+    }
+
+    func testDuplicateExplanationReachesTheReviewPresentation() throws {
+        let fixture = #"{"id":"rvw_00000000000000000000000000","captureId":null,"noteId":null,"type":"duplicate_suggestion","proposal":\#(Self.duplicateProposalJSON),"state":"open","resolution":null,"createdAt":"2026-09-01T12:00:00Z","resolvedAt":null}"#
+        let review = try APIJSON.makeDecoder().decode(ReviewItem.self, from: Data(fixture.utf8))
+
+        let presentation = PresentationMapping.review(review)
+
+        XCTAssertEqual(
+            presentation.duplicateExplanation,
+            "These notes describe the same weekly plan."
+        )
+        XCTAssertEqual(presentation.relatedNotes.count, 2)
+        XCTAssertEqual(presentation.allowedActions, [.keepBoth, .dismiss])
     }
 
     func testOpenNavigationHasStableAccessibilityIdentifier() {
@@ -60,7 +76,7 @@ final class ReviewViewTests: XCTestCase {
         XCTAssertTrue(actions.isEmpty)
     }
 
-    func testReviewActionMatrixMatchesE1AndExcludesExpansionAcceptance() throws {
+    func testReviewActionMatrixUsesPersistedBlockResolverAndPreservesLegacyConsentDismiss() throws {
         let route = try proposal(Self.routeProposalJSON)
         let revision = try proposal(#"{"type":"conflict","reason":"revision"}"#)
         let failed = try proposal(#"{"type":"failed_job","errorCode":"provider_unavailable"}"#)
@@ -71,6 +87,10 @@ final class ReviewViewTests: XCTestCase {
             #"{"type":"generated_block","blockId":"blk_00000000000000000000000000"}"#
         )
         let consent = try proposal(#"{"type":"conflict","reason":"consent_controls"}"#)
+        let persistedBlock = try generatedBlock()
+        let generatedNoteID = try NoteID(
+            validating: "note_00000000000000000000000000"
+        )
         let filingActions: [ReviewActionKind] = [.route, .create, .keepInbox, .dismiss]
 
         XCTAssertEqual(
@@ -132,9 +152,21 @@ final class ReviewViewTests: XCTestCase {
                 type: .pendingExpansion,
                 proposal: generated,
                 hasBoundReceipt: false,
+                hasBoundDecision: false,
+                generatedBlock: persistedBlock,
+                expectedNoteID: generatedNoteID
+            ),
+            [.acceptExpansion, .rejectExpansion]
+        )
+        XCTAssertEqual(
+            PresentationMapping.reviewAllowedActions(
+                type: .pendingExpansion,
+                proposal: generated,
+                hasBoundReceipt: false,
                 hasBoundDecision: false
             ),
-            [.dismiss]
+            [],
+            "A missing persisted block must fail closed instead of falling back to Review dismiss"
         )
         XCTAssertEqual(
             PresentationMapping.reviewAllowedActions(
@@ -166,6 +198,81 @@ final class ReviewViewTests: XCTestCase {
                 hasBoundDecision: false
             ),
             [.keepInbox, .dismiss]
+        )
+    }
+
+    func testGeneratedExpansionActionsRequireExactProposedBlockAndNoteBinding() throws {
+        let proposal = try proposal(
+            #"{"type":"generated_block","blockId":"blk_00000000000000000000000000"}"#
+        )
+        let expectedNoteID = try NoteID(
+            validating: "note_00000000000000000000000000"
+        )
+        let otherNoteID = try NoteID(
+            validating: "note_11111111111111111111111111"
+        )
+        let accepted = try generatedBlock(
+            state: "accepted",
+            stateRevision: 2,
+            resolvedAt: #""2026-09-01T12:01:00Z""#
+        )
+
+        XCTAssertEqual(
+            PresentationMapping.reviewAllowedActions(
+                type: .pendingExpansion,
+                proposal: proposal,
+                hasBoundReceipt: false,
+                hasBoundDecision: false,
+                generatedBlock: try generatedBlock(),
+                expectedNoteID: otherNoteID
+            ),
+            []
+        )
+        XCTAssertEqual(
+            PresentationMapping.reviewAllowedActions(
+                type: .pendingExpansion,
+                proposal: proposal,
+                hasBoundReceipt: false,
+                hasBoundDecision: false,
+                generatedBlock: accepted,
+                expectedNoteID: expectedNoteID
+            ),
+            []
+        )
+        XCTAssertEqual(
+            ReviewAccessibilityIdentifier.acceptExpansion(item.id),
+            "review.acceptExpansion.\(item.id)"
+        )
+        XCTAssertEqual(
+            ReviewAccessibilityIdentifier.rejectExpansion(item.id),
+            "review.rejectExpansion.\(item.id)"
+        )
+    }
+
+    func testGeneratedExpansionReviewPreservesVisibleAndAccessibleProvenance() throws {
+        let fixture = #"{"id":"rvw_00000000000000000000000000","captureId":"cap_00000000000000000000000000","noteId":"note_00000000000000000000000000","type":"pending_expansion","proposal":{"type":"generated_block","blockId":"blk_00000000000000000000000000"},"state":"open","resolution":null,"createdAt":"2026-09-01T12:00:00Z","resolvedAt":null}"#
+        let review = try APIJSON.makeDecoder().decode(
+            ReviewItem.self,
+            from: Data(fixture.utf8)
+        )
+        let block = try generatedBlock()
+
+        let presentation = PresentationMapping.review(
+            review,
+            generatedBlocksByID: [block.id.rawValue: block]
+        )
+        let generated = try XCTUnwrap(presentation.generatedBlock)
+
+        XCTAssertEqual(generated.modelID, "organizer-v1")
+        XCTAssertEqual(generated.promptVersion, "expansion-v1")
+        XCTAssertEqual(
+            generated.provenanceLabel,
+            "Model organizer-v1 · Prompt expansion-v1"
+        )
+        XCTAssertEqual(
+            generated.reviewAccessibilityLabel,
+            "AI-generated suggestion, proposed. Model organizer-v1. " +
+                "Prompt expansion-v1. Content: Add a short cooldown after training."
         )
     }
 
@@ -361,6 +468,15 @@ final class ReviewViewTests: XCTestCase {
         try APIJSON.makeDecoder().decode(ReviewProposal.self, from: Data(json.utf8))
     }
 
+    private func generatedBlock(
+        state: String = "proposed",
+        stateRevision: Int = 1,
+        resolvedAt: String = "null"
+    ) throws -> GeneratedBlock {
+        let json = #"{"id":"blk_00000000000000000000000000","noteId":"note_00000000000000000000000000","decisionId":"dec_00000000000000000000000000","kind":"suggestion","content":"Add a short cooldown after training.","state":"\#(state)","stateRevision":\#(stateRevision),"modelId":"organizer-v1","promptVersion":"expansion-v1","createdAt":"2026-09-01T12:00:00Z","resolvedAt":\#(resolvedAt)}"#
+        return try APIJSON.makeDecoder().decode(GeneratedBlock.self, from: Data(json.utf8))
+    }
+
     private func lowConfidenceReview(
         state: String = "open",
         resolution: String = "null",
@@ -428,5 +544,5 @@ final class ReviewViewTests: XCTestCase {
 
     private static let routeProposalJSON = #"{"type":"route_capture","plan":\#(routePlanJSON)}"#
 
-    private static let duplicateProposalJSON = #"{"type":"duplicate_notes","notes":[{"noteId":"note_00000000000000000000000000","revision":1},{"noteId":"note_11111111111111111111111111","revision":2}]}"#
+    private static let duplicateProposalJSON = #"{"type":"duplicate_notes","notes":[{"noteId":"note_00000000000000000000000000","revision":1},{"noteId":"note_11111111111111111111111111","revision":2}],"explanation":"These notes describe the same weekly plan."}"#
 }

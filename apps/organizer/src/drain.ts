@@ -56,6 +56,7 @@ export type ClaimedOrganizerJob = Readonly<{
   jobId: string;
   leaseExpiresAt: string;
   leaseToken: string;
+  modelId: string;
   occurredAt: string;
   ownerId: string;
   promptVersion: string;
@@ -106,6 +107,7 @@ export type OrganizerPreparation = Readonly<{
   expectedRevision: number | null;
   ids: Readonly<{
     decisionId: `dec_${string}`;
+    generatedBlockId: `blk_${string}`;
     mutationId: `mut_${string}`;
     reviewItemId: `rvw_${string}`;
     revisionId: `rev_${string}`;
@@ -118,6 +120,7 @@ export type OrganizerPreparation = Readonly<{
   replayed: boolean;
   reservations: Readonly<{
     decision: Readonly<{ operationCount: 1; reservationId: string }>;
+    generatedBlock: Readonly<{ operationCount: 1; reservationId: string }>;
     noteWrite: Readonly<{ operationCount: 4; reservationId: string }>;
     receipt: Readonly<{ operationCount: 1; reservationId: string }>;
     review: Readonly<{ operationCount: 1; reservationId: string }>;
@@ -126,6 +129,7 @@ export type OrganizerPreparation = Readonly<{
 }>;
 export type AtomicOrganizerCommand = Readonly<{
   decision: unknown;
+  generatedBlock: unknown;
   noteWrite: unknown;
   outcome: "appended" | "created" | "review";
   receipt: unknown;
@@ -133,6 +137,7 @@ export type AtomicOrganizerCommand = Readonly<{
   reviewReason: OrganizerReviewReason | null;
 }>;
 export type OrganizerReviewReason =
+  | "duplicate_suggestion"
   | "explicit_destination_unavailable"
   | "expansion_pending"
   | "planner_ambiguity"
@@ -396,7 +401,7 @@ function provisionalIds(jobId: string): StableOrganizationIds {
   return Object.freeze({
     createdNoteId: noteId,
     decisionId: `dec_${suffix}`,
-    generatedBlockId: null,
+    generatedBlockId: `blk_${suffix}`,
     mutationId: `mut_${suffix}`,
     reviewItemId: `rvw_${suffix}`,
     revisionId: `rev_${suffix}`
@@ -405,15 +410,19 @@ function provisionalIds(jobId: string): StableOrganizationIds {
 
 function preparedStableIds(
   preparation: OrganizerPreparation,
-  decision: "add_to_inbox" | "append_to_note" | "create_note" | "needs_review"
+  decision: "add_to_inbox" | "append_to_note" | "create_note" | "needs_review",
+  generatedExpansion = false
 ): StableOrganizationIds {
   const routed = decision === "append_to_note" || decision === "create_note";
   return Object.freeze({
     createdNoteId: decision === "create_note" ? preparation.noteId : null,
     decisionId: preparation.ids.decisionId,
-    generatedBlockId: null,
+    generatedBlockId: routed && generatedExpansion ? preparation.ids.generatedBlockId : null,
     mutationId: routed ? preparation.ids.mutationId : null,
-    reviewItemId: decision === "needs_review" ? preparation.ids.reviewItemId : null,
+    reviewItemId:
+      decision === "needs_review" || (routed && generatedExpansion)
+        ? preparation.ids.reviewItemId
+        : null,
     revisionId: routed ? preparation.ids.revisionId : null
   });
 }
@@ -586,7 +595,9 @@ function forcedReview(
 }
 
 function reviewReasonForPlan(plan: MaterializedOrganizationCommand): OrganizerReviewReason | null {
-  return plan.kind === "review" && plan.disposition === "needs_review" ? "planner_ambiguity" : null;
+  if (plan.kind === "review" && plan.disposition === "needs_review") return "planner_ambiguity";
+  if (plan.kind !== "review" && plan.generatedBlock !== null) return "expansion_pending";
+  return null;
 }
 
 function reviewReasonForConflict(
@@ -607,11 +618,14 @@ function assertCommandBinding(
 ): void {
   const expectedOutcome =
     plan.kind === "append" ? "appended" : plan.kind === "create" ? "created" : "review";
+  const generatedExpansion = plan.kind !== "review" && plan.generatedBlock !== null;
   if (
     command.outcome !== expectedOutcome ||
     command.reviewReason !== reviewReason ||
     (plan.kind === "review") !== (command.noteWrite === null) ||
-    (plan.kind === "review") !== (reviewReason !== null)
+    (plan.kind === "review" || generatedExpansion) !== (command.review !== null) ||
+    generatedExpansion !== (command.generatedBlock !== null) ||
+    (plan.kind === "review" || generatedExpansion) !== (reviewReason !== null)
   )
     throw new OrganizerUnavailableError();
 }
@@ -913,10 +927,17 @@ export function createOrganizerDrain(
           routingPolicyContext,
           isRoutingRulePath
         );
-        if (authorized.plan.generatedExpansion !== null) {
+        if (authorized.plan.reasonCodes.includes("duplicate_suspected")) {
           pendingReviewPlan = authorized.plan;
           pendingRoutingDecision = routingDecision;
-          pendingReviewReason = "expansion_pending";
+          const duplicateCandidates = new Set([
+            ...(authorized.plan.destination.candidateId === null
+              ? []
+              : [authorized.plan.destination.candidateId]),
+            ...authorized.plan.alternatives
+          ]);
+          pendingReviewReason =
+            duplicateCandidates.size >= 2 ? "duplicate_suggestion" : "planner_ambiguity";
           continue;
         }
         if (authorized.plan.decision === "add_to_inbox") {
@@ -986,7 +1007,11 @@ export function createOrganizerDrain(
         }
         const preparation =
           "outcome" in preparationResult ? preparationResult.preparation : preparationResult;
-        const stableIds = preparedStableIds(preparation, authorized.plan.decision);
+        const stableIds = preparedStableIds(
+          preparation,
+          authorized.plan.decision,
+          authorized.plan.generatedExpansion !== null
+        );
         let plan: MaterializedOrganizationCommand;
         try {
           plan = materializeAuthorizedOrganizationPlan({

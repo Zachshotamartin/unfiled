@@ -178,7 +178,7 @@ In order; first failure sends the capture to Inbox with `invalid_plan` (and the 
 
 Deterministic extraction preference: when inferred kind is `list_items` or `log_entry` and the syntax parses deterministically, the server's parser output **overrides** the model's item split if they disagree materially (model chooses destination; parser owns extraction). Reason code `parser_override` recorded.
 
-**Current implementation boundary:** Milestone D validates a returned `generatedExpansion` conservatively but does not persist its text; the application discards it. E3 must extend the encrypted organizer prepare/commit payloads to create a separate `proposed` generated block before pending-expansion UI, acceptance, rejection, receipt copy, or recovery can be claimed. Generated text is never merged into the user's operation list.
+**Current implementation boundary:** Milestone D historically validated a returned `generatedExpansion` conservatively but discarded its text. E3 now extends the encrypted organizer prepare/commit payloads to atomically persist one authorized expansion as a separate encrypted `proposed` generated block plus an encrypted pending-expansion Review. Exact retry recovers the same proposal, and accept or reject changes only generated-block and Review state; generated text is never merged into the user's operation list or user-authored note snapshot.
 
 ## 7. Stage 5 — Scoring and bands
 

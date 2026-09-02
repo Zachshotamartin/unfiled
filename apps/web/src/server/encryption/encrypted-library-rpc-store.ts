@@ -108,8 +108,10 @@ export type EncryptedLibraryOperationalBySurface = Readonly<{
   generated_block: Readonly<{
     noteId: string;
     decisionId: string;
+    reviewItemId: string | null;
     kind: "summary" | "interpretation" | "suggestion" | "label";
     state: "proposed" | "accepted" | "rejected";
+    stateRevision: number;
     modelId: string;
     promptVersion: string;
     resolvedAt: Timestamp | null;
@@ -222,6 +224,14 @@ export type ListEncryptedLibraryObjectsInput<Surface extends EncryptedLibrarySur
   afterResourceId?: string | null;
   limit?: number;
 }>;
+
+export type ListEncryptedGeneratedBlocksForNoteInput = Readonly<{
+  ownerId: string;
+  noteId: string;
+  afterBlockId?: string | null;
+}>;
+
+export type EncryptedGeneratedBlockPage = EncryptedLibraryPage<"generated_block">;
 
 export type ContentEncryptionBackfillExpectedContentBySurface = Readonly<{
   space_display: SpaceDisplayPayload;
@@ -412,6 +422,9 @@ export type VerifyEncryptedContentObjectResult<Surface extends VerifiableEncrypt
   }>;
 
 export type EncryptedLibraryRpcStore = Readonly<{
+  listEncryptedGeneratedBlocksForNote(
+    input: ListEncryptedGeneratedBlocksForNoteInput
+  ): Promise<EncryptedGeneratedBlockPage>;
   listEncryptedLibraryObjects<Surface extends EncryptedLibrarySurface>(
     input: ListEncryptedLibraryObjectsInput<Surface>
   ): Promise<EncryptedLibraryPage<Surface>>;
@@ -441,6 +454,8 @@ const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:\d{2})$/u;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 const MAX_PAGE_SIZE = 50;
 const DEFAULT_PAGE_SIZE = 25;
+const GENERATED_BLOCK_PAGE_SIZE = 50;
+const GENERATED_BLOCK_LOOKAHEAD_SIZE = GENERATED_BLOCK_PAGE_SIZE + 1;
 const MAX_JSON_DEPTH = 64;
 const MAX_JSON_NODES = 100_000;
 
@@ -976,8 +991,10 @@ function parseOperational(
         [
           "noteId",
           "decisionId",
+          "reviewItemId",
           "kind",
           "state",
+          "stateRevision",
           "modelId",
           "promptVersion",
           "resolvedAt",
@@ -986,19 +1003,32 @@ function parseOperational(
         fail
       );
       if (recordVersion !== 1) return fail();
+      const state = enumValue(row.state, ["proposed", "accepted", "rejected"] as const, fail);
+      const stateRevision = positiveVersion(row.stateRevision, fail);
+      const resolvedAt = nullableTimestamp(row.resolvedAt, fail);
+      const createdAt = timestamp(row.createdAt, fail);
+      if (
+        (state === "proposed" && (stateRevision !== 1 || resolvedAt !== null)) ||
+        (state !== "proposed" && (stateRevision < 2 || resolvedAt === null)) ||
+        (resolvedAt !== null && Date.parse(resolvedAt) < Date.parse(createdAt))
+      ) {
+        return fail();
+      }
       return Object.freeze({
         noteId: entityId(row.noteId, "note", fail),
         decisionId: entityId(row.decisionId, "dec", fail),
+        reviewItemId: nullableEntityId(row.reviewItemId, "rvw", fail),
         kind: enumValue(
           row.kind,
           ["summary", "interpretation", "suggestion", "label"] as const,
           fail
         ),
-        state: enumValue(row.state, ["proposed", "accepted", "rejected"] as const, fail),
-        modelId: boundedString(row.modelId, fail, 1, 200),
-        promptVersion: boundedString(row.promptVersion, fail, 1, 100),
-        resolvedAt: nullableTimestamp(row.resolvedAt, fail),
-        createdAt: timestamp(row.createdAt, fail)
+        state,
+        stateRevision,
+        modelId: boundedString(row.modelId, fail, 1, 120),
+        promptVersion: boundedString(row.promptVersion, fail, 1, 120),
+        resolvedAt,
+        createdAt
       });
     }
     case "review_item": {
@@ -1882,6 +1912,42 @@ function parseCommitResult<Surface extends BackfillableEncryptedLibrarySurface>(
 
 export function createEncryptedLibraryRpcStore(client: ServiceRpcClient): EncryptedLibraryRpcStore {
   return Object.freeze({
+    async listEncryptedGeneratedBlocksForNote(
+      input: ListEncryptedGeneratedBlocksForNoteInput
+    ): Promise<EncryptedGeneratedBlockPage> {
+      const ownerId = canonicalOwnerId(input.ownerId, invalidInput);
+      const noteId = entityId(input.noteId, "note", invalidInput);
+      const afterBlockId =
+        input.afterBlockId === undefined || input.afterBlockId === null
+          ? null
+          : entityId(input.afterBlockId, "blk", invalidInput);
+      const value = await client.rpc("get_encrypted_generated_blocks", {
+        p_owner_id: ownerId,
+        p_note_id: noteId,
+        p_after_block_id: afterBlockId,
+        p_limit: GENERATED_BLOCK_LOOKAHEAD_SIZE
+      });
+      if (!Array.isArray(value) || value.length > GENERATED_BLOCK_LOOKAHEAD_SIZE) {
+        return invalidProjection();
+      }
+      const parsedItems = value.map((row) => parseListRow(row, ownerId, "generated_block"));
+      let previous = afterBlockId;
+      for (const item of parsedItems) {
+        if (previous !== null && item.resourceId <= previous) return invalidProjection();
+        if (item.operational.noteId !== noteId || item.operational.state === "rejected") {
+          return invalidProjection();
+        }
+        previous = item.resourceId;
+      }
+      const hasMore = parsedItems.length === GENERATED_BLOCK_LOOKAHEAD_SIZE;
+      const items = parsedItems.slice(0, GENERATED_BLOCK_PAGE_SIZE);
+      return Object.freeze({
+        surface: "generated_block",
+        items: Object.freeze(items),
+        nextCursor: hasMore ? (items.at(-1)?.resourceId ?? null) : null
+      });
+    },
+
     async listEncryptedLibraryObjects<Surface extends EncryptedLibrarySurface>(
       input: ListEncryptedLibraryObjectsInput<Surface>
     ): Promise<EncryptedLibraryPage<Surface>> {

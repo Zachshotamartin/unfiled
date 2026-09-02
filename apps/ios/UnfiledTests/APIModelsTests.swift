@@ -230,7 +230,10 @@ final class APIModelsTests: XCTestCase {
         let aiDetail = try decoder.decode(CaptureDetail.self, from: Data(aiJSON.utf8))
         let aiPresentation = PresentationMapping.receipt(aiDetail)
         XCTAssertEqual(aiPresentation.insertedContent.first?.kind, .aiGenerated)
-        XCTAssertEqual(aiPresentation.insertedContent.first?.provenanceLabel, "AI-generated")
+        XCTAssertEqual(
+            aiPresentation.insertedContent.first?.provenanceLabel,
+            "AI-generated proposal"
+        )
     }
 
     func testReceiptAccessibilityIdentifiersRemainCaptureScoped() {

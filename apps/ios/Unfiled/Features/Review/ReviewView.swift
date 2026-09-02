@@ -16,6 +16,12 @@ enum ReviewAccessibilityIdentifier {
     static func keepInbox(_ reviewID: String) -> String { "review.keepInbox.\(reviewID)" }
     static func dismiss(_ reviewID: String) -> String { "review.dismiss.\(reviewID)" }
     static func keepBoth(_ reviewID: String) -> String { "review.keepBoth.\(reviewID)" }
+    static func acceptExpansion(_ reviewID: String) -> String {
+        "review.acceptExpansion.\(reviewID)"
+    }
+    static func rejectExpansion(_ reviewID: String) -> String {
+        "review.rejectExpansion.\(reviewID)"
+    }
 }
 
 struct ReviewQueueSummary: Equatable, Sendable {
@@ -145,12 +151,15 @@ struct ReviewView: View {
             }
         } else {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                let generatedOperationID = item.generatedBlock?.operationID
                 ReviewLedgerRow(
                     item: item,
                     position: index + 1,
                     total: items.count,
-                    isSubmitting: submittingInteractionIDs.contains("review.\(item.id)"),
-                    errorMessage: interactionErrors["review.\(item.id)"],
+                    isSubmitting: submittingInteractionIDs.contains("review.\(item.id)") ||
+                        generatedOperationID.map { submittingInteractionIDs.contains($0) } == true,
+                    errorMessage: generatedOperationID.flatMap { interactionErrors[$0] }
+                        ?? interactionErrors["review.\(item.id)"],
                     actionsDisabled: isLoading,
                     onOpenRelatedNote: onOpenRelatedNote,
                     onAction: onAction
@@ -222,15 +231,43 @@ private struct ReviewLedgerRow: View {
                 relatedNotes
             }
 
+            if item.type == .duplicateSuggestion {
+                if let explanation = item.duplicateExplanation {
+                    VStack(alignment: .leading, spacing: 8) {
+                        EditorialEyebrow(text: "Why Unfiled suggested this")
+                        Text(explanation)
+                            .font(.body)
+                            .foregroundStyle(UnfiledTheme.paper)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Why Unfiled suggested this: \(explanation)")
+                    .accessibilityIdentifier("review.duplicateExplanation.\(item.id)")
+                }
+                Text("Keeping both changes neither note. Dismiss also leaves both notes untouched.")
+                    .font(.footnote)
+                    .foregroundStyle(UnfiledTheme.fog)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel(
+                        "No destructive action. Keeping both or dismissing changes neither note."
+                    )
+            }
+
             if item.allows(.route) {
                 destinationChoices
             }
 
-            if item.type == .pendingExpansion {
-                Text("The proposed text has not been added to a note. Dismiss removes only this Review hold.")
-                    .font(.footnote)
-                    .foregroundStyle(UnfiledTheme.fog)
-                    .fixedSize(horizontal: false, vertical: true)
+            if let generatedBlock = item.generatedBlock {
+                generatedProposal(generatedBlock)
+            } else if item.type == .pendingExpansion {
+                Text(
+                    item.allows(.dismiss)
+                        ? "No generated text was persisted. Dismiss removes only this legacy consent hold."
+                        : "The persisted AI-generated proposal is unavailable. Refresh before deciding; your note text is unchanged."
+                )
+                .font(.footnote)
+                .foregroundStyle(UnfiledTheme.fog)
+                .fixedSize(horizontal: false, vertical: true)
             }
 
             actionControls
@@ -331,6 +368,43 @@ private struct ReviewLedgerRow: View {
         }
     }
 
+    private func generatedProposal(_ block: GeneratedBlockPresentation) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("AI-GENERATED · \(block.kindLabel.uppercased())")
+                    .font(.caption2.weight(.semibold).monospaced())
+                    .tracking(0.8)
+                    .foregroundStyle(UnfiledTheme.persimmon)
+                Spacer(minLength: 8)
+                Text(block.stateLabel.uppercased())
+                    .font(.caption2.weight(.semibold).monospaced())
+                    .foregroundStyle(UnfiledTheme.fog)
+            }
+            Text(block.content)
+                .font(.body)
+                .lineSpacing(5)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(block.provenanceLabel)
+                .font(.caption2.monospaced())
+                .foregroundStyle(UnfiledTheme.fog)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("This stays separate from editable note text.")
+                .font(.caption)
+                .foregroundStyle(UnfiledTheme.fog)
+        }
+        .padding(.vertical, 18)
+        .padding(.horizontal, 18)
+        .overlay(alignment: .leading) {
+            Rectangle().fill(UnfiledTheme.persimmon).frame(width: 3)
+        }
+        .background(UnfiledTheme.graphite)
+        .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(block.reviewAccessibilityLabel)
+        .accessibilityIdentifier("review.generatedBlock.\(item.id).\(block.id)")
+    }
+
     private var actionControls: some View {
         VStack(alignment: .leading, spacing: 10) {
             if isSubmitting {
@@ -368,6 +442,26 @@ private struct ReviewLedgerRow: View {
                 ) { onAction(item.id, .keepBoth) }
             }
 
+            if item.allows(.acceptExpansion) {
+                reviewButton(
+                    title: "Accept generated addition",
+                    systemImage: "checkmark",
+                    prominence: .primary,
+                    identifier: ReviewAccessibilityIdentifier.acceptExpansion(item.id),
+                    accessibilityHint: "Keeps it separately without rewriting note text"
+                ) { onAction(item.id, .acceptExpansion) }
+            }
+
+            if item.allows(.rejectExpansion) {
+                reviewButton(
+                    title: "Reject generated addition",
+                    systemImage: "xmark",
+                    prominence: .secondary,
+                    identifier: ReviewAccessibilityIdentifier.rejectExpansion(item.id),
+                    accessibilityHint: "Rejects it without changing note text"
+                ) { onAction(item.id, .rejectExpansion) }
+            }
+
             if item.allows(.dismiss) {
                 reviewButton(
                     title: "Dismiss",
@@ -386,6 +480,7 @@ private struct ReviewLedgerRow: View {
         systemImage: String,
         prominence: Prominence,
         identifier: String,
+        accessibilityHint: String = "",
         action: @escaping @MainActor () -> Void
     ) -> some View {
         Button(action: action) {
@@ -400,6 +495,7 @@ private struct ReviewLedgerRow: View {
         .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
         .disabled(allActionsDisabled)
         .opacity(allActionsDisabled && !isSubmitting ? 0.5 : 1)
+        .accessibilityHint(accessibilityHint)
         .accessibilityIdentifier(identifier)
     }
 
