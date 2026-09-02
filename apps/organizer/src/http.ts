@@ -297,7 +297,7 @@ export function createOrganizerApp(dependencies: OrganizerAppDependencies): Orga
                     authorizationHeader: request.headers.get("authorization"),
                     protectionBypassHeader: request.headers.get("x-vercel-protection-bypass"),
                     requestId,
-                    trustedSourceToken: request.headers.get("x-vercel-trusted-oidc-idp-token")
+                    trustedSourceToken: request.headers.get("x-unfiled-trusted-oidc-idp-token")
                   },
                   signal
                 );

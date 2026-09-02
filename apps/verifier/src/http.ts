@@ -323,7 +323,7 @@ export function createVerifierApp(dependencies: VerifierAppDependencies): Verifi
               authorizationHeader: request.headers.get("authorization"),
               protectionBypassHeader: request.headers.get("x-vercel-protection-bypass"),
               requestId: id,
-              trustedSourceToken: request.headers.get("x-vercel-trusted-oidc-idp-token")
+              trustedSourceToken: request.headers.get("x-unfiled-trusted-oidc-idp-token")
             },
             signal
           );

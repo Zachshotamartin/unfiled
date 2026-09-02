@@ -111,7 +111,7 @@ function request(
   const headers = new Headers({
     "content-type": "application/json",
     "x-vercel-oidc-token": "workload.header.signature",
-    "x-vercel-trusted-oidc-idp-token": "source.header.signature",
+    "x-unfiled-trusted-oidc-idp-token": "source.header.signature",
     ...input.headers
   });
   const method = input.method ?? "POST";
@@ -238,7 +238,7 @@ describe("verifier HTTP service", () => {
     ["cookie", request({ headers: { cookie: "session=secret" } }), 401],
     ["authorization", request({ headers: { authorization: "Bearer fallback" } }), 401],
     ["bypass", request({ headers: { "x-vercel-protection-bypass": "fallback" } }), 401],
-    ["missing source", request({ headers: { "x-vercel-trusted-oidc-idp-token": "wrong" } }), 401],
+    ["missing source", request({ headers: { "x-unfiled-trusted-oidc-idp-token": "wrong" } }), 401],
     ["missing workload", request({ headers: { "x-vercel-oidc-token": "wrong" } }), 503],
     ["unknown route", request({ path: "/notes" }), 404]
   ])("rejects %s", async (_label, incoming, expectedStatus) => {

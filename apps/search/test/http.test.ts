@@ -152,7 +152,7 @@ function request(
   const headers = new Headers({
     "content-type": "application/json",
     "x-vercel-oidc-token": WORKLOAD_TOKEN,
-    "x-vercel-trusted-oidc-idp-token": SOURCE_TOKEN,
+    "x-unfiled-trusted-oidc-idp-token": SOURCE_TOKEN,
     ...Object.fromEntries(new Headers(options.headers).entries())
   });
   return new Request(`https://search.example${options.path ?? "/internal/query"}`, {
@@ -308,12 +308,12 @@ describe("search HTTP boundary", () => {
     ["cookie", { cookie: "session=forbidden" }],
     ["authorization", { authorization: "Bearer forbidden" }],
     ["deployment bypass", { "x-vercel-protection-bypass": "forbidden" }],
-    ["missing source identity", { "x-vercel-trusted-oidc-idp-token": "" }]
+    ["missing source identity", { "x-unfiled-trusted-oidc-idp-token": "" }]
   ])("rejects %s before KMS and query", async (_name, changedHeaders) => {
     const headers = new Headers({
       "content-type": "application/json",
       "x-vercel-oidc-token": WORKLOAD_TOKEN,
-      "x-vercel-trusted-oidc-idp-token": SOURCE_TOKEN
+      "x-unfiled-trusted-oidc-idp-token": SOURCE_TOKEN
     });
     for (const [name, value] of Object.entries(changedHeaders)) {
       if (value === "") headers.delete(name);
@@ -375,7 +375,7 @@ describe("search HTTP boundary", () => {
     async (_name, contentHeaders, requestBody, status, code) => {
       const headers = new Headers({
         "x-vercel-oidc-token": WORKLOAD_TOKEN,
-        "x-vercel-trusted-oidc-idp-token": SOURCE_TOKEN,
+        "x-unfiled-trusted-oidc-idp-token": SOURCE_TOKEN,
         ...contentHeaders
       });
       const query = queryPort();
@@ -444,7 +444,7 @@ describe("search HTTP boundary", () => {
       headers: {
         "content-type": "application/json",
         "x-vercel-oidc-token": WORKLOAD_TOKEN,
-        "x-vercel-trusted-oidc-idp-token": SOURCE_TOKEN
+        "x-unfiled-trusted-oidc-idp-token": SOURCE_TOKEN
       },
       method: "POST"
     };
@@ -462,7 +462,7 @@ describe("search HTTP boundary", () => {
     const query = queryPort();
     const missingHeaders = new Headers({
       "content-type": "application/json",
-      "x-vercel-trusted-oidc-idp-token": SOURCE_TOKEN
+      "x-unfiled-trusted-oidc-idp-token": SOURCE_TOKEN
     });
     const app = createSearchApp({ config: config(), query: query.port });
     const missing = await app(

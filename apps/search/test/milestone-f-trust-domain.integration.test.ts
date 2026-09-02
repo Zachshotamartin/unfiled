@@ -641,7 +641,7 @@ describe("Milestone F semantic trust-domain composition", () => {
         expect(sourceUrl.pathname).toBe("/internal/query");
         const headers = new Headers(init?.headers);
         requireCondition(
-          headers.get("x-vercel-trusted-oidc-idp-token") === SOURCE_TOKEN,
+          headers.get("x-unfiled-trusted-oidc-idp-token") === SOURCE_TOKEN,
           "The web invocation did not carry its trusted-source identity."
         );
         expect(headers.has("x-vercel-oidc-token")).toBe(false);
@@ -773,7 +773,7 @@ describe("Milestone F semantic trust-domain composition", () => {
         headers: {
           "content-type": "application/json",
           "x-vercel-oidc-token": WORKLOAD_TOKEN,
-          "x-vercel-trusted-oidc-idp-token": SOURCE_TOKEN
+          "x-unfiled-trusted-oidc-idp-token": SOURCE_TOKEN
         },
         method: "POST"
       });

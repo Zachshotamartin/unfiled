@@ -441,7 +441,7 @@ describe("isolated worker HTTP app", () => {
       headers: {
         "x-request-id": REQUEST_ID,
         "x-vercel-oidc-token": "header.payload.signature",
-        "x-vercel-trusted-oidc-idp-token": TRUSTED_SOURCE_TOKEN
+        "x-unfiled-trusted-oidc-idp-token": TRUSTED_SOURCE_TOKEN
       }
     });
     expect((await app(request)).status).toBe(200);

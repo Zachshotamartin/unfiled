@@ -16,7 +16,7 @@ The service never receives source note rows, revision bodies, or complete source
 }
 ```
 
-No query string, cookie, `Authorization`, or deployment-protection bypass header is accepted. Preview and Production both require the web caller's `x-vercel-trusted-oidc-idp-token`; in `aws-kms` mode the AWS credential provider additionally reads the verifier workload's own OIDC token from Vercel's request context, while `vercel-sensitive-env-v1` mode needs no workload token. The caller token is cryptographically verified against the configured team issuer/audience, exact web project identity, exact same-environment subject, and bounded token lifetime. A successful response contains only:
+No query string, cookie, `Authorization`, or deployment-protection bypass header is accepted. Preview and Production both require the web caller's `x-unfiled-trusted-oidc-idp-token`; in `aws-kms` mode the AWS credential provider additionally reads the verifier workload's own OIDC token from Vercel's request context, while `vercel-sensitive-env-v1` mode needs no workload token. The caller token is cryptographically verified against the configured team issuer/audience, exact web project identity, exact same-environment subject, and bounded token lifetime. A successful response contains only:
 
 ```json
 { "generationId": "igen_01K...", "revisionToken": "42", "verifiedNoteCount": 25, "verified": true }

@@ -57,14 +57,14 @@ describe("encrypted index verifier caller", () => {
       cache: "no-store",
       headers: {
         "content-type": "application/json",
-        "x-vercel-trusted-oidc-idp-token": TOKEN
+        "x-unfiled-trusted-oidc-idp-token": TOKEN
       },
       method: "POST",
       redirect: "error"
     });
     expect(Object.keys(init.headers as Record<string, string>).sort()).toEqual([
       "content-type",
-      "x-vercel-trusted-oidc-idp-token"
+      "x-unfiled-trusted-oidc-idp-token"
     ]);
   });
 

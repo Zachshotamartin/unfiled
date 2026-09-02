@@ -38,14 +38,14 @@ describe("isolated encrypted organizer caller", () => {
       body: '{"trigger":"schedule"}',
       headers: {
         "content-type": "application/json",
-        "x-vercel-trusted-oidc-idp-token": TOKEN
+        "x-unfiled-trusted-oidc-idp-token": TOKEN
       },
       method: "POST",
       redirect: "error"
     });
     expect(Object.keys(init.headers as Record<string, string>).sort()).toEqual([
       "content-type",
-      "x-vercel-trusted-oidc-idp-token"
+      "x-unfiled-trusted-oidc-idp-token"
     ]);
     expect(init.body as string).not.toContain("owner");
     expect(getOidcToken).toHaveBeenCalledOnce();
