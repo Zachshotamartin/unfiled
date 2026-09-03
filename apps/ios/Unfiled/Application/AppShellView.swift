@@ -303,6 +303,7 @@ private struct CaptureReceiptDestinationView: View {
             errorMessage: model.captureDetailErrors[captureID],
             submittingInteractionIDs: model.submittingInteractionIDs,
             interactionErrors: model.interactionErrors,
+            reviewOpen: model.reviewItems.contains { $0.id == model.captureDetail(captureID)?.reviewItemID },
             onRefresh: { await model.loadCaptureDetail(captureID: captureID) },
             onOpenNote: model.openNote,
             onMove: model.presentCorrection,

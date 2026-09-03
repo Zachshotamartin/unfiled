@@ -25,3 +25,7 @@ supabase/.temp
 supabase/.env
 *.log
 .vercel
+
+# Live release gate outputs (content-free, but per-run)
+.live-gate/
+live-gate-api.json

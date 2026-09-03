@@ -9,8 +9,28 @@ final class ReviewNavigationTests: XCTestCase {
         return AppModel(bundle: Bundle(for: ReviewNavigationTests.self), userDefaults: defaults)
     }
 
+    /// An open review item, as the server would have listed it.
+    private func openItem(_ id: String) -> ReviewPresentation {
+        ReviewPresentation(
+            id: id,
+            type: .lowConfidence,
+            original: "Test capture",
+            proposedDestination: "Errands",
+            actionSummary: "Low-confidence destination",
+            captureID: "cap_00000000000000000000000000",
+            noteID: nil,
+            duplicateExplanation: nil,
+            generatedBlock: nil,
+            suggestedDestinations: [],
+            suggestedNewNote: nil,
+            relatedNotes: [],
+            allowedActions: [.create, .dismiss]
+        )
+    }
+
     func testShowReviewPushesThePageForTheItem() {
         let model = makeModel()
+        model.seedReviewItemsForTesting([openItem("rvw_01TEST")])
         model.navigationPath = [.settings]
         model.showReview(reviewID: "rvw_01TEST")
         XCTAssertEqual(model.navigationPath, [.settings, .review("rvw_01TEST")])
@@ -19,9 +39,19 @@ final class ReviewNavigationTests: XCTestCase {
 
     func testShowReviewDoesNotPushTheSamePageTwice() {
         let model = makeModel()
+        model.seedReviewItemsForTesting([openItem("rvw_01TEST")])
         model.showReview(reviewID: "rvw_01TEST")
         model.showReview(reviewID: "rvw_01TEST")
         XCTAssertEqual(model.navigationPath, [.review("rvw_01TEST")])
+    }
+
+    /// A review that was resolved or dismissed has no page: Open Review explains instead.
+    func testShowReviewForAClosedReviewNeverPushesAPage() {
+        let model = makeModel()
+        model.seedReviewItemsForTesting([openItem("rvw_01OTHER")])
+        model.showReview(reviewID: "rvw_01CLOSED")
+        XCTAssertEqual(model.navigationPath, [])
+        XCTAssertEqual(model.bannerMessage, ReviewClosedCopy.receiptLine)
     }
 
     func testShowReviewWithoutAnItemReturnsToTheInbox() {

@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 enum APIEndpointConfiguration {
     static let versionedBasePath = "/api/v1"
@@ -355,12 +356,27 @@ public final class APIClient: Sendable {
         }
         guard (200 ... 299).contains(response.statusCode) else {
             let payload = try? APIJSON.makeDecoder().decode(APIErrorPayload.self, from: data)
+            Self.failureLog.error(
+                "request refused path=\(Self.pathTemplate(response.url), privacy: .public) status=\(response.statusCode, privacy: .public) code=\(payload?.code.rawValue ?? "none", privacy: .public)"
+            )
             throw APIClientError.http(status: response.statusCode, code: payload?.code,
                                       requestId: payload?.requestId,
                                       retryAfterSeconds: payload?.retryAfterSeconds)
         }
         do { return try APIJSON.makeDecoder().decode(Response.self, from: data) }
         catch { throw APIClientError.malformedResponse(status: response.statusCode) }
+    }
+
+    private static let failureLog = Logger(subsystem: "com.zachshotamartin.unfiled", category: "api")
+
+    /// The request path with every identifier replaced, so a log line never names a record.
+    nonisolated static func pathTemplate(_ url: URL?) -> String {
+        guard let path = url?.path else { return "unknown" }
+        return path.replacingOccurrences(
+            of: #"[a-z]{2,4}_[0-9A-Za-z]{26}"#,
+            with: "<id>",
+            options: .regularExpression
+        )
     }
 
     private func sanitized(_ error: Error) -> APIClientError {
