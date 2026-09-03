@@ -239,17 +239,24 @@ struct NoteDetailView: View {
             .accessibilityIdentifier("noteDetail.edit")
 
             Menu {
-                Button("Revision history", systemImage: "clock.arrow.circlepath") {
+                Button {
                     onShowRevisionHistory()
+                } label: {
+                    Label { Text("Revision history") } icon: { GlyphImage.image(.clock) }
                 }
-                Button(
-                    isArchived ? "Restore from archive" : "Archive",
-                    systemImage: isArchived ? "arrow.uturn.backward" : "archivebox"
-                ) {
+                Button {
                     pendingNoteAction = .archive(!isArchived)
+                } label: {
+                    Label {
+                        Text(isArchived ? "Restore from archive" : "Archive")
+                    } icon: {
+                        GlyphImage.image(isArchived ? .undo : .archive)
+                    }
                 }
-                Button("Delete note", systemImage: "trash", role: .destructive) {
+                Button(role: .destructive) {
                     pendingNoteAction = .delete
+                } label: {
+                    Label { Text("Delete note") } icon: { GlyphImage.image(.trash) }
                 }
             } label: {
                 GlyphView(glyph: .more, size: 18, weight: 1.9)

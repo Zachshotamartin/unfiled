@@ -47,7 +47,7 @@ struct CaptureComposerView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 if restoredDraft {
-                    Label("Unsaved draft", systemImage: "clock.arrow.circlepath")
+                    GlyphLabel("Unsaved draft", glyph: .clock)
                         .font(UnfiledType.caption)
                         .foregroundStyle(UnfiledTheme.fog)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -92,9 +92,9 @@ struct CaptureComposerView: View {
                 HStack(spacing: UnfiledTheme.controlGap) {
                     Menu {
                         Picker("Privacy", selection: $privacy) {
-                            Label("Organize for me", systemImage: "tray.and.arrow.down")
+                            Label { Text("Organize for me") } icon: { GlyphImage.image(.organize) }
                                 .tag(LocalPrivacyMode.aiAssisted)
-                            Label("Private manual", systemImage: "lock")
+                            Label { Text("Private manual") } icon: { GlyphImage.image(.lock) }
                                 .tag(LocalPrivacyMode.privateManual)
                         }
                     } label: {

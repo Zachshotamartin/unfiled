@@ -41,7 +41,7 @@ struct RevisionHistoryView: View {
                 }
 
                 if let feedbackMessage {
-                    Label(feedbackMessage, systemImage: "exclamationmark.circle")
+                    GlyphLabel(feedbackMessage, glyph: .warning)
                         .font(UnfiledType.secondaryStrong)
                         .foregroundStyle(UnfiledTheme.persimmon)
                         .padding(.vertical, 18)
@@ -109,7 +109,7 @@ struct RevisionHistoryView: View {
             Text(revision.title)
                 .font(UnfiledType.body)
                 .lineLimit(2)
-            Label(sourceLabel(revision.source), systemImage: sourceIcon(revision.source))
+            GlyphLabel(sourceLabel(revision.source), glyph: sourceIcon(revision.source), size: 12, weight: 1.8)
                 .font(UnfiledType.caption)
                 .foregroundStyle(UnfiledTheme.fog)
 
@@ -208,13 +208,13 @@ struct RevisionHistoryView: View {
         }
     }
 
-    private func sourceIcon(_ source: String) -> String {
+    private func sourceIcon(_ source: String) -> UnfiledGlyph {
         switch source {
-        case RevisionSource.organization.rawValue: "tray.and.arrow.down"
-        case RevisionSource.undo.rawValue: "arrow.uturn.backward"
-        case RevisionSource.import.rawValue: "square.and.arrow.down"
-        case RevisionSource.interactive.rawValue: "checklist"
-        default: "square.and.pencil"
+        case RevisionSource.organization.rawValue: .organize
+        case RevisionSource.undo.rawValue: .undo
+        case RevisionSource.import.rawValue: .down
+        case RevisionSource.interactive.rawValue: .checklist
+        default: .pen
         }
     }
 }

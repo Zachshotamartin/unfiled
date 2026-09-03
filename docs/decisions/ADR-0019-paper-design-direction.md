@@ -25,7 +25,7 @@ Three directions were mocked side by side on the same two screens (a tinted sage
 ## Consequences
 
 - The web app still carries the earlier dark treatment; bringing it to Paper is separate work.
-- Glyph quality is now the app's responsibility: new screens must draw from `UnfiledGlyph`, not from system symbols, and additions must follow the tray, card, and stroke rule.
+- Glyph quality is now the app's responsibility: every screen draws from `UnfiledGlyph` (no system symbol remains in the app source as of 2026-09-02; `GlyphLabel` replaces symbol labels and `GlyphImage` renders a glyph into a template image where a menu or picker accepts only images), and additions must follow the tray, card, and stroke rule.
 - The Review list requests 50 items per page, the ceiling the encrypted reader accepts, instead of the contract's 100; the contract's documented maximum should be aligned with the reader in a later change.
 - Snapshot references and any screenshots in documentation predate this direction and need regenerating.
 - The canonical list markdown still partitions checked items under a `## Completed` heading (`listFragment` in `packages/ai-routing/src/application.ts`, with parity fixtures in `packages/domain`). The phone hides that heading and checks items in place, but the raw editor shows it and an edit reorders checked items to the end; keeping items in place in the canonical body is a protocol change left for a later ADR.

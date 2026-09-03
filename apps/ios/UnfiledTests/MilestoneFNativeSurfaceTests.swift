@@ -115,7 +115,7 @@ final class MilestoneFNativeSurfaceTests: XCTestCase {
     }
 
     func testSearchFailureCopyIsContentFreeAndDistinguishesOffline() {
-        XCTAssertEqual(SearchFailure.offline.systemImage, "wifi.slash")
+        XCTAssertEqual(SearchFailure.offline.glyph, .warning)
         XCTAssertEqual(SearchFailure.offline.message, "Reconnect to search your private notes.")
         XCTAssertEqual(
             SearchFailure.unavailable.message,

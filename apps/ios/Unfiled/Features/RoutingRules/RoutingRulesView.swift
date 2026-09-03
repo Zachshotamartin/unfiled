@@ -104,15 +104,11 @@ struct RoutingRulesView: View {
                 editor = RoutingRuleEditorContext(rule: nil)
             } label: {
                 HStack(spacing: 10) {
-                    Image(systemName: "plus")
-                        .font(UnfiledType.secondaryStrong)
-                        .accessibilityHidden(true)
+                    GlyphView(glyph: .plus, size: 16, weight: 2.2)
                     Text("New routing rule")
                         .font(UnfiledType.heading)
                     Spacer()
-                    Image(systemName: "arrow.right")
-                        .font(UnfiledType.caption)
-                        .accessibilityHidden(true)
+                    GlyphView(glyph: .arrow, size: 14, weight: 2)
                 }
                 .foregroundStyle(UnfiledTheme.ink)
                 .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
@@ -199,7 +195,7 @@ struct RoutingRulesView: View {
                 Button {
                     hasPreviewed = true
                 } label: {
-                    Label(RoutingRulePreviewPresentation.actionTitle, systemImage: "arrow.right")
+                    GlyphLabel(RoutingRulePreviewPresentation.actionTitle, glyph: .arrow)
                         .font(UnfiledType.secondaryStrong)
                         .frame(minHeight: UnfiledTheme.minimumTouchTarget)
                         .padding(.horizontal, UnfiledTheme.fieldPadding)
@@ -284,10 +280,8 @@ struct RoutingRulesView: View {
             .accessibilityIdentifier(RoutingRuleAccessibilityIdentifier.loading)
         } else if let errorMessage, rules.isEmpty {
             VStack(alignment: .leading, spacing: 14) {
-                Image(systemName: "wifi.exclamationmark")
-                    .font(UnfiledType.title)
+                GlyphView(glyph: .warning, size: 24, weight: 2.3)
                     .foregroundStyle(UnfiledTheme.persimmon)
-                    .accessibilityHidden(true)
                 Text("Rules are unavailable")
                     .font(UnfiledType.title)
                 Text(errorMessage)
@@ -371,7 +365,7 @@ struct RoutingRulesView: View {
     }
 
     private func inlineError(_ message: String) -> some View {
-        Label(message, systemImage: "exclamationmark.circle")
+        GlyphLabel(message, glyph: .warning)
             .font(UnfiledType.secondary)
             .foregroundStyle(UnfiledTheme.paper)
             .fixedSize(horizontal: false, vertical: true)
@@ -432,7 +426,7 @@ private struct RoutingRuleCard: View {
                         .font(UnfiledType.title)
                         .foregroundStyle(UnfiledTheme.paper)
                         .fixedSize(horizontal: false, vertical: true)
-                    Label(destinationLabel, systemImage: destinationIcon)
+                    GlyphLabel(destinationLabel, glyph: destinationIcon, size: 14, weight: 1.9)
                         .font(UnfiledType.secondary)
                         .foregroundStyle(isDestinationAvailable ? UnfiledTheme.fog : UnfiledTheme.persimmon)
                         .fixedSize(horizontal: false, vertical: true)
@@ -526,8 +520,7 @@ private struct RoutingRuleCard: View {
                 Button {
                     onSetEnabled(!rule.enabled)
                 } label: {
-                    Image(systemName: rule.enabled ? "checkmark.circle.fill" : "circle")
-                        .font(UnfiledType.title)
+                    GlyphView(glyph: rule.enabled ? .checkCircle : .circle, size: 24, weight: 2.2)
                         .foregroundStyle(rule.enabled ? UnfiledTheme.persimmon : UnfiledTheme.fog)
                         .frame(width: UnfiledTheme.minimumTouchTarget, height: UnfiledTheme.minimumTouchTarget)
                 }
@@ -590,10 +583,10 @@ private struct RoutingRuleCard: View {
         return "This rule is blocked. Choose an active destination before turning it on."
     }
 
-    private var destinationIcon: String {
+    private var destinationIcon: UnfiledGlyph {
         switch rule.destination {
-        case .note: "note.text"
-        case .space: "folder"
+        case .note: .card
+        case .space: .tray
         }
     }
 
@@ -682,7 +675,7 @@ private struct RoutingRuleEditorView: View {
                         .padding(.top, UnfiledTheme.sectionTop)
 
                     if let errorMessage {
-                        Label(errorMessage, systemImage: "exclamationmark.circle")
+                        GlyphLabel(errorMessage, glyph: .warning)
                             .font(UnfiledType.secondary)
                             .foregroundStyle(UnfiledTheme.paper)
                             .fixedSize(horizontal: false, vertical: true)

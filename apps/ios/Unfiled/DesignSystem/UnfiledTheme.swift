@@ -224,16 +224,15 @@ struct StatusDot: View {
 
 struct PrimaryActionButton: View {
     let title: String
-    var systemImage: String?
+    var glyph: UnfiledGlyph?
     var disabled = false
     let action: @MainActor () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                if let systemImage {
-                    Image(systemName: systemImage)
-                        .font(.system(size: 15, weight: .semibold))
+                if let glyph {
+                    GlyphView(glyph: glyph, size: 16, weight: 2.2)
                 }
                 Text(title)
                     .font(UnfiledType.heading)

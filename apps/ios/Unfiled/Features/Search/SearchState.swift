@@ -88,9 +88,7 @@ enum SearchFailure: Equatable, Sendable {
         }
     }
 
-    var systemImage: String {
-        self == .offline ? "wifi.slash" : "exclamationmark.circle"
-    }
+    var glyph: UnfiledGlyph { .warning }
 }
 
 enum SearchPaginationError: Error, Equatable, Sendable {

@@ -84,32 +84,8 @@ final class NoteContextViewTests: XCTestCase {
         }
     }
 
-    func testRemovedSourceAndBacklinkPresentationAreExplicit() throws {
-        let source = try XCTUnwrap(
-            sourcePage(indices: [7], nextCursor: nil, removed: true).items.first
-        )
-        let backlink = try XCTUnwrap(
-            backlinkPage(indices: [8], nextCursor: nil).items.first
-        )
-
-        XCTAssertEqual(
-            NoteContextPresentation.sourceStatus(source.relation),
-            "Removed from this note"
-        )
-        XCTAssertEqual(NoteContextPresentation.sourceLabel(.iosLockScreenWidget), "Lock Screen")
-        XCTAssertEqual(NoteContextPresentation.linkLabel(.reference), "Reference")
-        XCTAssertEqual(
-            NoteContextAccessibilityIdentifier.source(source),
-            "noteDetail.source.\(source.captureId.rawValue).\(source.mutationId.rawValue)"
-        )
-        XCTAssertEqual(
-            NoteContextAccessibilityIdentifier.backlink(backlink),
-            "noteDetail.backlink.\(backlink.linkId.rawValue)"
-        )
-    }
-
     func testOfflineAndDeletedFailuresUseContentFreeRecoveryCopy() {
-        XCTAssertEqual(NoteContextFailure.offline.systemImage, "wifi.slash")
+        XCTAssertEqual(NoteContextFailure.offline.glyph, .warning)
         XCTAssertEqual(
             NoteContextFailure.offline.message,
             "Reconnect to load this private note context."

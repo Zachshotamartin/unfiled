@@ -214,8 +214,7 @@ struct LogFieldsSection: View {
                     if isUpdating {
                         ProgressView().controlSize(.small).tint(UnfiledTheme.persimmon)
                     } else {
-                        Image(systemName: isEditing ? "chevron.up" : "square.and.pencil")
-                            .font(UnfiledType.heading)
+                        GlyphView(glyph: isEditing ? .up : .pen, size: 18, weight: 2.2)
                             .foregroundStyle(UnfiledTheme.persimmon)
                     }
                 }
@@ -236,7 +235,7 @@ struct LogFieldsSection: View {
             }
 
             if let error = errors[identity] {
-                Label(error, systemImage: "exclamationmark.circle")
+                GlyphLabel(error, glyph: .warning)
                     .font(UnfiledType.secondary)
                     .foregroundStyle(UnfiledTheme.persimmon)
                     .padding(.bottom, 12)
@@ -288,7 +287,7 @@ struct LogFieldsSection: View {
                 HStack(spacing: UnfiledTheme.controlGap) {
                     stepButton(
                         title: "Decrease \(field.label)",
-                        systemImage: "minus",
+                        glyph: .minus,
                         identifier: LogFieldAccessibilityIdentifier.decrement(
                             entryID: entry.id,
                             fieldID: field.id
@@ -297,7 +296,7 @@ struct LogFieldsSection: View {
                     )
                     stepButton(
                         title: "Increase \(field.label)",
-                        systemImage: "plus",
+                        glyph: .plus,
                         identifier: LogFieldAccessibilityIdentifier.increment(
                             entryID: entry.id,
                             fieldID: field.id
@@ -324,16 +323,15 @@ struct LogFieldsSection: View {
 
     private func stepButton(
         title: String,
-        systemImage: String,
+        glyph: UnfiledGlyph,
         identifier: String,
         delta: Double
     ) -> some View {
         Button {
             draft?.step(by: delta)
         } label: {
-            Label(title, systemImage: systemImage)
+            GlyphLabel(title, glyph: glyph, size: 18, weight: 2.3)
                 .labelStyle(.iconOnly)
-                .font(UnfiledType.title)
                 .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
                 .contentShape(Rectangle())
         }

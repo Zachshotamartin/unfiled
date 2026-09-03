@@ -84,8 +84,12 @@ struct LibraryView<Search: View>: View {
     private var header: some View {
         ScreenHeader(title: "Library", subtitle: librarySummary) {
             Menu {
-                Button("Archive", systemImage: "archivebox", action: onOpenArchive)
-                Button("Recently deleted", systemImage: "trash", action: onOpenDeleted)
+                Button(action: onOpenArchive) {
+                    Label { Text("Archive") } icon: { GlyphImage.image(.archive) }
+                }
+                Button(action: onOpenDeleted) {
+                    Label { Text("Recently deleted") } icon: { GlyphImage.image(.trash) }
+                }
             } label: {
                 GlyphView(glyph: .more, size: 20)
                     .foregroundStyle(UnfiledTheme.paper)

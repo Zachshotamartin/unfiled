@@ -200,10 +200,10 @@ struct AuthInlineMessage: View {
         case error
         case confirmation
 
-        var systemImage: String {
+        var glyph: UnfiledGlyph {
             switch self {
-            case .error: "exclamationmark.circle.fill"
-            case .confirmation: "checkmark.circle.fill"
+            case .error: .warning
+            case .confirmation: .checkCircle
             }
         }
     }
@@ -213,7 +213,7 @@ struct AuthInlineMessage: View {
     let accessibilityIdentifier: String
 
     var body: some View {
-        Label(message, systemImage: kind.systemImage)
+        GlyphLabel(message, glyph: kind.glyph)
             .font(UnfiledType.secondary)
             .foregroundStyle(kind == .error ? UnfiledTheme.paper : UnfiledTheme.fog)
             .fixedSize(horizontal: false, vertical: true)
@@ -243,9 +243,7 @@ struct AuthPrimaryButton: View {
                     .font(UnfiledType.heading)
 
                 if !isLoading {
-                    Image(systemName: "arrow.right")
-                        .font(UnfiledType.heading)
-                        .accessibilityHidden(true)
+                    GlyphView(glyph: .arrow, size: 18, weight: 2.3)
                 }
             }
             .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)

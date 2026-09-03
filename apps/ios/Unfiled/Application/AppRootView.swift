@@ -149,8 +149,12 @@ private struct AppBanner: View {
                 .foregroundStyle(UnfiledTheme.paper)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 4)
-            Button("Dismiss", systemImage: "xmark", action: onDismiss)
-                .labelStyle(.iconOnly)
+            Button(action: onDismiss) {
+                GlyphView(glyph: .close, size: 16, weight: 2.2)
+                    .frame(width: UnfiledTheme.minimumTouchTarget, height: UnfiledTheme.minimumTouchTarget)
+                    .contentShape(Rectangle())
+            }
+                .accessibilityLabel("Dismiss")
                 .foregroundStyle(UnfiledTheme.fog)
                 .frame(width: 44, height: 44)
         }

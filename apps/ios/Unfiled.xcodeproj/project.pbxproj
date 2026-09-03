@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		037FB4D7CEC8D73E901D3B67 /* APIClient+Captures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EF079A4A73790AAB2A2E1DB /* APIClient+Captures.swift */; };
 		052E81AA7E3B16D891E2B5B9 /* SettingsContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FDBEDECECF295451CAC92F3 /* SettingsContractTests.swift */; };
+		06E4D17D0A1AE22F3741C3CE /* GlyphVocabularyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B04454D62F5D2336886994C9 /* GlyphVocabularyTests.swift */; };
 		078E14DFE976F24F4B3E1A1A /* ULIDGeneratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BBEBA9E7C30C23E939F2285 /* ULIDGeneratorTests.swift */; };
 		0A85E88F8A0BC7C78E10341D /* SettingsModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B60F6B02B17795619BE0552C /* SettingsModels.swift */; };
 		0D50A717D7E5D1F85A6ACAC0 /* HTTPTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAD794EF5D69033F9E882F07 /* HTTPTransport.swift */; };
@@ -94,7 +95,6 @@
 		DD41B6466B9E9B52CD43B52F /* JSONValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA35AD216A2EFE1AFC3C3626 /* JSONValue.swift */; };
 		DE71E0739CB578495C9BC59E /* AppConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA539EEF3830F111B0F629FB /* AppConfiguration.swift */; };
 		DF02E1C17E2463C19E66F041 /* SearchViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA5629CC5D936E11D8467DD2 /* SearchViewTests.swift */; };
-		DF17C7C3701C029FD39A7F0E /* NoteContextSections.swift in Sources */ = {isa = PBXBuildFile; fileRef = 983F10D1A1430E378A3724C8 /* NoteContextSections.swift */; };
 		DF805F0DD6E8B6F6BB492232 /* SettingsPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51E704E25F0FF9CDB44CA5E2 /* SettingsPresentationTests.swift */; };
 		DFFE7F58405FFB68B9B724E7 /* LocalDatabaseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65E7D7F4646A765CE53F0D7B /* LocalDatabaseTests.swift */; };
 		E22556158CF03D64FA2D20E1 /* OrganizationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BA131636FFA7F43B1C97171 /* OrganizationModels.swift */; };
@@ -184,7 +184,6 @@
 		8C7118C524CDBD3ADC96A70C /* LibrarySubsetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibrarySubsetView.swift; sourceTree = "<group>"; };
 		9544AAD45BFF772D58357CE4 /* AppShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppShellView.swift; sourceTree = "<group>"; };
 		9687D6D0AF301DFB2E720A95 /* ProviderKeyGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderKeyGroupView.swift; sourceTree = "<group>"; };
-		983F10D1A1430E378A3724C8 /* NoteContextSections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteContextSections.swift; sourceTree = "<group>"; };
 		98EEE230E33E6E3B82BCEFAF /* SettingsChoicePages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsChoicePages.swift; sourceTree = "<group>"; };
 		9CA23364F38E60E7D78ABA17 /* Identifiers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Identifiers.swift; sourceTree = "<group>"; };
 		9DD246DA18E6F7FD6309C119 /* AuthTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthTestSupport.swift; sourceTree = "<group>"; };
@@ -198,6 +197,7 @@
 		A99799151702CEE14E574C4F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		AA5629CC5D936E11D8467DD2 /* SearchViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchViewTests.swift; sourceTree = "<group>"; };
 		AAD794EF5D69033F9E882F07 /* HTTPTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTTPTransport.swift; sourceTree = "<group>"; };
+		B04454D62F5D2336886994C9 /* GlyphVocabularyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlyphVocabularyTests.swift; sourceTree = "<group>"; };
 		B188CBE92BB2CC9FEC9FA7BA /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
 		B60F6B02B17795619BE0552C /* SettingsModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsModels.swift; sourceTree = "<group>"; };
 		B6B6DE4D8584E7AF2DEB2418 /* PresentationModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresentationModels.swift; sourceTree = "<group>"; };
@@ -394,6 +394,7 @@
 				7E0DA9F54851831A1DD06876 /* AuthSessionManagerTests.swift */,
 				521948BD6497C55D237E52B4 /* AuthSessionVaultTests.swift */,
 				9DD246DA18E6F7FD6309C119 /* AuthTestSupport.swift */,
+				B04454D62F5D2336886994C9 /* GlyphVocabularyTests.swift */,
 				C32B8271DE0B3FEBCD92C63D /* InteractionContractTests.swift */,
 				65E7D7F4646A765CE53F0D7B /* LocalDatabaseTests.swift */,
 				643F45B2BF7E496210EB36CC /* ManagedFallbackAvailabilityTests.swift */,
@@ -524,7 +525,6 @@
 				463E8422DE90DB2A8EDA259D /* GeneratedBlocksSection.swift */,
 				B188CBE92BB2CC9FEC9FA7BA /* LibraryView.swift */,
 				FD2A18669737FB34601AF60C /* LogFieldsSection.swift */,
-				983F10D1A1430E378A3724C8 /* NoteContextSections.swift */,
 				F4E8931EC54E520F2FC982B7 /* NoteDetailView.swift */,
 				7E5811656E5FDAB7B2D2E1A6 /* NoteEditorView.swift */,
 				65279A5FD21402CDD45AB25D /* RevisionHistoryView.swift */,
@@ -693,7 +693,6 @@
 				44D2130DA802668EF8347BC3 /* LogFieldsSection.swift in Sources */,
 				5D0D15511EA4F4894E204060 /* ManagedFallbackContract.swift in Sources */,
 				BACD16CB8C83BDA176019D5B /* NoteContextModels.swift in Sources */,
-				DF17C7C3701C029FD39A7F0E /* NoteContextSections.swift in Sources */,
 				94C2E5C430339062876C9457 /* NoteContextState.swift in Sources */,
 				C69D0DB6A5F7D010B5322643 /* NoteDetailView.swift in Sources */,
 				1FABB6B4CB82E0678E0CF3F9 /* NoteEditorView.swift in Sources */,
@@ -739,6 +738,7 @@
 				BECECB1D3B19D77079C1BBD0 /* AuthSessionManagerTests.swift in Sources */,
 				ADECF952CB50558495832BD5 /* AuthSessionVaultTests.swift in Sources */,
 				E6AE91F00E722069E503812F /* AuthTestSupport.swift in Sources */,
+				06E4D17D0A1AE22F3741C3CE /* GlyphVocabularyTests.swift in Sources */,
 				894713444DCBC280F56DEED4 /* InteractionContractTests.swift in Sources */,
 				DFFE7F58405FFB68B9B724E7 /* LocalDatabaseTests.swift in Sources */,
 				5F6E17BD30A268E4767CB5BF /* ManagedFallbackAvailabilityTests.swift in Sources */,

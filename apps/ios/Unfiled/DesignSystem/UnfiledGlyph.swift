@@ -8,6 +8,54 @@ enum UnfiledGlyph: CaseIterable {
     case pen, plus, send, sliders, more, chevron, back, close
     case lock, organize, clock, warning, tray, check, archive, trash
     case heading, bullets, checklist, quote, link
+    case arrow, down, up, move, undo, info, minus, circle, checkCircle, card
+}
+
+/// A text label with one of the app's glyphs where a system symbol would otherwise sit.
+struct GlyphLabel: View {
+    let title: String
+    let glyph: UnfiledGlyph
+    var size: CGFloat = 16
+    var weight: CGFloat = 2
+
+    init(_ title: String, glyph: UnfiledGlyph, size: CGFloat = 16, weight: CGFloat = 2) {
+        self.title = title
+        self.glyph = glyph
+        self.size = size
+        self.weight = weight
+    }
+
+    var body: some View {
+        Label {
+            Text(title)
+        } icon: {
+            GlyphView(glyph: glyph, size: size, weight: weight)
+        }
+    }
+}
+
+/// Menus and pickers accept only images, so a glyph is rendered once into a template image
+/// that the menu tints like any other icon.
+@MainActor
+enum GlyphImage {
+    private static var cache: [UnfiledGlyph: UIImage] = [:]
+
+    static func image(_ glyph: UnfiledGlyph) -> Image {
+        Image(uiImage: uiImage(glyph))
+    }
+
+    static func uiImage(_ glyph: UnfiledGlyph) -> UIImage {
+        if let cached = cache[glyph] { return cached }
+        let renderer = ImageRenderer(
+            content: GlyphView(glyph: glyph, size: 20, weight: 2.1)
+                .foregroundStyle(Color.black)
+                .padding(2)
+        )
+        renderer.scale = 3
+        let rendered = (renderer.uiImage ?? UIImage()).withRenderingMode(.alwaysTemplate)
+        cache[glyph] = rendered
+        return rendered
+    }
 }
 
 /// Renders a glyph in the current foreground style.
@@ -169,6 +217,36 @@ struct GlyphStroke: Shape {
             // Two rings that overlap, drawn with the same square caps as every stroke.
             path.addRoundedRect(in: box(3.5, 9, 10, 6), cornerSize: CGSize(width: 3 * unit, height: 3 * unit))
             path.addRoundedRect(in: box(10.5, 9, 10, 6), cornerSize: CGSize(width: 3 * unit, height: 3 * unit))
+        case .arrow:
+            path.move(to: point(4.5, 12)); path.addLine(to: point(19, 12))
+            path.move(to: point(13.5, 6.5)); path.addLine(to: point(19, 12)); path.addLine(to: point(13.5, 17.5))
+        case .down:
+            path.move(to: point(12, 4.5)); path.addLine(to: point(12, 19))
+            path.move(to: point(6.5, 13.5)); path.addLine(to: point(12, 19)); path.addLine(to: point(17.5, 13.5))
+        case .up:
+            path.move(to: point(6, 15)); path.addLine(to: point(12, 9)); path.addLine(to: point(18, 15))
+        case .move:
+            // Down from where it was, then out to the right: the card goes somewhere else.
+            path.move(to: point(5.5, 5)); path.addLine(to: point(5.5, 13.5)); path.addLine(to: point(18.5, 13.5))
+            path.move(to: point(13.5, 8.5)); path.addLine(to: point(18.5, 13.5)); path.addLine(to: point(13.5, 18.5))
+        case .undo:
+            // Back the way it came: a line that turns and points left again.
+            path.move(to: point(7, 9)); path.addLine(to: point(15.5, 9))
+            path.addArc(center: point(15.5, 12.5), radius: 3.5 * unit, startAngle: .degrees(-90), endAngle: .degrees(90), clockwise: false)
+            path.addLine(to: point(9, 16))
+            path.move(to: point(10.5, 5.5)); path.addLine(to: point(7, 9)); path.addLine(to: point(10.5, 12.5))
+        case .info:
+            path.addEllipse(in: box(4, 4, 16, 16))
+            path.move(to: point(12, 11)); path.addLine(to: point(12, 16.5))
+        case .minus:
+            path.move(to: point(5, 12)); path.addLine(to: point(19, 12))
+        case .circle:
+            path.addEllipse(in: box(4, 4, 16, 16))
+        case .checkCircle:
+            path.addEllipse(in: box(4, 4, 16, 16))
+            path.move(to: point(8, 12.3)); path.addLine(to: point(11, 15.3)); path.addLine(to: point(16.3, 9.3))
+        case .card:
+            path.addPath(GlyphGeometry.card(center: point(12, 12), width: 12 * unit, height: 15.5 * unit, radius: 1.6 * unit))
         case .quote, .more:
             break
         }
@@ -210,6 +288,8 @@ struct GlyphFill: Shape {
             for y in [6.5, 12.0, 17.5] {
                 path.addPath(GlyphGeometry.card(center: point(6, y), width: 2.6 * unit, height: 2.6 * unit, radius: 0.5 * unit))
             }
+        case .info:
+            path.addEllipse(in: CGRect(x: rect.minX + 10.9 * unit, y: rect.minY + 6.9 * unit, width: 2.2 * unit, height: 2.2 * unit))
         case .quote:
             // Two slanted cards, the way quotation marks sit.
             path.addPath(GlyphGeometry.card(center: point(8.5, 12), width: 3.6 * unit, height: 7 * unit, radius: 0.8 * unit))

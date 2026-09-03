@@ -335,7 +335,7 @@ struct SearchView: View {
                     .accessibilityIdentifier("search.result.\(result.id)")
 
                     if let resultFailure = resultFailures[result.id] {
-                        Label(resultFailure.message, systemImage: resultFailure.systemImage)
+                        GlyphLabel(resultFailure.message, glyph: resultFailure.glyph)
                             .font(UnfiledType.secondary)
                             .foregroundStyle(UnfiledTheme.persimmon)
                             .padding(.vertical, 8)
@@ -380,7 +380,7 @@ struct SearchView: View {
             }
             .accessibilityIdentifier("search.loadMore.error")
         } else if let paginationNotice {
-            Label(paginationNotice, systemImage: "line.3.horizontal.decrease.circle")
+            GlyphLabel(paginationNotice, glyph: .sliders)
                 .font(UnfiledType.secondary)
                 .foregroundStyle(UnfiledTheme.fog)
                 .fixedSize(horizontal: false, vertical: true)
@@ -391,7 +391,7 @@ struct SearchView: View {
             Button {
                 Task { await onLoadMore() }
             } label: {
-                Label("Load more results", systemImage: "arrow.down")
+                GlyphLabel("Load more results", glyph: .down)
                     .font(UnfiledType.heading)
                     .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
                     .contentShape(Rectangle())
@@ -478,7 +478,7 @@ private struct SearchDeletedResultLedgerRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("Deleted note", systemImage: "trash")
+            GlyphLabel("Deleted note", glyph: .trash)
                 .font(UnfiledType.heading)
                 .foregroundStyle(UnfiledTheme.fog)
             Text(result.title)
@@ -520,7 +520,7 @@ private struct SearchErrorLedgerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label(failure.title, systemImage: failure.systemImage)
+            GlyphLabel(failure.title, glyph: failure.glyph, size: 18, weight: 2.2)
                 .font(UnfiledType.heading)
                 .foregroundStyle(UnfiledTheme.paper)
             Text(failure.message)

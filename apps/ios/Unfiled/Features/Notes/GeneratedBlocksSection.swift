@@ -85,7 +85,7 @@ struct GeneratedBlocksSection: View {
                 loadMoreControls
 
                 if let paginationNotice, !paginationNotice.isEmpty {
-                    Label(paginationNotice, systemImage: "info.circle")
+                    GlyphLabel(paginationNotice, glyph: .info)
                         .font(UnfiledType.secondary)
                         .foregroundStyle(UnfiledTheme.fog)
                         .fixedSize(horizontal: false, vertical: true)
@@ -96,7 +96,7 @@ struct GeneratedBlocksSection: View {
 
                 if let loadError, !loadError.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        Label(loadError, systemImage: "exclamationmark.circle")
+                        GlyphLabel(loadError, glyph: .warning)
                             .font(UnfiledType.secondary)
                             .foregroundStyle(UnfiledTheme.fog)
                             .fixedSize(horizontal: false, vertical: true)
@@ -123,7 +123,7 @@ struct GeneratedBlocksSection: View {
     @ViewBuilder
     private var loadMoreControls: some View {
         if isLoadingMore {
-            Label("Loading more additions", systemImage: "clock")
+            GlyphLabel("Loading more additions", glyph: .clock)
                 .font(UnfiledType.caption)
                 .foregroundStyle(UnfiledTheme.fog)
                 .frame(minHeight: UnfiledTheme.minimumTouchTarget)
@@ -137,7 +137,7 @@ struct GeneratedBlocksSection: View {
         } else if !isLoading && (hasMore || loadMoreError?.isEmpty == false) {
             VStack(alignment: .leading, spacing: 8) {
                 if let loadMoreError, !loadMoreError.isEmpty {
-                    Label(loadMoreError, systemImage: "exclamationmark.circle")
+                    GlyphLabel(loadMoreError, glyph: .warning)
                         .font(UnfiledType.secondary)
                         .foregroundStyle(UnfiledTheme.fog)
                         .fixedSize(horizontal: false, vertical: true)
@@ -145,11 +145,10 @@ struct GeneratedBlocksSection: View {
                 Button {
                     Task { await onLoadMore() }
                 } label: {
-                    Label(
+                    GlyphLabel(
                         GeneratedBlockLoadMorePresentation.buttonTitle(
                             loadError: loadMoreError
-                        ),
-                        systemImage: "arrow.down"
+                        ), glyph: .down
                     )
                     .font(UnfiledType.heading)
                     .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
@@ -204,23 +203,22 @@ struct GeneratedBlocksSection: View {
 
             if block.isActionable {
                 if isSubmitting {
-                    Label("Saving your decision", systemImage: "clock")
+                    GlyphLabel("Saving your decision", glyph: .clock)
                         .font(UnfiledType.caption)
                         .foregroundStyle(UnfiledTheme.fog)
                         .frame(minHeight: UnfiledTheme.minimumTouchTarget)
                 }
                 actionButtons(for: block, disabled: isSubmitting)
             } else {
-                Label(
-                    "Accepted as a separate generated addition",
-                    systemImage: "checkmark.circle"
+                GlyphLabel(
+                    "Accepted as a separate generated addition", glyph: .checkCircle
                 )
                 .font(UnfiledType.caption)
                 .foregroundStyle(UnfiledTheme.fog)
             }
 
             if let errorMessage, !errorMessage.isEmpty {
-                Label(errorMessage, systemImage: "exclamationmark.circle")
+                GlyphLabel(errorMessage, glyph: .warning)
                     .font(UnfiledType.secondary)
                     .foregroundStyle(UnfiledTheme.paper)
                     .fixedSize(horizontal: false, vertical: true)
@@ -264,7 +262,7 @@ struct GeneratedBlocksSection: View {
         Button {
             onResolve(block.id, .accept)
         } label: {
-            Label("Accept", systemImage: "checkmark")
+            GlyphLabel("Accept", glyph: .check)
                 .font(UnfiledType.heading)
                 .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
                 .contentShape(Rectangle())
@@ -286,7 +284,7 @@ struct GeneratedBlocksSection: View {
         Button {
             onResolve(block.id, .reject)
         } label: {
-            Label("Reject", systemImage: "xmark")
+            GlyphLabel("Reject", glyph: .close)
                 .font(UnfiledType.heading)
                 .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
                 .contentShape(Rectangle())
