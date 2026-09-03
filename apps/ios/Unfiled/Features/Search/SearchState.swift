@@ -18,42 +18,15 @@ enum SearchInputRules {
     }
 }
 
-enum SearchScope: String, CaseIterable, Equatable, Sendable {
-    case all
-    case aiAssisted = "ai_assisted"
-
-    var title: String {
-        switch self {
-        case .all: "All notes"
-        case .aiAssisted: "AI-assisted notes"
-        }
-    }
-
-    var detail: String {
-        switch self {
-        case .all:
-            "Private exact-text search"
-        case .aiAssisted:
-            "Your query is sent to OpenAI through Unfiled’s dedicated search service—not your saved organizer key."
-        }
-    }
-
-    var requestPrivacy: PrivacyMode? {
-        self == .aiAssisted ? .aiAssisted : nil
-    }
-}
-
 struct SearchRequest: Hashable, Sendable {
     let query: String
     let includesArchived: Bool
-    let scope: SearchScope
 
-    init(query: String, includesArchived: Bool, scope: SearchScope = .all) {
+    init(query: String, includesArchived: Bool) {
         self.query = SearchInputRules.bounded(
             query.trimmingCharacters(in: .whitespacesAndNewlines)
         )
         self.includesArchived = includesArchived
-        self.scope = scope
     }
 
     var hasQuery: Bool { !query.isEmpty }
@@ -63,7 +36,7 @@ struct SearchRequest: Hashable, Sendable {
         SearchNotesRequest(
             query: query,
             archive: archive,
-            privacy: scope.requestPrivacy,
+            privacy: nil,
             cursor: cursor,
             limit: limit
         )
