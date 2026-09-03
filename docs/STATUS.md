@@ -44,6 +44,8 @@ The current release target is a **$0 private beta**:
 
 ## Recorded credential-free evidence
 
+- **Live release gate (2026-09-03):** `scripts/operations/live-gate/run.sh production` runs a synthetic account through all 59 documented API operations and the iPhone app's own model through the product flows against production; the deploy script refuses to ship on red and rolls back on a red post-deploy gate ([RELEASE_GATE.md](./RELEASE_GATE.md)). Organizer-dependent steps need the gate's own OpenAI key from the keychain.
+
 The Milestone F checkpoint records the following local or CI results:
 
 - 27 of 27 applicable workspace quality tasks passed;
