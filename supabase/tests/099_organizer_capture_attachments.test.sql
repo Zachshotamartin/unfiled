@@ -305,7 +305,7 @@ select is(
   'attachments come back in upload order'
 );
 select is(
-  (select value #> '{attachments,1}' - 'source'
+  (select (value #> '{attachments,1}'::text[]) - 'source'::text
    from organizer_attachment_values where key = 'attachments'),
   jsonb_build_object(
     'attachmentId', 'att_99000000000000000000000002',

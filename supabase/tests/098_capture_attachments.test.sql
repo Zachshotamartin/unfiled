@@ -439,11 +439,16 @@ select throws_ok(
   '22023', 'invalid_capture',
   'a capture cannot name the same attachment twice'
 );
+-- Reading the capture table directly is nobody's capability, the service role included, so the
+-- rollback is checked as the owner of the fixtures rather than through the service session.
+reset role;
 select is(
   (select count(*) from public.captures where id = 'cap_98000000000000000000000001'),
   0::bigint,
   'a refused binding rolls the capture back'
 );
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select is(
   public.create_encrypted_capture_with_job(
     '55555555-5555-4555-8555-555555555555',
