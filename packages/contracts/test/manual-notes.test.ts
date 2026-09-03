@@ -431,14 +431,22 @@ describe("Milestone B manual-note contracts", () => {
           | {
               parameters?: readonly { name: string; required?: boolean }[];
               requestBody?: {
-                content: { "application/json": { schema: { $ref: string } } };
+                content: { "application/json"?: { schema: { $ref: string } } };
               };
             }
           | undefined;
         if (operation?.requestBody === undefined) {
           continue;
         }
-        const schemaReference = operation.requestBody.content["application/json"].schema.$ref;
+        const jsonContent = operation.requestBody.content["application/json"];
+        if (jsonContent === undefined) {
+          // A raw binary upload still names its idempotency key in the header.
+          expect(operation.parameters).toContainEqual(
+            expect.objectContaining({ name: "Idempotency-Key", required: true })
+          );
+          continue;
+        }
+        const schemaReference = jsonContent.schema.$ref;
         if (
           !schemaReference.includes("Auth") &&
           !schemaReference.endsWith("/SearchNotesRequest") &&
