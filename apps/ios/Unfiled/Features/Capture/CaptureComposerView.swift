@@ -6,7 +6,6 @@ struct CaptureComposerView: View {
     @Environment(\.scenePhase) private var scenePhase
     @FocusState private var focused: Bool
     @State private var content: String
-    @State private var privacy: LocalPrivacyMode
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var confirmsClose = false
@@ -21,18 +20,17 @@ struct CaptureComposerView: View {
     let source: LocalCaptureSource
     let composerGeneration: Int
     let restoredDraft: Bool
-    let onSave: @MainActor (String, LocalPrivacyMode, LocalCaptureSource, Int, [CaptureAttachmentDraft]) async throws -> Void
-    let onDraftChange: @MainActor (String, LocalPrivacyMode, LocalCaptureSource, Int) async throws -> Void
+    let onSave: @MainActor (String, LocalCaptureSource, Int, [CaptureAttachmentDraft]) async throws -> Void
+    let onDraftChange: @MainActor (String, LocalCaptureSource, Int) async throws -> Void
     let onDiscardDraft: @MainActor (LocalCaptureSource, Int) async throws -> Void
 
     init(
         source: LocalCaptureSource,
         composerGeneration: Int,
         initialContent: String = "",
-        initialPrivacy: LocalPrivacyMode = .aiAssisted,
         restoredDraft: Bool = false,
-        onSave: @escaping @MainActor (String, LocalPrivacyMode, LocalCaptureSource, Int, [CaptureAttachmentDraft]) async throws -> Void,
-        onDraftChange: @escaping @MainActor (String, LocalPrivacyMode, LocalCaptureSource, Int) async throws -> Void,
+        onSave: @escaping @MainActor (String, LocalCaptureSource, Int, [CaptureAttachmentDraft]) async throws -> Void,
+        onDraftChange: @escaping @MainActor (String, LocalCaptureSource, Int) async throws -> Void,
         onDiscardDraft: @escaping @MainActor (LocalCaptureSource, Int) async throws -> Void
     ) {
         self.source = source
@@ -42,7 +40,6 @@ struct CaptureComposerView: View {
         self.onDraftChange = onDraftChange
         self.onDiscardDraft = onDiscardDraft
         _content = State(initialValue: initialContent)
-        _privacy = State(initialValue: initialPrivacy)
     }
 
     private var canSave: Bool {
@@ -116,35 +113,6 @@ struct CaptureComposerView: View {
                 SectionRule()
 
                 HStack(spacing: UnfiledTheme.controlGap) {
-                    Menu {
-                        Picker("Privacy", selection: $privacy) {
-                            Label { Text("Organize for me") } icon: { GlyphImage.image(.organize) }
-                                .tag(LocalPrivacyMode.aiAssisted)
-                            Label { Text("Private manual") } icon: { GlyphImage.image(.lock) }
-                                .tag(LocalPrivacyMode.privateManual)
-                        }
-                    } label: {
-                        // Organizing is the default and needs no word; only the private mode
-                        // names itself, which keeps the row from crowding on a narrow phone.
-                        HStack(spacing: 6) {
-                            GlyphView(glyph: privacy == .privateManual ? .lock : .organize, size: 18, weight: 1.9)
-                            if privacy == .privateManual {
-                                Text("Private")
-                                    .font(UnfiledType.caption)
-                                    .fixedSize()
-                            }
-                        }
-                        .foregroundStyle(UnfiledTheme.paper)
-                        .padding(.horizontal, privacy == .privateManual ? 14 : 12)
-                        .frame(minHeight: UnfiledTheme.minimumTouchTarget)
-                        .background(UnfiledTheme.raised)
-                        .clipShape(Capsule())
-                    }
-                    .fixedSize()
-                    .accessibilityLabel(
-                        privacy == .privateManual ? "Private manual capture" : "AI-assisted capture"
-                    )
-
                     // One control for photos: the library, or the camera when there is one.
                     Menu {
                         Button {
@@ -193,7 +161,6 @@ struct CaptureComposerView: View {
                             do {
                                 try await onSave(
                                     CaptureComposerRules.rawContent(content: content, kinds: attachmentKinds),
-                                    privacy,
                                     source,
                                     composerGeneration,
                                     attachments.map(\.draft)
@@ -262,7 +229,7 @@ struct CaptureComposerView: View {
                     try await Task.sleep(for: .milliseconds(250))
                     try Task.checkCancellation()
                     guard !isSaving else { return }
-                    try await onDraftChange(content, privacy, source, composerGeneration)
+                    try await onDraftChange(content, source, composerGeneration)
                 } catch is CancellationError {
                     return
                 } catch {
@@ -272,7 +239,7 @@ struct CaptureComposerView: View {
             .onChange(of: scenePhase) { _, newPhase in
                 guard newPhase != .active, !isSaving else { return }
                 Task { @MainActor in
-                    try? await onDraftChange(content, privacy, source, composerGeneration)
+                    try? await onDraftChange(content, source, composerGeneration)
                 }
             }
         }
@@ -303,7 +270,7 @@ struct CaptureComposerView: View {
     }
 
     private var draftChangeIdentifier: String {
-        "\(composerGeneration):\(isSaving):\(privacy.rawValue):\(content)"
+        "\(composerGeneration):\(isSaving):\(content)"
     }
 
     /// Downsizes and strips each picked photo before it can go anywhere.

@@ -461,12 +461,17 @@ select is(
   'false',
   'a capture binds its photo and recording atomically'
 );
+-- The attachments table is nobody's to read directly, so the binding is counted outside the
+-- service session, as the owner of the fixtures.
+reset role;
 select is(
   (select count(*) from public.capture_attachments
    where capture_id = 'cap_98000000000000000000000001' and bound_at is not null),
   2::bigint,
   'both attachments are bound'
 );
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select is(
   public.create_encrypted_capture_with_job(
     '55555555-5555-4555-8555-555555555555',

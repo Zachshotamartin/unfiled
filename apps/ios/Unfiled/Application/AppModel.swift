@@ -397,27 +397,6 @@ final class AppModel: ObservableObject {
         return try await runtime.unauthenticatedAPI.signUp(email: request.email, password: request.password)
     }
 
-    /// A Private capture is a private note, created directly while online. Returns false when the
-    /// note could not be created (offline, rejected) so the capture path keeps the text safe.
-    private func createPrivateNote(
-        content: String,
-        runtime: Runtime,
-        user: AuthUser,
-        context: AccountContext
-    ) async -> Bool {
-        let request = PrivateNoteDraft.request(content: content, idempotencyKey: UUID().uuidString.lowercased())
-        do {
-            let result = try await runtime.authenticatedAPI.createNote(request)
-            guard isCurrent(context) else { return true }
-            await applyNoteBatch([result.note], user: user, runtime: runtime, context: context)
-            guard isCurrent(context) else { return true }
-            await refreshAll()
-            return true
-        } catch {
-            return false
-        }
-    }
-
     func acceptVerifiedSession(_ session: AuthSession) async {
         guard let runtime else { return }
         do {
@@ -800,7 +779,6 @@ final class AppModel: ObservableObject {
                 source: source,
                 composerGeneration: session.generation,
                 initialContent: session.draft?.rawContent ?? "",
-                initialPrivacy: session.draft?.privacy ?? .aiAssisted,
                 restoredDraft: session.draft != nil
             )
         } catch {
@@ -831,7 +809,6 @@ final class AppModel: ObservableObject {
                 source: .mobile,
                 composerGeneration: session.generation,
                 initialContent: text,
-                initialPrivacy: .aiAssisted,
                 restoredDraft: false,
                 replacingCaptureID: captureID
             )
@@ -843,7 +820,6 @@ final class AppModel: ObservableObject {
 
     func saveCapture(
         content: String,
-        privacy: LocalPrivacyMode,
         source: LocalCaptureSource,
         composerGeneration: Int,
         attachments: [CaptureAttachmentDraft] = []
@@ -851,20 +827,11 @@ final class AppModel: ObservableObject {
         guard let runtime, let user = currentUser else { throw AuthenticationError.signedOut }
         let context = currentAccountContext(for: user)
         let replacingCaptureID = captureSheet?.replacingCaptureID
-        // A private capture with photos keeps them sealed beside the capture; only text-only
-        // private captures become a note on the spot.
-        if privacy == .privateManual, attachments.isEmpty,
-           await createPrivateNote(content: content, runtime: runtime, user: user, context: context) {
-            if let replacingCaptureID {
-                await removeReplacedCapture(replacingCaptureID, runtime: runtime, context: context)
-            }
-            return
-        }
         let captureID = try await runtime.captureSync.enqueue(
             profileID: user.id,
             rawContent: content,
             source: source,
-            privacy: privacy,
+            privacy: .aiAssisted,
             deviceID: deviceIdentifier(),
             composerGeneration: composerGeneration,
             attachments: attachments
@@ -943,7 +910,6 @@ final class AppModel: ObservableObject {
 
     func saveCaptureDraft(
         content: String,
-        privacy: LocalPrivacyMode,
         source: LocalCaptureSource,
         composerGeneration: Int
     ) async throws {
@@ -952,7 +918,7 @@ final class AppModel: ObservableObject {
             profileID: user.id,
             source: source,
             rawContent: content,
-            privacy: privacy,
+            privacy: .aiAssisted,
             generation: composerGeneration
         )
     }
@@ -2090,7 +2056,7 @@ final class AppModel: ObservableObject {
         }
         guard allowed.contains(.create) else { return }
         let text = reviewCapture(for: item)?.rawContent ?? ""
-        let title = String(PrivateNoteDraft.title(from: text).prefix(60))
+        let title = String(CaptureTitle.from(text).prefix(60))
         await performReviewResolution(
             reviewID: item.id.rawValue,
             resolution: .create(title: title, noteType: Self.noteType(for: plan.captureKind), spaceId: nil)

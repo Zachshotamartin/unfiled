@@ -30,12 +30,10 @@ struct AppShellView: View {
                     source: sheet.source,
                     composerGeneration: sheet.composerGeneration,
                     initialContent: sheet.initialContent,
-                    initialPrivacy: sheet.initialPrivacy,
                     restoredDraft: sheet.restoredDraft,
-                    onSave: { content, privacy, source, generation, attachments in
+                    onSave: { content, source, generation, attachments in
                         try await model.saveCapture(
                             content: content,
-                            privacy: privacy,
                             source: source,
                             composerGeneration: generation,
                             attachments: attachments

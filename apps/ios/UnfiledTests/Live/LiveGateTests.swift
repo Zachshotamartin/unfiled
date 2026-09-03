@@ -67,11 +67,27 @@ final class LiveGateTests: XCTestCase {
     private enum LiveGateFailure: Error { case fixture }
 
     /// Saves a capture the way the composer does: prepare (which loads the generation), save, close.
-    private func capture(_ content: String, privacy: LocalPrivacyMode) async throws {
+    private func capture(_ content: String) async throws {
         await model.prepareCapture(source: .mobile)
         let generation = model.captureSheet?.composerGeneration ?? 1
-        try await model.saveCapture(content: content, privacy: privacy, source: .mobile, composerGeneration: generation)
+        try await model.saveCapture(content: content, source: .mobile, composerGeneration: generation)
         model.captureSheet = nil
+    }
+
+    /// Writes a note through the editor's own create path, which is how a note exists without
+    /// waiting on the organizer. The note lifecycle steps below run against it.
+    private func writeNote(title: String, body: String, type: NoteType = .generic) async throws {
+        try await model.saveNote(
+            NoteEditorDraft(
+                noteID: nil,
+                title: title,
+                bodyMarkdown: body,
+                type: type,
+                privacy: .aiAssisted,
+                spaceID: nil
+            ),
+            expectedRevision: nil
+        )
     }
 
     /// The auth endpoints rate-limit one address; a run right after another waits for the window
@@ -119,46 +135,53 @@ final class LiveGateTests: XCTestCase {
             step("provider_key.saved", false, "no_key: set UNFILED_LIVE_GATE_OPENAI_API_KEY")
         }
 
-        // Private capture becomes a note directly
-        try await capture("Gate private note \(stamp): kitchen tap plumber", privacy: .privateManual)
-        let privateArrived = await waitUntil(60) { self.model.notes.contains { $0.title.contains("Gate private note") } }
-        step("capture.private_becomes_note", privateArrived, "notes \(model.notes.count)")
-        guard let privateNote = model.notes.first(where: { $0.title.contains("Gate private note") }) else { return }
+        // A note written in the editor, which is the only way a note exists without the organizer
+        try await writeNote(
+            title: "Gate note \(stamp)",
+            body: "kitchen tap plumber"
+        )
+        let noteArrived = await waitUntil(60) { self.model.notes.contains { $0.title.contains("Gate note") } }
+        step("note.written_in_editor", noteArrived, "notes \(model.notes.count)")
+        guard let writtenNote = model.notes.first(where: { $0.title.contains("Gate note") }) else { return }
 
         // Edit the note: the editor closes at once and the reply confirms the title
-        await model.presentEditor(noteID: privateNote.id)
+        await model.presentEditor(noteID: writtenNote.id)
         step("editor.opened", model.editorSheet != nil)
         if let sheet = model.editorSheet {
             var draft = sheet.draft
-            draft.title = "Gate private note \(stamp) v2"
+            draft.title = "Gate note \(stamp) v2"
             try await model.saveNote(draft, expectedRevision: sheet.currentRevision)
-            step("note.saved_title", model.noteDetail(privateNote.id)?.title == draft.title, model.noteDetail(privateNote.id)?.title ?? "nil")
+            step("note.saved_title", model.noteDetail(writtenNote.id)?.title == draft.title, model.noteDetail(writtenNote.id)?.title ?? "nil")
             step("editor.closed_after_save", model.editorSheet == nil)
         }
 
-        // A list note through the editor path: create via a private capture in list form
-        try await capture("- [ ] milk\n- [ ] eggs\n- [ ] bread", privacy: .privateManual)
+        // A second note, in list form, so the checklist surfaces have something to read
+        try await writeNote(
+            title: "Gate list \(stamp)",
+            body: "- [ ] milk\n- [ ] eggs\n- [ ] bread",
+            type: .list
+        )
         let listArrived = await waitUntil(60) { self.model.notes.count >= 2 }
-        step("capture.second_private_note", listArrived, "notes \(model.notes.count)")
+        step("note.second_written", listArrived, "notes \(model.notes.count)")
 
         // Archive and restore
-        try await model.setArchived(noteID: privateNote.id, archived: true)
-        step("note.archived", model.isArchived(privateNote.id))
-        try await model.setArchived(noteID: privateNote.id, archived: false)
-        step("note.unarchived", !model.isArchived(privateNote.id))
+        try await model.setArchived(noteID: writtenNote.id, archived: true)
+        step("note.archived", model.isArchived(writtenNote.id))
+        try await model.setArchived(noteID: writtenNote.id, archived: false)
+        step("note.unarchived", !model.isArchived(writtenNote.id))
 
         // Delete and restore from Recently deleted
         do {
-            try await model.deleteNote(noteID: privateNote.id)
-            step("note.deleted", !model.notes.contains { $0.id == privateNote.id }, model.bannerMessage ?? "")
+            try await model.deleteNote(noteID: writtenNote.id)
+            step("note.deleted", !model.notes.contains { $0.id == writtenNote.id }, model.bannerMessage ?? "")
         } catch {
             step("note.deleted", false, "\(error)")
         }
         await model.loadDeleted()
-        step("deleted.listed", model.deletedNotes.contains { $0.id == privateNote.id }, "deleted \(model.deletedNotes.count)")
+        step("deleted.listed", model.deletedNotes.contains { $0.id == writtenNote.id }, "deleted \(model.deletedNotes.count)")
         do {
-            try await model.restoreDeleted(noteID: privateNote.id)
-            step("note.restored", model.notes.contains { $0.id == privateNote.id })
+            try await model.restoreDeleted(noteID: writtenNote.id)
+            step("note.restored", model.notes.contains { $0.id == writtenNote.id })
         } catch {
             step("note.restored", false, "\(error)")
         }
@@ -169,7 +192,7 @@ final class LiveGateTests: XCTestCase {
         step("search.finds_private_note", found, "results \(model.searchResults.count)")
 
         // An AI-assisted capture: organized with a key, failed without one
-        try await capture("Groceries gate \(stamp): oat milk, bananas", privacy: .aiAssisted)
+        try await capture("Groceries gate \(stamp): oat milk, bananas")
         let receiptArrived = await waitUntil(30) { self.model.receipts.contains { $0.original.contains("Groceries gate") } }
         step("capture.receipt_row_at_once", receiptArrived, "receipts \(model.receipts.count)")
         let settled = await waitUntil(300, every: 10) {
@@ -226,7 +249,7 @@ final class LiveGateTests: XCTestCase {
         let photoGeneration = model.captureSheet?.composerGeneration ?? 1
         try await model.saveCapture(
             content: CaptureComposerRules.rawContent(content: "", kinds: [.image]),
-            privacy: .aiAssisted, source: .mobile, composerGeneration: photoGeneration, attachments: [attachment]
+            source: .mobile, composerGeneration: photoGeneration, attachments: [attachment]
         )
         model.captureSheet = nil
         let photoReceiptArrived = await waitUntil(30) { self.model.receipts.contains { $0.original == "Photo" } }

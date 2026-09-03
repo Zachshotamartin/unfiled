@@ -89,6 +89,18 @@ as $$
   );
 $$;
 
+create function pg_temp.caught_error(statement text)
+returns jsonb
+language plpgsql
+as $$
+begin
+  execute statement;
+  return null;
+exception when others then
+  return jsonb_build_object('sqlstate', sqlstate, 'message', sqlerrm);
+end;
+$$;
+
 create function pg_temp.attachment(
   p_attachment_id text,
   p_capture_id text,
@@ -338,16 +350,23 @@ select throws_ok(
 
 -- SET ROLE is not the organizer login
 
+-- SET ROLE is not a production login: session_user stays postgres, so the public wrapper
+-- refuses even though the grant exists. pgTAP's own assertions do not run under the role, so
+-- the refusal is captured and checked after the role is dropped.
 grant unfiled_organizer_worker to postgres;
 set local role unfiled_organizer_worker;
-select throws_ok(
+insert into organizer_attachment_values(key, value)
+values ('set-role-error', pg_temp.caught_error(
   $$select public.list_encrypted_organizer_attachments(
     'job_99000000000000000000000001', '00000000-0000-4000-8000-000000000000'
-  )$$,
-  '42501', 'forbidden',
+  )$$
+));
+reset role;
+select is(
+  (select value ->> 'message' from organizer_attachment_values where key = 'set-role-error'),
+  'forbidden',
   'SET ROLE cannot impersonate the organizer login for attachments'
 );
-reset role;
 
 select * from finish();
 rollback;

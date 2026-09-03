@@ -1144,13 +1144,13 @@ async function uploadPhoto(captureId, attachmentId, bytes, extra = {}) {
       clientCaptureId,
       rawContent: `Gate delete ${stamp}`,
       source: "web",
-      privacy: "private_manual",
+      privacy: "ai_assisted",
       clientCreatedAt: new Date().toISOString(),
       clientTimezone: "UTC"
     }
   });
   const captureId = created.json?.capture?.id ?? clientCaptureId;
-  record("captures.create_private", created.status === 201 || created.status === 202, {
+  record("captures.create_for_delete", created.status === 201 || created.status === 202, {
     status: created.status,
     code: code(created)
   });

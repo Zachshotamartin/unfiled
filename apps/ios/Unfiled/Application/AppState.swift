@@ -31,7 +31,6 @@ struct CaptureSheet: Equatable, Identifiable {
     let source: LocalCaptureSource
     let composerGeneration: Int
     let initialContent: String
-    let initialPrivacy: LocalPrivacyMode
     let restoredDraft: Bool
     /// When set, saving replaces this capture: the new one organizes and the old one is removed.
     var replacingCaptureID: String? = nil

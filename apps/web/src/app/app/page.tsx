@@ -1,4 +1,3 @@
-import { PlusIcon } from "@phosphor-icons/react/ssr";
 import type { Metadata } from "next";
 import Link from "next/link";
 
@@ -20,15 +19,7 @@ export default function TodayPage() {
   return (
     <main id="main-content" className="product-page">
       <div className="content-column">
-        <PageHeading
-          eyebrow={date}
-          title="Today"
-          action={
-            <Link href="/app/notes/new" className="button-primary">
-              <PlusIcon size={17} weight="bold" aria-hidden="true" /> New note
-            </Link>
-          }
-        />
+        <PageHeading eyebrow={date} title="Today" />
         <div className="mt-12">
           <CaptureExperience />
         </div>
