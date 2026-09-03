@@ -1,0 +1,60 @@
+# The only path production changes by. It applies the database migrations this commit needs,
+# deploys the five services, waits for production to serve the commit, runs the live gate
+# against it, and promotes the previous deployments back if the gate is red. Vercel's own git
+# integration is turned off for main (apps/*/vercel.json), so nothing else can deploy.
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Migrate, deploy, and gate production
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.14.0
+          run_install: false
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Release production
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID_WEB: ${{ secrets.VERCEL_PROJECT_ID_WEB }}
+          VERCEL_PROJECT_ID_ORGANIZER: ${{ secrets.VERCEL_PROJECT_ID_ORGANIZER }}
+          VERCEL_PROJECT_ID_WORKER: ${{ secrets.VERCEL_PROJECT_ID_WORKER }}
+          VERCEL_PROJECT_ID_VERIFIER: ${{ secrets.VERCEL_PROJECT_ID_VERIFIER }}
+          VERCEL_PROJECT_ID_SEARCH: ${{ secrets.VERCEL_PROJECT_ID_SEARCH }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          UNFILED_GATE_OPENAI_API_KEY: ${{ secrets.UNFILED_GATE_OPENAI_API_KEY }}
+          UNFILED_GATE_CRON_SECRET: ${{ secrets.UNFILED_GATE_CRON_SECRET }}
+        run: node scripts/operations/release/release.mjs
+
+      - name: Upload gate results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-gate
+          path: live-gate-api.json
+          if-no-files-found: ignore

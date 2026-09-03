@@ -1,3 +1,6 @@
+# Gates a running origin on request, without deploying anything. Releases run this same gate
+# themselves (.github/workflows/release.yml), so this no longer fires on push: a gate that runs
+# after an uncontrolled deploy can only report damage it had no chance to prevent.
 name: Release gate
 
 on:
@@ -7,8 +10,6 @@ on:
         description: "Web origin to gate"
         required: false
         default: "https://unfiled-web.vercel.app"
-  push:
-    branches: [main]
 
 concurrency:
   group: release-gate

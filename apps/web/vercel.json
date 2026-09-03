@@ -1,6 +1,8 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "regions": ["sfo1"],
+  "regions": [
+    "sfo1"
+  ],
   "crons": [
     {
       "path": "/api/internal/captures/drain",
@@ -18,5 +20,10 @@
       "path": "/api/internal/indexing/drain",
       "schedule": "27 3 * * *"
     }
-  ]
+  ],
+  "git": {
+    "deploymentEnabled": {
+      "main": false
+    }
+  }
 }

@@ -4,6 +4,7 @@
 # on the simulator). Deploy and merge refuse to proceed unless this gate is green for the commit.
 #
 # Usage: scripts/operations/live-gate/run.sh [production|<origin>] [--skip-phone]
+# Usage flags: --skip-phone runs the API gate only; --phone-only runs the simulator gate only.
 #   UNFILED_GATE_API_SCRIPT  path of the API gate to run (default: this checkout's); the deploy
 #                            script points it at the deployed commit's gate for the pre-deploy check
 # Secrets are read from the environment or the login keychain and are never printed:
@@ -30,8 +31,10 @@ export UNFILED_GATE_CRON_SECRET="${UNFILED_GATE_CRON_SECRET:-$(keychain unfiled-
 [ -n "$UNFILED_GATE_OPENAI_API_KEY" ] || echo "note: no organizer key; organizer-dependent steps will fail as no_key" >&2
 
 status=0
-echo "== live gate: api ($ORIGIN, commit ${COMMIT:0:7})"
-UNFILED_GATE_OUTPUT="$OUT_DIR/api-$COMMIT.json" node "${UNFILED_GATE_API_SCRIPT:-$ROOT/scripts/operations/live-gate/api-gate.mjs}" || status=1
+if [ "$SKIP_PHONE" != "--phone-only" ]; then
+  echo "== live gate: api ($ORIGIN, commit ${COMMIT:0:7})"
+  UNFILED_GATE_OUTPUT="$OUT_DIR/api-$COMMIT.json" node "${UNFILED_GATE_API_SCRIPT:-$ROOT/scripts/operations/live-gate/api-gate.mjs}" || status=1
+fi
 
 if [ "$SKIP_PHONE" != "--skip-phone" ]; then
   echo "== live gate: phone (simulator, the app's own model)"
