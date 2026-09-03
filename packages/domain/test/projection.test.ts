@@ -88,7 +88,9 @@ describe("structured Markdown projections", () => {
       "- [ ] milk\n\n## Completed\n\n- [x] eggs",
       nextItemId
     );
-    expect(reconciled.items.map(({ text, checked, section }) => ({ text, checked, section }))).toEqual([
+    expect(
+      reconciled.items.map(({ text, checked, section }) => ({ text, checked, section }))
+    ).toEqual([
       { text: "milk", checked: false, section: null },
       { text: "eggs", checked: true, section: null }
     ]);
