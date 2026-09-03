@@ -1,0 +1,39 @@
+name: Release gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      origin:
+        description: "Web origin to gate"
+        required: false
+        default: "https://unfiled-web.vercel.app"
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-gate
+  cancel-in-progress: false
+
+jobs:
+  api-gate:
+    name: Live API gate (real operations, synthetic account)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run the live API gate
+        env:
+          UNFILED_GATE_WEB_ORIGIN: ${{ github.event.inputs.origin || 'https://unfiled-web.vercel.app' }}
+          UNFILED_GATE_OPENAI_API_KEY: ${{ secrets.UNFILED_GATE_OPENAI_API_KEY }}
+          UNFILED_GATE_CRON_SECRET: ${{ secrets.UNFILED_GATE_CRON_SECRET }}
+          UNFILED_GATE_OUTPUT: live-gate-api.json
+        run: node scripts/operations/live-gate/api-gate.mjs
+      - name: Keep the content-free summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-gate-api
+          path: live-gate-api.json
