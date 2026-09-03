@@ -413,16 +413,34 @@ select is(
   'unbound attachments are not listed for a capture'
 );
 
--- Binding on capture creation
+-- Binding on capture creation. The body is built once and kept, because a replay that
+-- rebuilt its own timestamps would read as a different capture.
+
+create temporary table capture_values (key text primary key, value jsonb not null) on commit drop;
+grant all on capture_values to service_role;
+insert into capture_values(key, value)
+values (
+  'first',
+  pg_temp.capture(
+    'cap_98000000000000000000000001', 'job_98000000000000000000000001',
+    '98000000-0000-4000-8000-000000000013', null
+  )
+);
+
+create function pg_temp.stored_capture(p_attachment_ids jsonb)
+returns jsonb
+language sql
+stable
+as $$
+  select value || jsonb_build_object('attachmentIds', p_attachment_ids)
+  from capture_values where key = 'first';
+$$;
+
 
 select throws_ok(
   $$select public.create_encrypted_capture_with_job(
     '55555555-5555-4555-8555-555555555555',
-    pg_temp.capture(
-      'cap_98000000000000000000000001', 'job_98000000000000000000000001',
-      '98000000-0000-4000-8000-000000000013',
-      '["att_98000000000000000000000001", "att_98000000000000000000000003"]'
-    )
+    pg_temp.stored_capture('["att_98000000000000000000000001", "att_98000000000000000000000003"]')
   )$$,
   '42501', 'attachment_not_owned',
   'a capture cannot bind an attachment uploaded for another capture'
@@ -430,11 +448,7 @@ select throws_ok(
 select throws_ok(
   $$select public.create_encrypted_capture_with_job(
     '55555555-5555-4555-8555-555555555555',
-    pg_temp.capture(
-      'cap_98000000000000000000000001', 'job_98000000000000000000000001',
-      '98000000-0000-4000-8000-000000000013',
-      '["att_98000000000000000000000001", "att_98000000000000000000000001"]'
-    )
+    pg_temp.stored_capture('["att_98000000000000000000000001", "att_98000000000000000000000001"]')
   )$$,
   '22023', 'invalid_capture',
   'a capture cannot name the same attachment twice'
@@ -452,11 +466,7 @@ select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select is(
   public.create_encrypted_capture_with_job(
     '55555555-5555-4555-8555-555555555555',
-    pg_temp.capture(
-      'cap_98000000000000000000000001', 'job_98000000000000000000000001',
-      '98000000-0000-4000-8000-000000000013',
-      '["att_98000000000000000000000001", "att_98000000000000000000000002"]'
-    )
+    pg_temp.stored_capture('["att_98000000000000000000000001", "att_98000000000000000000000002"]')
   ) ->> 'replayed',
   'false',
   'a capture binds its photo and recording atomically'
@@ -475,11 +485,7 @@ select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select is(
   public.create_encrypted_capture_with_job(
     '55555555-5555-4555-8555-555555555555',
-    pg_temp.capture(
-      'cap_98000000000000000000000001', 'job_98000000000000000000000001',
-      '98000000-0000-4000-8000-000000000013',
-      '["att_98000000000000000000000002", "att_98000000000000000000000001"]'
-    )
+    pg_temp.stored_capture('["att_98000000000000000000000002", "att_98000000000000000000000001"]')
   ) ->> 'replayed',
   'true',
   'replaying the capture with the same attachments in any order is idempotent'
@@ -487,11 +493,7 @@ select is(
 select throws_ok(
   $$select public.create_encrypted_capture_with_job(
     '55555555-5555-4555-8555-555555555555',
-    pg_temp.capture(
-      'cap_98000000000000000000000001', 'job_98000000000000000000000001',
-      '98000000-0000-4000-8000-000000000013',
-      '["att_98000000000000000000000001"]'
-    )
+    pg_temp.stored_capture('["att_98000000000000000000000001"]')
   )$$,
   'P0001', 'invalid_idempotency_key',
   'replaying the capture with a different attachment set is refused'

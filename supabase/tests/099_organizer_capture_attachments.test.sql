@@ -167,7 +167,7 @@ create temporary table organizer_attachment_values (
   key text primary key,
   value jsonb not null
 ) on commit drop;
-grant all on organizer_attachment_values to service_role;
+grant all on organizer_attachment_values to service_role, unfiled_organizer_worker;
 
 -- Capability
 
