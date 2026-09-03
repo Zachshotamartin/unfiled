@@ -16,12 +16,7 @@ struct CaptureComposerView: View {
     @State private var showsCamera = false
     @State private var attachmentNotice: String?
     @State private var idGenerator = PrefixedULIDGenerator()
-    @State private var voicePhase: VoiceRecorderPhase = .idle
-    @State private var recorder = VoiceRecorder()
-    @State private var recordingTicker: Task<Void, Never>?
-    /// Recording is offered only where the words can be written down on this phone.
-    @State private var offersVoice = VoiceAvailability.canRecordOnThisPhone()
-    private let transcriber: any SpeechTranscribing = OnDeviceSpeechTranscriber()
+    // Speaking a capture is the keyboard's dictation key; the app adds nothing to it.
 
     let source: LocalCaptureSource
     let composerGeneration: Int
@@ -177,22 +172,6 @@ struct CaptureComposerView: View {
                     .accessibilityLabel("Add photo")
                     .accessibilityIdentifier("capture.add-photo")
 
-                    if offersVoice {
-                        VoiceRecorderControl(
-                            phase: voicePhase,
-                            onTapRecord: { Task { @MainActor in await startRecording() } },
-                            onTapStop: { Task { @MainActor in await stopRecording() } },
-                            onOpenSettings: {
-                                if let url = URL(string: UIApplication.openSettingsURLString) {
-                                    UIApplication.shared.open(url)
-                                }
-                            },
-                            onDismissFailure: {
-                                voicePhase = VoiceRecorderMachine.apply(.reset, to: voicePhase, now: Date())
-                            }
-                        )
-                    }
-
                     Spacer(minLength: 4)
 
                     // The count matters only as the limit comes into view; until then it is noise.
@@ -291,12 +270,7 @@ struct CaptureComposerView: View {
                 }
             }
             .onChange(of: scenePhase) { _, newPhase in
-                // Coming back may mean a language was downloaded or permission changed.
-                if newPhase == .active {
-                    offersVoice = VoiceAvailability.canRecordOnThisPhone()
-                    return
-                }
-                guard !isSaving else { return }
+                guard newPhase != .active, !isSaving else { return }
                 Task { @MainActor in
                     try? await onDraftChange(content, privacy, source, composerGeneration)
                 }
@@ -355,87 +329,6 @@ struct CaptureComposerView: View {
         }
         attachmentNotice = nil
         open()
-    }
-
-    /// One tap starts a recording, after the microphone is allowed; one recording per capture.
-    private func startRecording() async {
-        guard offersVoice else { return }
-        guard CaptureComposerRules.canAdd(.audio, to: attachmentKinds) else {
-            attachmentNotice = "One recording is the most one capture can carry."
-            return
-        }
-        guard await recorder.requestPermission() else {
-            voicePhase = VoiceRecorderMachine.apply(.microphoneDenied, to: voicePhase, now: Date())
-            return
-        }
-        do {
-            try recorder.start()
-            voicePhase = VoiceRecorderMachine.apply(.tapRecord, to: voicePhase, now: Date())
-            recordingTicker?.cancel()
-            recordingTicker = Task { @MainActor in
-                while !Task.isCancelled, voicePhase.isRecording {
-                    try? await Task.sleep(for: .seconds(1))
-                    let next = VoiceRecorderMachine.apply(.tick, to: voicePhase, now: Date())
-                    if case .stopped = next {
-                        voicePhase = next
-                        await finishRecording()
-                        return
-                    }
-                }
-            }
-        } catch {
-            recorder.discard()
-            voicePhase = VoiceRecorderMachine.apply(.recorderFailed, to: voicePhase, now: Date())
-        }
-    }
-
-    private func stopRecording() async {
-        recordingTicker?.cancel()
-        recordingTicker = nil
-        voicePhase = VoiceRecorderMachine.apply(.tapStop, to: voicePhase, now: Date())
-        await finishRecording()
-    }
-
-    /// Reads the recording into the capture, writes down the words on the phone, and removes the
-    /// file. A recording that cannot be transcribed is still kept; the owner can type instead.
-    private func finishRecording() async {
-        guard let stopped = recorder.stop() else {
-            recorder.discard()
-            return
-        }
-        defer { try? FileManager.default.removeItem(at: stopped.url) }
-        guard case let .stopped(duration) = voicePhase else {
-            return
-        }
-        guard let bytes = try? Data(contentsOf: stopped.url),
-              (1 ... CaptureAttachmentUpload.maximumBytes).contains(bytes.count) else {
-            voicePhase = VoiceRecorderMachine.apply(.recorderFailed, to: voicePhase, now: Date())
-            return
-        }
-        voicePhase = VoiceRecorderMachine.apply(.beginTranscription, to: voicePhase, now: Date())
-        var transcript = ""
-        do {
-            transcript = try await transcriber.transcribe(fileURL: stopped.url)
-            voicePhase = VoiceRecorderMachine.apply(.transcript(transcript), to: voicePhase, now: Date())
-        } catch SpeechTranscriptionError.denied {
-            voicePhase = VoiceRecorderMachine.apply(.transcriptionFailed, to: voicePhase, now: Date())
-            attachmentNotice = VoiceRecorderRules.copy(for: .speechDenied)
-        } catch {
-            voicePhase = VoiceRecorderMachine.apply(.transcriptionFailed, to: voicePhase, now: Date())
-            attachmentNotice = "The words could not be written down on this phone. The recording is attached as it is."
-        }
-        do {
-            let id = try await idGenerator.next(.attachment)
-            attachments.append(PendingCaptureAttachment(
-                id: id, kind: .audio, mediaType: "audio/mp4", bytes: bytes,
-                width: nil, height: nil, durationMs: max(1, Int(duration * 1000))
-            ))
-        } catch {
-            attachmentNotice = "The recording could not be kept."
-        }
-        if case let .ready(words, _) = voicePhase, !words.isEmpty {
-            content = content.isEmpty ? words : content + "\n" + words
-        }
     }
 
     private func addPhoto(data: Data) async {

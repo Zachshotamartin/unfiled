@@ -1,7 +1,7 @@
-# Media capture plan: photos and voice notes
+# Media capture plan: photos
 
 - Status: proposed (2026-09-03); provider facts below were checked against the OpenAI and Anthropic documentation on 2026-09-03
-- Owner's ask: file a photo (with optional text) into a text note, show the image in the note, and capture voice notes that are transcribed and filed, through the owner's own OpenAI or Anthropic key
+- Owner's ask: file a photo (with optional text) into a text note and show the image in the note. Speaking a capture turned out to need nothing from the app: the iOS keyboard's dictation key already writes speech into the text field, so the in-app recorder that was built for this was removed again.
 - Decision record: [ADR-0020](decisions/ADR-0020-capture-attachments-and-voice-notes.md)
 
 ## 1. What the code allows today (verified)
@@ -87,7 +87,7 @@ The owner asked for this to be intuitive. The rules the phone work follows:
 
 ## 3. Phases, each one PR with its tests
 
-Status on 2026-09-03 (branch `feat/capture-attachments`, draft PR #25): P1 through P6 are implemented with their tests; P8 covers capture detail attachments, Inbox and Review thumbnails, the web preview, and export of placed attachments; P9 carries photo steps in both live gates. Remaining: P7 (OpenAI transcription as an opt-in engine), a per-note delete of a recording, a voice step in the live gates, and the gated production deploy once a valid organizer key exists.
+Status on 2026-09-03 (branch `feat/capture-attachments`, draft PR #25): photos are implemented end to end with their tests, from the composer through the sealed upload, the organizer's vision call, the note renderer, capture detail, export and both live gates. Voice is not a feature: the keyboard dictates. The sealed model still admits a recording kind at the API and database level; nothing produces one. Remaining: the gated production deploy once a valid organizer key exists.
 
 | Phase | Scope                                                                                                                                                                                                               | Tests                                                                                                                           |
 | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |

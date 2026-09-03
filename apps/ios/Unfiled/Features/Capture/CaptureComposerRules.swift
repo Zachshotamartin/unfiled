@@ -1,12 +1,12 @@
 import Foundation
 
-/// What the composer allows and what it sends when the owner attached photos or a recording.
+/// What the composer allows and what it sends when the owner attached photos. Speaking a capture
+/// is the keyboard's dictation key, which puts the words straight into the text.
 enum CaptureComposerRules {
     static let maximumPhotos = 4
-    static let maximumRecordings = 1
     static let maximumCharacters = 10_000
 
-    /// Words or attachments are enough to send; too many characters never are.
+    /// Words or photos are enough to send; too many characters never are.
     static func canSend(content: String, attachmentCount: Int) -> Bool {
         guard content.utf16.count <= maximumCharacters else { return false }
         let words = content.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -18,22 +18,17 @@ enum CaptureComposerRules {
     static func rawContent(content: String, kinds: [LocalAttachmentKind]) -> String {
         let words = content.trimmingCharacters(in: .whitespacesAndNewlines)
         if !words.isEmpty { return words }
-        let photos = kinds.filter { $0 == .image }.count
-        let recordings = kinds.count - photos
-        switch (photos, recordings) {
-        case (0, 0): return ""
-        case (0, _): return "Voice note"
-        case (1, 0): return "Photo"
-        case (_, 0): return "Photos"
-        case (1, _): return "Photo and voice note"
-        default: return "Photos and voice note"
+        switch kinds.filter({ $0 == .image }).count {
+        case 0: return ""
+        case 1: return "Photo"
+        default: return "Photos"
         }
     }
 
     static func canAdd(_ kind: LocalAttachmentKind, to kinds: [LocalAttachmentKind]) -> Bool {
         switch kind {
         case .image: return kinds.filter { $0 == .image }.count < maximumPhotos
-        case .audio: return kinds.filter { $0 == .audio }.count < maximumRecordings
+        case .audio: return false
         }
     }
 

@@ -42,7 +42,7 @@ struct CaptureAttachmentStrip: View {
                                 .clipShape(Circle())
                         }
                         .padding(4)
-                        .accessibilityLabel(attachment.kind == .image ? "Remove photo" : "Remove recording")
+                        .accessibilityLabel("Remove photo")
                     }
                     .accessibilityElement(children: .contain)
                 }
@@ -55,21 +55,14 @@ struct CaptureAttachmentStrip: View {
 
     @ViewBuilder
     private func thumbnail(_ attachment: PendingCaptureAttachment) -> some View {
-        if attachment.kind == .image, let image = UIImage(data: attachment.bytes) {
+        if let image = UIImage(data: attachment.bytes) {
             Image(uiImage: image)
                 .resizable()
                 .scaledToFill()
                 .accessibilityLabel("Photo")
         } else {
-            VStack(spacing: 6) {
-                GlyphView(glyph: .microphone, size: 22, weight: 1.9)
-                Text(attachment.durationMs.map { "\($0 / 1000) s" } ?? "Recording")
-                    .font(UnfiledType.caption)
-            }
-            .foregroundStyle(UnfiledTheme.paper)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(UnfiledTheme.raised)
-            .accessibilityLabel("Recording")
+            UnfiledTheme.raised
+                .accessibilityLabel("Photo")
         }
     }
 }
