@@ -15,6 +15,7 @@ import {
 } from "./errors.js";
 import { createKeyedMac, verifyKeyedMac } from "./mac.js";
 import {
+  CaptureAttachmentPayloadSchema,
   CapturePayloadSchema,
   CaptureReceiptPayloadSchema,
   GeneratedBlockPayloadSchema,
@@ -1130,6 +1131,55 @@ export function createEncryptedAggregateService(
         expectedAggregate(ownerId, expected.captureId, expected.recordVersion, "capture", keyClass),
         CapturePayloadSchema
       );
+    },
+
+    async sealCaptureAttachment(access, input) {
+      const ownerId = ownerIdFromAccess(access);
+      assertEntityId(input.attachmentId, "att");
+      assertEntityId(input.captureId, "cap");
+      const keyClass = parsePrivacy(input.privacy);
+      if (input.payload.captureId !== input.captureId) {
+        aggregateFailure(
+          EncryptedAggregateErrorCode.INVALID_INPUT,
+          "Attachment capture is invalid"
+        );
+      }
+      return sealContextMacProtected(
+        expectedAggregate(
+          ownerId,
+          input.attachmentId,
+          input.recordVersion,
+          "capture_attachment",
+          keyClass
+        ),
+        input.payload,
+        CaptureAttachmentPayloadSchema
+      );
+    },
+
+    async openCaptureAttachment(access, record, expected) {
+      const ownerId = ownerIdFromAccess(access);
+      assertEntityId(expected.attachmentId, "att");
+      assertEntityId(expected.captureId, "cap");
+      const keyClass = parsePrivacy(expected.privacy);
+      const payload = await openContextMacProtected(
+        record,
+        expectedAggregate(
+          ownerId,
+          expected.attachmentId,
+          expected.recordVersion,
+          "capture_attachment",
+          keyClass
+        ),
+        CaptureAttachmentPayloadSchema
+      );
+      if (payload.captureId !== expected.captureId) {
+        aggregateFailure(
+          EncryptedAggregateErrorCode.INVALID_INPUT,
+          "Attachment capture is invalid"
+        );
+      }
+      return payload;
     },
 
     async sealNoteContent(access, input) {

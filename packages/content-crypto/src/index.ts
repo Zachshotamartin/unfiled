@@ -40,7 +40,8 @@ export const encryptedContentKinds = Object.freeze([
   "organization_mutation_attempt",
   "idempotency_response",
   "capture_receipt",
-  "note_rag_index"
+  "note_rag_index",
+  "capture_attachment"
 ] as const);
 
 export type EncryptedContentKind = (typeof encryptedContentKinds)[number];

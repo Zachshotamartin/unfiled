@@ -1,5 +1,10 @@
 import {
   BehaviorBandSchema,
+  CAPTURE_ATTACHMENT_MAX_BYTES,
+  CaptureAttachmentKindSchema,
+  CaptureAttachmentMediaTypeSchema,
+  MAX_CAPTURE_IMAGE_EDGE_PIXELS,
+  MAX_CAPTURE_RECORDING_MS,
   CaptureReceiptActionSchema,
   CaptureReceiptDestinationSchema,
   CaptureReceiptOutcomeSchema,
@@ -29,6 +34,73 @@ export const CapturePayloadSchema = z.strictObject({
   rawContent: NonBlankCaptureContentSchema
 });
 export type CapturePayload = z.infer<typeof CapturePayloadSchema>;
+
+export { CAPTURE_ATTACHMENT_MAX_BYTES };
+
+const STANDARD_BASE64 = /^[A-Za-z0-9+/]*={0,2}$/u;
+
+/// Bytes decoded from standard base64 with no whitespace, or null when the text is not base64.
+function decodedBase64Length(value: string): number | null {
+  if (value.length === 0 || value.length % 4 !== 0 || !STANDARD_BASE64.test(value)) return null;
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  return (value.length / 4) * 3 - padding;
+}
+
+const CAPTURE_ATTACHMENT_MAX_BASE64_LENGTH = Math.ceil(CAPTURE_ATTACHMENT_MAX_BYTES / 3) * 4;
+
+/// A photo or recording sealed beside its capture under the capture's key class. The bytes are
+/// base64 because every sealed payload is canonical JSON; the byte length is bound to the data
+/// so a truncated upload cannot pass as a complete one.
+export const CaptureAttachmentPayloadSchema = z
+  .strictObject({
+    schemaVersion: z.literal(1),
+    captureId: entityIdSchema("cap"),
+    kind: CaptureAttachmentKindSchema,
+    mediaType: CaptureAttachmentMediaTypeSchema,
+    dataBase64: z.string().min(4).max(CAPTURE_ATTACHMENT_MAX_BASE64_LENGTH),
+    byteLength: z.number().int().min(1).max(CAPTURE_ATTACHMENT_MAX_BYTES),
+    width: z.number().int().min(1).max(MAX_CAPTURE_IMAGE_EDGE_PIXELS).optional(),
+    height: z.number().int().min(1).max(MAX_CAPTURE_IMAGE_EDGE_PIXELS).optional(),
+    durationMs: z.number().int().min(1).max(MAX_CAPTURE_RECORDING_MS).optional()
+  })
+  .superRefine((value, context) => {
+    if (decodedBase64Length(value.dataBase64) !== value.byteLength) {
+      context.addIssue({
+        code: "custom",
+        message: "Attachment byte length must match the encoded data",
+        path: ["byteLength"]
+      });
+    }
+    const image = value.kind === "image";
+    if (image !== value.mediaType.startsWith("image/")) {
+      context.addIssue({
+        code: "custom",
+        message: "Attachment media type must match its kind",
+        path: ["mediaType"]
+      });
+    }
+    if (
+      image &&
+      (value.width === undefined || value.height === undefined || value.durationMs !== undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Images carry width and height and no duration",
+        path: ["width"]
+      });
+    }
+    if (
+      !image &&
+      (value.durationMs === undefined || value.width !== undefined || value.height !== undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Recordings carry a duration and no dimensions",
+        path: ["durationMs"]
+      });
+    }
+  });
+export type CaptureAttachmentPayload = z.infer<typeof CaptureAttachmentPayloadSchema>;
 
 export const NoteContentPayloadSchema = z.strictObject({
   schemaVersion: z.literal(1),
