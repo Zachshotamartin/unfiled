@@ -345,6 +345,14 @@ describe("encrypted taxonomy and Review reads", () => {
     await expect(
       invalidPageRepository.listSpaces(false, { limit: 0, offset: 0 })
     ).rejects.toMatchObject({ code: ServiceRpcErrorCode.VALIDATION_FAILED });
+    // The API asks for one row past the contract's largest page to detect a next page, so
+    // 101 passes the page bound (and then fails on this fixture's broken topology).
+    await expect(
+      invalidPageRepository.listSpaces(false, { limit: 101, offset: 0 })
+    ).rejects.toMatchObject({ code: ServiceRpcErrorCode.PROVIDER_UNAVAILABLE });
+    await expect(
+      invalidPageRepository.listSpaces(false, { limit: 102, offset: 0 })
+    ).rejects.toMatchObject({ code: ServiceRpcErrorCode.VALIDATION_FAILED });
     await expect(invalidPageRepository.listSpaces(false)).rejects.toMatchObject({
       code: ServiceRpcErrorCode.PROVIDER_UNAVAILABLE
     });

@@ -41,12 +41,15 @@ function unavailable(): never {
   throw new ServiceRpcError(ServiceRpcErrorCode.PROVIDER_UNAVAILABLE);
 }
 
+/** The contract's largest page, plus the one row the API reads past it to detect a next page. */
+const MAX_REPOSITORY_PAGE = 100 + 1;
+
 function boundedPage(page: RepositoryPage | undefined): RepositoryPage {
   const value = page ?? { limit: 100, offset: 0 };
   if (
     !Number.isSafeInteger(value.limit) ||
     value.limit < 1 ||
-    value.limit > 100 ||
+    value.limit > MAX_REPOSITORY_PAGE ||
     !Number.isSafeInteger(value.offset) ||
     value.offset < 0 ||
     !Number.isSafeInteger(value.limit + value.offset)
