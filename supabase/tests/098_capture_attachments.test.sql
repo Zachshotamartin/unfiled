@@ -534,81 +534,6 @@ select is(
   'bound attachments survive the sweep'
 );
 
--- The rollout states a real owner is in
---
--- Photos always take the encrypted path, so this write has to accept every state the rest of
--- the schema accepts. It shipped with the two-state guard the schema used before the storage
--- contract, so it refused every upload from an owner who had finished the rollout, which is
--- what production onboards every fresh owner into. These tests stayed green because their
--- owner sits in dual-write.
-
-reset role;
-create temporary table pg_temp.attachment_rollout(key text primary key, value jsonb);
-grant all on pg_temp.attachment_rollout to service_role;
-set local role service_role;
-select set_config('request.jwt.claims', '{"role":"service_role"}', true);
-select is(
-  public.complete_content_encryption_backfill(
-    '55555555-5555-4555-8555-555555555555',
-    'c5d-attachment-owner-backfill', null
-  ) ->> 'complete',
-  'true',
-  'the attachment owner has nothing legacy left to backfill'
-);
-select is(
-  public.advance_content_encryption_rollout(
-    '55555555-5555-4555-8555-555555555555', 'dual_write', 'encrypted_read'
-  ) ->> 'state',
-  'encrypted_read',
-  'the attachment owner enters encrypted-read'
-);
-insert into pg_temp.attachment_rollout(key, value) values (
-  'prepare', public.prepare_content_plaintext_scrub(
-    '55555555-5555-4555-8555-555555555555',
-    '98000000-0000-4000-8000-000000000030', 'encrypted_read'
-  )
-);
-insert into pg_temp.attachment_rollout(key, value) values (
-  'scrub', public.scrub_content_plaintext_batch(
-    '55555555-5555-4555-8555-555555555555',
-    '98000000-0000-4000-8000-000000000030', null, 25
-  )
-);
-select is(
-  public.complete_content_plaintext_scrub(
-    '55555555-5555-4555-8555-555555555555',
-    '98000000-0000-4000-8000-000000000030',
-    (select value ->> 'cursor' from pg_temp.attachment_rollout where key = 'scrub')
-  ) ->> 'complete',
-  'true',
-  'the attachment owner has no plaintext left to scrub'
-);
-select is(
-  public.advance_content_encryption_rollout(
-    '55555555-5555-4555-8555-555555555555', 'encrypted_read', 'encrypted_only'
-  ) ->> 'state',
-  'encrypted_only',
-  'the attachment owner finishes the rollout, as production owners do'
-);
-select public.reserve_content_key_operations(
-  '55555555-5555-4555-8555-555555555555',
-  reservation_id, 'ai_assisted', 'c5d.capture.ai.object.v1', 1, 1
-)
-from (values
-  ('98000000-0000-4000-8000-000000000031'::uuid)
-) as reservations(reservation_id);
-select is(
-  public.create_encrypted_capture_attachment(
-    '55555555-5555-4555-8555-555555555555',
-    pg_temp.attachment(
-      'att_98000000000000000000000004', 'cap_98000000000000000000000004',
-      'image', '98000000-0000-4000-8000-000000000031', 'F'
-    )
-  ) ->> 'replayed',
-  'false',
-  'an owner who finished the rollout can still upload a photo'
-);
-
 -- Account deletion
 
 delete from auth.users where id = '55555555-5555-4555-8555-555555555555';
@@ -617,6 +542,145 @@ select is(
   0::bigint,
   'deleting the account removes its attachments'
 );
+
+-- The rollout state a real owner is in
+--
+-- Photos always take the encrypted path, so this write has to accept every state the rest of the
+-- schema accepts. It shipped with the two-state guard the schema used before the storage
+-- contract, so it refused every upload from an owner who had finished the rollout, which is what
+-- production onboards every fresh owner into. The owner above sits in dual-write, which is why
+-- every assertion there passed while no real photo could be stored. This owner finishes the
+-- rollout the way production does, and then uploads.
+
+reset role;
+create temporary table pg_temp.attachment_rollout(key text primary key, value jsonb);
+grant all on pg_temp.attachment_rollout to service_role;
+insert into auth.users (
+  instance_id, id, aud, role, email, encrypted_password,
+  email_confirmed_at, confirmation_token, recovery_token,
+  email_change_token_new, email_change, raw_app_meta_data,
+  raw_user_meta_data, created_at, updated_at
+) values (
+  '00000000-0000-0000-0000-000000000000',
+  '57575757-5757-4757-8757-575757575757',
+  'authenticated', 'authenticated', 'finished-rollout@unfiled.local', '', now(),
+  '', '', '', '', '{"provider":"email","providers":["email"]}'::jsonb,
+  '{}'::jsonb, now(), now()
+);
+insert into public.content_encryption_rollouts(user_id)
+values ('57575757-5757-4757-8757-575757575757');
+insert into public.user_content_keys (
+  user_id, key_id, key_class, key_purpose, key_version, kms_key_id,
+  wrapped_intermediate_key, state, activated_at
+) values
+  (
+    '57575757-5757-4757-8757-575757575757',
+    'c5d.capture.ai.object.v1', 'ai_assisted', 'object_wrap', 1,
+    'arn:aws:kms:us-west-2:123456789012:key/98000000-0000-4000-8000-000000000101',
+    decode(repeat('21', 32), 'hex'), 'active', now()
+  ),
+  (
+    '57575757-5757-4757-8757-575757575757',
+    'c5d.capture.ai.mac.v1', 'ai_assisted', 'content_mac', 1,
+    'arn:aws:kms:us-west-2:123456789012:key/98000000-0000-4000-8000-000000000102',
+    decode(repeat('22', 32), 'hex'), 'active', now()
+  ),
+  (
+    '57575757-5757-4757-8757-575757575757',
+    'c5d.capture.private.object.v1', 'private_manual', 'object_wrap', 1,
+    'arn:aws:kms:us-west-2:123456789012:key/98000000-0000-4000-8000-000000000103',
+    decode(repeat('23', 32), 'hex'), 'active', now()
+  ),
+  (
+    '57575757-5757-4757-8757-575757575757',
+    'c5d.capture.private.mac.v1', 'private_manual', 'content_mac', 1,
+    'arn:aws:kms:us-west-2:123456789012:key/98000000-0000-4000-8000-000000000104',
+    decode(repeat('24', 32), 'hex'), 'active', now()
+  );
+
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+select is(
+  public.advance_content_encryption_rollout(
+    '57575757-5757-4757-8757-575757575757', 'expanded', 'dual_write'
+  ) ->> 'state',
+  'dual_write',
+  'the finished-rollout owner enters dual-write'
+);
+select is(
+  public.complete_content_encryption_backfill(
+    '57575757-5757-4757-8757-575757575757',
+    'c5d-attachment-empty-library', null
+  ) ->> 'complete',
+  'true',
+  'an empty library completes its backfill'
+);
+select is(
+  public.advance_content_encryption_rollout(
+    '57575757-5757-4757-8757-575757575757', 'dual_write', 'encrypted_read'
+  ) ->> 'state',
+  'encrypted_read',
+  'the finished-rollout owner enters encrypted-read'
+);
+insert into pg_temp.attachment_rollout(key, value) values (
+  'prepare', public.prepare_content_plaintext_scrub(
+    '57575757-5757-4757-8757-575757575757',
+    '98000000-0000-4000-8000-000000000030', 'encrypted_read'
+  )
+);
+insert into pg_temp.attachment_rollout(key, value) values (
+  'scrub', public.scrub_content_plaintext_batch(
+    '57575757-5757-4757-8757-575757575757',
+    '98000000-0000-4000-8000-000000000030', null, 25
+  )
+);
+select is(
+  public.complete_content_plaintext_scrub(
+    '57575757-5757-4757-8757-575757575757',
+    '98000000-0000-4000-8000-000000000030',
+    (select value ->> 'cursor' from pg_temp.attachment_rollout where key = 'scrub')
+  ) ->> 'complete',
+  'true',
+  'an empty library has no plaintext to scrub'
+);
+select is(
+  public.advance_content_encryption_rollout(
+    '57575757-5757-4757-8757-575757575757', 'encrypted_read', 'encrypted_only'
+  ) ->> 'state',
+  'encrypted_only',
+  'the owner finishes the rollout, where production puts every fresh owner'
+);
+select public.reserve_content_key_operations(
+  '57575757-5757-4757-8757-575757575757',
+  '98000000-0000-4000-8000-000000000031'::uuid,
+  'ai_assisted', 'c5d.capture.ai.object.v1', 1, 1
+);
+select is(
+  public.create_encrypted_capture_attachment(
+    '57575757-5757-4757-8757-575757575757',
+    jsonb_build_object(
+      'attachmentId', 'att_98000000000000000000000009',
+      'captureId', 'cap_98000000000000000000000009',
+      'kind', 'image',
+      'mediaType', 'image/jpeg',
+      'byteLength', 4096,
+      'width', 1568,
+      'height', 1044,
+      'durationMs', null,
+      'privacy', 'ai_assisted',
+      'contentCipher', pg_temp.cipher(
+        'att_98000000000000000000000009',
+        '57575757-5757-4757-8757-575757575757',
+        'capture_attachment', 'c5d.capture.ai.object.v1',
+        '98000000-0000-4000-8000-000000000031'::uuid, 'G'
+      ),
+      'contentMac', pg_temp.mac('att_98000000000000000000000009G')
+    )
+  ) ->> 'replayed',
+  'false',
+  'an owner who finished the rollout can still upload a photo'
+);
+reset role;
 
 select * from finish();
 rollback;
