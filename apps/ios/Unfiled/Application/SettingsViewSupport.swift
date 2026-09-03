@@ -27,21 +27,50 @@ enum AISettingsAccessibilityIdentifier {
     static func scoped(_ identifier: String, _ provider: AIProvider) -> String {
         "\(identifier).\(provider.rawValue)"
     }
+
+    /// The choice lists moved to pushed pages; the row that opens each page carries this suffix.
+    static func row(_ identifier: String) -> String {
+        "\(identifier).row"
+    }
 }
 
 enum AISettingsControlLayout {
     /// Space between the last help line under a credential field and its action row, so a submit
     /// button never reads as part of the text field.
     static let credentialFieldActionGap: CGFloat = 14
-    static let credentialActionSpacing: CGFloat = 12
-    static let credentialActionMinimumHeight: CGFloat = 50
+    static let credentialActionSpacing: CGFloat = UnfiledTheme.controlGap
+    static let credentialActionMinimumHeight: CGFloat = UnfiledTheme.controlHeight
     static let destructiveActionMinimumWidth: CGFloat = 96
     static let fieldHelpSpacing: CGFloat = 8
     static let sectionContentSpacing: CGFloat = 14
-    static let optionSpacing: CGFloat = 10
+    static let optionSpacing: CGFloat = UnfiledTheme.controlGap
+    /// Settings rows: one line of body text between hairlines, never shorter than a control.
+    static let rowMinimumHeight: CGFloat = UnfiledTheme.controlHeight
+    static let rowVerticalPadding: CGFloat = 14
+    /// Gap between a row's title and the value or glyph on its right.
+    static let rowValueSpacing: CGFloat = 12
 }
 
 enum AISettingsCopy {
+    static func accessTitle(_ mode: ProviderMode) -> String {
+        switch mode {
+        case .byok: "My API key"
+        case .appDefault: "Unfiled managed"
+        }
+    }
+
+    static func accessDetail(_ mode: ProviderMode) -> String {
+        switch mode {
+        case .byok: "Billed to the provider account behind your key."
+        case .appDefault: "Funded by this deployment; no key needed."
+        }
+    }
+
+    static let accessIntro = "Which account pays for organizing new captures."
+    static let effortIntro = "More effort means more reasoning, latency, and cost. Safety and trust thresholds never change."
+    static let modelIntro = "Automatic follows the effort setting. An exact model stays selected until you change it."
+    static let expansionIntro = "Generated additions stay separate from your writing until you accept or reject them."
+    static let behaviorIntro = "Sets the confidence needed to file a capture without review."
     static func organizationTitle(_ mode: OrganizationMode) -> String {
         switch mode {
         case .cautious: "Cautious"
@@ -89,95 +118,6 @@ enum AISettingsCopy {
         case .detailed: "May propose a separate addition up to 600 characters."
         }
     }
-
-    static func keyStatusTitle(_ status: ProviderKeyStatus?) -> String {
-        switch status {
-        case .active: "Saved key active"
-        case .invalid: "Saved key rejected"
-        case .revoked: "Saved key revoked"
-        case nil: "No saved key"
-        }
-    }
-
-    static func providerFamily(_ provider: AIProvider) -> String {
-        switch provider {
-        case .openai: "GPT-5.6 models"
-        case .anthropic: "Claude 5 models"
-        }
-    }
-}
-
-struct SettingsSection<Content: View>: View {
-    let title: String
-    let content: Content
-
-    init(_ title: String, @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.content = content()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: AISettingsControlLayout.sectionContentSpacing) {
-            Text(title)
-                .font(.system(.caption2, design: .monospaced, weight: .medium))
-                .tracking(1)
-                .textCase(.uppercase)
-                .foregroundStyle(UnfiledTheme.fog)
-                .accessibilityAddTraits(.isHeader)
-            content
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 22)
-        .overlay(alignment: .bottom) { SectionRule() }
-    }
-}
-
-struct SettingsOptionRow<Value: Hashable>: View {
-    let title: String
-    let detail: String
-    let value: Value
-    @Binding var selection: Value
-
-    private var isSelected: Bool { selection == value }
-
-    var body: some View {
-        Button {
-            selection = value
-        } label: {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
-                    .font(.system(.body, weight: .medium))
-                    .foregroundStyle(isSelected ? UnfiledTheme.persimmon : UnfiledTheme.fog)
-                    .frame(width: 24, height: 24)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title)
-                        .font(.system(.subheadline, weight: .semibold))
-                        .foregroundStyle(UnfiledTheme.paper)
-                    Text(detail)
-                        .font(.system(.caption))
-                        .foregroundStyle(UnfiledTheme.fog)
-                }
-                .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 4)
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
-            .background(isSelected ? UnfiledTheme.raised : UnfiledTheme.graphite)
-            .overlay {
-                RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius)
-                    .stroke(isSelected ? UnfiledTheme.persimmon : UnfiledTheme.border)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(title)
-        .accessibilityValue(isSelected ? "Selected" : "Not selected")
-        .accessibilityHint(detail)
-        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
-    }
 }
 
 struct SettingsLabeledField<Content: View>: View {
@@ -191,14 +131,10 @@ struct SettingsLabeledField<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: AISettingsControlLayout.fieldHelpSpacing) {
-            Text(label)
-                .font(.system(.caption2, design: .monospaced, weight: .medium))
-                .tracking(0.8)
-                .textCase(.uppercase)
-                .foregroundStyle(UnfiledTheme.fog)
+            EditorialEyebrow(text: label)
             content
-                .padding(.horizontal, 14)
-                .frame(maxWidth: .infinity, minHeight: 50, alignment: .leading)
+                .padding(.horizontal, UnfiledTheme.fieldPadding)
+                .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight, alignment: .leading)
                 .background(UnfiledTheme.raised)
                 .overlay {
                     RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius)
@@ -213,10 +149,10 @@ struct SettingsInlineMessage: View {
     enum Kind {
         case error, warning
 
-        var systemImage: String {
+        var glyph: UnfiledGlyph {
             switch self {
-            case .error: "exclamationmark.triangle.fill"
-            case .warning: "tray.full"
+            case .error: .warning
+            case .warning: .clock
             }
         }
 
@@ -241,10 +177,14 @@ struct SettingsInlineMessage: View {
     }
 
     private var label: some View {
-        Label(message, systemImage: kind.systemImage)
-            .font(.system(.footnote))
-            .foregroundStyle(kind.color)
-            .fixedSize(horizontal: false, vertical: true)
+        Label {
+            Text(message)
+                .font(UnfiledType.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            GlyphView(glyph: kind.glyph, size: 14, weight: 1.6)
+        }
+        .foregroundStyle(kind.color)
     }
 }
 
@@ -254,7 +194,7 @@ struct SettingsPrimaryButton: View {
     let loadingTitle: String
     let isLoading: Bool
     let isDisabled: Bool
-    var systemImage = "arrow.right"
+    var glyph: UnfiledGlyph?
     let accessibilityIdentifier: String
     let action: @MainActor () -> Void
 
@@ -268,16 +208,14 @@ struct SettingsPrimaryButton: View {
                         .accessibilityHidden(true)
                 }
                 Text(isLoading ? loadingTitle : title)
-                    .font(.system(.subheadline, weight: .semibold))
+                    .font(UnfiledType.secondaryStrong)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
-                if !isLoading {
-                    Image(systemName: systemImage)
-                        .font(.system(.footnote, weight: .bold))
-                        .accessibilityHidden(true)
+                if let glyph, !isLoading {
+                    GlyphView(glyph: glyph, size: 14, weight: 1.9)
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, UnfiledTheme.fieldPadding)
             .padding(.vertical, 8)
             .frame(
                 maxWidth: .infinity,
@@ -293,6 +231,86 @@ struct SettingsPrimaryButton: View {
         .accessibilityIdentifier(accessibilityIdentifier)
         .accessibilityLabel(isLoading ? loadingTitle : title)
         .accessibilityValue(isLoading ? "In progress" : "")
+    }
+}
+
+/// The filled accent action at its compact width, for sitting beside a field on one line.
+struct SettingsInlinePrimaryButton: View {
+    let title: String
+    let isLoading: Bool
+    let isDisabled: Bool
+    let accessibilityLabel: String
+    let accessibilityHint: String
+    let accessibilityIdentifier: String
+    let action: @MainActor () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(UnfiledTheme.ink)
+                        .accessibilityHidden(true)
+                }
+                Text(title)
+                    .font(UnfiledType.secondaryStrong)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, UnfiledTheme.fieldPadding)
+            .frame(minHeight: UnfiledTheme.controlHeight)
+            .foregroundStyle(UnfiledTheme.ink)
+            .background(isDisabled && !isLoading ? UnfiledTheme.fog : UnfiledTheme.persimmon)
+            .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled || isLoading)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint(accessibilityHint)
+        .accessibilityValue(isLoading ? "In progress" : "")
+        .accessibilityIdentifier(accessibilityIdentifier)
+    }
+}
+
+/// The two ways out of a save whose result is unknown: retry the exact draft, or reload the
+/// authoritative copy. Shown wherever the locked draft is visible.
+struct SettingsRetryBanner: View {
+    let isRetrying: Bool
+    let isReconciling: Bool
+    let isBusy: Bool
+    let stacksVertically: Bool
+    let onDiscard: @MainActor () -> Void
+    let onRetry: @MainActor () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AISettingsControlLayout.credentialActionSpacing) {
+            SettingsInlineMessage(
+                message: "The last save could not be confirmed. Retry the exact same change, or discard it and reload the saved copy.",
+                kind: .warning
+            )
+            SettingsActionRow(stacksVertically: stacksVertically) { fillsWidth in
+                SettingsSecondaryButton(
+                    title: isReconciling ? "Checking server…" : "Discard and reload",
+                    role: .neutral,
+                    isDisabled: isBusy,
+                    fillsWidth: fillsWidth,
+                    accessibilityHint: "Reloads the authoritative server settings before unlocking the draft",
+                    accessibilityIdentifier: AISettingsAccessibilityIdentifier.settingsRetryDiscard,
+                    action: onDiscard
+                )
+            } primary: {
+                SettingsPrimaryButton(
+                    title: "Retry exact save",
+                    loadingTitle: "Retrying exact save…",
+                    isLoading: isRetrying,
+                    isDisabled: isBusy,
+                    accessibilityIdentifier: AISettingsAccessibilityIdentifier.save,
+                    action: onRetry
+                )
+                .accessibilityHint("Retries the unchanged request with the same action key")
+            }
+        }
     }
 }
 
@@ -322,11 +340,11 @@ struct SettingsSecondaryButton: View {
     var body: some View {
         Button(role: role == .destructive ? .destructive : nil, action: action) {
             Text(title)
-                .font(.system(.subheadline, weight: .semibold))
+                .font(UnfiledType.secondaryStrong)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .foregroundStyle(isDisabled ? foreground.opacity(0.55) : foreground)
-                .padding(.horizontal, 14)
+                .padding(.horizontal, UnfiledTheme.fieldPadding)
                 .padding(.vertical, 8)
                 .frame(
                     minWidth: AISettingsControlLayout.destructiveActionMinimumWidth,
@@ -393,7 +411,7 @@ struct SettingsActionRow<Secondary: View, Primary: View>: View {
 
 extension View {
     func settingsSupportingText() -> some View {
-        font(.system(.footnote))
+        font(UnfiledType.secondary)
             .foregroundStyle(UnfiledTheme.fog)
             .fixedSize(horizontal: false, vertical: true)
     }

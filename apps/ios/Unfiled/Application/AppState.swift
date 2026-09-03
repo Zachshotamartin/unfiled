@@ -21,6 +21,10 @@ enum AppRoute: Hashable {
     case deleted
     case settings
     case routingRules
+    /// A space's notes; nil is the Unfiled space (notes without a space).
+    case space(String?)
+    /// One review item on its own page.
+    case review(String)
 }
 
 struct CaptureSheet: Equatable, Identifiable {
@@ -29,6 +33,8 @@ struct CaptureSheet: Equatable, Identifiable {
     let initialContent: String
     let initialPrivacy: LocalPrivacyMode
     let restoredDraft: Bool
+    /// When set, saving replaces this capture: the new one organizes and the old one is removed.
+    var replacingCaptureID: String? = nil
 
     var id: String { source.rawValue }
 }
@@ -36,6 +42,8 @@ struct CaptureSheet: Equatable, Identifiable {
 struct EditorSheet: Equatable, Identifiable {
     let draft: NoteEditorDraft
     let currentRevision: Int?
+    /// Set when a save was refused: the editor reopens with the draft and this reason.
+    var failureMessage: String? = nil
 
     var id: String { draft.noteID ?? "new-note" }
 }

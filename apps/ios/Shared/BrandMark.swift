@@ -25,8 +25,8 @@ struct UnfiledMark: View {
     }
 }
 private enum BrandMarkColor {
-    static let paper = Color(red: 242 / 255, green: 239 / 255, blue: 232 / 255)
-    static let persimmon = Color(red: 238 / 255, green: 111 / 255, blue: 85 / 255)
+    static let paper = Color(red: 20 / 255, green: 23 / 255, blue: 27 / 255)
+    static let persimmon = Color(red: 30 / 255, green: 107 / 255, blue: 87 / 255)
 }
 
 private struct IntakeTray: Shape {
@@ -49,7 +49,7 @@ private struct IntakeTray: Shape {
 
 #Preview("Mark") {
     ZStack {
-        Color(red: 11 / 255, green: 12 / 255, blue: 14 / 255)
+        Color(red: 243 / 255, green: 244 / 255, blue: 246 / 255)
         UnfiledMark(size: 72)
     }
     .frame(width: 160, height: 160)

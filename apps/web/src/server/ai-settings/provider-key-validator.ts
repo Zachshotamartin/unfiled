@@ -40,12 +40,25 @@ function providerLabel(provider: PublicByokProvider): string {
   return provider === "openai" ? "OpenAI" : "Anthropic";
 }
 
-function unavailable(provider: PublicByokProvider): HttpError {
-  return new HttpError(
+/** Content-free reason attached as the cause so the 5xx log names the failing step. */
+export class ProviderKeyValidationUnavailable extends Error {
+  public readonly reason: string;
+
+  public constructor(reason: string) {
+    super("Provider key validation unavailable");
+    this.name = "ProviderKeyValidationUnavailable";
+    this.reason = reason;
+  }
+}
+
+function unavailable(provider: PublicByokProvider, reason: string): HttpError {
+  const error = new HttpError(
     503,
     ApiErrorCode.PROVIDER_UNAVAILABLE,
     `${providerLabel(provider)} could not validate that key right now. Try again.`
   );
+  error.cause = new ProviderKeyValidationUnavailable(reason);
+  return error;
 }
 
 function validationUrl(
@@ -65,7 +78,7 @@ function validationUrl(
     environment[TEST_VALIDATION_OPT_IN_VARIABLE] !== "1" ||
     hasVercelMarker
   ) {
-    throw unavailable(provider);
+    throw unavailable(provider, "test_override_refused");
   }
 
   let parsed: URL;
@@ -74,7 +87,7 @@ function validationUrl(
     parsed = new URL(override);
     expected = new URL(configuration.productionUrl);
   } catch {
-    throw unavailable(provider);
+    throw unavailable(provider, "test_override_malformed");
   }
   if (
     parsed.protocol !== "http:" ||
@@ -86,7 +99,7 @@ function validationUrl(
     parsed.pathname !== expected.pathname ||
     parsed.search !== expected.search
   ) {
-    throw unavailable(provider);
+    throw unavailable(provider, "test_override_rejected");
   }
   return parsed.href;
 }
@@ -135,8 +148,11 @@ export function createProviderKeyValidator(
           referrerPolicy: "no-referrer",
           signal
         });
-      } catch {
-        throw unavailable(provider);
+      } catch (error: unknown) {
+        throw unavailable(
+          provider,
+          error instanceof Error && error.name === "AbortError" ? "fetch_aborted" : "fetch_failed"
+        );
       }
       try {
         if (response.status === 200) return;
@@ -154,7 +170,7 @@ export function createProviderKeyValidator(
             `${providerLabel(provider)} is temporarily rate limiting key validation. Try again.`
           );
         }
-        throw unavailable(provider);
+        throw unavailable(provider, `upstream_status_${response.status}`);
       } finally {
         try {
           await response.body?.cancel();

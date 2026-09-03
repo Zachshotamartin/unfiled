@@ -32,7 +32,8 @@ import {
 import {
   OrganizationApplicationError,
   applyOwnerAuthorizedMaterializedOrganizationCommand,
-  type AppliedOrganizationCommand
+  type AppliedOrganizationCommand,
+  applyDeterministicExtractionOverride
 } from "@unfiled/ai-routing/application";
 import {
   OrganizationMaterializationError,
@@ -94,7 +95,10 @@ import type {
   PrepareReviewResolutionResult
 } from "@/server/encryption/encrypted-owner-interaction-rpc-adapter";
 import type { EncryptedGeneratedBlockReader } from "@/server/generated-blocks/encrypted-generated-block-reader";
-import { generatedExpansionReceiptProjectionMatches } from "@/server/encryption/encrypted-receipt-projection";
+import {
+  generatedExpansionReceiptProjectionMatches,
+  reviewReceiptProjectionMatches
+} from "@/server/encryption/encrypted-receipt-projection";
 import type {
   EncryptedNoteMutationRead,
   EncryptedNoteRead
@@ -485,17 +489,19 @@ function sourceReceiptMatches(
     (row.outcome === "created_note" || row.outcome === "added_to_note") &&
     row.reasonCodes.length === 1 &&
     row.reasonCodes[0] === ENCRYPTED_ORGANIZER_REASON_SENTINEL;
+  const projection = Object.freeze({
+    recordVersion: row.recordVersion,
+    privacy: row.sourcePrivacy,
+    decisionId: row.decisionId,
+    reviewItemId: row.reviewItemId,
+    mutationId: row.mutationId,
+    outcome: row.outcome,
+    reasonCodes: row.reasonCodes
+  });
+  const reviewProjectionMatches = reviewReceiptProjectionMatches(payload, projection);
   const generatedExpansionProjectionMatches = generatedExpansionReceiptProjectionMatches(
     payload,
-    {
-      recordVersion: row.recordVersion,
-      privacy: row.sourcePrivacy,
-      decisionId: row.decisionId,
-      reviewItemId: row.reviewItemId,
-      mutationId: row.mutationId,
-      outcome: row.outcome,
-      reasonCodes: row.reasonCodes
-    },
+    projection,
     source.generatedBlock?.blockId
   );
   return (
@@ -506,7 +512,10 @@ function sourceReceiptMatches(
     payload.mutationId === row.mutationId &&
     payload.outcome === row.outcome &&
     payload.destination?.noteId === (row.destinationNoteId ?? undefined) &&
-    (exactReasonsMatch || organizerReasonProjectionMatches || generatedExpansionProjectionMatches)
+    (exactReasonsMatch ||
+      organizerReasonProjectionMatches ||
+      reviewProjectionMatches ||
+      generatedExpansionProjectionMatches)
   );
 }
 
@@ -1327,19 +1336,22 @@ export class EncryptedOwnerInteractionCoordinator {
         "Generated expansions are not correction material"
       );
     }
+    // A plan the organizer deferred to Review carries no operations, so it cannot seed a
+    // note by itself; the capture text becomes the content, as when there is no plan at all.
     const seed: OrganizationPlan =
-      base ??
-      OrganizationPlanSchema.parse({
-        schemaVersion: 1,
-        captureKind: "freeform",
-        decision: "add_to_inbox",
-        destination: { candidateId: null, newNote: null },
-        operations: [{ type: "append_raw", content: rawContent }],
-        generatedExpansion: null,
-        alternatives: [],
-        reasonCodes: []
-      });
-    return OrganizationPlanSchema.parse({
+      base !== null && base.operations.length > 0
+        ? base
+        : OrganizationPlanSchema.parse({
+            schemaVersion: 1,
+            captureKind: "freeform",
+            decision: "add_to_inbox",
+            destination: { candidateId: null, newNote: null },
+            operations: [{ type: "append_raw", content: rawContent }],
+            generatedExpansion: null,
+            alternatives: [],
+            reasonCodes: []
+          });
+    const shaped = OrganizationPlanSchema.parse({
       ...seed,
       decision: destination.expectedRevision === 0 ? "create_note" : "append_to_note",
       destination:
@@ -1356,6 +1368,27 @@ export class EncryptedOwnerInteractionCoordinator {
       generatedExpansion: null,
       alternatives: []
     });
+    return this.structuredForNoteType(shaped, noteType, rawContent);
+  }
+
+  /**
+   * A review or correction seeds a note with the capture's raw text. A list or log note should
+   * receive it in its own shape, as the organizer's deterministic extractor would have produced:
+   * separate list items, or a log entry, so a grocery line becomes checkable items and an
+   * existing list keeps every item and its checked state.
+   */
+  private structuredForNoteType(
+    plan: OrganizationPlan,
+    noteType: Note["type"],
+    rawContent: string
+  ): OrganizationPlan {
+    const kind = noteType === "list" ? "list_items" : noteType === "log" ? "log_entry" : null;
+    if (kind === null) return plan;
+    return applyDeterministicExtractionOverride({
+      captureText: rawContent,
+      inferredKind: kind,
+      plan
+    }).plan;
   }
 
   private correctionPlanCanSeedMove(plan: OrganizationPlan): boolean {

@@ -135,6 +135,64 @@ public struct Note: Codable, Equatable, Sendable {
     public let updatedAt: Date
 }
 
+/// Copies carrying a change the server has not confirmed yet. Identity and revision stay,
+/// so the confirmed reply replaces the copy and an older refresh cannot.
+extension Note {
+    func edited(
+        title: String,
+        bodyMarkdown: String,
+        spaceId: SpaceID?,
+        privacy: PrivacyMode,
+        updatedAt: Date
+    ) -> Note {
+        copy(
+            title: title,
+            bodyMarkdown: bodyMarkdown,
+            spaceId: .some(spaceId),
+            privacy: privacy,
+            updatedAt: updatedAt
+        )
+    }
+
+    func archived(at date: Date?) -> Note {
+        copy(archivedAt: .some(date))
+    }
+
+    func deleted(at date: Date?) -> Note {
+        copy(deletedAt: .some(date))
+    }
+
+    /// An outer `nil` keeps the current value; `.some(nil)` clears a nullable field.
+    private func copy(
+        title: String? = nil,
+        bodyMarkdown: String? = nil,
+        spaceId: SpaceID?? = nil,
+        privacy: PrivacyMode? = nil,
+        archivedAt: Date?? = nil,
+        deletedAt: Date?? = nil,
+        updatedAt: Date? = nil
+    ) -> Note {
+        Note(
+            spaceId: spaceId ?? self.spaceId,
+            type: type,
+            title: title ?? self.title,
+            bodyMarkdown: bodyMarkdown ?? self.bodyMarkdown,
+            structuredData: structuredData,
+            isOpen: isOpen,
+            pinnedAt: pinnedAt,
+            privacy: privacy ?? self.privacy,
+            archivedAt: archivedAt ?? self.archivedAt,
+            deletedAt: deletedAt ?? self.deletedAt,
+            tagIds: tagIds,
+            links: links,
+            id: id,
+            currentRevision: currentRevision,
+            createdAt: createdAt,
+            updatedAt: updatedAt ?? self.updatedAt
+        )
+    }
+}
+
 public struct NoteSummary: Codable, Equatable, Sendable {
     public let id: NoteID
     @RequiredNullable public var spaceId: SpaceID?

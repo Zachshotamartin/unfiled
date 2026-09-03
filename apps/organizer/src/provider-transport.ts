@@ -1,9 +1,14 @@
-import { OrganizerPlannerReviewError, OrganizerProviderError } from "./errors.js";
+import {
+  OrganizerPlannerReviewError,
+  OrganizerProviderError,
+  type OrganizerProviderErrorIdentity
+} from "./errors.js";
 
 /**
  * Provider-neutral HTTP transport helpers shared by the OpenAI and Anthropic
  * planners. Every helper is bounded, cancellation-aware, and content-free in
- * its failures: provider bodies are never retained, logged, or rethrown.
+ * its failures: provider bodies are never retained, logged, or rethrown. The one exception is
+ * {@link readProviderErrorIdentity}, which keeps the provider's own error identifiers.
  */
 export const MAX_PROVIDER_RESPONSE_BYTES = 256 * 1_024;
 
@@ -25,13 +30,59 @@ export function assertProviderApiKey(apiKey: string): void {
 }
 
 /** Shared HTTP status policy. 529 is Anthropic's documented overload status. */
-export function providerResponseFailure(status: number): OrganizerProviderError {
+export function providerResponseFailure(
+  status: number,
+  identity: OrganizerProviderErrorIdentity | null = null
+): OrganizerProviderError {
   if (status === 401 || status === 403)
-    return new OrganizerProviderError("provider_key_invalid", false, status);
-  if (status === 429) return new OrganizerProviderError("rate_limited", true, status);
+    return new OrganizerProviderError("provider_key_invalid", false, status, identity);
+  if (status === 429) return new OrganizerProviderError("rate_limited", true, status, identity);
   if (status === 408 || status === 409 || status === 529 || status >= 500)
-    return new OrganizerProviderError("provider_unavailable", true, status);
-  return new OrganizerProviderError("validation_failed", false, status);
+    return new OrganizerProviderError("provider_unavailable", true, status, identity);
+  return new OrganizerProviderError("validation_failed", false, status, identity);
+}
+
+const PROVIDER_IDENTIFIER_PATTERN = /^[A-Za-z0-9_.[\]-]{1,64}$/u;
+const SCHEMA_ERROR_PREFIX = "Invalid schema";
+const SCHEMA_ERROR_MAX_LENGTH = 240;
+const SCHEMA_ERROR_UNSAFE_CHARACTERS = /[^A-Za-z0-9 _.,:;'"()[\]{}/=<>-]/gu;
+
+function providerIdentifier(value: unknown): string | undefined {
+  return typeof value === "string" && PROVIDER_IDENTIFIER_PATTERN.test(value) ? value : undefined;
+}
+
+function providerSchemaError(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.startsWith(SCHEMA_ERROR_PREFIX)) return undefined;
+  return value.slice(0, SCHEMA_ERROR_MAX_LENGTH).replace(SCHEMA_ERROR_UNSAFE_CHARACTERS, "?");
+}
+
+/**
+ * Reads a failed provider response only for the identifiers the provider attaches to its own
+ * request validation and, when the message begins with "Invalid schema", that message, which
+ * names keywords of the organizer's schema and never user content. Every other byte is
+ * discarded, and any read or parse failure yields an empty identity.
+ */
+export async function readProviderErrorIdentity(
+  response: Response,
+  signal: AbortSignal
+): Promise<OrganizerProviderErrorIdentity> {
+  let body: unknown;
+  try {
+    body = await readBoundedProviderJson(response, signal);
+  } catch {
+    return Object.freeze({});
+  }
+  if (!isRecord(body) || !isRecord(body.error)) return Object.freeze({});
+  const identity: { type?: string; code?: string; param?: string; schemaError?: string } = {};
+  const type = providerIdentifier(body.error.type);
+  const code = providerIdentifier(body.error.code);
+  const param = providerIdentifier(body.error.param);
+  const schemaError = providerSchemaError(body.error.message);
+  if (type !== undefined) identity.type = type;
+  if (code !== undefined) identity.code = code;
+  if (param !== undefined) identity.param = param;
+  if (schemaError !== undefined) identity.schemaError = schemaError;
+  return Object.freeze(identity);
 }
 
 export async function discardProviderResponse(response: Response): Promise<void> {

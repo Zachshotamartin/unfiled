@@ -24,6 +24,7 @@ The current release target is a **$0 private beta**:
 - AI organization is bring-your-own-key across two providers ([ADR-0015](./decisions/ADR-0015-user-selectable-provider-model-effort.md)): a user saves an OpenAI key, a Claude (Anthropic) key, or both in Supabase Vault and chooses Provider, Model (Automatic or one exact `organization-model-registry-v2` model), and Effort; the beta funds no app-default provider key, so an owner with no saved key makes no provider request: each capture stays saved and readable, is marked `failed` with `provider_unavailable` in Capture activity, the UI asks for a key, and the owner retries after saving one (automatic Inbox filing without a key is roadmap item G1d);
 - retrieval embeddings are `unfiled-local-hash-v1` (512 dimensions): a deterministic, provider-neutral feature-hash vector computed in process, so no note or query text is sent to a provider merely for retrieval. It is not an AI semantic embedding; its relevance is weaker than a semantic embedding, and it must not be presented as semantic search;
 - the storage promise is application encryption at rest with scoped server-side decryption. Unfiled is **not** end-to-end encrypted and **not** zero knowledge.
+- the iPhone app follows the Paper design direction ([ADR-0019](./decisions/ADR-0019-paper-design-direction.md)): a light ground, one type scale with serif titles and serif thoughts, the mark once per tab screen (Inbox and Library, the Desk model), and glyphs drawn from the mark's tray-and-card vocabulary instead of system symbols; the web app still carries the earlier dark treatment.; every action shows its result at once and reverts only if the server refuses (ADR-0019, decision 9), and 250 phone unit tests pass;
 
 ## Current snapshot
 
@@ -103,6 +104,8 @@ Do not currently claim:
 - that app-funded AI is available in the free beta;
 - that Unfiled is end-to-end encrypted, zero knowledge, or readable only by the user; or
 - that **Unfiled** or `unfiled.app` is legally cleared or under proved project/mailbox control.
+
+On 2026-09-03 the owner entered an OpenAI key on the phone and the first capture organized end to end on production (`job_01M1JFY4` succeeded at 02:30:16 UTC with `gpt-5.6-terra`, then `job_01M1JFR0` at 02:31:23 UTC); both became review items in the Inbox, the policy's warm-up behavior for an account's first five captures. Reading those captures then exposed a web defect of the same family as the receipt-less 503: the receipt matcher did not accept the content-free review reason the commit function projects onto the row, fixed on the same branch, and resolving a review with a new note exposed a second: a deferred plan has no operations to seed the note, also fixed there. With all three deployed, the owner filed a review item into a new note from the phone at 03:11 UTC and it appeared in the Library. Getting there took three organizer fixes on the `design/paper` branch: the strict Structured Outputs schema carried keywords OpenAI rejects, and the organizer now records a content-free provider error identity on every failed job so the next such defect names itself. The Claude path has not run live.
 
 ## Next source of truth
 

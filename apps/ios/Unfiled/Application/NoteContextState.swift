@@ -28,12 +28,12 @@ enum NoteContextFailure: Equatable, Sendable {
         }
     }
 
-    var systemImage: String {
+    var glyph: UnfiledGlyph {
         switch self {
-        case .deleted: "trash"
-        case .offline: "wifi.slash"
-        case .stale: "arrow.clockwise"
-        case .unavailable: "exclamationmark.circle"
+        case .deleted: .trash
+        case .offline: .warning
+        case .stale: .clock
+        case .unavailable: .warning
         }
     }
 }

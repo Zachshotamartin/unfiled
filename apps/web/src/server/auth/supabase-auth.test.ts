@@ -215,3 +215,41 @@ describe("Supabase session refresh adapter", () => {
     } satisfies Partial<HttpError>);
   });
 });
+
+describe("Supabase password sign-up adapter", () => {
+  it("answers an already registered address with a distinct 409 code", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ code: 422, msg: "User already registered" }), {
+            status: 422,
+            headers: { "content-type": "application/json" }
+          })
+        )
+      )
+    );
+    await expect(
+      supabaseAuthProvider.signUp("person@example.com", "correct horse battery")
+    ).rejects.toMatchObject({ code: "account_exists", status: 409 } satisfies Partial<HttpError>);
+  });
+  it("keeps weak-password and other provider rejections as validation failures", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ msg: "Password should be at least 6 characters" }), {
+            status: 422,
+            headers: { "content-type": "application/json" }
+          })
+        )
+      )
+    );
+    await expect(
+      supabaseAuthProvider.signUp("person@example.com", "correct horse battery")
+    ).rejects.toMatchObject({
+      code: "validation_failed",
+      status: 400
+    } satisfies Partial<HttpError>);
+  });
+});

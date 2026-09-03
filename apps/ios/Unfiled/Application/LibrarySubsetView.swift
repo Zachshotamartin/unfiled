@@ -16,12 +16,12 @@ struct LibrarySubsetView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 EditorialEyebrow(text: eyebrow)
-                    .padding(.top, 16)
+                    .padding(.top, UnfiledTheme.pushedHeaderTop)
                 Text(title)
-                    .font(.system(size: 42, weight: .bold))
+                    .font(UnfiledType.display)
                     .tracking(-1.5)
-                    .padding(.top, 8)
-                    .padding(.bottom, 24)
+                    .padding(.top, UnfiledTheme.eyebrowToTitle)
+                    .padding(.bottom, UnfiledTheme.headerBottom)
                 SectionRule()
 
                 if notes.isEmpty {
@@ -39,11 +39,11 @@ struct LibrarySubsetView: View {
                             } label: {
                                 VStack(alignment: .leading, spacing: 7) {
                                     Text(note.title)
-                                        .font(.system(size: 20, weight: .semibold))
+                                        .font(UnfiledType.title)
                                         .foregroundStyle(UnfiledTheme.paper)
                                         .lineLimit(2)
                                     Text("\(note.type.uppercased()) · \(note.updatedLabel)")
-                                        .font(.system(size: 11, design: .monospaced))
+                                        .font(UnfiledType.caption)
                                         .foregroundStyle(UnfiledTheme.fog)
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -61,24 +61,25 @@ struct LibrarySubsetView: View {
                                     Text("Restore")
                                 }
                             }
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(UnfiledType.secondaryStrong)
                             .foregroundStyle(UnfiledTheme.persimmon)
-                            .frame(minWidth: 68, minHeight: 44)
+                            .frame(minWidth: 68, minHeight: UnfiledTheme.minimumTouchTarget)
                             .disabled(busyNoteID != nil)
                         }
-                        .padding(.vertical, 18)
+                        .padding(.vertical, UnfiledTheme.rowVertical)
                         SectionRule()
                     }
                 }
 
                 if let errorMessage {
                     Text(errorMessage)
-                        .font(.footnote)
+                        .font(UnfiledType.secondary)
                         .foregroundStyle(UnfiledTheme.persimmon)
-                        .padding(.vertical, 18)
+                        .padding(.vertical, UnfiledTheme.rowVertical)
                 }
             }
             .padding(.horizontal, UnfiledTheme.screenPadding)
+            .padding(.bottom, UnfiledTheme.pushedScreenBottom)
         }
         .refreshable { await onRefresh() }
         .navigationBarTitleDisplayMode(.inline)

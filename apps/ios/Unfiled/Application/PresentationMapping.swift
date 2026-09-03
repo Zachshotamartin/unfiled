@@ -82,7 +82,7 @@ enum PresentationMapping {
             title: value.title,
             snippet: value.snippet,
             type: value.type.rawValue,
-            path: value.spacePath.isEmpty ? "Unfiled" : value.spacePath.joined(separator: " / "),
+            path: value.spacePath.joined(separator: " / "),
             updatedLabel: relativeDate(value.updatedAt, now: now)
         )
     }
@@ -168,10 +168,10 @@ enum PresentationMapping {
             destinationNoteID: receipt?.destination?.noteId.rawValue,
             destinationTitle: receipt?.destination?.title,
             reviewItemID: receipt?.reviewItemId?.rawValue,
-            insertedContent: receipt.map(receiptContent) ?? [],
+            insertedContent: receipt.map(receiptContent).map(ReceiptContentPresentation.collapsingRepeatedCaptures) ?? [],
             actions: receipt?.actions.map(receiptAction) ?? [],
             pending: value.status == .queued || value.status == .processing,
-            retryable: false
+            retryable: value.status == .failed
         )
     }
 
@@ -189,7 +189,7 @@ enum PresentationMapping {
             insertedContent: [],
             actions: [],
             pending: value.status == .queued || value.status == .processing,
-            retryable: false
+            retryable: value.status == .failed
         )
     }
 
@@ -248,8 +248,23 @@ enum PresentationMapping {
         }
     }
 
-    private static func preview(_ markdown: String) -> String {
-        let collapsed = markdown
+    /// The Library preview reads like prose: checklist markers and the server's "Completed"
+    /// heading are projection, not content, so they never show.
+    static func preview(_ markdown: String) -> String {
+        let lines = markdown
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line -> String in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("#"), trimmed.drop(while: { $0 == "#" }).trimmingCharacters(in: .whitespaces) == "Completed" {
+                    return ""
+                }
+                return trimmed.replacingOccurrences(
+                    of: #"^[-*+]\s+\[[ xX]\]\s*"#,
+                    with: "",
+                    options: .regularExpression
+                )
+            }
+        let collapsed = lines.joined(separator: " ")
             .replacingOccurrences(of: #"[#>*_`\[\]()-]+"#, with: " ", options: .regularExpression)
             .split(whereSeparator: \Character.isWhitespace)
             .joined(separator: " ")
@@ -296,7 +311,7 @@ enum PresentationMapping {
     }
 
     private static func spacePath(_ id: SpaceID?, spaces: [Space]) -> String {
-        guard var cursor = id else { return "Unfiled" }
+        guard var cursor = id else { return "" }
         let byID = Dictionary(uniqueKeysWithValues: spaces.map { ($0.id, $0) })
         var names: [String] = []
         var visited: Set<SpaceID> = []

@@ -50,6 +50,7 @@ describe("versioned contracts", () => {
   it("publishes stable machine error codes", () => {
     expect(Object.values(ApiErrorCode)).toEqual([
       "account_deletion_failed",
+      "account_exists",
       "budget_exhausted",
       "capture_too_long",
       "conflict_requires_review",

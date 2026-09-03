@@ -47,8 +47,22 @@ import {
   OrganizerProviderError,
   OrganizerUnavailableError
 } from "./errors.js";
+import { errorOrigin } from "./logging.js";
 
 export type DrainTrigger = "manual" | "recovery" | "schedule";
+
+/** What the drain reports for a failed job: safe code, retry decision, error class, throw site. */
+export type OrganizerJobFailure = Readonly<{
+  errorCode: string;
+  retryable: boolean;
+  errorName: string;
+  origin?: string;
+  providerStatus?: number;
+  providerErrorType?: string;
+  providerErrorCode?: string;
+  providerErrorParam?: string;
+  providerSchemaError?: string;
+}>;
 export type OrganizerDrainResult = Readonly<{
   claimed: number;
   completed: number;
@@ -666,6 +680,8 @@ export function createOrganizerDrain(
     claimLimit: number;
     concurrency: number;
     leaseSeconds: number;
+    /** Receives one content-free record per failed job. */
+    onJobFailure?: (failure: OrganizerJobFailure) => void;
     planner: OrganizerPlanner;
     recoveryLimit: number;
     repository: OrganizerRepository;
@@ -1183,6 +1199,23 @@ export function createOrganizerDrain(
       }
     } catch (error: unknown) {
       const failure = safeFailure(error);
+      const origin = errorOrigin(error);
+      const providerStatus =
+        error instanceof OrganizerProviderError && error.status !== null ? error.status : undefined;
+      const identity = error instanceof OrganizerProviderError ? error.identity : null;
+      options.onJobFailure?.({
+        errorCode: failure.errorCode,
+        retryable: failure.retryable,
+        errorName: error instanceof Error ? error.name : typeof error,
+        ...(origin === undefined ? {} : { origin }),
+        ...(providerStatus === undefined ? {} : { providerStatus }),
+        ...(identity?.type === undefined ? {} : { providerErrorType: identity.type }),
+        ...(identity?.code === undefined ? {} : { providerErrorCode: identity.code }),
+        ...(identity?.param === undefined ? {} : { providerErrorParam: identity.param }),
+        ...(identity?.schemaError === undefined
+          ? {}
+          : { providerSchemaError: identity.schemaError })
+      });
       const providerSelection = providerCredential?.lastSelection() ?? null;
       try {
         const result = await options.repository.fail({

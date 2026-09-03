@@ -107,7 +107,7 @@ struct PasswordSignInView: View {
                     errorMessage = nil
                 } label: {
                     Text(isSignUp ? "Have an account? Sign in" : "New here? Create an account")
-                        .font(.system(.footnote, weight: .semibold))
+                        .font(UnfiledType.secondaryStrong)
                         .foregroundStyle(UnfiledTheme.paper)
                         .frame(maxWidth: .infinity, minHeight: UnfiledTheme.minimumTouchTarget)
                 }
@@ -117,7 +117,7 @@ struct PasswordSignInView: View {
                 .padding(.top, 12)
 
                 Text("We use your email address only to identify your account. Passwords are never stored on this device.")
-                    .font(.system(.footnote))
+                    .font(UnfiledType.secondary)
                     .foregroundStyle(UnfiledTheme.fog)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 15)
@@ -140,12 +140,12 @@ struct PasswordSignInView: View {
     ) -> some View {
         HStack(spacing: 8) {
             content()
-                .font(.system(.body))
+                .font(UnfiledType.body)
                 .foregroundStyle(UnfiledTheme.paper)
                 .tint(UnfiledTheme.persimmon)
         }
-        .padding(.horizontal, 16)
-        .frame(minHeight: 56)
+        .padding(.horizontal, UnfiledTheme.fieldPadding)
+        .frame(minHeight: UnfiledTheme.controlHeight)
         .background(UnfiledTheme.graphite)
         .overlay {
             RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius)
@@ -180,12 +180,7 @@ struct PasswordSignInView: View {
                 return
             } catch {
                 guard !Task.isCancelled else { return }
-                errorMessage = AuthFormRules.displayMessage(
-                    for: error,
-                    fallback: submittedMode == .signUp
-                        ? "The account could not be created. Try again."
-                        : "Sign-in failed. Check your email and password."
-                )
+                errorMessage = AuthFormRules.credentialsMessage(for: error, mode: submittedMode)
             }
         }
     }

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createStructuredLogger } from "./logging.js";
 
 import { createProductionOrganizerCipher } from "./cipher.js";
 import type { OrganizerConfig } from "./config.js";
@@ -74,7 +75,11 @@ export function createOrganizerComposition(
               : createOpenAIOrganizerEmbeddingProvider({}),
           repository
         });
+  const logger = createStructuredLogger();
   const drain = createOrganizerDrain({
+    onJobFailure: (failure) => {
+      logger.log({ event: "organizer.job_failed", level: "error", ...failure });
+    },
     ...(config.planner.kind === "lease-bound-provider-registry-v2"
       ? { appDefaultProviderApiKeys: config.planner.appDefaultApiKeys }
       : {}),
@@ -93,6 +98,7 @@ export function createOrganizerComposition(
       config: appConfig,
       drain,
       keyManagement,
+      logger,
       ...(productionInvocationAuth === undefined ? {} : { productionInvocationAuth })
     }),
     async close() {

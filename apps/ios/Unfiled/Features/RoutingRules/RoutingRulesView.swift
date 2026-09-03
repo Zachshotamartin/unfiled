@@ -25,7 +25,7 @@ struct RoutingRulesView: View {
                 header
 
                 routingPreview
-                    .padding(.top, 34)
+                    .padding(.top, UnfiledTheme.sectionTop)
 
                 if let errorMessage, !rules.isEmpty {
                     inlineError(errorMessage)
@@ -33,10 +33,10 @@ struct RoutingRulesView: View {
                 }
 
                 content
-                    .padding(.top, 28)
+                    .padding(.top, UnfiledTheme.sectionTop)
             }
             .padding(.horizontal, UnfiledTheme.screenPadding)
-            .padding(.bottom, 56)
+            .padding(.bottom, UnfiledTheme.pushedScreenBottom)
         }
         .refreshable { await onRefresh() }
         .navigationBarTitleDisplayMode(.inline)
@@ -86,16 +86,16 @@ struct RoutingRulesView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 0) {
             EditorialEyebrow(text: "Automatic filing")
-                .padding(.top, 18)
+                .padding(.top, UnfiledTheme.pushedHeaderTop)
 
             Text("Send familiar jots where they belong.")
-                .font(.system(size: 38, weight: .bold))
+                .font(UnfiledType.display)
                 .tracking(-1.35)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 9)
+                .padding(.top, UnfiledTheme.eyebrowToTitle)
 
             Text("A matching rule chooses a note or space before general organization. Learned suggestions always stay off until you approve them.")
-                .font(.system(size: 16))
+                .font(UnfiledType.body)
                 .foregroundStyle(UnfiledTheme.fog)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 13)
@@ -104,19 +104,15 @@ struct RoutingRulesView: View {
                 editor = RoutingRuleEditorContext(rule: nil)
             } label: {
                 HStack(spacing: 10) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 15, weight: .bold))
-                        .accessibilityHidden(true)
+                    GlyphView(glyph: .plus, size: 16, weight: 2.2)
                     Text("New routing rule")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(UnfiledType.heading)
                     Spacer()
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 13, weight: .bold))
-                        .accessibilityHidden(true)
+                    GlyphView(glyph: .arrow, size: 14, weight: 2)
                 }
                 .foregroundStyle(UnfiledTheme.ink)
-                .frame(maxWidth: .infinity, minHeight: 54)
-                .padding(.horizontal, 16)
+                .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
+                .padding(.horizontal, UnfiledTheme.fieldPadding)
                 .background(
                     isLoading && !hasLoaded ? UnfiledTheme.fog : UnfiledTheme.persimmon
                 )
@@ -125,7 +121,7 @@ struct RoutingRulesView: View {
             .buttonStyle(.plain)
             .disabled(isLoading && !hasLoaded)
             .accessibilityIdentifier(RoutingRuleAccessibilityIdentifier.create)
-            .padding(.top, 24)
+            .padding(.top, UnfiledTheme.headerBottom)
         }
     }
 
@@ -135,19 +131,19 @@ struct RoutingRulesView: View {
                 VStack(alignment: .leading, spacing: 7) {
                     EditorialEyebrow(text: RoutingRulePreviewPresentation.sectionLabel)
                     Text(RoutingRulePreviewPresentation.heading)
-                        .font(.system(size: 21, weight: .semibold))
+                        .font(UnfiledType.title)
                         .foregroundStyle(UnfiledTheme.paper)
                 }
                 Spacer(minLength: 8)
                 Text("ON THIS DEVICE ONLY")
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .font(UnfiledType.label)
                     .tracking(0.75)
                     .foregroundStyle(UnfiledTheme.persimmon)
             }
 
             VStack(alignment: .leading, spacing: 9) {
                 Text("Sample capture")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .font(UnfiledType.label)
                     .tracking(0.75)
                     .foregroundStyle(UnfiledTheme.fog)
 
@@ -157,7 +153,7 @@ struct RoutingRulesView: View {
                     axis: .vertical
                 )
                 .lineLimit(2 ... 5)
-                .padding(.horizontal, 14)
+                .padding(.horizontal, UnfiledTheme.fieldPadding)
                 .padding(.vertical, 13)
                 .frame(maxWidth: .infinity, minHeight: 82, alignment: .topLeading)
                 .background(UnfiledTheme.ink)
@@ -175,7 +171,7 @@ struct RoutingRulesView: View {
                     Text("\(previewSample.unicodeScalars.count)/\(RoutingRulePreviewMatcher.maximumSampleCodePoints)")
                         .monospacedDigit()
                 }
-                .font(.system(size: 11))
+                .font(UnfiledType.caption)
                 .foregroundStyle(UnfiledTheme.fog)
             }
             .padding(.top, 20)
@@ -183,12 +179,12 @@ struct RoutingRulesView: View {
             SectionRule()
                 .padding(.top, 18)
 
-            HStack(spacing: 12) {
+            HStack(spacing: UnfiledTheme.controlGap) {
                 Button("Clear") {
                     previewSample = ""
                     hasPreviewed = false
                 }
-                .font(.system(size: 14, weight: .semibold))
+                .font(UnfiledType.secondaryStrong)
                 .foregroundStyle(UnfiledTheme.fog)
                 .frame(minWidth: 72, minHeight: UnfiledTheme.minimumTouchTarget)
                 .buttonStyle(.plain)
@@ -199,10 +195,10 @@ struct RoutingRulesView: View {
                 Button {
                     hasPreviewed = true
                 } label: {
-                    Label(RoutingRulePreviewPresentation.actionTitle, systemImage: "arrow.right")
-                        .font(.system(size: 14, weight: .semibold))
+                    GlyphLabel(RoutingRulePreviewPresentation.actionTitle, glyph: .arrow)
+                        .font(UnfiledType.secondaryStrong)
                         .frame(minHeight: UnfiledTheme.minimumTouchTarget)
-                        .padding(.horizontal, 15)
+                        .padding(.horizontal, UnfiledTheme.fieldPadding)
                         .foregroundStyle(UnfiledTheme.ink)
                         .background(canPreview ? UnfiledTheme.persimmon : UnfiledTheme.fog)
                         .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
@@ -216,7 +212,7 @@ struct RoutingRulesView: View {
             previewResult
                 .padding(.top, 14)
         }
-        .padding(17)
+        .padding(UnfiledTheme.cardPadding)
         .background(UnfiledTheme.graphite)
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay {
@@ -231,15 +227,15 @@ struct RoutingRulesView: View {
 
         VStack(alignment: .leading, spacing: 5) {
             Text(presentation.title)
-                .font(.system(size: 15, weight: .semibold))
+                .font(UnfiledType.secondaryStrong)
             ForEach(Array(presentation.details.enumerated()), id: \.offset) { _, detail in
                 Text(detail)
-                    .font(.system(size: 12))
+                    .font(UnfiledType.caption)
                     .foregroundStyle(UnfiledTheme.fog)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(13)
+        .padding(UnfiledTheme.cardPadding)
         .background(UnfiledTheme.raised)
         .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
         .accessibilityElement(children: .ignore)
@@ -284,20 +280,18 @@ struct RoutingRulesView: View {
             .accessibilityIdentifier(RoutingRuleAccessibilityIdentifier.loading)
         } else if let errorMessage, rules.isEmpty {
             VStack(alignment: .leading, spacing: 14) {
-                Image(systemName: "wifi.exclamationmark")
-                    .font(.system(size: 28, weight: .medium))
+                GlyphView(glyph: .warning, size: 24, weight: 2.3)
                     .foregroundStyle(UnfiledTheme.persimmon)
-                    .accessibilityHidden(true)
                 Text("Rules are unavailable")
-                    .font(.system(size: 22, weight: .semibold))
+                    .font(UnfiledType.title)
                 Text(errorMessage)
-                    .font(.system(size: 15))
+                    .font(UnfiledType.secondary)
                     .foregroundStyle(UnfiledTheme.fog)
                     .fixedSize(horizontal: false, vertical: true)
                 Button("Try again") {
                     Task { @MainActor in await onRefresh() }
                 }
-                .font(.system(size: 15, weight: .semibold))
+                .font(UnfiledType.secondaryStrong)
                 .foregroundStyle(UnfiledTheme.persimmon)
                 .frame(minHeight: UnfiledTheme.minimumTouchTarget)
             }
@@ -329,7 +323,7 @@ struct RoutingRulesView: View {
                     message: nil,
                     rules: savedRules
                 )
-                .padding(.top, proposals.isEmpty ? 0 : 34)
+                .padding(.top, proposals.isEmpty ? 0 : UnfiledTheme.sectionTop)
             }
         }
     }
@@ -343,7 +337,7 @@ struct RoutingRulesView: View {
             EditorialEyebrow(text: title)
             if let message {
                 Text(message)
-                    .font(.system(size: 14))
+                    .font(UnfiledType.secondary)
                     .foregroundStyle(UnfiledTheme.fog)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -371,8 +365,8 @@ struct RoutingRulesView: View {
     }
 
     private func inlineError(_ message: String) -> some View {
-        Label(message, systemImage: "exclamationmark.circle")
-            .font(.system(size: 14))
+        GlyphLabel(message, glyph: .warning)
+            .font(UnfiledType.secondary)
             .foregroundStyle(UnfiledTheme.paper)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -429,11 +423,11 @@ private struct RoutingRuleCard: View {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 7) {
                     Text(rule.condition)
-                        .font(.system(size: 19, weight: .semibold))
+                        .font(UnfiledType.title)
                         .foregroundStyle(UnfiledTheme.paper)
                         .fixedSize(horizontal: false, vertical: true)
-                    Label(destinationLabel, systemImage: destinationIcon)
-                        .font(.system(size: 14))
+                    GlyphLabel(destinationLabel, glyph: destinationIcon, size: 14, weight: 1.9)
+                        .font(UnfiledType.secondary)
                         .foregroundStyle(isDestinationAvailable ? UnfiledTheme.fog : UnfiledTheme.persimmon)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -446,19 +440,19 @@ private struct RoutingRuleCard: View {
                 Text("P\(rule.priority)")
                 Text(RoutingRulePresentation.sourceLabel(for: rule))
             }
-            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .font(UnfiledType.label)
             .tracking(0.7)
             .foregroundStyle(UnfiledTheme.fog)
             .padding(.top, 13)
 
             Text(RoutingRulePresentation.lastFiredLabel(for: rule))
-                .font(.system(size: 11, design: .monospaced))
+                .font(UnfiledType.caption)
                 .foregroundStyle(UnfiledTheme.fog)
                 .padding(.top, 7)
 
             if !isDestinationAvailable {
                 Text(unavailableDestinationMessage)
-                    .font(.system(size: 13))
+                    .font(UnfiledType.caption)
                     .foregroundStyle(UnfiledTheme.persimmon)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 13)
@@ -466,7 +460,7 @@ private struct RoutingRuleCard: View {
 
             if rule.proposalState == .offered {
                 Text("Suggested from repeated corrections. It is off and will never activate without your confirmation.")
-                    .font(.system(size: 13))
+                    .font(UnfiledType.caption)
                     .foregroundStyle(UnfiledTheme.fog)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 13)
@@ -477,7 +471,7 @@ private struct RoutingRuleCard: View {
                     .padding(.top, 18)
             }
         }
-        .padding(17)
+        .padding(UnfiledTheme.cardPadding)
         .background(UnfiledTheme.graphite)
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay {
@@ -489,14 +483,14 @@ private struct RoutingRuleCard: View {
     }
 
     private var proposalActions: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: UnfiledTheme.controlGap) {
             Button(action: onAccept) {
                 HStack(spacing: 7) {
                     if isSubmitting { ProgressView().controlSize(.small) }
                     Text(isDestinationAvailable ? "Accept and turn on" : "Cannot accept")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(UnfiledType.secondaryStrong)
                 }
-                .frame(maxWidth: .infinity, minHeight: 46)
+                .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
                 .foregroundStyle(UnfiledTheme.ink)
                 .background(isDestinationAvailable ? UnfiledTheme.persimmon : UnfiledTheme.fog)
                 .clipShape(RoundedRectangle(cornerRadius: 11))
@@ -506,9 +500,9 @@ private struct RoutingRuleCard: View {
             .accessibilityIdentifier(RoutingRuleAccessibilityIdentifier.accept(rule.id.rawValue))
 
             Button("Decline suggestion", role: .destructive, action: onRemove)
-                .font(.system(size: 13, weight: .semibold))
+                .font(UnfiledType.caption)
                 .foregroundStyle(UnfiledTheme.persimmon)
-                .frame(maxWidth: .infinity, minHeight: 44)
+                .frame(maxWidth: .infinity, minHeight: UnfiledTheme.minimumTouchTarget)
                 .buttonStyle(.plain)
                 .disabled(isSubmitting)
                 .accessibilityHint("Prevents this same suggestion from being offered again")
@@ -517,19 +511,18 @@ private struct RoutingRuleCard: View {
     }
 
     private var savedRuleActions: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 12) {
+        VStack(spacing: UnfiledTheme.controlGap) {
+            HStack(spacing: UnfiledTheme.controlGap) {
                 Text(isDestinationAvailable ? (rule.enabled ? "On" : "Off") : "Blocked")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(UnfiledType.secondaryStrong)
                     .foregroundStyle(isDestinationAvailable ? UnfiledTheme.paper : UnfiledTheme.persimmon)
                 Spacer()
                 Button {
                     onSetEnabled(!rule.enabled)
                 } label: {
-                    Image(systemName: rule.enabled ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 24, weight: .medium))
+                    GlyphView(glyph: rule.enabled ? .checkCircle : .circle, size: 24, weight: 2.2)
                         .foregroundStyle(rule.enabled ? UnfiledTheme.persimmon : UnfiledTheme.fog)
-                        .frame(width: 44, height: 44)
+                        .frame(width: UnfiledTheme.minimumTouchTarget, height: UnfiledTheme.minimumTouchTarget)
                 }
                 .buttonStyle(.plain)
                 .disabled(isSubmitting || (!isDestinationAvailable && !rule.enabled))
@@ -537,7 +530,7 @@ private struct RoutingRuleCard: View {
                 .accessibilityValue(rule.enabled ? "On" : "Off")
                 .accessibilityIdentifier(RoutingRuleAccessibilityIdentifier.toggle(rule.id.rawValue))
             }
-            .frame(minHeight: 44)
+            .frame(minHeight: UnfiledTheme.minimumTouchTarget)
 
             SectionRule()
 
@@ -550,8 +543,8 @@ private struct RoutingRuleCard: View {
                     .foregroundStyle(UnfiledTheme.persimmon)
                     .accessibilityIdentifier(RoutingRuleAccessibilityIdentifier.delete(rule.id.rawValue))
             }
-            .font(.system(size: 14, weight: .semibold))
-            .frame(minHeight: 44)
+            .font(UnfiledType.secondaryStrong)
+            .frame(minHeight: UnfiledTheme.minimumTouchTarget)
             .buttonStyle(.plain)
             .disabled(isSubmitting)
         }
@@ -559,7 +552,7 @@ private struct RoutingRuleCard: View {
 
     private var badge: some View {
         Text(badgeLabel)
-            .font(.system(size: 9, weight: .bold, design: .monospaced))
+            .font(UnfiledType.label)
             .tracking(0.8)
             .foregroundStyle(badgeColor)
             .padding(.horizontal, 8)
@@ -590,10 +583,10 @@ private struct RoutingRuleCard: View {
         return "This rule is blocked. Choose an active destination before turning it on."
     }
 
-    private var destinationIcon: String {
+    private var destinationIcon: UnfiledGlyph {
         switch rule.destination {
-        case .note: "note.text"
-        case .space: "folder"
+        case .note: .card
+        case .space: .tray
         }
     }
 
@@ -673,25 +666,25 @@ private struct RoutingRuleEditorView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     EditorialEyebrow(text: context.rule == nil ? "New instruction" : "Edit instruction")
                     Text(context.rule == nil ? "Create a routing rule" : "Update this routing rule")
-                        .font(.system(size: 34, weight: .bold))
+                        .font(UnfiledType.display)
                         .tracking(-1.1)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 9)
+                        .padding(.top, UnfiledTheme.eyebrowToTitle)
 
                     form
-                        .padding(.top, 28)
+                        .padding(.top, UnfiledTheme.sectionTop)
 
                     if let errorMessage {
-                        Label(errorMessage, systemImage: "exclamationmark.circle")
-                            .font(.system(size: 14))
+                        GlyphLabel(errorMessage, glyph: .warning)
+                            .font(UnfiledType.secondary)
                             .foregroundStyle(UnfiledTheme.paper)
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.top, 22)
                     }
                 }
                 .padding(.horizontal, UnfiledTheme.screenPadding)
-                .padding(.top, 22)
-                .padding(.bottom, 130)
+                .padding(.top, UnfiledTheme.pushedHeaderTop)
+                .padding(.bottom, UnfiledTheme.screenBottom)
             }
             .scrollDismissesKeyboard(.interactively)
             .safeAreaInset(edge: .bottom, spacing: 0) { saveBar }
@@ -722,8 +715,8 @@ private struct RoutingRuleEditorView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .focused($conditionFocused)
-                    .padding(.horizontal, 15)
-                    .frame(minHeight: 56)
+                    .padding(.horizontal, UnfiledTheme.fieldPadding)
+                    .frame(minHeight: UnfiledTheme.controlHeight)
                     .background(UnfiledTheme.graphite)
                     .overlay {
                         RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius)
@@ -735,7 +728,7 @@ private struct RoutingRuleEditorView: View {
                     .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
                     .accessibilityIdentifier(RoutingRuleAccessibilityIdentifier.editorCondition)
                 Text("Matching is case-insensitive and ignores trailing punctuation.")
-                    .font(.system(size: 12))
+                    .font(UnfiledType.caption)
                     .foregroundStyle(UnfiledTheme.fog)
             }
 
@@ -746,13 +739,13 @@ private struct RoutingRuleEditorView: View {
                     }
                 }
                 .pickerStyle(.menu)
-                .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-                .padding(.horizontal, 15)
+                .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight, alignment: .leading)
+                .padding(.horizontal, UnfiledTheme.fieldPadding)
                 .background(UnfiledTheme.graphite)
                 .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
                 .accessibilityIdentifier(RoutingRuleAccessibilityIdentifier.editorType)
                 Text(ruleTypeExplanation(draft.ruleType))
-                    .font(.system(size: 12))
+                    .font(UnfiledType.caption)
                     .foregroundStyle(UnfiledTheme.fog)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -781,8 +774,8 @@ private struct RoutingRuleEditorView: View {
                     }
                 }
                 .pickerStyle(.menu)
-                .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-                .padding(.horizontal, 15)
+                .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight, alignment: .leading)
+                .padding(.horizontal, UnfiledTheme.fieldPadding)
                 .background(UnfiledTheme.graphite)
                 .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
                 .accessibilityIdentifier(RoutingRuleAccessibilityIdentifier.editorDestination)
@@ -790,7 +783,7 @@ private struct RoutingRuleEditorView: View {
                 if let status = draft.unavailableDestinationStatus,
                    selectedDestinationID == nil {
                     Text("The previous destination is \(statusLabel(status)). Choose an active destination to save.")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(UnfiledType.caption)
                         .foregroundStyle(UnfiledTheme.persimmon)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -802,12 +795,12 @@ private struct RoutingRuleEditorView: View {
                         Text("Higher rules run first")
                         Spacer()
                         Text("\(draft.priority)")
-                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                            .font(UnfiledType.caption.monospacedDigit())
                             .foregroundStyle(UnfiledTheme.persimmon)
                     }
                     .frame(minHeight: 48)
                 }
-                .padding(.horizontal, 15)
+                .padding(.horizontal, UnfiledTheme.fieldPadding)
                 .background(UnfiledTheme.graphite)
                 .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
                 .accessibilityIdentifier(RoutingRuleAccessibilityIdentifier.editorPriority)
@@ -815,14 +808,14 @@ private struct RoutingRuleEditorView: View {
 
             fieldGroup("Status") {
                 Toggle("Use this rule", isOn: $draft.enabled)
-                    .font(.system(size: 15, weight: .semibold))
-                    .frame(minHeight: 50)
-                    .padding(.horizontal, 15)
+                    .font(UnfiledType.secondaryStrong)
+                    .frame(minHeight: UnfiledTheme.controlHeight)
+                    .padding(.horizontal, UnfiledTheme.fieldPadding)
                     .background(UnfiledTheme.graphite)
                     .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
                     .accessibilityIdentifier(RoutingRuleAccessibilityIdentifier.editorEnabled)
                 Text(draft.enabled ? "It will be active after saving." : "It will stay saved but paused.")
-                    .font(.system(size: 12))
+                    .font(UnfiledType.caption)
                     .foregroundStyle(UnfiledTheme.fog)
             }
         }
@@ -852,9 +845,9 @@ private struct RoutingRuleEditorView: View {
                             .accessibilityHidden(true)
                     }
                     Text(isSaving ? "Saving…" : saveTitle)
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(UnfiledType.heading)
                 }
-                .frame(maxWidth: .infinity, minHeight: 54)
+                .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
                 .foregroundStyle(UnfiledTheme.ink)
                 .background(draft.canSave && !isSaving ? UnfiledTheme.persimmon : UnfiledTheme.fog)
                 .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))

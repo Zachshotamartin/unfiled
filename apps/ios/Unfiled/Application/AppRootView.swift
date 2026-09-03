@@ -55,7 +55,7 @@ struct AppRootView: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.light)
     }
 
     private var accountDeletionReceiptBinding: Binding<AccountDeletionReceiptPresentation?> {
@@ -76,7 +76,7 @@ struct PrivacyCurtainView: View {
             VStack(spacing: 16) {
                 UnfiledMark(size: 46)
                 Text("unfiled")
-                    .font(.system(size: 24, weight: .bold))
+                    .font(UnfiledType.title)
                     .tracking(-0.8)
                     .foregroundStyle(UnfiledTheme.paper)
             }
@@ -106,7 +106,7 @@ private struct LaunchLedgerView: View {
         VStack(spacing: 22) {
             UnfiledMark(size: 66)
             Text("unfiled")
-                .font(.system(size: 34, weight: .bold))
+                .font(UnfiledType.display)
                 .tracking(-1)
             ProgressView()
                 .tint(UnfiledTheme.persimmon)
@@ -125,9 +125,9 @@ private struct ProtectedStorageFailureView: View {
             UnfiledMark(size: 48)
             EditorialEyebrow(text: "Protected storage")
             Text("Unfiled could not open")
-                .font(.system(size: 34, weight: .bold))
+                .font(UnfiledType.display)
             Text(message)
-                .font(.body)
+                .font(UnfiledType.body)
                 .foregroundStyle(UnfiledTheme.fog)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -145,12 +145,16 @@ private struct AppBanner: View {
         HStack(spacing: 12) {
             UnfiledMark(size: 24)
             Text(message)
-                .font(.system(size: 13, weight: .medium))
+                .font(UnfiledType.caption)
                 .foregroundStyle(UnfiledTheme.paper)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 4)
-            Button("Dismiss", systemImage: "xmark", action: onDismiss)
-                .labelStyle(.iconOnly)
+            Button(action: onDismiss) {
+                GlyphView(glyph: .close, size: 16, weight: 2.2)
+                    .frame(width: UnfiledTheme.minimumTouchTarget, height: UnfiledTheme.minimumTouchTarget)
+                    .contentShape(Rectangle())
+            }
+                .accessibilityLabel("Dismiss")
                 .foregroundStyle(UnfiledTheme.fog)
                 .frame(width: 44, height: 44)
         }

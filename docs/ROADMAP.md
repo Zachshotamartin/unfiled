@@ -46,6 +46,35 @@ seals a `kept_in_inbox` receipt with reason `provider_key_missing` and sets the 
 unorganized captures in the account export: today the archive holds notes and a manifest, so a
 capture that has not become a note is visible in Capture activity but absent from the export.
 
+### G1e. Bring the web app to the Paper direction (after ADR-0019)
+
+The iPhone app moved to the Paper direction on 2026-09-02; the Next.js app still uses the earlier
+dark treatment. Deliver the same tokens (ground, ink, one green accent), the same type scale with
+serif titles and serif thoughts, the mark once per page, and the tray-and-card glyph set in the web
+app, with the composer and Notes library structured the same way. Apply the same rules the phone now
+follows: the Desk model (Inbox and Library, no Review or Search tabs), one motion system, and one way
+to create (the composer; Private captures become private notes; the web's separate new-note form goes
+away and its editor is for editing only). Evidence: the public pages and
+the signed-in app rendered side by side with the phone.
+
+### G1f. Revise a filed capture with owner guidance (owner request, 2026-09-02)
+
+A filed receipt offers Move and Undo; the owner also wants Revise: send the capture back to the
+organizer with a sentence of extra context. Proposed design: the guidance is sealed with the
+owner's capture key and stored on the new organizer job (one additive migration), the organizer
+opens it and discloses it to the provider as owner guidance, and for an already filed capture the
+phone undoes the filing first, then retries with the guidance. The alternative, folding the
+guidance into a new capture, duplicates the thought in the record. Awaiting the owner's choice.
+
+### G1g. Block-based notes (owner question, 2026-09-02)
+
+A note has one type and that type fixes its structure: list items, a project checklist, log
+entries, or a body. The owner asked for component-driven notes, for example a checklist whose
+items carry explanations, or a log entry beside a list. That is a block model: the contract's
+note payload becomes an ordered list of typed blocks, the encrypted note payloads and revisions
+follow, the organizer's operations address blocks, and both editors render and edit blocks. Sized
+as its own milestone after G; the current types stay as presets over the block model.
+
 ### G2. Prove the hosted topology
 
 Deliver:

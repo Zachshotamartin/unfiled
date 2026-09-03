@@ -34,53 +34,52 @@ struct SettingsView: View {
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var draft: AISettingsDraft?
+    @State private var keyProvider: AIProvider = .openai
+    @State private var pushedPage: SettingsPage?
     @State private var providerPendingDeletion: AIProvider?
     @State private var confirmsSignOut = false
     @State private var isSigningOut = false
     @State private var isReconcilingAISettingsRetry = false
-    @FocusState private var focusedField: Field?
 
-    private enum Field: Hashable {
-        case timezone, locale
-    }
-
+    /// Top to bottom: the key that makes organization work, how it organizes, automatic filing,
+    /// the account, and this phone. Each group is a short list of rows; choices live on pages.
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                header
+                ScreenHeader(title: "Settings", showsMark: false)
 
                 if isLoadingAISettings, aiSettings == nil {
                     loadingState
+                        .padding(.top, UnfiledTheme.sectionTop)
                 } else {
-                    if let aiSettings, draft != nil {
-                        aiSettingsSections(current: aiSettings)
+                    if hasLoadedAISettings {
+                        aiKeyGroup
+                            .padding(.top, UnfiledTheme.sectionTop)
+                    }
+                    if aiSettings != nil, let draft {
+                        organizationGroup(draft)
+                            .padding(.top, UnfiledTheme.sectionTop)
                     } else if hasLoadedAISettings {
                         settingsUnavailableState
-                    }
-                    if hasLoadedAISettings {
-                        providerKeySections
+                            .padding(.top, UnfiledTheme.sectionTop)
                     }
                 }
 
-                accountAndDeviceSettings
-                AccountDataControls(
-                    exportArtifact: accountExportArtifact,
-                    isPreparingExport: isPreparingAccountExport,
-                    exportError: accountExportError,
-                    isDeletingAccount: isDeletingAccount,
-                    hasPendingDeletionReplay: hasPendingAccountDeletionReplay,
-                    deletionError: accountDeletionError,
-                    onPrepareExport: onPrepareAccountExport,
-                    onDiscardExport: onDiscardAccountExport,
-                    onDeleteAccount: onDeleteAccount
-                )
-                signOutAction
+                automaticFilingGroup
+                    .padding(.top, UnfiledTheme.sectionTop)
+                accountGroup
+                    .padding(.top, UnfiledTheme.sectionTop)
+                phoneGroup
+                    .padding(.top, UnfiledTheme.sectionTop)
             }
             .padding(.horizontal, UnfiledTheme.screenPadding)
-            .padding(.bottom, 48)
+            .padding(.bottom, UnfiledTheme.pushedScreenBottom)
         }
         .scrollDismissesKeyboard(.interactively)
         .refreshable { await onRefreshAISettings() }
+        .navigationDestination(item: $pushedPage) { page in
+            destination(page)
+        }
         .confirmationDialog(
             Text("Delete the saved \(providerPendingDeletion?.displayName ?? "provider") key?"),
             isPresented: deletionDialogIsPresented,
@@ -109,35 +108,25 @@ struct SettingsView: View {
             adopt(aiSettings)
         }
         .onChange(of: aiSettings) { _, value in adopt(value) }
+        .onChange(of: isSavingAISettings) { wasSaving, isSaving in
+            // Every save ends by re-reading the authoritative copy, so a failed change reverts
+            // and a stale-revision refresh wins. An unconfirmed save keeps its locked draft.
+            if wasSaving, !isSaving, !hasPendingAISettingsRetry {
+                adopt(aiSettings)
+            }
+        }
         .navigationBarTitleDisplayMode(.inline)
         .accessibilityIdentifier(AISettingsAccessibilityIdentifier.screen)
         .unfiledScreen()
     }
 
-    // MARK: Header and load states
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            EditorialEyebrow(text: "Account and behavior")
-                .padding(.top, 16)
-            Text("Settings")
-                .font(.system(.largeTitle, weight: .bold))
-                .tracking(-1.2)
-                .accessibilityAddTraits(.isHeader)
-                .padding(.top, 8)
-            Text("Choose how Unfiled organizes the next thing you capture. Queued work keeps the settings it started with.")
-                .font(.system(.subheadline))
-                .foregroundStyle(UnfiledTheme.fog)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 12)
-                .padding(.bottom, 16)
-        }
-    }
+    // MARK: Load states
 
     private var loadingState: some View {
         HStack(spacing: 12) {
-            ProgressView()
+            UnfiledLoadingView(size: 18)
             Text("Loading protected AI settings…")
+                .font(UnfiledType.secondary)
                 .foregroundStyle(UnfiledTheme.fog)
         }
         .frame(maxWidth: .infinity, minHeight: 150, alignment: .leading)
@@ -146,69 +135,294 @@ struct SettingsView: View {
     }
 
     private var settingsUnavailableState: some View {
-        SettingsSection("AI behavior unavailable") {
-            SettingsInlineMessage(
-                message: aiSettingsError ?? "AI settings could not be loaded.",
-                kind: .error,
-                accessibilityIdentifier: AISettingsAccessibilityIdentifier.settingsError
-            )
-            Button("Try again") {
-                Task { @MainActor in await onRefreshAISettings() }
-            }
-            .font(.system(.subheadline, weight: .semibold))
-            .foregroundStyle(UnfiledTheme.persimmon)
-            .frame(minHeight: UnfiledTheme.minimumTouchTarget)
-            .accessibilityHint("Reloads AI settings and key status")
-        }
-    }
-
-    // MARK: Provider, model, effort, then behavior
-
-    @ViewBuilder
-    private func aiSettingsSections(current: UserSettings) -> some View {
-        Group {
-            accessModeSection
-            if draft?.providerMode == .byok {
-                providerSection
-                modelSection
-            }
-            effortSection
-            organizationSection
-            expansionSection
-            profileSection
-        }
-        .disabled(isAISettingsDraftLocked)
-        saveSettingsAction(current: current)
-    }
-
-    private var accessModeSection: some View {
-        SettingsSection("AI access") {
-            Text(accessModeCopy)
-                .settingsSupportingText()
-            VStack(spacing: AISettingsControlLayout.optionSpacing) {
-                SettingsOptionRow(
-                    title: "My API key",
-                    detail: "Usage is billed to the provider account behind the key you choose below.",
-                    value: ProviderMode.byok,
-                    selection: providerModeBinding
+        SettingsGroup(label: "Organization") {
+            VStack(alignment: .leading, spacing: AISettingsControlLayout.sectionContentSpacing) {
+                SettingsInlineMessage(
+                    message: aiSettingsError ?? "AI settings could not be loaded.",
+                    kind: .error,
+                    accessibilityIdentifier: AISettingsAccessibilityIdentifier.settingsError
                 )
-                if offersManagedMode {
-                    SettingsOptionRow(
-                        title: "Unfiled managed",
-                        detail: managedModeDetail,
-                        value: ProviderMode.appDefault,
-                        selection: providerModeBinding
+                Button("Try again") {
+                    Task { @MainActor in await onRefreshAISettings() }
+                }
+                .font(UnfiledType.secondaryStrong)
+                .foregroundStyle(UnfiledTheme.persimmon)
+                .frame(minHeight: UnfiledTheme.minimumTouchTarget)
+                .accessibilityHint("Reloads AI settings and key status")
+            }
+            .settingsBlock()
+        }
+    }
+
+    // MARK: AI key
+
+    private var aiKeyGroup: some View {
+        ProviderKeyGroupView(
+            selectedProvider: keyProvider,
+            providerInUse: selectedProviderForNewCaptures,
+            providerKeys: providerKeys,
+            caption: keyCaption,
+            mutation: providerKeyMutation,
+            isLocked: isBusy,
+            pendingRetryProvider: pendingProviderKeyRetry,
+            errors: providerKeyErrors,
+            onSelectProvider: selectKeyProvider,
+            onSave: saveProviderKey,
+            onDiscardRetry: onDiscardProviderKeyRetry,
+            onRequestDelete: { providerPendingDeletion = $0 }
+        )
+    }
+
+    private var keyCaption: String? {
+        let provider = draft?.byokProvider ?? keyProvider
+        return ProviderKeyGroupPresentation.caption(
+            mode: draft?.providerMode ?? aiSettings?.providerMode,
+            isManagedFallbackAvailable: isManagedFallbackAvailable,
+            provider: provider,
+            keyStatus: providerKeys[provider]?.status,
+            fallbackAllowed: draft?.byokFallbackToApp ?? false
+        )
+    }
+
+    /// A chip aims the field at a provider; with an active key it also switches new captures to it.
+    private func selectKeyProvider(_ provider: AIProvider) {
+        keyProvider = provider
+        guard ProviderKeyGroupPresentation.selectsProviderImmediately(
+            keyStatus: providerKeys[provider]?.status
+        ) else { return }
+        apply { ProviderKeyGroupPresentation.draftUsingKey($0, for: provider) }
+    }
+
+    /// A validated key selects My API key mode for its provider through the settings contract,
+    /// so the user never picks a mode separately.
+    private func saveProviderKey(_ key: String, provider: AIProvider) async -> Bool {
+        let saved = await onSaveProviderKey(key, provider)
+        if saved {
+            apply { ProviderKeyGroupPresentation.draftUsingKey($0, for: provider) }
+        }
+        return saved
+    }
+
+    // MARK: Organization
+
+    private func organizationGroup(_ draft: AISettingsDraft) -> some View {
+        SettingsGroup(label: "Organization") {
+            if aiSettingsError != nil || hasPendingAISettingsRetry {
+                settingsStatus
+                    .settingsBlock()
+            }
+            if isManagedFallbackAvailable {
+                SettingsNavigationRow(
+                    title: "AI access",
+                    value: SettingsRowPresentation.accessValue(draft),
+                    accessibilityIdentifier: AISettingsAccessibilityIdentifier.row(
+                        AISettingsAccessibilityIdentifier.providerMode
                     )
+                ) {
+                    pushedPage = .access
                 }
             }
-            .accessibilityIdentifier(AISettingsAccessibilityIdentifier.providerMode)
+            SettingsNavigationRow(
+                title: "Effort",
+                value: SettingsRowPresentation.effortValue(draft),
+                accessibilityIdentifier: AISettingsAccessibilityIdentifier.row(
+                    AISettingsAccessibilityIdentifier.routingEffort
+                )
+            ) {
+                pushedPage = .effort
+            }
+            if draft.providerMode == .byok {
+                SettingsNavigationRow(
+                    title: "Model",
+                    value: SettingsRowPresentation.modelValue(draft),
+                    accessibilityIdentifier: AISettingsAccessibilityIdentifier.row(
+                        AISettingsAccessibilityIdentifier.model
+                    )
+                ) {
+                    pushedPage = .model
+                }
+            }
+            SettingsNavigationRow(
+                title: "Expansion",
+                value: SettingsRowPresentation.expansionValue(draft),
+                accessibilityIdentifier: AISettingsAccessibilityIdentifier.row(
+                    AISettingsAccessibilityIdentifier.expansionStyle
+                )
+            ) {
+                pushedPage = .expansion
+            }
+            SettingsNavigationRow(
+                title: "Behavior",
+                value: SettingsRowPresentation.behaviorValue(draft),
+                accessibilityIdentifier: AISettingsAccessibilityIdentifier.row(
+                    AISettingsAccessibilityIdentifier.organizationMode
+                )
+            ) {
+                pushedPage = .behavior
+            }
+            SettingsNavigationRow(
+                title: "Timezone",
+                value: SettingsRowPresentation.timezoneValue(draft),
+                accessibilityIdentifier: AISettingsAccessibilityIdentifier.row(
+                    AISettingsAccessibilityIdentifier.timezone
+                )
+            ) {
+                pushedPage = .dayBoundary
+            }
+        }
+    }
 
-            if offersManagedMode, !isManagedFallbackAvailable {
+    /// The save error and, after an unconfirmed save, the two ways out. Shown on the main
+    /// screen and repeated at the foot of a page so a failure is seen where it happened.
+    private var settingsStatus: some View {
+        VStack(alignment: .leading, spacing: AISettingsControlLayout.credentialActionSpacing) {
+            if let aiSettingsError {
                 SettingsInlineMessage(
-                    message: "This deployment does not fund AI, so managed access cannot organize new captures. Choose My API key, pick a provider, and add a key below.",
-                    kind: .warning
+                    message: aiSettingsError,
+                    kind: .error,
+                    accessibilityIdentifier: AISettingsAccessibilityIdentifier.settingsError
                 )
             }
+            if hasPendingAISettingsRetry {
+                SettingsRetryBanner(
+                    isRetrying: isSavingAISettings,
+                    isReconciling: isReconcilingAISettingsRetry,
+                    isBusy: isBusy,
+                    stacksVertically: dynamicTypeSize.isAccessibilitySize,
+                    onDiscard: reconcileAndDiscardSettingsRetry,
+                    onRetry: retrySettingsDraft
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var pageStatus: some View {
+        if aiSettingsError != nil || hasPendingAISettingsRetry {
+            settingsStatus
+                .padding(.top, UnfiledTheme.sectionTop)
+        }
+    }
+
+    // MARK: Pushed pages
+
+    @ViewBuilder
+    private func destination(_ page: SettingsPage) -> some View {
+        if let draft {
+            switch page {
+            case .access:
+                SettingsChoicePage(
+                    title: "AI access",
+                    intro: AISettingsCopy.accessIntro,
+                    options: accessOptions,
+                    selection: draft.providerMode,
+                    isLocked: isAISettingsDraftLocked,
+                    accessibilityIdentifier: AISettingsAccessibilityIdentifier.providerMode,
+                    onSelect: { mode in apply { $0.selectingProviderMode(mode) } },
+                    footer: { pageStatus }
+                )
+            case .effort:
+                SettingsChoicePage(
+                    title: "Effort",
+                    intro: AISettingsCopy.effortIntro,
+                    options: RoutingEffort.allCases.map { effort in
+                        SettingsChoiceOption(
+                            value: effort,
+                            title: AISettingsCopy.routingTitle(effort),
+                            detail: AISettingsCopy.routingDetail(effort)
+                        )
+                    },
+                    selection: draft.routingEffort,
+                    isLocked: isAISettingsDraftLocked,
+                    accessibilityIdentifier: AISettingsAccessibilityIdentifier.routingEffort,
+                    onSelect: { effort in apply(\.routingEffort, effort) },
+                    footer: { pageStatus }
+                )
+            case .model:
+                SettingsChoicePage(
+                    title: "Model",
+                    intro: AISettingsCopy.modelIntro,
+                    options: AIModelRegistry.selections(for: draft.byokProvider).map { model in
+                        SettingsChoiceOption(
+                            value: model,
+                            title: AIModelRegistry.label(for: model),
+                            detail: SettingsRowPresentation.modelDetail(model, draft: draft)
+                        )
+                    },
+                    selection: draft.modelSelection,
+                    isLocked: isAISettingsDraftLocked,
+                    accessibilityIdentifier: AISettingsAccessibilityIdentifier.model,
+                    onSelect: { model in apply(\.modelSelection, model) },
+                    footer: {
+                        fallbackToggle
+                        pageStatus
+                    }
+                )
+            case .expansion:
+                SettingsChoicePage(
+                    title: "Expansion",
+                    intro: AISettingsCopy.expansionIntro,
+                    options: ExpansionStyle.allCases.map { style in
+                        SettingsChoiceOption(
+                            value: style,
+                            title: AISettingsCopy.expansionTitle(style),
+                            detail: AISettingsCopy.expansionDetail(style)
+                        )
+                    },
+                    selection: draft.expansionStyle,
+                    isLocked: isAISettingsDraftLocked,
+                    accessibilityIdentifier: AISettingsAccessibilityIdentifier.expansionStyle,
+                    onSelect: { style in apply(\.expansionStyle, style) },
+                    footer: { pageStatus }
+                )
+            case .behavior:
+                SettingsChoicePage(
+                    title: "Behavior",
+                    intro: AISettingsCopy.behaviorIntro,
+                    options: OrganizationMode.allCases.map { mode in
+                        SettingsChoiceOption(
+                            value: mode,
+                            title: AISettingsCopy.organizationTitle(mode),
+                            detail: AISettingsCopy.organizationDetail(mode)
+                        )
+                    },
+                    selection: draft.organizationMode,
+                    isLocked: isAISettingsDraftLocked,
+                    accessibilityIdentifier: AISettingsAccessibilityIdentifier.organizationMode,
+                    onSelect: { mode in apply(\.organizationMode, mode) },
+                    footer: { pageStatus }
+                )
+            case .dayBoundary:
+                SettingsDayBoundaryPage(
+                    draft: draft,
+                    isLocked: isAISettingsDraftLocked,
+                    isSaving: isSavingAISettings,
+                    hasPendingRetry: hasPendingAISettingsRetry,
+                    onSave: { candidate in apply { _ in candidate } },
+                    footer: { pageStatus }
+                )
+            }
+        } else {
+            ScrollView {
+                settingsUnavailableState
+                    .padding(.horizontal, UnfiledTheme.screenPadding)
+                    .padding(.top, UnfiledTheme.pushedHeaderTop)
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .unfiledScreen()
+        }
+    }
+
+    /// Managed access is offered as a choice only where the deployment funds it or the account
+    /// already saved it, exactly as `ManagedFallbackContract` says.
+    private var accessOptions: [SettingsChoiceOption<ProviderMode>] {
+        let modes: [ProviderMode] = offersManagedMode ? [.byok, .appDefault] : [.byok]
+        return modes.map { mode in
+            SettingsChoiceOption(
+                value: mode,
+                title: AISettingsCopy.accessTitle(mode),
+                detail: AISettingsCopy.accessDetail(mode)
+            )
         }
     }
 
@@ -219,347 +433,105 @@ struct SettingsView: View {
         )
     }
 
-    private var accessModeCopy: String {
-        isManagedFallbackAvailable
-            ? "Use your own provider key, or managed access funded by this deployment."
-            : "Use your own provider key. The free beta does not include app-funded inference."
-    }
-
-    private var managedModeDetail: String {
-        isManagedFallbackAvailable
-            ? "This deployment funds AI access, so no key is required."
-            : "Saved earlier. Not funded on this deployment; new captures wait until a key is added."
-    }
-
-    private var providerSection: some View {
-        SettingsSection("Provider") {
-            Text("Choose which saved key and model family handles new captures. Switching keeps both keys saved.")
-                .settingsSupportingText()
-            VStack(spacing: AISettingsControlLayout.optionSpacing) {
-                ForEach(AIProvider.allCases, id: \.self) { provider in
-                    SettingsOptionRow(
-                        title: provider.displayName,
-                        detail: providerDetail(provider),
-                        value: provider,
-                        selection: providerBinding
-                    )
+    @ViewBuilder
+    private var fallbackToggle: some View {
+        if ManagedFallbackContract.showsFallbackToggle(isAvailable: isManagedFallbackAvailable) {
+            Toggle(isOn: fallbackBinding) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Allow managed fallback when available")
+                        .font(UnfiledType.body)
+                    Text("Off by default. Runs only where the deployment and the queued job permit it.")
+                        .font(UnfiledType.secondary)
+                        .foregroundStyle(UnfiledTheme.fog)
                 }
+                .fixedSize(horizontal: false, vertical: true)
             }
-            .accessibilityIdentifier(AISettingsAccessibilityIdentifier.provider)
-
-            if ManagedFallbackContract.showsFallbackToggle(isAvailable: isManagedFallbackAvailable) {
-                Toggle(isOn: binding(\.byokFallbackToApp, fallback: false)) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Allow managed fallback when available")
-                            .font(.system(.subheadline, weight: .semibold))
-                        Text("Off by default. A fallback can run only where the deployment and the queued job permit it.")
-                            .font(.system(.caption))
-                            .foregroundStyle(UnfiledTheme.fog)
-                    }
-                    .fixedSize(horizontal: false, vertical: true)
-                }
-                .tint(UnfiledTheme.persimmon)
-                .frame(minHeight: 58)
-                .accessibilityIdentifier(AISettingsAccessibilityIdentifier.fallback)
-            }
-
-            if let provider = draft?.byokProvider,
-               providerKeys[provider]?.status != .active,
-               draft?.byokFallbackToApp != true {
-                SettingsInlineMessage(
-                    message: "No active \(provider.displayName) key is saved. New captures stay safely queued until a key or an allowed fallback is available.",
-                    kind: .warning
-                )
-            }
+            .tint(UnfiledTheme.persimmon)
+            .disabled(isAISettingsDraftLocked)
+            .settingsRow()
+            .padding(.top, UnfiledTheme.sectionTop)
+            .accessibilityIdentifier(AISettingsAccessibilityIdentifier.fallback)
         }
     }
 
-    private var modelSection: some View {
-        SettingsSection("Model") {
-            Text("Automatic follows the effort setting. An exact model stays selected until you change it, and higher tiers cost more per capture.")
-                .settingsSupportingText()
-            VStack(spacing: AISettingsControlLayout.optionSpacing) {
-                ForEach(modelSelections, id: \.self) { model in
-                    SettingsOptionRow(
-                        title: AIModelRegistry.label(for: model),
-                        detail: modelDetail(model),
-                        value: model,
-                        selection: binding(\.modelSelection, fallback: .automatic)
-                    )
-                }
-            }
-            .accessibilityIdentifier(AISettingsAccessibilityIdentifier.model)
-        }
-    }
+    // MARK: Automatic filing, account, and this phone
 
-    private var effortSection: some View {
-        SettingsSection("Effort") {
-            Text("Effort changes provider reasoning, latency, and likely cost. It never changes safety or trust thresholds.")
-                .settingsSupportingText()
-            VStack(spacing: AISettingsControlLayout.optionSpacing) {
-                ForEach(RoutingEffort.allCases, id: \.self) { effort in
-                    SettingsOptionRow(
-                        title: AISettingsCopy.routingTitle(effort),
-                        detail: routingDetail(effort),
-                        value: effort,
-                        selection: binding(\.routingEffort, fallback: .standard)
-                    )
-                }
-            }
-            .accessibilityIdentifier(AISettingsAccessibilityIdentifier.routingEffort)
-        }
-    }
-
-    private var organizationSection: some View {
-        SettingsSection("Organization behavior") {
-            Text("This changes the confidence thresholds used for the next capture.")
-                .settingsSupportingText()
-            VStack(spacing: AISettingsControlLayout.optionSpacing) {
-                ForEach(OrganizationMode.allCases, id: \.self) { mode in
-                    SettingsOptionRow(
-                        title: AISettingsCopy.organizationTitle(mode),
-                        detail: AISettingsCopy.organizationDetail(mode),
-                        value: mode,
-                        selection: binding(\.organizationMode, fallback: .balanced)
-                    )
-                }
-            }
-            .accessibilityIdentifier(AISettingsAccessibilityIdentifier.organizationMode)
-        }
-    }
-
-    private var expansionSection: some View {
-        SettingsSection("Generated additions") {
-            Text("Generated additions stay separate from your writing until you accept or reject them.")
-                .settingsSupportingText()
-            VStack(spacing: AISettingsControlLayout.optionSpacing) {
-                ForEach(ExpansionStyle.allCases, id: \.self) { style in
-                    SettingsOptionRow(
-                        title: AISettingsCopy.expansionTitle(style),
-                        detail: AISettingsCopy.expansionDetail(style),
-                        value: style,
-                        selection: binding(\.expansionStyle, fallback: .brief)
-                    )
-                }
-            }
-            .accessibilityIdentifier(AISettingsAccessibilityIdentifier.expansionStyle)
-        }
-    }
-
-    private var profileSection: some View {
-        SettingsSection("Locale and day boundary") {
-            VStack(alignment: .leading, spacing: AISettingsControlLayout.fieldHelpSpacing) {
-                SettingsLabeledField("Timezone") {
-                    TextField(
-                        "America/Los_Angeles",
-                        text: binding(\.timezone, fallback: TimeZone.current.identifier)
-                    )
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.asciiCapable)
-                    .submitLabel(.next)
-                    .focused($focusedField, equals: .timezone)
-                    .onSubmit { focusedField = .locale }
-                    .accessibilityLabel("Timezone")
-                    .accessibilityHint("Enter an IANA timezone such as America slash Los Angeles")
-                    .accessibilityIdentifier(AISettingsAccessibilityIdentifier.timezone)
-                }
-                Text("The timezone determines future daily-note dates. Existing notes are never re-dated.")
-                    .settingsSupportingText()
-            }
-
-            VStack(alignment: .leading, spacing: AISettingsControlLayout.fieldHelpSpacing) {
-                SettingsLabeledField("Locale") {
-                    TextField("en-US", text: binding(\.locale, fallback: Locale.current.identifier))
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.asciiCapable)
-                        .submitLabel(.done)
-                        .focused($focusedField, equals: .locale)
-                        .onSubmit { focusedField = nil }
-                        .accessibilityLabel("Locale")
-                        .accessibilityHint("Enter a language tag such as en dash US")
-                        .accessibilityIdentifier(AISettingsAccessibilityIdentifier.locale)
-                }
-                if let message = draft?.validationMessage {
-                    SettingsInlineMessage(message: message, kind: .error)
-                }
-            }
-        }
-    }
-
-    // MARK: Settings save region
-
-    private func saveSettingsAction(current: UserSettings) -> some View {
-        VStack(alignment: .leading, spacing: AISettingsControlLayout.credentialActionSpacing) {
-            if let aiSettingsError {
-                SettingsInlineMessage(
-                    message: aiSettingsError,
-                    kind: .error,
-                    accessibilityIdentifier: AISettingsAccessibilityIdentifier.settingsError
-                )
-            }
-            if hasPendingAISettingsRetry {
-                SettingsInlineMessage(
-                    message: "The last save could not be confirmed. Retry the exact same draft, or discard it and reload the saved copy.",
-                    kind: .warning
-                )
-                SettingsActionRow(stacksVertically: dynamicTypeSize.isAccessibilitySize) { fillsWidth in
-                    SettingsSecondaryButton(
-                        title: isReconcilingAISettingsRetry ? "Checking server…" : "Discard draft and reload",
-                        role: .neutral,
-                        isDisabled: isBusy,
-                        fillsWidth: fillsWidth,
-                        accessibilityHint: "Reloads the authoritative server settings before unlocking the draft",
-                        accessibilityIdentifier: AISettingsAccessibilityIdentifier.settingsRetryDiscard
-                    ) {
-                        reconcileAndDiscardSettingsRetry()
-                    }
-                } primary: {
-                    SettingsPrimaryButton(
-                        title: "Retry exact save",
-                        loadingTitle: "Retrying exact save…",
-                        isLoading: isSavingAISettings,
-                        isDisabled: isBusy || draft == nil,
-                        systemImage: "arrow.clockwise",
-                        accessibilityIdentifier: AISettingsAccessibilityIdentifier.save
-                    ) {
-                        submitSettingsDraft()
-                    }
-                    .accessibilityHint("Retries the unchanged request with the same action key")
-                }
-            } else {
-                SettingsPrimaryButton(
-                    title: "Save for next capture",
-                    loadingTitle: "Saving settings…",
-                    isLoading: isSavingAISettings,
-                    isDisabled: !canSaveSettings(current: current),
-                    accessibilityIdentifier: AISettingsAccessibilityIdentifier.save
-                ) {
-                    submitSettingsDraft()
-                }
-                .accessibilityHint("Applies these choices to captures accepted after the save")
-            }
-        }
-        .padding(.top, 24)
-        .padding(.bottom, 8)
-    }
-
-    // MARK: Provider keys
-
-    private var providerKeySections: some View {
-        ForEach(AIProvider.allCases, id: \.self) { provider in
-            ProviderKeySectionView(
-                provider: provider,
-                metadata: providerKeys[provider],
-                isSelectedForNewCaptures: selectedProviderForNewCaptures == provider,
-                mutation: providerKeyMutation,
-                isLocked: isBusy,
-                pendingRetryProvider: pendingProviderKeyRetry,
-                errorMessage: providerKeyErrors[provider],
-                onSave: onSaveProviderKey,
-                onDiscardRetry: onDiscardProviderKeyRetry,
-                onRequestDelete: { providerPendingDeletion = $0 }
+    private var automaticFilingGroup: some View {
+        SettingsGroup(label: "Automatic filing") {
+            SettingsNavigationRow(
+                title: "Routing rules",
+                accessibilityHint: "Opens automatic filing rules",
+                accessibilityIdentifier: RoutingRuleAccessibilityIdentifier.settingsLink,
+                action: onOpenRoutingRules
             )
         }
     }
 
-    // MARK: Account and device
-
-    private var accountAndDeviceSettings: some View {
-        Group {
-            SettingsSection("Signed in") {
-                Label(email, systemImage: "person.crop.circle")
-                    .font(.system(.subheadline))
-                metadata("Shared backend", value: apiHost)
+    private var accountGroup: some View {
+        SettingsGroup(label: "Account") {
+            SettingsInfoRow(title: "Signed in", value: email)
+            SettingsInfoRow(title: "Backend", value: apiHost)
+            SettingsButtonRow(
+                title: isSigningOut ? "Signing out…" : "Sign out",
+                emphasis: .accent,
+                isBusy: isSigningOut,
+                accessibilityHint: "Asks before signing out on this iPhone"
+            ) {
+                confirmsSignOut = true
             }
-
-            SettingsSection("Protected storage") {
-                Label("SQLCipher-encrypted local database", systemImage: "lock.shield")
-                    .font(.system(.subheadline))
-                Text("This iPhone stores drafts, cached notes, and pending captures in SQLCipher. Its key stays in this device’s Keychain and is not synchronized to iCloud. Provider keys never enter that database.")
-                    .settingsSupportingText()
-            }
-
-            SettingsSection("Automatic filing") {
-                Button(action: onOpenRoutingRules) {
-                    HStack(spacing: 14) {
-                        Image(systemName: "arrow.triangle.branch")
-                            .font(.system(.body, weight: .semibold))
-                            .foregroundStyle(UnfiledTheme.persimmon)
-                            .frame(width: 28)
-                            .accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Routing rules")
-                                .font(.system(.callout, weight: .semibold))
-                                .foregroundStyle(UnfiledTheme.paper)
-                            Text("Choose where familiar captures should go")
-                                .font(.system(.footnote))
-                                .foregroundStyle(UnfiledTheme.fog)
-                        }
-                        .fixedSize(horizontal: false, vertical: true)
-                        Spacer(minLength: 10)
-                        Image(systemName: "chevron.right")
-                            .font(.system(.footnote, weight: .semibold))
-                            .foregroundStyle(UnfiledTheme.fog)
-                            .accessibilityHidden(true)
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityHint("Opens automatic filing rules")
-                .accessibilityIdentifier(RoutingRuleAccessibilityIdentifier.settingsLink)
-            }
-
-            SettingsSection("Lock Screen capture") {
-                Label("Quick Capture widget", systemImage: "rectangle.on.rectangle")
-                    .font(.system(.subheadline))
-                Text("Touch and hold the Lock Screen, choose Customize, tap the widget area, then add Unfiled. A tap opens the native composer with the keyboard ready; iOS does not allow free-form typing inside the widget itself.")
-                    .settingsSupportingText()
-            }
+            AccountDataControls(
+                exportArtifact: accountExportArtifact,
+                isPreparingExport: isPreparingAccountExport,
+                exportError: accountExportError,
+                isDeletingAccount: isDeletingAccount,
+                hasPendingDeletionReplay: hasPendingAccountDeletionReplay,
+                deletionError: accountDeletionError,
+                onPrepareExport: onPrepareAccountExport,
+                onDiscardExport: onDiscardAccountExport,
+                onDeleteAccount: onDeleteAccount
+            )
         }
     }
 
-    private var signOutAction: some View {
-        Button(role: .destructive) {
-            confirmsSignOut = true
-        } label: {
-            HStack {
-                Text(isSigningOut ? "Signing out…" : "Sign out")
-                Spacer()
-                if isSigningOut { ProgressView() }
-            }
-            .font(.system(.callout, weight: .semibold))
-            .foregroundStyle(UnfiledTheme.persimmon)
-            .frame(minHeight: 54)
-            .contentShape(Rectangle())
+    private var phoneGroup: some View {
+        SettingsGroup(label: "On this phone") {
+            SettingsNoteRow(
+                glyph: .lock,
+                text: "Notes and pending captures live in an encrypted database whose key never leaves this iPhone’s Keychain."
+            )
         }
-        .buttonStyle(.plain)
-        .disabled(isSigningOut)
-        .accessibilityValue(isSigningOut ? "In progress" : "")
-        .padding(.top, 26)
     }
 
-    // MARK: Bindings and derived state
+    // MARK: Draft changes
 
-    private var providerModeBinding: Binding<ProviderMode> {
-        Binding(
-            get: { draft?.providerMode ?? .appDefault },
-            set: { value in
-                guard !isAISettingsDraftLocked else { return }
-                draft = draft?.selectingProviderMode(value)
-            }
-        )
+    /// Every change goes through here: the draft is replaced, never mutated in place, and saved
+    /// at once through the settings contract. A locked draft ignores changes.
+    private func apply(_ change: (AISettingsDraft) -> AISettingsDraft) {
+        guard let draft, !isAISettingsDraftLocked, !isBusy else { return }
+        let next = change(draft)
+        guard next != draft else { return }
+        self.draft = next
+        Task { @MainActor in _ = await onSaveAISettings(next) }
     }
 
-    private var providerBinding: Binding<AIProvider> {
+    private func apply<Value>(_ keyPath: WritableKeyPath<AISettingsDraft, Value>, _ value: Value) {
+        apply { draft in
+            var next = draft
+            next[keyPath: keyPath] = value
+            return next
+        }
+    }
+
+    /// Resubmits the locked draft unchanged, so the retry carries the same action key.
+    private func retrySettingsDraft() {
+        guard let draft else { return }
+        Task { @MainActor in _ = await onSaveAISettings(draft) }
+    }
+
+    private var fallbackBinding: Binding<Bool> {
         Binding(
-            get: { draft?.byokProvider ?? .openai },
-            set: { value in
-                guard !isAISettingsDraftLocked else { return }
-                draft = draft?.selectingProvider(value)
-            }
+            get: { draft?.byokFallbackToApp ?? false },
+            set: { value in apply(\.byokFallbackToApp, value) }
         )
     }
 
@@ -577,23 +549,6 @@ struct SettingsView: View {
         return aiSettings.byokProvider
     }
 
-    private var modelSelections: [AIModelSelection] {
-        AIModelRegistry.selections(for: draft?.byokProvider ?? .openai)
-    }
-
-    private func binding<Value>(
-        _ keyPath: WritableKeyPath<AISettingsDraft, Value>,
-        fallback: Value
-    ) -> Binding<Value> {
-        Binding(
-            get: { draft?[keyPath: keyPath] ?? fallback },
-            set: { value in
-                guard !isAISettingsDraftLocked else { return }
-                draft?[keyPath: keyPath] = value
-            }
-        )
-    }
-
     private var isAISettingsDraftLocked: Bool {
         AISettingsRetryContract.controlsAreLocked(
             isLoading: isLoadingAISettings,
@@ -609,18 +564,13 @@ struct SettingsView: View {
             isDeletingAccount
     }
 
-    private func canSaveSettings(current: UserSettings) -> Bool {
-        guard let draft, draft.validationMessage == nil, !isBusy,
-              !hasPendingAISettingsRetry else { return false }
-        return ((try? draft.makeUpdateRequest(
-            comparedTo: current,
-            idempotencyKey: "settings-ui-validation",
-            managedFallbackAvailable: isManagedFallbackAvailable
-        )) ?? nil) != nil
-    }
-
+    /// The first adoption also aims the key field at the saved provider; later ones leave the
+    /// chip where the user put it.
     private func adopt(_ settings: UserSettings?) {
         guard let settings else { return }
+        if draft == nil, let provider = settings.byokProvider {
+            keyProvider = provider
+        }
         draft = makeDraft(settings)
     }
 
@@ -629,15 +579,8 @@ struct SettingsView: View {
             .applyingManagedFallbackAvailability(isManagedFallbackAvailable)
     }
 
-    private func submitSettingsDraft() {
-        guard let draft else { return }
-        focusedField = nil
-        Task { @MainActor in _ = await onSaveAISettings(draft) }
-    }
-
     private func reconcileAndDiscardSettingsRetry() {
         guard !isReconcilingAISettingsRetry else { return }
-        focusedField = nil
         isReconcilingAISettingsRetry = true
         Task { @MainActor in
             if let authoritative = await onDiscardAISettingsRetry() {
@@ -653,51 +596,5 @@ struct SettingsView: View {
             await onSignOut()
             isSigningOut = false
         }
-    }
-
-    // MARK: Copy
-
-    private func metadata(_ label: String, value: String) -> some View {
-        HStack {
-            Text(label).foregroundStyle(UnfiledTheme.fog)
-            Spacer()
-            Text(value).font(.system(.caption, design: .monospaced))
-        }
-        .font(.system(.subheadline))
-    }
-
-    private func providerDetail(_ provider: AIProvider) -> String {
-        let family = AISettingsCopy.providerFamily(provider)
-        switch providerKeys[provider] {
-        case let metadata? where metadata.status == .active:
-            return "\(family) · key active, ending \(metadata.lastFour)."
-        case let metadata? where metadata.status == .invalid:
-            return "\(family) · saved key was rejected. Replace it below."
-        case .some:
-            return "\(family) · saved key was revoked. Replace it below."
-        case nil:
-            return "\(family) · no key saved yet. Add one below."
-        }
-    }
-
-    private func modelDetail(_ model: AIModelSelection) -> String {
-        guard let draft else { return AIModelRegistry.detail(for: model) }
-        if model == .automatic {
-            let resolved = AIModelRegistry.label(for: draft.resolvedAutomaticModel)
-            let effort = AISettingsCopy.routingTitle(draft.routingEffort).lowercased()
-            return "Currently resolves to \(resolved) for \(effort) effort."
-        }
-        let base = AIModelRegistry.detail(for: model)
-        return AIModelRegistry.isHigherCost(model) ? "\(base) Higher cost on your key." : base
-    }
-
-    private func routingDetail(_ effort: RoutingEffort) -> String {
-        let base = AISettingsCopy.routingDetail(effort)
-        guard let draft, draft.providerMode == .byok else { return base }
-        if draft.modelSelection == .automatic {
-            let model = AIModelRegistry.automaticModel(for: draft.byokProvider, effort: effort)
-            return "\(base) Automatic uses \(AIModelRegistry.label(for: model))."
-        }
-        return "\(base) Billed to your \(draft.byokProvider.displayName) key."
     }
 }

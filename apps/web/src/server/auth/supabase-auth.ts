@@ -153,8 +153,8 @@ export const supabaseAuthProvider: AuthProvider = {
       const message = providerMessage(body);
       if (message.includes("already") || message.includes("registered")) {
         throw new HttpError(
-          400,
-          ApiErrorCode.VALIDATION_FAILED,
+          409,
+          ApiErrorCode.ACCOUNT_EXISTS,
           "An account with this email already exists. Sign in instead."
         );
       }

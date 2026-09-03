@@ -13,6 +13,18 @@ struct ReceiptContentPresentation: Equatable, Identifiable, Sendable {
     var provenanceLabel: String? {
         kind == .aiGenerated ? "AI-generated proposal" : nil
     }
+
+    /// Captured references all resolve to the whole capture text (receipts never decrypt the
+    /// note), so repeats of the same captured content collapse to the first one.
+    static func collapsingRepeatedCaptures(
+        _ content: [ReceiptContentPresentation]
+    ) -> [ReceiptContentPresentation] {
+        var seenCaptured: Set<String> = []
+        return content.filter { item in
+            guard item.kind == .captured else { return true }
+            return seenCaptured.insert(item.content).inserted
+        }
+    }
 }
 
 enum ReceiptActionPresentation: Equatable, Identifiable, Sendable {
@@ -43,6 +55,31 @@ struct ReceiptPresentation: Equatable, Identifiable, Sendable {
     let actions: [ReceiptActionPresentation]
     let pending: Bool
     let retryable: Bool
+
+    /// A capture that is waiting on a retry or a review can still have its text changed; the
+    /// change becomes a new capture and this one is removed.
+    var canEditText: Bool {
+        !pending && (retryable || outcome == .needsReview)
+    }
+
+    /// The row as it reads the moment a retry is asked for, before the server replies.
+    func retrying() -> ReceiptPresentation {
+        ReceiptPresentation(
+            id: id, category: "Organizing", time: time, headline: "Organizing again",
+            original: original, outcome: nil, destinationNoteID: nil, destinationTitle: nil,
+            reviewItemID: nil, insertedContent: [], actions: [], pending: true, retryable: false
+        )
+    }
+
+    /// The row as it reads the moment an undo is asked for: the undo is no longer offered.
+    func undoing() -> ReceiptPresentation {
+        ReceiptPresentation(
+            id: id, category: category, time: time, headline: "Undoing the organized change",
+            original: original, outcome: outcome, destinationNoteID: destinationNoteID,
+            destinationTitle: destinationTitle, reviewItemID: reviewItemID,
+            insertedContent: insertedContent, actions: [], pending: pending, retryable: false
+        )
+    }
 }
 
 struct NotePresentation: Equatable, Identifiable, Sendable {
@@ -73,7 +110,7 @@ struct NoteDetailPresentation: Equatable, Identifiable, Sendable {
     let privacy: String
     let spacePath: String
     let currentRevision: Int
-    let checklistItems: [ChecklistItemPresentation]
+    var checklistItems: [ChecklistItemPresentation]
     let logEntries: [LogEntryPresentation]
     let provenance: String?
 }
@@ -202,6 +239,10 @@ enum ReviewUserAction: Sendable {
     case keepBoth
     case acceptExpansion
     case rejectExpansion
+    /// Change the capture's text; the edit becomes a new capture and this one is removed.
+    case editText
+    /// Take the organizer's own suggestion, or start a note of the kind it detected.
+    case decide
 }
 
 struct RevisionPresentation: Equatable, Identifiable, Sendable {
@@ -220,19 +261,15 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
 }
 
 enum MainTab: String, CaseIterable, Identifiable {
-    case today = "Today"
-    case notes = "Notes"
-    case review = "Review"
-    case search = "Search"
+    case inbox = "Inbox"
+    case library = "Library"
 
     var id: String { rawValue }
 
-    var systemImage: String {
+    var glyph: UnfiledGlyph {
         switch self {
-        case .today: "calendar"
-        case .notes: "note.text"
-        case .review: "checkmark.circle"
-        case .search: "magnifyingglass"
+        case .inbox: .organize
+        case .library: .notes
         }
     }
 }

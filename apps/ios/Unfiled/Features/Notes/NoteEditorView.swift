@@ -55,11 +55,13 @@ struct NoteEditorView: View {
         draft: NoteEditorDraft,
         spaces: [SpacePresentation],
         currentRevision: Int?,
+        failureMessage: String? = nil,
         onCancel: @escaping @MainActor () -> Void,
         onSave: @escaping @MainActor (NoteEditorDraft) async throws -> Void
     ) {
         _draft = State(initialValue: draft)
         _savedDraft = State(initialValue: draft)
+        _errorMessage = State(initialValue: failureMessage)
         self.spaces = spaces
         self.currentRevision = currentRevision
         self.onCancel = onCancel
@@ -69,23 +71,25 @@ struct NoteEditorView: View {
     private var isNewNote: Bool { draft.noteID == nil }
     private var isDirty: Bool { draft != savedDraft }
     private var canSave: Bool {
-        isDirty && draft.validationIssue == nil && !isSaving
+        (isDirty || errorMessage != nil) && draft.validationIssue == nil && !isSaving
     }
 
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    editorHeader
+                    if isNewNote || !spaces.isEmpty {
+                        editorHeader
+                    }
                     SectionRule()
 
                     VStack(alignment: .leading, spacing: 9) {
                         Text("Title")
-                            .font(.caption.weight(.medium).monospaced())
+                            .font(UnfiledType.label)
                             .foregroundStyle(UnfiledTheme.fog)
 
                         TextField("Untitled note", text: $draft.title, axis: .vertical)
-                            .font(.title.weight(.bold))
+                            .font(UnfiledType.display)
                             .tracking(-1)
                             .foregroundStyle(UnfiledTheme.paper)
                             .focused($focusedField, equals: .title)
@@ -94,32 +98,32 @@ struct NoteEditorView: View {
                             .accessibilityIdentifier("noteEditor.title")
 
                         Text("\(draft.title.utf16.count)/\(NoteEditorDraft.maximumTitleLength)")
-                            .font(.caption2.monospaced())
+                            .font(UnfiledType.caption)
                             .foregroundStyle(
                                 draft.title.utf16.count > NoteEditorDraft.maximumTitleLength
                                     ? UnfiledTheme.persimmon : UnfiledTheme.fog
                             )
                             .frame(maxWidth: .infinity, alignment: .trailing)
                     }
-                    .padding(.vertical, 24)
+                    .padding(.vertical, UnfiledTheme.rowVertical)
 
                     SectionRule()
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Note")
-                            .font(.caption.weight(.medium).monospaced())
+                            .font(UnfiledType.label)
                             .foregroundStyle(UnfiledTheme.fog)
 
                         ZStack(alignment: .topLeading) {
                             if draft.bodyMarkdown.isEmpty {
                                 Text("Start writing")
-                                    .font(.body)
+                                    .font(UnfiledType.body)
                                     .foregroundStyle(UnfiledTheme.fog.opacity(0.72))
                                     .padding(.top, 8)
                                     .accessibilityHidden(true)
                             }
                             TextEditor(text: $draft.bodyMarkdown)
-                                .font(.body)
+                                .font(UnfiledType.body)
                                 .lineSpacing(6)
                                 .scrollContentBackground(.hidden)
                                 .foregroundStyle(UnfiledTheme.paper)
@@ -130,18 +134,18 @@ struct NoteEditorView: View {
                         }
 
                         Text("\(draft.bodyMarkdown.utf16.count)/\(NoteEditorDraft.maximumBodyLength)")
-                            .font(.caption2.monospaced())
+                            .font(UnfiledType.caption)
                             .foregroundStyle(
                                 draft.bodyMarkdown.utf16.count > NoteEditorDraft.maximumBodyLength
                                     ? UnfiledTheme.persimmon : UnfiledTheme.fog
                             )
                             .frame(maxWidth: .infinity, alignment: .trailing)
                     }
-                    .padding(.vertical, 24)
+                    .padding(.vertical, UnfiledTheme.rowVertical)
 
                     if let message = draft.validationIssue ?? errorMessage {
-                        Label(message, systemImage: "exclamationmark.circle")
-                            .font(.subheadline.weight(.medium))
+                        Label { Text(message) } icon: { GlyphView(glyph: .warning, size: 16, weight: 2) }
+                            .font(UnfiledType.secondaryStrong)
                             .foregroundStyle(UnfiledTheme.persimmon)
                             .padding(.bottom, 20)
                             .accessibilityIdentifier("noteEditor.error")
@@ -164,101 +168,75 @@ struct NoteEditorView: View {
         } message: {
             Text("This edit has not been saved.")
         }
-        .interactiveDismissDisabled(isDirty || isSaving)
+        .interactiveDismissDisabled(isDirty || errorMessage != nil || isSaving)
         .onAppear { focusedField = isNewNote ? .title : .body }
         .unfiledScreen()
     }
 
     private var editorHeader: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                EditorialEyebrow(text: isNewNote ? "New note" : "Manual edit")
-                Spacer()
-                if let currentRevision {
-                    Text("Revision \(currentRevision)")
-                        .font(.caption.weight(.medium).monospaced())
-                        .foregroundStyle(UnfiledTheme.fog)
-                }
-            }
-
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 10) { propertyControls }
-                VStack(alignment: .leading, spacing: 10) { propertyControls }
+                HStack(spacing: UnfiledTheme.controlGap) { propertyControls }
+                VStack(alignment: .leading, spacing: UnfiledTheme.controlGap) { propertyControls }
             }
         }
-        .padding(.top, 16)
-        .padding(.bottom, 20)
+        .padding(.top, UnfiledTheme.pushedHeaderTop)
+        .padding(.bottom, UnfiledTheme.headerBottom)
     }
 
     @ViewBuilder
+    /// Three plain choices as three labeled chip rows. No menus: every option is visible and
+    /// one tap away, and the selected chip is the only dark one.
+    /// Three plain choices as three labeled chip rows. No menus: every option is visible and
+    /// one tap away, and the selected chip is the only dark one.
     private var propertyControls: some View {
-        if isNewNote {
-            Menu {
-                ForEach(NoteType.allCases, id: \.self) { type in
-                    Button {
-                        draft.type = type
-                    } label: {
-                        if draft.type == type {
-                            Label(type.rawValue.capitalized, systemImage: "checkmark")
-                        } else {
-                            Text(type.rawValue.capitalized)
+        VStack(alignment: .leading, spacing: UnfiledTheme.controlGap) {
+            if isNewNote {
+                choiceRow(label: "Kind", identifier: "noteEditor.type") {
+                    ForEach(NoteType.allCases, id: \.self) { type in
+                        Chip(title: type.rawValue.capitalized, selected: draft.type == type) {
+                            choose { draft.type = type }
                         }
                     }
                 }
-            } label: {
-                propertyLabel(draft.type.rawValue.capitalized, systemImage: "note.text")
+                .accessibilityLabel("Note type, \(draft.type.rawValue)")
             }
-            .accessibilityLabel("Note type, \(draft.type.rawValue)")
-            .accessibilityIdentifier("noteEditor.type")
-        }
-
-        Menu {
-            Button {
-                draft.privacy = .aiAssisted
-            } label: {
-                Label("AI assisted", systemImage: draft.privacy == .aiAssisted ? "checkmark" : "tray.and.arrow.down")
-            }
-            Button {
-                draft.privacy = .privateManual
-            } label: {
-                Label("Private manual", systemImage: draft.privacy == .privateManual ? "checkmark" : "lock")
-            }
-        } label: {
-            propertyLabel(
-                draft.privacy == .privateManual ? "Private" : "AI assisted",
-                systemImage: draft.privacy == .privateManual ? "lock" : "tray.and.arrow.down"
-            )
-        }
-        .accessibilityIdentifier("noteEditor.privacy")
-
-        Menu {
-            Button("No space") { draft.spaceID = nil }
-            ForEach(spaces) { space in
-                Button {
-                    draft.spaceID = space.id
-                } label: {
-                    if draft.spaceID == space.id {
-                        Label(space.name, systemImage: "checkmark")
-                    } else {
-                        Text(space.name)
+            if !spaces.isEmpty {
+                choiceRow(label: "Space", identifier: "noteEditor.space") {
+                    Chip(title: "None", selected: draft.spaceID == nil) {
+                        choose { draft.spaceID = nil }
+                    }
+                    ForEach(spaces) { space in
+                        Chip(title: space.name, selected: draft.spaceID == space.id) {
+                            choose { draft.spaceID = space.id }
+                        }
                     }
                 }
+                .accessibilityLabel("Space, \(selectedSpaceName)")
             }
-        } label: {
-            propertyLabel(selectedSpaceName, systemImage: "tray.full")
         }
-        .accessibilityLabel("Space, \(selectedSpaceName)")
-        .accessibilityIdentifier("noteEditor.space")
     }
 
-    private func propertyLabel(_ title: String, systemImage: String) -> some View {
-        Label(title, systemImage: systemImage)
-            .font(.footnote.weight(.medium))
-            .foregroundStyle(UnfiledTheme.paper)
-            .padding(.horizontal, 12)
-            .frame(minHeight: 40)
-            .background(UnfiledTheme.graphite)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+    private func choose(_ change: @escaping () -> Void) {
+        UnfiledHaptics.selection()
+        withAnimation(UnfiledMotion.animation(UnfiledMotion.quick)) { change() }
+    }
+
+    private func choiceRow<Content: View>(
+        label: String,
+        identifier: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            EditorialEyebrow(text: label)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: UnfiledTheme.controlGap) {
+                    content()
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(identifier)
     }
 
     private var selectedSpaceName: String {
@@ -273,11 +251,11 @@ struct NoteEditorView: View {
             SectionRule()
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
-                    markdownButton("Heading", systemImage: "textformat.size", insertion: "## ")
-                    markdownButton("Bulleted list", systemImage: "list.bullet", insertion: "- ")
-                    markdownButton("Checklist", systemImage: "checklist", insertion: "- [ ] ")
-                    markdownButton("Quote", systemImage: "quote.opening", insertion: "> ")
-                    markdownButton("Link", systemImage: "link", insertion: "[label](https://)")
+                    markdownButton("Heading", glyph: .heading, insertion: "## ")
+                    markdownButton("Bulleted list", glyph: .bullets, insertion: "- ")
+                    markdownButton("Checklist", glyph: .checklist, insertion: "- [ ] ")
+                    markdownButton("Quote", glyph: .quote, insertion: "> ")
+                    markdownButton("Link", glyph: .link, insertion: "[label](https://)")
                 }
                 .padding(.horizontal, UnfiledTheme.screenPadding)
                 .padding(.vertical, 8)
@@ -288,14 +266,13 @@ struct NoteEditorView: View {
 
     private func markdownButton(
         _ label: String,
-        systemImage: String,
+        glyph: UnfiledGlyph,
         insertion: String
     ) -> some View {
         Button {
             appendMarkdown(insertion)
         } label: {
-            Image(systemName: systemImage)
-                .font(.body.weight(.medium))
+            GlyphView(glyph: glyph, size: 18, weight: 1.9)
                 .foregroundStyle(UnfiledTheme.paper)
                 .frame(width: 46, height: 44)
         }
@@ -308,7 +285,7 @@ struct NoteEditorView: View {
     private var navigationToolbar: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
             Button("Cancel") {
-                if isDirty {
+                if isDirty || errorMessage != nil {
                     confirmsDiscard = true
                 } else {
                     onCancel()

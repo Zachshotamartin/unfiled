@@ -19,6 +19,7 @@ struct CaptureReceiptDetailView: View {
     let onMove: @MainActor (String, String, String) -> Void
     let onUndo: @MainActor (String, String, Int) -> Void
     let onShowReview: @MainActor (String) -> Void
+    let onEditCapture: @MainActor (String) -> Void
 
     var body: some View {
         ScrollView {
@@ -34,8 +35,8 @@ struct CaptureReceiptDetailView: View {
                 }
             }
             .padding(.horizontal, UnfiledTheme.screenPadding)
-            .padding(.top, 24)
-            .padding(.bottom, 72)
+            .padding(.top, UnfiledTheme.pushedHeaderTop)
+            .padding(.bottom, UnfiledTheme.pushedScreenBottom)
         }
         .refreshable { await onRefresh() }
         .navigationTitle("Receipt")
@@ -46,24 +47,24 @@ struct CaptureReceiptDetailView: View {
     @ViewBuilder
     private func receiptContent(_ receipt: ReceiptPresentation) -> some View {
         Text(receipt.headline)
-            .font(.largeTitle.weight(.bold))
+            .font(UnfiledType.display)
             .tracking(-0.9)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityAddTraits(.isHeader)
-            .padding(.top, 10)
+            .padding(.top, UnfiledTheme.eyebrowToTitle)
 
-        Label(receipt.category, systemImage: statusIcon(receipt))
-            .font(.caption.weight(.medium).monospaced())
+        GlyphLabel(receipt.category, glyph: statusIcon(receipt), size: 12, weight: 1.9)
+            .font(UnfiledType.label)
             .textCase(.uppercase)
             .foregroundStyle(UnfiledTheme.fog)
             .padding(.top, 14)
 
         SectionRule()
-            .padding(.top, 24)
+            .padding(.top, UnfiledTheme.headerBottom)
 
         receiptSection(title: "Original capture") {
             Text(receipt.original)
-                .font(.body.monospaced())
+                .font(UnfiledType.body)
                 .foregroundStyle(UnfiledTheme.paper)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
@@ -72,8 +73,8 @@ struct CaptureReceiptDetailView: View {
         if let destinationTitle = receipt.destinationTitle {
             SectionRule()
             receiptSection(title: "Destination") {
-                Label(destinationTitle, systemImage: "arrow.turn.down.right")
-                    .font(.title3.weight(.semibold))
+                GlyphLabel(destinationTitle, glyph: .move, size: 18, weight: 2.2)
+                    .font(UnfiledType.title)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -91,11 +92,11 @@ struct CaptureReceiptDetailView: View {
 
         if receipt.pending {
             SectionRule()
-            Label("Saved safely; organization is still in progress", systemImage: "clock")
-                .font(.body)
+            GlyphLabel("Saved safely; organization is still in progress", glyph: .clock)
+                .font(UnfiledType.body)
                 .foregroundStyle(UnfiledTheme.fog)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.vertical, 22)
+                .padding(.vertical, UnfiledTheme.rowVertical)
         }
 
         if !receipt.actions.isEmpty {
@@ -111,13 +112,28 @@ struct CaptureReceiptDetailView: View {
             )
         }
 
+        if receipt.canEditText {
+            Button {
+                onEditCapture(receipt.id)
+            } label: {
+                Label { Text("Edit text") } icon: { GlyphView(glyph: .pen, size: 16, weight: 1.8) }
+                    .font(UnfiledType.heading)
+                    .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
+            }
+            .buttonStyle(.unfiledPress)
+            .foregroundStyle(UnfiledTheme.persimmon)
+            .background(UnfiledTheme.graphite)
+            .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
+            .accessibilityIdentifier("receipt.edit.\(receipt.id)")
+        }
+
         if let reviewItemID = receipt.reviewItemID {
             Button {
                 onShowReview(reviewItemID)
             } label: {
-                Label("Open Review", systemImage: "tray.and.arrow.down")
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity, minHeight: 52)
+                Label { Text("Open Review") } icon: { GlyphView(glyph: .tray, size: 16, weight: 1.8) }
+                    .font(UnfiledType.heading)
+                    .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
             }
             .buttonStyle(.plain)
             .foregroundStyle(UnfiledTheme.ink)
@@ -129,16 +145,16 @@ struct CaptureReceiptDetailView: View {
         }
 
         if let interactionError = receiptInteractionError(receipt) {
-            Label(interactionError, systemImage: "exclamationmark.circle")
-                .font(.footnote)
+            GlyphLabel(interactionError, glyph: .warning)
+                .font(UnfiledType.secondary)
                 .foregroundStyle(UnfiledTheme.paper)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 18)
         }
 
         if let errorMessage {
-            Label(errorMessage, systemImage: "wifi.exclamationmark")
-                .font(.footnote)
+            GlyphLabel(errorMessage, glyph: .warning)
+                .font(UnfiledType.secondary)
                 .foregroundStyle(UnfiledTheme.fog)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 18)
@@ -153,7 +169,7 @@ struct CaptureReceiptDetailView: View {
             EditorialEyebrow(text: title)
             content()
         }
-        .padding(.vertical, 22)
+        .padding(.vertical, UnfiledTheme.rowVertical)
     }
 
     private var loadingView: some View {
@@ -161,7 +177,7 @@ struct CaptureReceiptDetailView: View {
             ProgressView()
                 .tint(UnfiledTheme.persimmon)
             Text("Loading the latest receipt")
-                .font(.body)
+                .font(UnfiledType.body)
                 .foregroundStyle(UnfiledTheme.fog)
         }
         .frame(maxWidth: .infinity, minHeight: 180, alignment: .leading)
@@ -172,21 +188,21 @@ struct CaptureReceiptDetailView: View {
     private var unavailableView: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Receipt unavailable")
-                .font(.title2.weight(.semibold))
+                .font(UnfiledType.title)
             Text(errorMessage ?? "The saved capture could not be loaded right now.")
-                .font(.body)
+                .font(UnfiledType.body)
                 .foregroundStyle(UnfiledTheme.fog)
                 .fixedSize(horizontal: false, vertical: true)
             Button {
                 Task { await onRefresh() }
             } label: {
                 Text("Try again")
-                    .font(.body.weight(.semibold))
+                    .font(UnfiledType.heading)
                     .frame(minHeight: UnfiledTheme.minimumTouchTarget)
             }
             .accessibilityIdentifier("receipt.detail.retry")
         }
-        .padding(.top, 32)
+        .padding(.top, UnfiledTheme.sectionTop)
     }
 
     private func receiptInteractionError(_ receipt: ReceiptPresentation) -> String? {
@@ -203,14 +219,14 @@ struct CaptureReceiptDetailView: View {
         return nil
     }
 
-    private func statusIcon(_ receipt: ReceiptPresentation) -> String {
-        if receipt.pending { return "clock" }
+    private func statusIcon(_ receipt: ReceiptPresentation) -> UnfiledGlyph {
+        if receipt.pending { return .clock }
         switch receipt.outcome {
-        case .createdNote, .addedToNote: return "checkmark.circle"
-        case .needsReview: return "tray.and.arrow.down"
-        case .keptInInbox: return "tray"
-        case .failed: return "exclamationmark.circle"
-        case nil: return "doc.text"
+        case .createdNote, .addedToNote: return .checkCircle
+        case .needsReview: return .organize
+        case .keptInInbox: return .tray
+        case .failed: return .warning
+        case nil: return .card
         }
     }
 }
@@ -227,11 +243,11 @@ struct ReceiptInsertedContentRow: View {
             VStack(alignment: .leading, spacing: 6) {
                 if let provenance = item.provenanceLabel {
                     Text(provenance)
-                        .font(.caption.weight(.medium).monospaced())
+                        .font(UnfiledType.label)
                         .foregroundStyle(UnfiledTheme.persimmon)
                 }
                 Text(item.content)
-                    .font(.body)
+                    .font(UnfiledType.body)
                     .foregroundStyle(UnfiledTheme.paper)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -271,7 +287,7 @@ struct ReceiptActionButtons: View {
             case let .open(noteID):
                 actionButton(
                     title: "Open",
-                    systemImage: "arrow.right",
+                    glyph: .arrow,
                     identifier: ReceiptAccessibilityIdentifier.open(receipt.id),
                     isBusy: false,
                     isDisabled: false
@@ -279,7 +295,7 @@ struct ReceiptActionButtons: View {
             case let .move(noteID, decisionID):
                 actionButton(
                     title: "Move",
-                    systemImage: "arrow.turn.up.right",
+                    glyph: .move,
                     identifier: ReceiptAccessibilityIdentifier.move(receipt.id),
                     isBusy: submittingInteractionIDs.contains("correction.\(decisionID)"),
                     isDisabled: actionsDisabled || isMutationBusy
@@ -287,7 +303,7 @@ struct ReceiptActionButtons: View {
             case let .undo(mutationID, expectedRevision):
                 actionButton(
                     title: "Undo",
-                    systemImage: "arrow.uturn.backward",
+                    glyph: .undo,
                     identifier: ReceiptAccessibilityIdentifier.undo(receipt.id),
                     isBusy: submittingInteractionIDs.contains("receipt.undo.\(receipt.id)"),
                     isDisabled: actionsDisabled || isMutationBusy
@@ -298,7 +314,7 @@ struct ReceiptActionButtons: View {
 
     private func actionButton(
         title: String,
-        systemImage: String,
+        glyph: UnfiledGlyph,
         identifier: String,
         isBusy: Bool,
         isDisabled: Bool,
@@ -312,12 +328,10 @@ struct ReceiptActionButtons: View {
                         .tint(UnfiledTheme.persimmon)
                         .accessibilityHidden(true)
                 } else {
-                    Image(systemName: systemImage)
-                        .font(.caption.weight(.semibold))
-                        .accessibilityHidden(true)
+                    GlyphView(glyph: glyph, size: 14, weight: 2)
                 }
                 Text(isBusy ? "Working…" : title)
-                    .font(.body.weight(.semibold))
+                    .font(UnfiledType.heading)
             }
             .frame(minHeight: UnfiledTheme.minimumTouchTarget)
             .contentShape(Rectangle())

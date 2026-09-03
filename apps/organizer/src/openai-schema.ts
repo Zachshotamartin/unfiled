@@ -14,35 +14,34 @@ function objectSchema(
   };
 }
 
-const nullableString = (maximum: number): JsonSchema => ({
-  maxLength: maximum,
-  type: ["string", "null"]
-});
+/**
+ * Strict mode accepts only `pattern` and `format` on strings, so lengths are not expressed
+ * here; OrganizationPlanSchema enforces every bound after the response returns.
+ */
+const nullableString: JsonSchema = Object.freeze({ type: ["string", "null"] });
 
 const oneLine = Object.freeze({
-  maxLength: 500,
-  minLength: 1,
   pattern: "^[^\\r\\n]+$",
   type: "string"
 });
 
 const appendRaw = objectSchema({
-  content: { maxLength: 10_000, minLength: 1, type: "string" },
-  type: { const: "append_raw" }
+  content: { type: "string" },
+  type: { const: "append_raw", type: "string" }
 });
 const appendParagraphs = objectSchema({
   paragraphs: { items: oneLine, maxItems: 20, minItems: 1, type: "array" },
-  type: { const: "append_paragraphs" }
+  type: { const: "append_paragraphs", type: "string" }
 });
 const appendListItems = objectSchema({
   items: { items: oneLine, maxItems: 50, minItems: 1, type: "array" },
-  section: nullableString(100),
-  type: { const: "append_list_items" }
+  section: nullableString,
+  type: { const: "append_list_items", type: "string" }
 });
 const addRelation = objectSchema({
   linkType: { enum: ["reference", "related"], type: "string" },
   toCandidateId: { pattern: EPHEMERAL_CANDIDATE_ID_PATTERN, type: "string" },
-  type: { const: "add_relation" }
+  type: { const: "add_relation", type: "string" }
 });
 
 /**
@@ -83,7 +82,7 @@ export const OPENAI_ORGANIZATION_PLAN_SCHEMA: JsonSchema = Object.freeze({
               type: "string"
             },
             spaceCandidateId: { type: "null" },
-            title: { maxLength: 60, minLength: 1, type: "string" }
+            title: { type: "string" }
           }),
           { type: "null" }
         ]
@@ -96,7 +95,7 @@ export const OPENAI_ORGANIZATION_PLAN_SCHEMA: JsonSchema = Object.freeze({
             enum: ["summary", "interpretation", "suggestion", "label"],
             type: "string"
           },
-          text: { maxLength: 600, minLength: 1, type: "string" }
+          text: { type: "string" }
         }),
         { type: "null" }
       ]
@@ -128,7 +127,7 @@ export const OPENAI_ORGANIZATION_PLAN_SCHEMA: JsonSchema = Object.freeze({
       maxItems: 5,
       type: "array"
     },
-    schemaVersion: { const: 1 }
+    schemaVersion: { const: 1, type: "integer" }
   })
 });
 

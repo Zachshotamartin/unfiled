@@ -44,6 +44,18 @@ export class OrganizerUnavailableError extends OrganizerError {
   }
 }
 
+/**
+ * The identifiers a provider attaches to its own request-validation failure (`error.type`,
+ * `error.code`, `error.param`) and, only when the message begins with "Invalid schema", that
+ * message, which names keywords of the organizer's schema and never user content.
+ */
+export type OrganizerProviderErrorIdentity = Readonly<{
+  type?: string;
+  code?: string;
+  param?: string;
+  schemaError?: string;
+}>;
+
 export type OrganizerProviderFailureCode =
   "provider_key_invalid" | "provider_unavailable" | "rate_limited" | "validation_failed";
 
@@ -52,17 +64,20 @@ export class OrganizerProviderError extends Error {
   public readonly retryable: boolean;
   public readonly safeCode: OrganizerProviderFailureCode;
   public readonly status: number | null;
+  public readonly identity: OrganizerProviderErrorIdentity | null;
 
   public constructor(
     safeCode: OrganizerProviderFailureCode,
     retryable: boolean,
-    status: number | null = null
+    status: number | null = null,
+    identity: OrganizerProviderErrorIdentity | null = null
   ) {
     super("The organizer provider request failed.");
     this.name = "OrganizerProviderError";
     this.retryable = retryable;
     this.safeCode = safeCode;
     this.status = status;
+    this.identity = identity;
   }
 }
 

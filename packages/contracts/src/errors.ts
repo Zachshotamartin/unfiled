@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const ApiErrorCode = {
   ACCOUNT_DELETION_FAILED: "account_deletion_failed",
+  ACCOUNT_EXISTS: "account_exists",
   BUDGET_EXHAUSTED: "budget_exhausted",
   CAPTURE_TOO_LONG: "capture_too_long",
   CONFLICT_REQUIRES_REVIEW: "conflict_requires_review",

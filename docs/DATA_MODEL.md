@@ -687,7 +687,7 @@ Each field value is a string of at most 500 characters, a finite JSON number tha
 
 ### 5.3 Projection rules
 
-`body_markdown` for lists and logs is a deterministic projection. Lists accept blank lines, `##`–`######` section headings, and `-`, `*`, or `+` bullets with an optional `[ ]`/`[x]`; checked items render after `## Completed`. Duplicate normalized item text or any other nonblank line is a structure conflict. Reconciliation preserves IDs by normalized text, then by ordinal when unambiguous.
+`body_markdown` for lists and logs is a deterministic projection. Lists accept blank lines, `##`–`######` section headings, and `-`, `*`, or `+` bullets with an optional `[ ]`/`[x]`; items render in place with their check state (unsectioned items first, then each section in order of first appearance), and a `## Completed` heading in older bodies reads as a return to no section. Duplicate normalized item text or any other nonblank line is a structure conflict. Reconciliation preserves IDs by normalized text, then by ordinal when unambiguous.
 
 Logs render each entry as `## <strict ISO-offset occurredAt>`, a blank line, then sorted `- key: value` rows; entries sort by timestamp then ID. Reconciliation preserves same-timestamp identities by deterministic occurrence position (the prior IDs are sorted), rejects duplicate field keys and all non-log lines, decodes quoted JSON strings, and emits finite numbers as plain decimal rather than exponent notation.
 

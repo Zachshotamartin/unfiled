@@ -57,6 +57,17 @@ final class NoteDetailViewTests: XCTestCase {
         )
     }
 
+    /// Opening a note must not flash a "Generated additions" section while the blocks load.
+    func testGeneratedAdditionsStayHiddenUntilABlockExists() {
+        XCTAssertFalse(GeneratedBlockVisibility.showsSection(blocks: []))
+        XCTAssertFalse(
+            GeneratedBlockVisibility.showsSection(blocks: [block(id: "blk_rejected", state: .rejected)])
+        )
+        XCTAssertTrue(
+            GeneratedBlockVisibility.showsSection(blocks: [block(id: "blk_proposed", state: .proposed)])
+        )
+    }
+
     func testGeneratedBlockLoadMoreControlHasDeliberateRetryAndLoadingSemantics() {
         XCTAssertEqual(
             GeneratedBlockAccessibilityIdentifier.loadMore,
@@ -97,5 +108,14 @@ final class NoteDetailViewTests: XCTestCase {
             modelID: "organizer-v1",
             promptVersion: "expansion-v1"
         )
+    }
+
+    func testBodyProjectionDropsHeadingsThatOnlyIntroduceChecklistLines() {
+        let body = "Intro line\n\n## Completed\n- [x] eggs\n- [x] milk"
+        XCTAssertEqual(NoteDetailContent.bodyWithoutChecklistProjection(body), "Intro line")
+        let mixed = "## Notes\nSome text\n\n## Completed\n- [x] eggs"
+        XCTAssertEqual(NoteDetailContent.bodyWithoutChecklistProjection(mixed), "## Notes\nSome text")
+        let onlyChecklist = "## Completed\n- [x] eggs"
+        XCTAssertEqual(NoteDetailContent.bodyWithoutChecklistProjection(onlyChecklist), "")
     }
 }

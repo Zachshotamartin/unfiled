@@ -6,7 +6,11 @@ struct AppShellView: View {
 
     var body: some View {
         NavigationStack(path: $model.navigationPath) {
-            selectedTab
+            ZStack {
+                selectedTab
+                    .id(model.selectedTab)
+                    .transition(UnfiledMotion.page)
+            }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     BottomLedgerNavigation(
                         selectedTab: $model.selectedTab,
@@ -45,6 +49,7 @@ struct AppShellView: View {
                         draft: sheet.draft,
                         spaces: model.spaces,
                         currentRevision: sheet.currentRevision,
+                        failureMessage: sheet.failureMessage,
                         onCancel: { model.editorSheet = nil },
                         onSave: { draft in
                             try await model.saveNote(
@@ -84,10 +89,12 @@ struct AppShellView: View {
     @ViewBuilder
     private var selectedTab: some View {
         switch model.selectedTab {
-        case .today:
-            TodayView(
+        case .inbox:
+            InboxView(
                 receipts: model.receipts,
-                isLoading: model.isLoadingLibrary,
+                reviewItems: model.reviewItems,
+                isLoading: model.isLoadingLibrary || model.isLoadingReview,
+                needsProviderKey: model.providerKeyMetadataByProvider.isEmpty,
                 submittingInteractionIDs: model.submittingInteractionIDs,
                 interactionErrors: model.interactionErrors,
                 onRefresh: model.refreshAll,
@@ -108,56 +115,50 @@ struct AppShellView: View {
                 onRetryCapture: { captureID in
                     Task { @MainActor in await model.retryCapture(captureID: captureID) }
                 },
+                onEditCapture: { captureID in
+                    Task { @MainActor in await model.editCapture(captureID: captureID) }
+                },
                 onCapture: {
                     Task { @MainActor in await model.prepareCapture(source: .mobile) }
-                }
-            )
-        case .notes:
-            NotesLibraryView(
-                notes: model.notes,
-                spaces: model.spaces,
-                isLoading: model.isLoadingLibrary,
-                onRefresh: model.refreshAll,
-                onOpenNote: model.openNote,
-                onCreateNote: model.presentNewNote,
-                onOpenArchive: { model.navigationPath.append(.archive) },
-                onOpenDeleted: { model.navigationPath.append(.deleted) }
-            )
-        case .review:
-            ReviewView(
-                items: model.reviewItems,
-                isLoading: model.isLoadingReview,
-                errorMessage: model.reviewError,
-                submittingInteractionIDs: model.submittingInteractionIDs,
-                interactionErrors: model.interactionErrors,
-                requestedFocusID: model.requestedReviewFocusID,
-                onRefresh: model.refreshAll,
-                onOpenRelatedNote: model.openNote,
-                onAction: { reviewID, action in
+                },
+                onReviewAction: { reviewID, action in
                     Task { @MainActor in
                         await model.handleReviewAction(reviewID: reviewID, action: action)
                     }
                 }
             )
-        case .search:
-            SearchView(
-                results: model.searchResults,
-                isLoading: model.isSearching,
-                failure: model.searchFailure,
-                hasMore: model.searchHasMore,
-                isLoadingMore: model.isLoadingMoreSearch,
-                loadMoreFailure: model.searchLoadMoreFailure,
-                paginationNotice: model.searchPaginationNotice,
-                openingResultIDs: model.searchOpeningResultIDs,
-                deletedResultIDs: model.searchDeletedResultIDs,
-                resultFailures: model.searchResultFailures,
-                onSearch: model.search,
-                onLoadMore: model.loadMoreSearch,
-                onOpenNote: model.openSearchResult
-            )
+        case .library:
+            LibraryView(
+                notes: model.notes,
+                spaces: model.spaces,
+                isLoading: model.isLoadingLibrary,
+                onRefresh: model.refreshAll,
+                onOpenNote: model.openNote,
+                onOpenSpace: { model.navigationPath.append(.space($0)) },
+                onOpenArchive: { model.navigationPath.append(.archive) },
+                onOpenDeleted: { model.navigationPath.append(.deleted) }
+            ) { query in
+                SearchView(
+                    results: model.searchResults,
+                    isLoading: model.isSearching,
+                    failure: model.searchFailure,
+                    hasMore: model.searchHasMore,
+                    isLoadingMore: model.isLoadingMoreSearch,
+                    loadMoreFailure: model.searchLoadMoreFailure,
+                    paginationNotice: model.searchPaginationNotice,
+                    openingResultIDs: model.searchOpeningResultIDs,
+                    deletedResultIDs: model.searchDeletedResultIDs,
+                    resultFailures: model.searchResultFailures,
+                    query: query,
+                    embedded: true,
+                    onSearch: model.search,
+                    onLoadMore: model.loadMoreSearch,
+                    onOpenNote: model.openSearchResult,
+                    showsHeader: false
+                )
+            }
         }
     }
-
     @ViewBuilder
     private func destination(_ route: AppRoute) -> some View {
         switch route {
@@ -198,6 +199,32 @@ struct AppShellView: View {
                 onRestore: model.restoreDeleted
             )
             .task { await model.loadDeleted() }
+        case let .review(reviewID):
+            ReviewView(
+                items: model.reviewItems.filter { $0.id == reviewID },
+                isLoading: model.isLoadingReview,
+                errorMessage: model.reviewError,
+                submittingInteractionIDs: model.submittingInteractionIDs,
+                interactionErrors: model.interactionErrors,
+                requestedFocusID: reviewID,
+                onRefresh: model.refreshAll,
+                onOpenRelatedNote: model.openNote,
+                onAction: { id, action in
+                    Task { @MainActor in
+                        await model.handleReviewAction(reviewID: id, action: action)
+                    }
+                }
+            )
+            .onChange(of: model.reviewItems.map(\.id)) { _, ids in
+                if !model.isLoadingReview, !ids.contains(reviewID) {
+                    model.closeReviewPage(reviewID: reviewID)
+                }
+            }
+            .onChange(of: model.isLoadingReview) { _, loading in
+                if !loading, !model.reviewItems.contains(where: { $0.id == reviewID }) {
+                    model.closeReviewPage(reviewID: reviewID)
+                }
+            }
         case .settings:
             SettingsView(
                 email: model.currentUser?.email ?? "",
@@ -230,6 +257,12 @@ struct AppShellView: View {
                 onDeleteAccount: model.deleteAccount,
                 onOpenRoutingRules: { model.navigationPath.append(.routingRules) },
                 onSignOut: model.signOut
+            )
+        case let .space(spaceID):
+            SpaceNotesView(
+                title: spaceID.flatMap { id in model.spaces.first { $0.id == id }?.name } ?? "Library",
+                notes: model.notes.filter { $0.spaceID == spaceID },
+                onOpenNote: model.openNote
             )
         case .routingRules:
             RoutingRulesView(
@@ -282,7 +315,10 @@ private struct CaptureReceiptDestinationView: View {
                     )
                 }
             },
-            onShowReview: { model.showReview(reviewID: $0) }
+            onShowReview: { model.showReview(reviewID: $0) },
+            onEditCapture: { captureID in
+                Task { @MainActor in await model.editCapture(captureID: captureID) }
+            }
         )
         .task { await model.loadCaptureDetail(captureID: captureID) }
     }
@@ -295,23 +331,23 @@ private struct BottomLedgerNavigation: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            tab(.today)
-            tab(.notes)
+            tab(.inbox)
 
-            Button(action: onCapture) {
-                Image(systemName: "plus")
-                    .font(.system(size: 23, weight: .semibold))
+            Button {
+                UnfiledHaptics.tap()
+                onCapture()
+            } label: {
+                GlyphView(glyph: .pen, size: 24, weight: 2.2)
                     .foregroundStyle(UnfiledTheme.ink)
-                    .frame(width: 58, height: 58)
+                    .frame(width: 56, height: 56)
                     .background(UnfiledTheme.persimmon)
                     .clipShape(Circle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(UnfiledPressStyle(scale: 0.9))
             .accessibilityLabel("Write something")
             .padding(.horizontal, 4)
 
-            tab(.review)
-            tab(.search)
+            tab(.library)
         }
         .padding(.horizontal, 8)
         .padding(.top, 9)
@@ -322,15 +358,19 @@ private struct BottomLedgerNavigation: View {
 
     private func tab(_ tab: MainTab) -> some View {
         Button {
-            selectedTab = tab
+            guard selectedTab != tab else { return }
+            UnfiledHaptics.selection()
+            withAnimation(UnfiledMotion.animation(UnfiledMotion.settle)) {
+                selectedTab = tab
+            }
         } label: {
             VStack(spacing: 3) {
                 ZStack(alignment: .topTrailing) {
-                    Image(systemName: tab.systemImage)
-                        .font(.system(size: 19, weight: .medium))
-                    if tab == .review && reviewCount > 0 {
+                    GlyphView(glyph: tab.glyph, size: 22, weight: 1.9)
+                        .glyphNudge(on: selectedTab == tab)
+                    if tab == .inbox && reviewCount > 0 {
                         Text("\(min(reviewCount, 99))")
-                            .font(.system(size: 9, weight: .bold))
+                            .font(UnfiledType.label)
                             .foregroundStyle(UnfiledTheme.ink)
                             .padding(.horizontal, 4)
                             .frame(minHeight: 15)
@@ -340,13 +380,22 @@ private struct BottomLedgerNavigation: View {
                     }
                 }
                 Text(tab.rawValue)
-                    .font(.system(size: 10, weight: .medium))
+                    .font(UnfiledType.label)
             }
             .foregroundStyle(selectedTab == tab ? UnfiledTheme.paper : UnfiledTheme.fog)
             .frame(maxWidth: .infinity, minHeight: 48)
+            .background {
+                if selectedTab == tab {
+                    Capsule()
+                        .fill(UnfiledTheme.raised)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .transition(UnfiledMotion.bubble)
+                }
+            }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.unfiledPress)
         .accessibilityLabel(tab.rawValue)
         .accessibilityAddTraits(selectedTab == tab ? .isSelected : [])
     }
@@ -384,7 +433,7 @@ private struct NoteDestinationView: View {
                         model.navigationPath.append(.revisions(noteID))
                     },
                     onOpenProvenance: {
-                        model.selectedTab = .today
+                        model.selectedTab = .inbox
                         model.navigationPath = []
                     },
                     onToggleChecklistItem: { itemID, checked in
@@ -493,18 +542,20 @@ private struct RevisionSnapshotView: View {
             VStack(alignment: .leading, spacing: 18) {
                 EditorialEyebrow(text: "Read-only · Revision \(snapshot.currentRevision)")
                 Text(snapshot.title)
-                    .font(.system(size: 38, weight: .bold))
+                    .font(UnfiledType.display)
                     .tracking(-1.3)
                 Text(snapshot.spacePath)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(UnfiledType.caption)
                     .foregroundStyle(UnfiledTheme.fog)
                 SectionRule()
                 Text(NoteDetailContent.markdown(snapshot.bodyMarkdown))
-                    .font(.system(size: 17))
+                    .font(UnfiledType.body)
                     .lineSpacing(6)
                     .textSelection(.enabled)
             }
-            .padding(UnfiledTheme.screenPadding)
+            .padding(.horizontal, UnfiledTheme.screenPadding)
+            .padding(.top, UnfiledTheme.pushedHeaderTop)
+            .padding(.bottom, UnfiledTheme.pushedScreenBottom)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .navigationTitle("Revision \(snapshot.currentRevision)")

@@ -811,6 +811,37 @@ describe("encrypted capture aggregate repository", () => {
     );
   });
 
+  it("reads a needs_review receipt whose row carries the organizer's projected reason", async () => {
+    const reviewPayload: CaptureReceiptPayload = Object.freeze({
+      schemaVersion: 1,
+      captureId: CAPTURE,
+      jobId: JOB,
+      decisionId: DECISION,
+      reviewItemId: REVIEW,
+      mutationId: null,
+      outcome: "needs_review",
+      headline: "Needs review",
+      destination: null,
+      insertedContentReferences: [],
+      actions: [],
+      reasonCodes: ["ambiguous_intent", "no_candidate_fit"],
+      createdAt: RECEIVED_AT
+    });
+    const projectedRow = receiptRow("ai_assisted", {
+      decisionId: DECISION,
+      reviewItemId: REVIEW,
+      mutationId: null,
+      outcome: "needs_review",
+      reasonCodes: ["ambiguous_intent"]
+    });
+    await expect(
+      repository(
+        aggregateMocks({ receiptPayload: reviewPayload }).aggregate,
+        adapter({ getCaptureReceipt: vi.fn(() => Promise.resolve(projectedRow)) })
+      ).getReceipt(context, CAPTURE)
+    ).resolves.toMatchObject({ receipt: { outcome: "needs_review", reviewItemId: REVIEW } });
+  });
+
   it("hydrates direct receipt reads and bounds list output to decrypted public summaries", async () => {
     const aggregate = aggregateMocks({ receiptPayload: inboxPayload() });
     const row = captureRow("private_manual", { status: "inbox", receiptAvailable: true });

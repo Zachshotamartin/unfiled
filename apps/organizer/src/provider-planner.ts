@@ -25,11 +25,11 @@ import { ORGANIZER_PROMPT_VERSION, ORGANIZER_SCHEMA_VERSION } from "./prompt.js"
 import type { OrganizerProviderCredential } from "./provider-credential.js";
 import {
   assertProviderApiKey,
-  discardProviderResponse,
   fetchProviderWithAbort,
   providerFailureRetryable,
   providerNetworkFailure,
   providerResponseFailure,
+  readProviderErrorIdentity,
   readBoundedProviderJson,
   type ProviderRequestHeaders
 } from "./provider-transport.js";
@@ -122,9 +122,10 @@ async function executeProviderRequest(
     signal
   );
   if (!response.ok) {
-    const failure = providerResponseFailure(response.status);
-    await discardProviderResponse(response);
-    throw failure;
+    throw providerResponseFailure(
+      response.status,
+      await readProviderErrorIdentity(response, signal)
+    );
   }
   const parsed = adapter.parseResponse(await readBoundedProviderJson(response, signal));
   if (signal.aborted) throw new OrganizerProviderError("provider_unavailable", true);

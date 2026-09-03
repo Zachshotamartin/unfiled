@@ -1,3 +1,4 @@
+import { ProviderKeyValidationUnavailable } from "@/server/ai-settings/provider-key-validator";
 import {
   ApiErrorCode,
   MAX_AI_SETTINGS_REQUEST_BYTES,
@@ -58,11 +59,13 @@ function requestInput<T>(schema: Schema<T>, value: unknown): T {
 function repositoryOutput<T>(schema: Schema<T>, value: unknown): T {
   const parsed = schema.safeParse(value);
   if (!parsed.success) {
-    throw new HttpError(
+    const error = new HttpError(
       503,
       ApiErrorCode.PROVIDER_UNAVAILABLE,
       "Settings are temporarily unavailable. Try again."
     );
+    error.cause = new ProviderKeyValidationUnavailable("response_shape");
+    throw error;
   }
   return parsed.data;
 }
