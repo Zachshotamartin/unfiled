@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { NoteTypeSchema, PrivacyModeSchema } from "./enums.js";
+import { CaptureAttachmentKindSchema, MAX_CAPTURE_ATTACHMENTS } from "./captures.js";
 import { entityIdSchema } from "./ids.js";
 const TimestampSchema = z.iso.datetime({ offset: true });
 
@@ -59,6 +60,14 @@ export const AccountExportNoteLinkSchema = z.strictObject({
   linkType: z.enum(["reference", "related"])
 });
 
+/// A photo or recording a note places; its bytes sit at attachments/<id>.<jpg|m4a> in the archive
+/// when they could be read.
+export const AccountExportNoteAttachmentSchema = z.strictObject({
+  id: entityIdSchema("att"),
+  kind: CaptureAttachmentKindSchema
+});
+export type AccountExportNoteAttachment = z.infer<typeof AccountExportNoteAttachmentSchema>;
+
 export const AccountExportNoteSchema = z.strictObject({
   id: entityIdSchema("note"),
   markdownPath: z.string().min(1).max(255),
@@ -71,7 +80,8 @@ export const AccountExportNoteSchema = z.strictObject({
   deletedAt: TimestampSchema.nullable(),
   tagIds: z.array(entityIdSchema("tag")).max(100),
   links: z.array(AccountExportNoteLinkSchema).max(100),
-  sourceCaptureIds: z.array(entityIdSchema("cap")).max(1_000)
+  sourceCaptureIds: z.array(entityIdSchema("cap")).max(1_000),
+  attachments: z.array(AccountExportNoteAttachmentSchema).max(MAX_CAPTURE_ATTACHMENTS * 20)
 });
 export type AccountExportNote = z.infer<typeof AccountExportNoteSchema>;
 

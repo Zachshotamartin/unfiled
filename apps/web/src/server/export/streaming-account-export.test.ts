@@ -76,8 +76,18 @@ const rules: readonly AccountExportRoutingRule[] = [
   }
 ];
 
-function source(notes: readonly OwnerExportNote[], pageSize = 137): OwnerExportSource {
+function source(
+  notes: readonly OwnerExportNote[],
+  pageSize = 137,
+  attachments: Readonly<Record<string, Uint8Array>> = {}
+): OwnerExportSource {
   return {
+    attachment(id) {
+      const bytes = attachments[id];
+      return Promise.resolve(
+        bytes === undefined ? null : { kind: "image" as const, mediaType: "image/jpeg", bytes }
+      );
+    },
     async *spacePages() {
       await Promise.resolve();
       yield spaces;
@@ -135,6 +145,39 @@ function tarFiles(bytes: Uint8Array): ReadonlyMap<string, Uint8Array> {
 }
 
 describe("streaming account export", () => {
+  it("carries placed photos beside their notes, once per archive, and lists them in the manifest", async () => {
+    const photo = "att_01ARZ3NDEKTSV4RRFFQ69G5FAZ";
+    const gone = "att_01ARZ3NDEKTSV4RRFFQ69G5FAY";
+    const bytes = new Uint8Array([255, 216, 255, 224, 0, 16, 74, 70]);
+    const body = [
+      "Whiteboard from the kitchen",
+      "",
+      `![Photo](unfiled-attachment:${photo})`,
+      `[Recording](unfiled-attachment:${gone})`
+    ].join("\n");
+    const notes = [
+      { ...note(0), bodyMarkdown: body },
+      { ...note(1), bodyMarkdown: `Again\n\n![Photo](unfiled-attachment:${photo})` }
+    ];
+    const archive = createStreamingAccountExport(source(notes, 137, { [photo]: bytes }), {
+      exportedAt: EXPORTED_AT,
+      signal: new AbortController().signal
+    });
+    const files = tarFiles(await decompress(archive));
+
+    expect([...(files.get(`attachments/${photo}.jpg`) ?? [])]).toEqual([...bytes]);
+    expect(files.has(`attachments/${gone}.m4a`)).toBe(false);
+    expect([...files.keys()].filter((path) => path.startsWith("attachments/"))).toHaveLength(1);
+    const manifest = JSON.parse(new TextDecoder().decode(files.get("manifest.json"))) as {
+      notes: readonly { attachments: readonly { id: string; kind: string }[] }[];
+    };
+    expect(manifest.notes[0]?.attachments).toEqual([
+      { id: photo, kind: "image" },
+      { id: gone, kind: "audio" }
+    ]);
+    expect(manifest.notes[1]?.attachments).toEqual([{ id: photo, kind: "image" }]);
+  });
+
   it("streams exactly 1,000 notes with collision-safe paths and human-readable taxonomy", async () => {
     const notes = Array.from({ length: 1_000 }, (_, index) => note(index + 1, "Same title"));
     const archive = await decompress(

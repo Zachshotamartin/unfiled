@@ -6010,6 +6010,19 @@
                   "maxItems": 1000,
                   "type": "array",
                   "items": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" }
+                },
+                "attachments": {
+                  "maxItems": 100,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": { "type": "string", "pattern": "^att_[0-9A-HJKMNP-TV-Z]{26}$" },
+                      "kind": { "type": "string", "enum": ["image", "audio"] }
+                    },
+                    "required": ["id", "kind"],
+                    "additionalProperties": false
+                  }
                 }
               },
               "required": [
@@ -6024,7 +6037,8 @@
                 "deletedAt",
                 "tagIds",
                 "links",
-                "sourceCaptureIds"
+                "sourceCaptureIds",
+                "attachments"
               ],
               "additionalProperties": false
             }
@@ -6170,6 +6184,19 @@
             "maxItems": 1000,
             "type": "array",
             "items": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          "attachments": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "pattern": "^att_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "kind": { "type": "string", "enum": ["image", "audio"] }
+              },
+              "required": ["id", "kind"],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -6184,7 +6211,8 @@
           "deletedAt",
           "tagIds",
           "links",
-          "sourceCaptureIds"
+          "sourceCaptureIds",
+          "attachments"
         ],
         "additionalProperties": false
       },

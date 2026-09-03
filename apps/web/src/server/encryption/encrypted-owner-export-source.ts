@@ -19,6 +19,7 @@ import type {
   EncryptedLibraryRpcStore
 } from "./encrypted-library-rpc-store";
 import { EncryptedNoteAggregateRepository } from "./encrypted-note-aggregate-repository";
+import type { EncryptedCaptureRpcAdapter } from "./encrypted-capture-rpc-adapter";
 import type { EncryptedNoteReadRpcAdapter } from "./encrypted-note-read-rpc-adapter";
 import type { EncryptedNoteRpcAdapter } from "./encrypted-note-rpc-adapter";
 import type { EncryptedOwnerDataRpcAdapter } from "./encrypted-owner-data-rpc-adapter";
@@ -51,11 +52,19 @@ export type OwnerExportNote = Readonly<{
   sourceCaptureIds: readonly EntityId<"cap">[];
 }>;
 
+export type OwnerExportAttachment = Readonly<{
+  kind: "image" | "audio";
+  mediaType: string;
+  bytes: Uint8Array;
+}>;
+
 export type OwnerExportSource = Readonly<{
   spacePages(): AsyncIterable<readonly AccountExportSpace[]>;
   tagPages(): AsyncIterable<readonly AccountExportTag[]>;
   notePages(): AsyncIterable<readonly OwnerExportNote[]>;
   routingRulePages(): AsyncIterable<readonly AccountExportRoutingRule[]>;
+  /** The decrypted bytes of one attachment the owner's notes place, or null when it is gone. */
+  attachment(id: EntityId<"att">): Promise<OwnerExportAttachment | null>;
 }>;
 
 type Dependencies = Readonly<{
@@ -65,6 +74,7 @@ type Dependencies = Readonly<{
   reads: EncryptedNoteReadRpcAdapter;
   library: EncryptedLibraryRpcStore;
   ownerData: EncryptedOwnerDataRpcAdapter;
+  captures: Pick<EncryptedCaptureRpcAdapter, "getAttachment">;
   signal?: AbortSignal;
 }>;
 
@@ -127,6 +137,33 @@ export class EncryptedOwnerExportSource implements OwnerExportSource {
       reads: dependencies.reads,
       writes: readOnlyWrites
     });
+  }
+
+  public async attachment(id: EntityId<"att">): Promise<OwnerExportAttachment | null> {
+    throwIfAborted(this.dependencies.signal);
+    const row = await this.dependencies.captures.getAttachment({
+      ownerId: this.dependencies.ownerId,
+      attachmentId: id
+    });
+    if (row === null) return null;
+    const payload = await this.dependencies.aggregate.openCaptureAttachment(
+      this.dependencies.access,
+      Object.freeze({ encrypted: row.contentCipher, contentMac: row.contentMac }),
+      {
+        attachmentId: row.attachmentId,
+        captureId: row.captureId,
+        recordVersion: 1,
+        privacy: row.privacy
+      }
+    );
+    const bytes = new Uint8Array(Buffer.from(payload.dataBase64, "base64"));
+    if (
+      payload.kind !== row.kind ||
+      payload.mediaType !== row.mediaType ||
+      bytes.byteLength !== row.byteLength
+    )
+      unavailable();
+    return Object.freeze({ kind: row.kind, mediaType: row.mediaType, bytes });
   }
 
   public async *notePages(): AsyncIterable<readonly OwnerExportNote[]> {

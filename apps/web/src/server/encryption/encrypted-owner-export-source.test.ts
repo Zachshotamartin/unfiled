@@ -88,7 +88,8 @@ function dependencies(
       aggregate,
       reads: {} as EncryptedNoteReadRpcAdapter,
       library,
-      ownerData: {} as EncryptedOwnerDataRpcAdapter
+      ownerData: {} as EncryptedOwnerDataRpcAdapter,
+      captures: { getAttachment: vi.fn(() => Promise.resolve(null)) }
     },
     aggregate
   };
@@ -139,5 +140,84 @@ describe("encrypted owner export taxonomy", () => {
     ).rejects.toMatchObject({ code: ServiceRpcErrorCode.PROVIDER_UNAVAILABLE });
     expect(spaceHarness.aggregate.openSpaceDisplay).not.toHaveBeenCalled();
     expect(tagHarness.aggregate.openTagDisplay).not.toHaveBeenCalled();
+  });
+});
+
+describe("encrypted owner export attachments", () => {
+  const ATTACHMENT_ID = "att_01ARZ3NDEKTSV4RRFFQ69G5FAZ" as const;
+  const CAPTURE_ID = "cap_01ARZ3NDEKTSV4RRFFQ69G5FAV" as const;
+  const JPEG = new Uint8Array([255, 216, 255, 224, 0, 16]);
+  const row = {
+    attachmentId: ATTACHMENT_ID,
+    captureId: CAPTURE_ID,
+    kind: "image" as const,
+    mediaType: "image/jpeg" as const,
+    byteLength: JPEG.byteLength,
+    width: 4,
+    height: 3,
+    durationMs: null,
+    privacy: "ai_assisted" as const,
+    boundAt: "2026-09-03T10:00:01.000Z",
+    createdAt: "2026-09-03T10:00:00.000Z",
+    contentCipher: {
+      envelope: {},
+      keyId: "k",
+      keyClass: "ai_assisted" as const,
+      keyPurpose: "object_wrap" as const,
+      keyVersion: 1
+    },
+    contentMac: {
+      value: "a".repeat(64),
+      keyId: "m",
+      keyClass: "ai_assisted" as const,
+      keyPurpose: "content_mac" as const,
+      keyVersion: 1
+    }
+  };
+
+  function withAttachment(
+    harness: ReturnType<typeof dependencies>,
+    stored: typeof row | null
+  ): EncryptedOwnerExportSource {
+    return new EncryptedOwnerExportSource({
+      ...harness.input,
+      captures: { getAttachment: vi.fn(() => Promise.resolve(stored)) } as never
+    });
+  }
+
+  it("opens a placed photo through the owner's sealed read and refuses a mismatched description", async () => {
+    const harness = dependencies({});
+    const openCaptureAttachment = vi.fn(() =>
+      Promise.resolve({
+        schemaVersion: 1,
+        captureId: CAPTURE_ID,
+        kind: "image",
+        mediaType: "image/jpeg",
+        dataBase64: Buffer.from(JPEG).toString("base64"),
+        byteLength: JPEG.byteLength,
+        width: 4,
+        height: 3
+      })
+    );
+    Object.assign(harness.aggregate, { openCaptureAttachment });
+
+    const attachment = await withAttachment(harness, row).attachment(ATTACHMENT_ID);
+    expect(attachment?.kind).toBe("image");
+    expect(attachment?.mediaType).toBe("image/jpeg");
+    expect([...(attachment?.bytes ?? [])]).toEqual([...JPEG]);
+    expect(openCaptureAttachment).toHaveBeenCalledWith(
+      harness.input.access,
+      { encrypted: row.contentCipher, contentMac: row.contentMac },
+      {
+        attachmentId: ATTACHMENT_ID,
+        captureId: CAPTURE_ID,
+        recordVersion: 1,
+        privacy: "ai_assisted"
+      }
+    );
+    await expect(withAttachment(harness, null).attachment(ATTACHMENT_ID)).resolves.toBeNull();
+    await expect(
+      withAttachment(harness, { ...row, byteLength: 5 }).attachment(ATTACHMENT_ID)
+    ).rejects.toMatchObject({ code: ServiceRpcErrorCode.PROVIDER_UNAVAILABLE });
   });
 });

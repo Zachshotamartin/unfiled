@@ -46,7 +46,7 @@ Why Postgres envelopes and not Supabase Storage: Storage would add a second key 
 - `POST /api/v1/captures/attachments`: raw binary body (`content-type: image/jpeg` or `audio/mp4`), `idempotency-key` is the client-generated attachment id, non-content metadata in `x-unfiled-*` headers. Bounded by a binary reader beside the JSON reader (700,000 bytes; 413 above). Returns the attachment id and byte length. Raw binary rather than base64 JSON because the JSON cap is fixed at 250,000 bytes, and rather than multipart because there is no parser to audit and nothing else needs one.
 - `POST /api/v1/captures` gains `attachmentIds` (at most four images and one recording). The server binds only attachments the caller owns that are not yet bound.
 - `GET /api/v1/captures/attachments/{attachmentId}` returns decrypted bytes with `cache-control: private, no-store`. The path carries only opaque ids, like every other resource path.
-- Export writes one JSONL line per attachment with base64 bytes. Account deletion cascades from captures and notes and the deletion receipt counts attachments removed.
+- Export lists what each note places in the manifest and carries the bytes as `attachments/<id>.jpg` or `.m4a` in the archive, each once. Account deletion cascades from the owner and the deletion receipt's per-table counts include `public.capture_attachments` automatically.
 
 ### 2.3 Organizer
 
@@ -87,7 +87,7 @@ The owner asked for this to be intuitive. The rules the phone work follows:
 
 ## 3. Phases, each one PR with its tests
 
-Status on 2026-09-03 (branch `feat/capture-attachments`, draft PR #25): P1 through P5 are implemented with their tests, and the live API gate and phone gate carry photo steps (P9 for photos). P6 (voice on the phone), P7 (provider transcription), P8 (receipts, review, export, deletion) and the voice half of P9 remain.
+Status on 2026-09-03 (branch `feat/capture-attachments`, draft PR #25): P1 through P6 are implemented with their tests; P8 covers capture detail attachments, Inbox and Review thumbnails, the web preview, and export of placed attachments; P9 carries photo steps in both live gates. Remaining: P7 (OpenAI transcription as an opt-in engine), a per-note delete of a recording, a voice step in the live gates, and the gated production deploy once a valid organizer key exists.
 
 | Phase | Scope                                                                                                                                                                                                               | Tests                                                                                                                           |
 | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
