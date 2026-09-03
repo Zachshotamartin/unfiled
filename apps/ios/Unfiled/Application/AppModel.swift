@@ -723,7 +723,13 @@ final class AppModel: ObservableObject {
                 .prefix(50)
                 .map { $0 }
         } else {
-            receipts = localReceipts
+            // A failed captures page must not empty the Inbox. Falling back to the outbox alone
+            // made every waiting row vanish until the app was relaunched, while the banner said
+            // the phone was showing its own copy. Keep what is already on screen instead.
+            let localReceiptIDs = Set(localReceipts.map(\.id))
+            receipts = (localReceipts + receipts.filter { !localReceiptIDs.contains($0.id) })
+                .prefix(50)
+                .map { $0 }
         }
 
         if reviewQueueGeneration.accepts(reviewOperationGeneration) {

@@ -19,6 +19,23 @@ if [[ -n "$(git status --porcelain -- . ':!CLAUDE_FABLE_HANDOFF.md' ':!apps/ios'
   echo "Working tree has uncommitted product changes; commit first so provenance matches." >&2
   exit 1
 fi
+# Production runs this repo against the production database, so the schema has to be there first.
+# Code that ships ahead of its migrations fails every organizer job, which is how the capture
+# attachment release broke production on 2026-09-03.
+echo "== preflight: production database has every migration this commit needs"
+pending="$(npx --yes supabase@latest db push --linked --dry-run </dev/null 2>/dev/null \
+  | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const line=s.trim().split("\n").filter(l=>l.startsWith("{")).pop();if(!line){console.log("UNKNOWN");return}try{console.log((JSON.parse(line).migrations||[]).join(" "))}catch{console.log("UNKNOWN")}})')"
+if [[ "$pending" == "UNKNOWN" ]]; then
+  echo "Could not read production migration state. Run: npx supabase@latest db push --linked --dry-run" >&2
+  exit 1
+fi
+if [[ -n "$pending" ]]; then
+  echo "Production is missing migrations: $pending" >&2
+  echo "Apply them first: npx supabase@latest db push --linked" >&2
+  exit 1
+fi
+echo "schema is current"
+
 commit="$(git rev-parse HEAD)"
 ref="$(git rev-parse --abbrev-ref HEAD)"
 message="$(git log -1 --format=%s)"
