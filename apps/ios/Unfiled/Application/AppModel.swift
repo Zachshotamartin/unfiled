@@ -304,6 +304,9 @@ final class AppModel: ObservableObject {
     private var didBootstrap = false
     private var accountEpoch: UInt64 = 0
     private var refreshEpoch: UInt64 = 0
+    /// The refresh currently running, owned by the model rather than by whichever view asked
+    /// for it, so a pull-to-refresh that ends does not cancel the work it started.
+    private var refreshAllTask: Task<Void, Never>?
     private var searchEpoch: UInt64 = 0
     private var searchTask: Task<Void, Never>?
     private var searchPaginationState: SearchPaginationState?
@@ -544,7 +547,22 @@ final class AppModel: ObservableObject {
         accountDeletionReceipt = nil
     }
 
+    /// SwiftUI cancels the task behind pull-to-refresh as soon as the gesture ends or the view
+    /// rebuilds, and this refresh mutates state that same view renders, so it used to cancel
+    /// itself: every request failed at once, the app called that an outage, and the screen fell
+    /// back to its stored copy. The work now belongs to the model; callers only wait for it.
     func refreshAll() async {
+        if let inFlight = refreshAllTask {
+            await inFlight.value
+            return
+        }
+        let task = Task { await self.performRefreshAll() }
+        refreshAllTask = task
+        await task.value
+        refreshAllTask = nil
+    }
+
+    private func performRefreshAll() async {
         guard let runtime, let user = currentUser else { return }
         let context = currentAccountContext(for: user)
         refreshEpoch &+= 1
@@ -644,7 +662,7 @@ final class AppModel: ObservableObject {
                 }
             )
             rebuildActiveNotes(additionalFallbacks: summaryFallbacks)
-        } else {
+        } else if case .unavailable = notePage {
             let decoded = await cachedNotes(profileID: user.id, database: runtime.database)
             guard isCurrent(context), refreshEpoch == operationEpoch else { return }
             for note in decoded where notesByID[note.id.rawValue].map({
@@ -722,7 +740,7 @@ final class AppModel: ObservableObject {
             receipts = (localReceipts.filter { !serverIDs.contains($0.id) } + serverReceipts)
                 .prefix(50)
                 .map { $0 }
-        } else {
+        } else if case .unavailable = capturePage {
             // A failed captures page must not empty the Inbox. Falling back to the outbox alone
             // made every waiting row vanish until the app was relaunched, while the banner said
             // the phone was showing its own copy. Keep what is already on screen instead.
@@ -763,7 +781,7 @@ final class AppModel: ObservableObject {
                     _ = applyCaptureDetail(detail)
                 }
                 publishReviewItems(items, captureDetails: currentDetails)
-            } else {
+            } else if case .unavailable = reviewPage {
                 reviewError = "The review queue is unavailable. Pull to try again."
             }
         }
@@ -1177,6 +1195,8 @@ final class AppModel: ObservableObject {
             applyAISettings(response.settings)
         case .unavailable:
             aiSettingsError = "AI settings could not be loaded. Pull down to try again."
+        case .cancelled:
+            break
         }
         for (provider, result) in [
             (AIProvider.openai, openAIKey),
@@ -1199,6 +1219,8 @@ final class AppModel: ObservableObject {
                 }
             case .unavailable:
                 providerKeyErrors[provider] = "\(provider.displayName) key status could not be loaded. Pull down to try again."
+            case .cancelled:
+                break
             }
         }
     }
@@ -4172,7 +4194,8 @@ final class AppModel: ObservableObject {
     private static func isAmbiguousInteractionFailure(_ error: Error) -> Bool {
         guard let error = error as? APIClientError else { return false }
         return switch error {
-        case .transportFailure,
+        case .cancelled,
+             .transportFailure,
              .invalidHTTPResponse,
              .authenticationRequired,
              .responseBodyTooLarge,
@@ -4245,7 +4268,7 @@ final class AppModel: ObservableObject {
             return "AI settings were not saved. Review them and try again."
         }
         return switch error {
-        case .transportFailure, .invalidHTTPResponse:
+        case .cancelled, .transportFailure, .invalidHTTPResponse:
             "Unfiled could not confirm the change. Try Save again to safely retry it."
         case .authenticationRequired:
             "Sign in again before changing AI settings."
@@ -4277,7 +4300,7 @@ final class AppModel: ObservableObject {
             : "The \(name) key was not deleted. Refresh its status and try again."
         guard let error = error as? APIClientError else { return fallback }
         return switch error {
-        case .transportFailure, .invalidHTTPResponse, .malformedResponse, .responseBodyTooLarge:
+        case .cancelled, .transportFailure, .invalidHTTPResponse, .malformedResponse, .responseBodyTooLarge:
             action == .save
                 ? "The save could not be confirmed. Key status was refreshed; paste the key again only if needed."
                 : "The deletion could not be confirmed. Refresh key status and retry the same action."
@@ -4336,7 +4359,7 @@ final class AppModel: ObservableObject {
     nonisolated static func interactionFailureMessage(_ error: Error, fallback: String) -> String {
         guard let error = error as? APIClientError else { return fallback }
         switch error {
-        case .transportFailure, .invalidHTTPResponse:
+        case .cancelled, .transportFailure, .invalidHTTPResponse:
             return "Unfiled could not confirm the change. Try the same action again."
         case .authenticationRequired:
             return "Sign in again before changing this capture."
@@ -4735,7 +4758,12 @@ final class AppModel: ObservableObject {
     ) async -> AsyncLoadResult<Value> {
         do { return .value(try await operation()) }
         catch {
-            // Content-free: the request's name, the error's type, and its class of failure.
+            // A request the app itself abandoned says nothing about the account or the network,
+            // so it is neither logged as a failure nor allowed to change what a screen shows.
+            if error is CancellationError || (error as? APIClientError) == .cancelled {
+                return .cancelled
+            }
+            // Content-free: the request name, the error type, and its class of failure.
             refreshLog.error("\(label, privacy: .public) failed: \(String(describing: error).prefix(200), privacy: .public)")
             return .unavailable
         }

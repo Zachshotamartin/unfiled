@@ -327,7 +327,7 @@ public final class APIClient: Sendable {
         guard responseLimit > 0 else { throw APIClientError.invalidRequest }
         do { return try await transport.data(for: request, maxResponseBytes: responseLimit) }
         catch let error as APIClientError { throw error }
-        catch { throw APIClientError.transportFailure }
+        catch { throw APIClient.failure(from: error) }
     }
 
     private func perform<Body: Encodable>(_ method: String, path: String, query: [URLQueryItem],
@@ -374,7 +374,7 @@ public final class APIClient: Sendable {
         guard responseLimit > 0 else { throw APIClientError.invalidRequest }
         do { return try await transport.data(for: request, maxResponseBytes: responseLimit) }
         catch let error as APIClientError { throw error }
-        catch { throw APIClientError.transportFailure }
+        catch { throw APIClient.failure(from: error) }
     }
 
     private func performArchiveStream(_ path: String, token: String) async throws -> HTTPStreamResponse {
@@ -394,7 +394,7 @@ public final class APIClient: Sendable {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         do { return try await transport.stream(for: request, chunkBytes: 65_536) }
         catch let error as APIClientError { throw error }
-        catch { throw APIClientError.transportFailure }
+        catch { throw APIClient.failure(from: error) }
     }
 
     private func validatedArchiveStream(
@@ -437,7 +437,7 @@ public final class APIClient: Sendable {
             }
             return data
         } catch let error as APIClientError { throw error }
-        catch { throw APIClientError.transportFailure }
+        catch { throw APIClient.failure(from: error) }
     }
 
     private func decode<Response: Decodable>(
@@ -465,6 +465,15 @@ public final class APIClient: Sendable {
         catch { throw APIClientError.malformedResponse(status: response.statusCode) }
     }
 
+
+    /// A request the caller abandoned is not an outage. Reporting cancellation as a transport
+    /// failure is what made an ordinary pull-to-refresh claim the phone was offline and fall
+    /// back to its stored copy.
+    static func failure(from error: Error) -> APIClientError {
+        if error is CancellationError { return .cancelled }
+        if let urlError = error as? URLError, urlError.code == .cancelled { return .cancelled }
+        return .transportFailure
+    }
     private static let failureLog = Logger(subsystem: "com.zachshotamartin.unfiled", category: "api")
 
     /// The request path with every identifier replaced, so a log line never names a record.
