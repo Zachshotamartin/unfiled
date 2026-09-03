@@ -42,6 +42,8 @@ export type OrganizerCaptureControls = Readonly<{
 export type DecryptedCapture = Readonly<{
   controls: OrganizerCaptureControls;
   rawContent: string;
+  /** The owner's directions for this capture, if they gave any. Never note text. */
+  guidance?: string | null;
 }>;
 export type DecryptedCandidate = Readonly<{
   bodyMarkdown: string;

@@ -46,7 +46,7 @@ type ProviderCandidate = Readonly<{
 
 type ProviderInput = Readonly<{
   candidates: readonly ProviderCandidate[];
-  capture: Readonly<{ inferredKind: string; text: string }>;
+  capture: Readonly<{ inferredKind: string; ownerInstructions: string | null; text: string }>;
   contract: typeof ORGANIZER_DISCLOSURE_CONTRACT;
   controls: Readonly<{
     expansionDisabled: boolean;
@@ -195,6 +195,7 @@ export function prepareProviderDisclosure(
     candidates: Object.freeze(candidates),
     capture: Object.freeze({
       inferredKind: inferOrganizerCaptureKind(input.capture.rawContent),
+      ownerInstructions: input.capture.guidance ?? null,
       text: input.capture.rawContent
     }),
     contract: ORGANIZER_DISCLOSURE_CONTRACT,
