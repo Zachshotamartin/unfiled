@@ -179,6 +179,23 @@ async function applyMigrations() {
   console.log(`applied ${pending.length} migration(s)`);
 }
 
+/** Provenance the Vercel dashboard shows, so a deployment names the commit it came from. */
+function meta(commit) {
+  return [
+    "-m",
+    `githubCommitSha=${commit}`,
+    "-m",
+    "githubCommitRef=main",
+    "-m",
+    "githubCommitOrg=Zachshotamartin",
+    "-m",
+    "githubCommitRepo=unfiled",
+    "-m",
+    "githubOrg=Zachshotamartin",
+    "-m",
+    "githubRepo=unfiled"
+  ];
+}
 async function deployAll(commit) {
   const linkDir = mkdtempSync(join(tmpdir(), "unfiled-release-"));
   const deployed = {};
@@ -201,6 +218,7 @@ async function deployAll(commit) {
         "--force",
         "--token",
         process.env.VERCEL_TOKEN,
+        ...meta(commit),
         "--env",
         `VERCEL_GIT_COMMIT_SHA=${commit}`,
         "--build-env",
