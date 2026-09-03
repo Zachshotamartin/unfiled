@@ -105,6 +105,8 @@ Do not currently claim:
 - that Unfiled is end-to-end encrypted, zero knowledge, or readable only by the user; or
 - that **Unfiled** or `unfiled.app` is legally cleared or under proved project/mailbox control.
 
+On 2026-09-03 the owner entered an OpenAI key on the phone and the first capture organized end to end on production (`job_01M1JFY4` succeeded at 02:30:16 UTC with `gpt-5.6-terra`, then `job_01M1JFR0` at 02:31:23 UTC); both became review items in the Inbox, the policy's warm-up behavior for an account's first five captures. Getting there took three organizer fixes on the `design/paper` branch: the strict Structured Outputs schema carried keywords OpenAI rejects, and the organizer now records a content-free provider error identity on every failed job so the next such defect names itself. The Claude path has not run live.
+
 ## Next source of truth
 
 The ordered remaining work is in [ROADMAP.md](./ROADMAP.md). The final release report must cite evidence rather than replace this status page with unsupported completion language.
