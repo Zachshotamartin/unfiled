@@ -140,7 +140,7 @@ struct NoteEditorView: View {
                     .padding(.vertical, UnfiledTheme.rowVertical)
 
                     if let message = draft.validationIssue ?? errorMessage {
-                        Label(message, systemImage: "exclamationmark.circle")
+                        Label { Text(message) } icon: { GlyphView(glyph: .warning, size: 16, weight: 2) }
                             .font(UnfiledType.secondaryStrong)
                             .foregroundStyle(UnfiledTheme.persimmon)
                             .padding(.bottom, 20)
@@ -171,16 +171,6 @@ struct NoteEditorView: View {
 
     private var editorHeader: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                EditorialEyebrow(text: isNewNote ? "New note" : "Manual edit")
-                Spacer()
-                if let currentRevision {
-                    Text("Revision \(currentRevision)")
-                        .font(UnfiledType.label)
-                        .foregroundStyle(UnfiledTheme.fog)
-                }
-            }
-
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: UnfiledTheme.controlGap) { propertyControls }
                 VStack(alignment: .leading, spacing: UnfiledTheme.controlGap) { propertyControls }
@@ -207,25 +197,19 @@ struct NoteEditorView: View {
                 }
                 .accessibilityLabel("Note type, \(draft.type.rawValue)")
             }
-            choiceRow(label: "Privacy", identifier: "noteEditor.privacy") {
-                Chip(title: "Organize", selected: draft.privacy == .aiAssisted) {
-                    choose { draft.privacy = .aiAssisted }
-                }
-                Chip(title: "Private", selected: draft.privacy == .privateManual) {
-                    choose { draft.privacy = .privateManual }
-                }
-            }
-            choiceRow(label: "Space", identifier: "noteEditor.space") {
-                Chip(title: "None", selected: draft.spaceID == nil) {
-                    choose { draft.spaceID = nil }
-                }
-                ForEach(spaces) { space in
-                    Chip(title: space.name, selected: draft.spaceID == space.id) {
-                        choose { draft.spaceID = space.id }
+            if !spaces.isEmpty {
+                choiceRow(label: "Space", identifier: "noteEditor.space") {
+                    Chip(title: "None", selected: draft.spaceID == nil) {
+                        choose { draft.spaceID = nil }
+                    }
+                    ForEach(spaces) { space in
+                        Chip(title: space.name, selected: draft.spaceID == space.id) {
+                            choose { draft.spaceID = space.id }
+                        }
                     }
                 }
+                .accessibilityLabel("Space, \(selectedSpaceName)")
             }
-            .accessibilityLabel("Space, \(selectedSpaceName)")
         }
     }
 
@@ -263,11 +247,11 @@ struct NoteEditorView: View {
             SectionRule()
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
-                    markdownButton("Heading", systemImage: "textformat.size", insertion: "## ")
-                    markdownButton("Bulleted list", systemImage: "list.bullet", insertion: "- ")
-                    markdownButton("Checklist", systemImage: "checklist", insertion: "- [ ] ")
-                    markdownButton("Quote", systemImage: "quote.opening", insertion: "> ")
-                    markdownButton("Link", systemImage: "link", insertion: "[label](https://)")
+                    markdownButton("Heading", glyph: .heading, insertion: "## ")
+                    markdownButton("Bulleted list", glyph: .bullets, insertion: "- ")
+                    markdownButton("Checklist", glyph: .checklist, insertion: "- [ ] ")
+                    markdownButton("Quote", glyph: .quote, insertion: "> ")
+                    markdownButton("Link", glyph: .link, insertion: "[label](https://)")
                 }
                 .padding(.horizontal, UnfiledTheme.screenPadding)
                 .padding(.vertical, 8)
@@ -278,14 +262,13 @@ struct NoteEditorView: View {
 
     private func markdownButton(
         _ label: String,
-        systemImage: String,
+        glyph: UnfiledGlyph,
         insertion: String
     ) -> some View {
         Button {
             appendMarkdown(insertion)
         } label: {
-            Image(systemName: systemImage)
-                .font(UnfiledType.heading)
+            GlyphView(glyph: glyph, size: 18, weight: 1.9)
                 .foregroundStyle(UnfiledTheme.paper)
                 .frame(width: 46, height: 44)
         }

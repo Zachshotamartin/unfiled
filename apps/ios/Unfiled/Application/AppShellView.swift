@@ -136,7 +136,7 @@ struct AppShellView: View {
                 onOpenSpace: { model.navigationPath.append(.space($0)) },
                 onOpenArchive: { model.navigationPath.append(.archive) },
                 onOpenDeleted: { model.navigationPath.append(.deleted) }
-            ) { leave in
+            ) { query in
                 SearchView(
                     results: model.searchResults,
                     isLoading: model.isSearching,
@@ -148,11 +148,12 @@ struct AppShellView: View {
                     openingResultIDs: model.searchOpeningResultIDs,
                     deletedResultIDs: model.searchDeletedResultIDs,
                     resultFailures: model.searchResultFailures,
+                    query: query,
+                    embedded: true,
                     onSearch: model.search,
                     onLoadMore: model.loadMoreSearch,
                     onOpenNote: model.openSearchResult,
-                    showsHeader: false,
-                    onLeave: leave
+                    showsHeader: false
                 )
             }
         }
@@ -253,7 +254,7 @@ struct AppShellView: View {
             )
         case let .space(spaceID):
             SpaceNotesView(
-                title: spaceID.flatMap { id in model.spaces.first { $0.id == id }?.name } ?? "Unfiled",
+                title: spaceID.flatMap { id in model.spaces.first { $0.id == id }?.name } ?? "Library",
                 notes: model.notes.filter { $0.spaceID == spaceID },
                 onOpenNote: model.openNote
             )

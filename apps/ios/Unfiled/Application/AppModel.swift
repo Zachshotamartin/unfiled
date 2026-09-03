@@ -1,4 +1,7 @@
 import Combine
+import OSLog
+
+private let refreshLog = Logger(subsystem: "com.zachshotamartin.unfiled", category: "refresh")
 import Foundation
 import UIKit
 
@@ -576,19 +579,19 @@ final class AppModel: ObservableObject {
         // metadata, so every refresh loads it rather than waiting for Settings to open.
         let aiSettingsLoad = Task { await self.loadAISettings() }
 
-        async let notesResult = Self.attempt {
+        async let notesResult = Self.attempt("notes") {
             try await Self.fetchAllNotes(api: runtime.authenticatedAPI)
         }
-        async let spacesResult = Self.attempt {
+        async let spacesResult = Self.attempt("spaces") {
             try await Self.fetchAllSpaces(api: runtime.authenticatedAPI)
         }
-        async let capturesResult = Self.attempt {
+        async let capturesResult = Self.attempt("captures") {
             try await Self.fetchAllCaptures(api: runtime.authenticatedAPI)
         }
-        async let reviewsResult = Self.attempt {
+        async let reviewsResult = Self.attempt("reviews") {
             try await Self.fetchAllReviewItems(api: runtime.authenticatedAPI)
         }
-        async let outboxResult = Self.attempt {
+        async let outboxResult = Self.attempt("outbox") {
             try await runtime.captureSync.pendingEntries(profileID: user.id)
         }
 
@@ -1072,10 +1075,10 @@ final class AppModel: ObservableObject {
             }
         }
 
-        async let settingsResult = Self.attempt {
+        async let settingsResult = Self.attempt("settings") {
             try await runtime.authenticatedAPI.getUserSettings()
         }
-        async let openAIKeyResult = Self.attempt {
+        async let openAIKeyResult = Self.attempt("openai-key") {
             try await runtime.authenticatedAPI.getProviderKeyMetadata(provider: .openai)
         }
         async let anthropicKeyResult = Self.attempt {
@@ -2007,6 +2010,8 @@ final class AppModel: ObservableObject {
         case .editText:
             guard let captureID = item.captureId?.rawValue else { return }
             await editCapture(captureID: captureID)
+        case .decide:
+            await decideReview(item: item, allowed: allowed)
         case .keepBoth:
             guard allowed.contains(.keepBoth) else { return }
             await performReviewResolution(reviewID: reviewID, resolution: .keepBoth)
@@ -2018,6 +2023,38 @@ final class AppModel: ObservableObject {
             guard allowed.contains(.rejectExpansion),
                   let block = reviewGeneratedBlock(for: item) else { return }
             await resolveGeneratedBlock(blockID: block.id.rawValue, resolution: .reject)
+        }
+    }
+
+    /// Takes the organizer's own suggestion when it made one; otherwise starts a note of the
+    /// kind it detected, titled from the capture's first line.
+    private func decideReview(item: ReviewItem, allowed: [ReviewActionKind]) async {
+        guard case let .routeCapture(plan) = item.proposal else { return }
+        let candidates = ([plan.destination.candidateId].compactMap { $0 } + plan.alternatives)
+        let suggested = candidates.first { candidate in
+            guard let note = notesByID[candidate.rawValue] else { return false }
+            return note.isOpen && note.archivedAt == nil && note.deletedAt == nil
+        }
+        if allowed.contains(.route), let noteID = suggested {
+            await performReviewRoute(reviewID: item.id.rawValue, noteID: noteID.rawValue)
+            return
+        }
+        guard allowed.contains(.create) else { return }
+        let text = reviewCapture(for: item)?.rawContent ?? ""
+        let title = String(PrivateNoteDraft.title(from: text).prefix(60))
+        await performReviewResolution(
+            reviewID: item.id.rawValue,
+            resolution: .create(title: title, noteType: Self.noteType(for: plan.captureKind), spaceId: nil)
+        )
+    }
+
+    private static func noteType(for kind: CaptureKind) -> NoteType {
+        switch kind {
+        case .listItems: .list
+        case .logEntry: .log
+        case .principle: .principle
+        case .projectUpdate: .project
+        case .freeform: .generic
         }
     }
 
@@ -4478,10 +4515,15 @@ final class AppModel: ObservableObject {
     }
 
     private nonisolated static func attempt<Value: Sendable>(
+        _ label: StaticString = "request",
         _ operation: @escaping @Sendable () async throws -> Value
     ) async -> AsyncLoadResult<Value> {
         do { return .value(try await operation()) }
-        catch { return .unavailable }
+        catch {
+            // Content-free: the request's name, the error's type, and its class of failure.
+            refreshLog.error("\(label, privacy: .public) failed: \(String(describing: error).prefix(200), privacy: .public)")
+            return .unavailable
+        }
     }
 
     private nonisolated static func fetchNoteDetails(

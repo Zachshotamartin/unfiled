@@ -11,31 +11,40 @@ struct LibraryView<Search: View>: View {
     let onOpenSpace: @MainActor (String?) -> Void
     let onOpenArchive: @MainActor () -> Void
     let onOpenDeleted: @MainActor () -> Void
-    /// Builds the search screen in place; the closure it receives leaves search.
-    @ViewBuilder let searchView: (_ leave: @escaping @MainActor () -> Void) -> Search
+    /// Builds the search results in place, driven by the Library's own field.
+    @ViewBuilder let searchView: (_ query: Binding<String>) -> Search
 
-    @State private var isSearching = false
+    @State private var query = ""
+    @FocusState private var searchFocused: Bool
+
+    private var isSearching: Bool { searchFocused || !query.isEmpty }
 
     var body: some View {
-        ZStack {
-            if isSearching {
-                searchView {
-                    withAnimation(UnfiledMotion.animation(UnfiledMotion.settle)) { isSearching = false }
-                }
-                .transition(UnfiledMotion.rise)
-            } else {
-                library
-                    .transition(.opacity)
-            }
-        }
-    }
-
-    private var library: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 header
                     .padding(.bottom, UnfiledTheme.sectionTop)
-                searchEntry
+                searchField
+                if isSearching {
+                    searchView($query)
+                        .padding(.top, UnfiledTheme.controlGap)
+                        .transition(UnfiledMotion.rise)
+                } else {
+                    libraryContent
+                        .transition(.opacity)
+                }
+            }
+            .padding(.horizontal, UnfiledTheme.screenPadding)
+            .padding(.bottom, UnfiledTheme.screenBottom)
+            .animation(UnfiledMotion.animation(UnfiledMotion.settle), value: isSearching)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .refreshable { await onRefresh() }
+        .unfiledScreen()
+    }
+
+    @ViewBuilder
+    private var libraryContent: some View {
                 if !spaceCards.isEmpty {
                     EditorialEyebrow(text: "Spaces")
                         .padding(.top, UnfiledTheme.sectionTop)
@@ -43,7 +52,7 @@ struct LibraryView<Search: View>: View {
                     LazyVGrid(columns: gridColumns, spacing: UnfiledTheme.controlGap) {
                         ForEach(spaceCards) { space in
                             SpaceCard(space: space) {
-                                onOpenSpace(space.id == LibraryView.unfiledSpaceID ? nil : space.id)
+                                onOpenSpace(space.id)
                             }
                         }
                     }
@@ -51,7 +60,7 @@ struct LibraryView<Search: View>: View {
                 if notes.isEmpty && !isLoading {
                     EmptyLedgerView(
                         title: "Nothing filed yet",
-                        message: "Write something in the Inbox. Organized thoughts land here; private ones go to Unfiled."
+                        message: "Write something in the Inbox. Organized thoughts land here; private ones are kept as written."
                     )
                     .padding(.top, UnfiledTheme.sectionTop - UnfiledTheme.rowVertical)
                 } else {
@@ -70,12 +79,6 @@ struct LibraryView<Search: View>: View {
                         }
                     }
                 }
-            }
-            .padding(.horizontal, UnfiledTheme.screenPadding)
-            .padding(.bottom, UnfiledTheme.screenBottom)
-        }
-        .refreshable { await onRefresh() }
-        .unfiledScreen()
     }
 
     private var header: some View {
@@ -94,33 +97,49 @@ struct LibraryView<Search: View>: View {
         }
     }
 
-    /// Looks like the field it opens; tapping it hands the page to search.
-    private var searchEntry: some View {
-        Button {
-            UnfiledHaptics.tap()
-            withAnimation(UnfiledMotion.animation(UnfiledMotion.settle)) { isSearching = true }
-        } label: {
-            HStack(spacing: UnfiledTheme.controlGap) {
-                GlyphView(glyph: .search, size: 18, weight: 1.8)
-                    .foregroundStyle(UnfiledTheme.fog)
-                Text("Search your notes")
-                    .font(UnfiledType.body)
-                    .foregroundStyle(UnfiledTheme.fog)
-                Spacer()
+    /// The one search field: typing here brings results in below it; clearing brings the
+    /// Library back.
+    private var searchField: some View {
+        HStack(spacing: UnfiledTheme.controlGap) {
+            GlyphView(glyph: .search, size: 18, weight: 1.8)
+                .foregroundStyle(UnfiledTheme.fog)
+            TextField("Search your notes", text: $query)
+                .font(UnfiledType.body)
+                .foregroundStyle(UnfiledTheme.paper)
+                .focused($searchFocused)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+                .onChange(of: query) { _, value in
+                    query = SearchInputRules.bounded(value)
+                }
+                .accessibilityLabel("Search your notes")
+                .accessibilityIdentifier("library.search-entry")
+            if isSearching {
+                Button {
+                    UnfiledHaptics.tap()
+                    query = ""
+                    searchFocused = false
+                } label: {
+                    GlyphView(glyph: .close, size: 16, weight: 1.8)
+                        .foregroundStyle(UnfiledTheme.fog)
+                        .frame(width: UnfiledTheme.minimumTouchTarget, height: UnfiledTheme.minimumTouchTarget)
+                }
+                .buttonStyle(.unfiledPress)
+                .accessibilityLabel("Leave search")
+                .accessibilityIdentifier("library.search-leave")
             }
-            .padding(.horizontal, UnfiledTheme.fieldPadding)
-            .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight, alignment: .leading)
-            .background(UnfiledTheme.graphite)
-            .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
-            .overlay {
-                RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius)
-                    .stroke(UnfiledTheme.border, lineWidth: 1)
-            }
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.unfiledPress)
-        .accessibilityLabel("Search your notes")
-        .accessibilityIdentifier("library.search-entry")
+        .padding(.leading, UnfiledTheme.fieldPadding)
+        .padding(.trailing, isSearching ? 4 : UnfiledTheme.fieldPadding)
+        .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight, alignment: .leading)
+        .background(UnfiledTheme.graphite)
+        .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
+        .overlay {
+            RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius)
+                .stroke(searchFocused ? UnfiledTheme.persimmon : UnfiledTheme.border, lineWidth: searchFocused ? 2 : 1)
+        }
+        .animation(UnfiledMotion.animation(UnfiledMotion.quick), value: searchFocused)
     }
 
     private var librarySummary: String {
@@ -131,21 +150,8 @@ struct LibraryView<Search: View>: View {
         return "\(noteCount) across \(spaceCount)"
     }
 
-    static var unfiledSpaceID: String { "space.unfiled" }
-
-    /// Real spaces plus a synthetic Unfiled space for notes that have none.
-    private var spaceCards: [SpacePresentation] {
-        let unfiledCount = notes.filter { $0.spaceID == nil }.count
-        guard unfiledCount > 0 else { return spaces }
-        return spaces + [
-            SpacePresentation(
-                id: LibraryView.unfiledSpaceID,
-                name: "Unfiled",
-                parentID: nil,
-                noteCount: unfiledCount
-            )
-        ]
-    }
+    /// Only real spaces are cards; notes without a space are simply listed below.
+    private var spaceCards: [SpacePresentation] { spaces }
 
     private var gridColumns: [GridItem] {
         [GridItem(.flexible(), spacing: UnfiledTheme.controlGap), GridItem(.flexible())]

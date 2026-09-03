@@ -210,6 +210,8 @@ enum ReviewUserAction: Sendable {
     case rejectExpansion
     /// Change the capture's text; the edit becomes a new capture and this one is removed.
     case editText
+    /// Take the organizer's own suggestion, or start a note of the kind it detected.
+    case decide
 }
 
 struct RevisionPresentation: Equatable, Identifiable, Sendable {

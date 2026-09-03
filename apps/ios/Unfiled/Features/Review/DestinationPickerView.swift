@@ -213,7 +213,7 @@ struct DestinationPickerView: View {
             .accessibilityLabel("Note type, \(noteType.rawValue)")
 
             choiceRow(label: "Space", identifier: "destination.space.\(sheet.id)") {
-                Chip(title: "Unfiled", selected: spaceID == nil) {
+                Chip(title: "None", selected: spaceID == nil) {
                     choose { spaceID = nil }
                 }
                 ForEach(spaces) { space in
@@ -299,7 +299,7 @@ struct DestinationPickerView: View {
     }
 
     private var selectedSpaceName: String {
-        spaces.first { $0.id == spaceID }?.name ?? "Unfiled"
+        spaces.first { $0.id == spaceID }?.name ?? "None"
     }
 
     private var eligibleNotes: [NotePresentation] {

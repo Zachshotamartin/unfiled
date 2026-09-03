@@ -82,7 +82,7 @@ enum PresentationMapping {
             title: value.title,
             snippet: value.snippet,
             type: value.type.rawValue,
-            path: value.spacePath.isEmpty ? "Unfiled" : value.spacePath.joined(separator: " / "),
+            path: value.spacePath.joined(separator: " / "),
             updatedLabel: relativeDate(value.updatedAt, now: now)
         )
     }
@@ -296,7 +296,7 @@ enum PresentationMapping {
     }
 
     private static func spacePath(_ id: SpaceID?, spaces: [Space]) -> String {
-        guard var cursor = id else { return "Unfiled" }
+        guard var cursor = id else { return "" }
         let byID = Dictionary(uniqueKeysWithValues: spaces.map { ($0.id, $0) })
         var names: [String] = []
         var visited: Set<SpaceID> = []

@@ -23,7 +23,7 @@ enum SearchQueryDebouncer {
 }
 
 struct SearchView: View {
-    @State private var query: String
+    @Binding private var query: String
     @State private var includesArchived: Bool
     @State private var scope: SearchScope
     @State private var submittedRequest: SearchRequest
@@ -46,6 +46,8 @@ struct SearchView: View {
     let showsHeader: Bool
     /// Leaves search when the Library hosts it.
     let onLeave: (@MainActor () -> Void)?
+    /// Embedded under another screen's field: only the controls and results, no scroll or header.
+    let embedded: Bool
     @FocusState private var fieldFocused: Bool
 
     init(
@@ -59,7 +61,8 @@ struct SearchView: View {
         openingResultIDs: Set<String> = [],
         deletedResultIDs: Set<String> = [],
         resultFailures: [String: SearchFailure] = [:],
-        initialQuery: String = "",
+        query: Binding<String>,
+        embedded: Bool = false,
         includesArchived: Bool = false,
         initialScope: SearchScope = .all,
         debounceDuration: Duration = SearchQueryDebouncer.defaultDelay,
@@ -85,12 +88,13 @@ struct SearchView: View {
         self.onOpenNote = onOpenNote
         self.showsHeader = showsHeader
         self.onLeave = onLeave
-        _query = State(initialValue: initialQuery)
+        _query = query
+        self.embedded = embedded
         _includesArchived = State(initialValue: includesArchived)
         _scope = State(initialValue: initialScope)
         _submittedRequest = State(
             initialValue: SearchRequest(
-                query: initialQuery,
+                query: query.wrappedValue,
                 includesArchived: includesArchived,
                 scope: initialScope
             )
@@ -102,6 +106,35 @@ struct SearchView: View {
     }
 
     var body: some View {
+        if embedded {
+            embeddedBody
+        } else {
+            standaloneBody
+        }
+    }
+
+    private var embeddedBody: some View {
+        LazyVStack(alignment: .leading, spacing: 0) {
+            scopeControl
+            archiveControl
+            if request.hasQuery {
+                resultsHeader
+            }
+            SectionRule()
+            content
+        }
+        .task(id: request) {
+            await SearchQueryDebouncer.dispatch(
+                request: request,
+                delay: debounceDuration
+            ) { submittedRequest in
+                self.submittedRequest = submittedRequest
+                onSearch(submittedRequest)
+            }
+        }
+    }
+
+    private var standaloneBody: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if showsHeader {

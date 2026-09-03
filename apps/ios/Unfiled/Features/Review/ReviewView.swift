@@ -397,22 +397,23 @@ struct ReviewLedgerRow: View {
                     .accessibilityIdentifier("review.submitting.\(item.id)")
             }
 
+            if item.allows(.create) || item.allows(.route) {
+                reviewButton(
+                    title: "Let Unfiled decide",
+                    systemImage: "sparkles",
+                    prominence: .primary,
+                    identifier: "review.decide.\(item.id)",
+                    accessibilityHint: "Files it where the organizer suggested, or starts a note of the kind it detected"
+                ) { onAction(item.id, .decide) }
+            }
+
             if item.allows(.create) {
                 reviewButton(
                     title: item.suggestedNewNote.map { "New note: \($0.title)" } ?? "New note",
                     systemImage: "plus",
-                    prominence: .primary,
+                    prominence: .secondary,
                     identifier: ReviewAccessibilityIdentifier.newNote(item.id)
                 ) { onAction(item.id, .createNote) }
-            }
-
-            if item.allows(.keepInbox) {
-                reviewButton(
-                    title: "Keep in Inbox",
-                    systemImage: "tray",
-                    prominence: .secondary,
-                    identifier: ReviewAccessibilityIdentifier.keepInbox(item.id)
-                ) { onAction(item.id, .keepInbox) }
             }
 
             if item.allows(.keepBoth) {
@@ -456,10 +457,11 @@ struct ReviewLedgerRow: View {
 
             if item.allows(.dismiss) {
                 reviewButton(
-                    title: "Dismiss",
+                    title: "Not now",
                     systemImage: "xmark",
                     prominence: .secondary,
-                    identifier: ReviewAccessibilityIdentifier.dismiss(item.id)
+                    identifier: ReviewAccessibilityIdentifier.dismiss(item.id),
+                    accessibilityHint: "Closes this review; the capture stays in the Inbox"
                 ) { onAction(item.id, .dismiss) }
             }
         }

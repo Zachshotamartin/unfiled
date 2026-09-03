@@ -7,6 +7,7 @@ enum UnfiledGlyph: CaseIterable {
     case today, notes, review, search
     case pen, plus, send, sliders, more, chevron, back, close
     case lock, organize, clock, warning, tray, check, archive, trash
+    case heading, bullets, checklist, quote, link
 }
 
 /// Renders a glyph in the current foreground style.
@@ -149,7 +150,26 @@ struct GlyphStroke: Shape {
             path.move(to: point(4.5, 7)); path.addLine(to: point(19.5, 7))
             path.move(to: point(9.5, 7)); path.addLine(to: point(9.5, 4.5)); path.addLine(to: point(14.5, 4.5)); path.addLine(to: point(14.5, 7))
             path.addPath(GlyphGeometry.tray(in: box(6.5, 7, 11, 13)))
-        case .more:
+        case .heading:
+            // A title card over two lines of text.
+            path.move(to: point(5, 15)); path.addLine(to: point(19, 15))
+            path.move(to: point(5, 19)); path.addLine(to: point(14, 19))
+        case .bullets:
+            // Three lines; the bullets are small cards.
+            path.move(to: point(10, 6.5)); path.addLine(to: point(19, 6.5))
+            path.move(to: point(10, 12)); path.addLine(to: point(19, 12))
+            path.move(to: point(10, 17.5)); path.addLine(to: point(19, 17.5))
+        case .checklist:
+            // Two checks with their lines.
+            path.move(to: point(4.5, 8)); path.addLine(to: point(6.6, 10.1)); path.addLine(to: point(10, 5.9))
+            path.move(to: point(12.5, 8)); path.addLine(to: point(19.5, 8))
+            path.move(to: point(4.5, 16)); path.addLine(to: point(6.6, 18.1)); path.addLine(to: point(10, 13.9))
+            path.move(to: point(12.5, 16)); path.addLine(to: point(19.5, 16))
+        case .link:
+            // Two rings that overlap, drawn with the same square caps as every stroke.
+            path.addRoundedRect(in: box(3.5, 9, 10, 6), cornerSize: CGSize(width: 3 * unit, height: 3 * unit))
+            path.addRoundedRect(in: box(10.5, 9, 10, 6), cornerSize: CGSize(width: 3 * unit, height: 3 * unit))
+        case .quote, .more:
             break
         }
         return path
@@ -184,6 +204,16 @@ struct GlyphFill: Shape {
             path.addPath(GlyphGeometry.card(center: point(13, 7.5), width: 4.2 * unit, height: 8.5 * unit, radius: 0.8 * unit))
         case .warning:
             path.addEllipse(in: CGRect(x: rect.minX + 10.9 * unit, y: rect.minY + 14.6 * unit, width: 2.2 * unit, height: 2.2 * unit))
+        case .heading:
+            path.addPath(GlyphGeometry.card(center: point(8.5, 8), width: 5.5 * unit, height: 7 * unit, radius: 0.8 * unit))
+        case .bullets:
+            for y in [6.5, 12.0, 17.5] {
+                path.addPath(GlyphGeometry.card(center: point(6, y), width: 2.6 * unit, height: 2.6 * unit, radius: 0.5 * unit))
+            }
+        case .quote:
+            // Two slanted cards, the way quotation marks sit.
+            path.addPath(GlyphGeometry.card(center: point(8.5, 12), width: 3.6 * unit, height: 7 * unit, radius: 0.8 * unit))
+            path.addPath(GlyphGeometry.card(center: point(15.5, 12), width: 3.6 * unit, height: 7 * unit, radius: 0.8 * unit))
         default:
             break
         }

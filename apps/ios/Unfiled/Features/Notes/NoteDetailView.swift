@@ -105,41 +105,8 @@ struct NoteDetailView: View {
                     SectionRule()
                 }
 
-                NoteContextSections(
-                    state: noteContext,
-                    onRefresh: onRefreshNoteContext,
-                    onLoadMoreSources: onLoadMoreSources,
-                    onLoadMoreBacklinks: onLoadMoreBacklinks,
-                    onOpenCapture: onOpenSourceCapture,
-                    onOpenNote: onOpenBacklink
-                )
-
-                SectionRule()
-
-                if let provenance = note.provenance, !provenance.isEmpty {
-                    Button(action: onOpenProvenance) {
-                        HStack(spacing: 12) {
-                            Image(systemName: "tray.and.arrow.down")
-                                .font(UnfiledType.heading)
-                                .foregroundStyle(UnfiledTheme.persimmon)
-                            Text(provenance)
-                                .font(UnfiledType.secondary)
-                                .foregroundStyle(UnfiledTheme.fog)
-                                .multilineTextAlignment(.leading)
-                            Spacer(minLength: 12)
-                            Image(systemName: "arrow.right")
-                                .foregroundStyle(UnfiledTheme.persimmon)
-                        }
-                        .frame(maxWidth: .infinity, minHeight: 68, alignment: .leading)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityHint("Opens the captures that updated this note")
-                    .accessibilityIdentifier("noteDetail.provenance")
-                }
-
                 if let feedbackMessage {
-                    Label(feedbackMessage, systemImage: "exclamationmark.circle")
+                    Label { Text(feedbackMessage) } icon: { GlyphView(glyph: .warning, size: 16, weight: 2) }
                         .font(UnfiledType.secondaryStrong)
                         .foregroundStyle(UnfiledTheme.persimmon)
                         .padding(.vertical, 18)
@@ -178,7 +145,7 @@ struct NoteDetailView: View {
     private var noteHeader: some View {
         VStack(alignment: .leading, spacing: 18) {
             if isArchived {
-                Label("Archived", systemImage: "archivebox")
+                Label { Text("Archived") } icon: { GlyphView(glyph: .archive, size: 14, weight: 1.8) }
                     .font(UnfiledType.label)
                     .foregroundStyle(UnfiledTheme.fog)
                     .frame(maxWidth: .infinity, alignment: .trailing)
@@ -199,23 +166,10 @@ struct NoteDetailView: View {
                     .accessibilityLabel("Space, \(note.spacePath)")
             }
 
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 18) { metadata }
-                VStack(alignment: .leading, spacing: 8) { metadata }
-            }
-            .font(UnfiledType.caption)
-            .foregroundStyle(UnfiledTheme.fog)
         }
         .padding(.top, UnfiledTheme.pushedHeaderTop)
         .padding(.bottom, UnfiledTheme.headerBottom)
         .overlay(alignment: .bottom) { SectionRule() }
-    }
-
-    @ViewBuilder
-    private var metadata: some View {
-        Label(note.type.capitalized, systemImage: icon(for: note.type))
-        Label(privacyLabel, systemImage: privacyIcon)
-        Text("Revision \(note.currentRevision)")
     }
 
     private var checklist: some View {
@@ -325,10 +279,13 @@ struct NoteDetailView: View {
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .topBarTrailing) {
-            Button("Edit", systemImage: "square.and.pencil", action: onEdit)
-                .labelStyle(.iconOnly)
-                .frame(minWidth: UnfiledTheme.minimumTouchTarget, minHeight: UnfiledTheme.minimumTouchTarget)
-                .accessibilityIdentifier("noteDetail.edit")
+            Button(action: onEdit) {
+                GlyphView(glyph: .pen, size: 18, weight: 1.9)
+                    .foregroundStyle(UnfiledTheme.paper)
+                    .frame(minWidth: UnfiledTheme.minimumTouchTarget, minHeight: UnfiledTheme.minimumTouchTarget)
+            }
+            .accessibilityLabel("Edit")
+            .accessibilityIdentifier("noteDetail.edit")
 
             Menu {
                 Button("Revision history", systemImage: "clock.arrow.circlepath") {
@@ -344,32 +301,13 @@ struct NoteDetailView: View {
                     pendingNoteAction = .delete
                 }
             } label: {
-                Image(systemName: "ellipsis.circle")
-                    .font(UnfiledType.title)
+                GlyphView(glyph: .more, size: 18, weight: 1.9)
                     .foregroundStyle(UnfiledTheme.paper)
                     .frame(width: UnfiledTheme.minimumTouchTarget, height: UnfiledTheme.minimumTouchTarget)
             }
             .disabled(isPerformingNoteAction)
             .accessibilityLabel("Note actions")
             .accessibilityIdentifier("noteDetail.actions")
-        }
-    }
-
-    private var privacyLabel: String {
-        note.privacy == PrivacyMode.privateManual.rawValue ? "Private manual" : "AI assisted"
-    }
-
-    private var privacyIcon: String {
-        note.privacy == PrivacyMode.privateManual.rawValue ? "lock" : "tray.and.arrow.down"
-    }
-
-    private func icon(for type: String) -> String {
-        switch type {
-        case NoteType.list.rawValue: "checklist"
-        case NoteType.log.rawValue: "chart.bar.doc.horizontal"
-        case NoteType.principle.rawValue: "quote.opening"
-        case NoteType.project.rawValue: "list.bullet.clipboard"
-        default: "note.text"
         }
     }
 
