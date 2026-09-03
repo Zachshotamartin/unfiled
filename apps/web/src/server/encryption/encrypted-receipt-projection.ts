@@ -11,6 +11,38 @@ type ReceiptProjection = Readonly<{
   reasonCodes: readonly string[];
 }>;
 
+/**
+ * The organizer's commit function projects one content-free reason onto a `needs_review`
+ * receipt row (`ambiguous_intent` for planner ambiguity, `revision_conflict`, or
+ * `explicit_destination` when the explicit destination was unavailable) while the
+ * authenticated payload keeps the plan's own reasons. Accept exactly that shape and nothing else.
+ */
+const REVIEW_REASON_PROJECTIONS: ReadonlySet<string> = new Set([
+  "ambiguous_intent",
+  "revision_conflict",
+  "explicit_destination"
+]);
+
+export function reviewReceiptProjectionMatches(
+  payload: CaptureReceiptPayload,
+  row: ReceiptProjection
+): boolean {
+  const projected = row.reasonCodes[0];
+  return (
+    row.privacy === "ai_assisted" &&
+    row.recordVersion === 1 &&
+    row.outcome === "needs_review" &&
+    payload.outcome === "needs_review" &&
+    row.decisionId !== null &&
+    row.reviewItemId !== null &&
+    row.mutationId === null &&
+    row.reasonCodes.length === 1 &&
+    projected !== undefined &&
+    REVIEW_REASON_PROJECTIONS.has(projected) &&
+    (projected !== "ambiguous_intent" || payload.reasonCodes.includes("ambiguous_intent"))
+  );
+}
+
 const ACCEPTED = "expansion_accepted";
 const REJECTED = "expansion_rejected";
 const DESTINATION_EXPIRED = "destination_expired";

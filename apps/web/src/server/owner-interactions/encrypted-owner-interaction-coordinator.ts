@@ -94,7 +94,10 @@ import type {
   PrepareReviewResolutionResult
 } from "@/server/encryption/encrypted-owner-interaction-rpc-adapter";
 import type { EncryptedGeneratedBlockReader } from "@/server/generated-blocks/encrypted-generated-block-reader";
-import { generatedExpansionReceiptProjectionMatches } from "@/server/encryption/encrypted-receipt-projection";
+import {
+  generatedExpansionReceiptProjectionMatches,
+  reviewReceiptProjectionMatches
+} from "@/server/encryption/encrypted-receipt-projection";
 import type {
   EncryptedNoteMutationRead,
   EncryptedNoteRead
@@ -485,17 +488,19 @@ function sourceReceiptMatches(
     (row.outcome === "created_note" || row.outcome === "added_to_note") &&
     row.reasonCodes.length === 1 &&
     row.reasonCodes[0] === ENCRYPTED_ORGANIZER_REASON_SENTINEL;
+  const projection = Object.freeze({
+    recordVersion: row.recordVersion,
+    privacy: row.sourcePrivacy,
+    decisionId: row.decisionId,
+    reviewItemId: row.reviewItemId,
+    mutationId: row.mutationId,
+    outcome: row.outcome,
+    reasonCodes: row.reasonCodes
+  });
+  const reviewProjectionMatches = reviewReceiptProjectionMatches(payload, projection);
   const generatedExpansionProjectionMatches = generatedExpansionReceiptProjectionMatches(
     payload,
-    {
-      recordVersion: row.recordVersion,
-      privacy: row.sourcePrivacy,
-      decisionId: row.decisionId,
-      reviewItemId: row.reviewItemId,
-      mutationId: row.mutationId,
-      outcome: row.outcome,
-      reasonCodes: row.reasonCodes
-    },
+    projection,
     source.generatedBlock?.blockId
   );
   return (
@@ -506,7 +511,10 @@ function sourceReceiptMatches(
     payload.mutationId === row.mutationId &&
     payload.outcome === row.outcome &&
     payload.destination?.noteId === (row.destinationNoteId ?? undefined) &&
-    (exactReasonsMatch || organizerReasonProjectionMatches || generatedExpansionProjectionMatches)
+    (exactReasonsMatch ||
+      organizerReasonProjectionMatches ||
+      reviewProjectionMatches ||
+      generatedExpansionProjectionMatches)
   );
 }
 
