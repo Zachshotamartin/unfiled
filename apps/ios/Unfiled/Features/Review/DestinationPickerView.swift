@@ -60,15 +60,15 @@ struct DestinationPickerView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 12)
 
-                    Picker("Destination type", selection: $mode) {
+                    choiceRow(label: "Destination", identifier: "destination.mode.\(sheet.id)") {
                         ForEach(DestinationPickerMode.allCases) { value in
-                            Text(value.rawValue).tag(value)
+                            Chip(title: value.rawValue, selected: mode == value) {
+                                choose { mode = value }
+                            }
                         }
                     }
-                    .pickerStyle(.segmented)
-                    .frame(minHeight: UnfiledTheme.minimumTouchTarget)
+                    .accessibilityLabel("Destination, \(mode.rawValue)")
                     .padding(.top, UnfiledTheme.sectionTop)
-                    .accessibilityIdentifier("destination.mode.\(sheet.id)")
 
                     SectionRule()
                         .padding(.top, UnfiledTheme.headerBottom)
@@ -77,15 +77,6 @@ struct DestinationPickerView: View {
                         existingNotes
                     } else {
                         newNoteForm
-                    }
-
-                    if let errorMessage {
-                        Label(errorMessage, systemImage: "exclamationmark.circle")
-                            .font(UnfiledType.secondary)
-                            .foregroundStyle(UnfiledTheme.paper)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.top, 20)
-                            .accessibilityIdentifier("destination.error.\(sheet.id)")
                     }
                 }
                 .padding(.horizontal, UnfiledTheme.screenPadding)
@@ -97,11 +88,22 @@ struct DestinationPickerView: View {
                 submitBar
             }
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onCancel)
-                        .disabled(isSubmitting)
-                        .frame(minWidth: UnfiledTheme.minimumTouchTarget,
-                               minHeight: UnfiledTheme.minimumTouchTarget)
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { titleFocused = false }
+                        .font(UnfiledType.heading)
+                        .foregroundStyle(UnfiledTheme.persimmon)
+                        .accessibilityIdentifier("destination.keyboard-done.\(sheet.id)")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { onCancel() } label: {
+                        GlyphView(glyph: .close, size: 18, weight: 1.9)
+                            .foregroundStyle(UnfiledTheme.paper)
+                            .frame(minWidth: 44, minHeight: 44)
+                    }
+                    .disabled(isSubmitting)
+                    .accessibilityLabel("Cancel")
+                    .accessibilityIdentifier("destination.cancel.\(sheet.id)")
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
@@ -130,17 +132,10 @@ struct DestinationPickerView: View {
             } else {
                 ForEach(eligibleNotes) { note in
                     Button {
-                        selectedNoteID = note.id
+                        choose { selectedNoteID = note.id }
                     } label: {
                         HStack(alignment: .top, spacing: 14) {
-                            Image(systemName: selectedNoteID == note.id ? "checkmark.circle.fill" : "circle")
-                                .font(UnfiledType.title)
-                                .foregroundStyle(
-                                    selectedNoteID == note.id
-                                        ? UnfiledTheme.persimmon
-                                        : UnfiledTheme.fog
-                                )
-                                .accessibilityHidden(true)
+                            selectionMark(selected: selectedNoteID == note.id)
 
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(note.title)
@@ -158,7 +153,7 @@ struct DestinationPickerView: View {
                         .contentShape(Rectangle())
                         .padding(.vertical, 8)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.unfiledPress)
                     .disabled(isSubmitting)
                     .accessibilityLabel(note.title)
                     .accessibilityValue(selectedNoteID == note.id ? "Selected" : "Not selected")
@@ -168,6 +163,21 @@ struct DestinationPickerView: View {
                 }
             }
         }
+    }
+
+    /// The selection mark is the app's own check on a card-sized ring, never a system symbol.
+    private func selectionMark(selected: Bool) -> some View {
+        ZStack {
+            Circle()
+                .stroke(selected ? UnfiledTheme.persimmon : UnfiledTheme.border, lineWidth: 1.5)
+            if selected {
+                GlyphView(glyph: .check, size: 14, weight: 2)
+                    .foregroundStyle(UnfiledTheme.persimmon)
+            }
+        }
+        .frame(width: 24, height: 24)
+        .padding(.top, 2)
+        .accessibilityHidden(true)
     }
 
     private var newNoteForm: some View {
@@ -193,36 +203,26 @@ struct DestinationPickerView: View {
                     .accessibilityIdentifier("destination.title.\(sheet.id)")
             }
 
-            VStack(alignment: .leading, spacing: 10) {
-                EditorialEyebrow(text: "Note type")
-                Picker("Note type", selection: $noteType) {
-                    ForEach(NoteType.allCases, id: \.rawValue) { value in
-                        Text(value.rawValue.capitalized).tag(value)
+            choiceRow(label: "Note type", identifier: "destination.noteType.\(sheet.id)") {
+                ForEach(NoteType.allCases, id: \.rawValue) { value in
+                    Chip(title: value.rawValue.capitalized, selected: noteType == value) {
+                        choose { noteType = value }
                     }
                 }
-                .pickerStyle(.menu)
-                .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight, alignment: .leading)
-                .padding(.horizontal, UnfiledTheme.fieldPadding)
-                .background(UnfiledTheme.graphite)
-                .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
-                .accessibilityIdentifier("destination.noteType.\(sheet.id)")
             }
+            .accessibilityLabel("Note type, \(noteType.rawValue)")
 
-            VStack(alignment: .leading, spacing: 10) {
-                EditorialEyebrow(text: "Space")
-                Picker("Space", selection: $spaceID) {
-                    Text("Unfiled").tag(String?.none)
-                    ForEach(spaces) { space in
-                        Text(space.name).tag(String?.some(space.id))
+            choiceRow(label: "Space", identifier: "destination.space.\(sheet.id)") {
+                Chip(title: "Unfiled", selected: spaceID == nil) {
+                    choose { spaceID = nil }
+                }
+                ForEach(spaces) { space in
+                    Chip(title: space.name, selected: spaceID == space.id) {
+                        choose { spaceID = space.id }
                     }
                 }
-                .pickerStyle(.menu)
-                .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight, alignment: .leading)
-                .padding(.horizontal, UnfiledTheme.fieldPadding)
-                .background(UnfiledTheme.graphite)
-                .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
-                .accessibilityIdentifier("destination.space.\(sheet.id)")
             }
+            .accessibilityLabel("Space, \(selectedSpaceName)")
         }
         .padding(.top, 20)
     }
@@ -230,6 +230,21 @@ struct DestinationPickerView: View {
     private var submitBar: some View {
         VStack(spacing: 0) {
             SectionRule()
+            if let errorMessage {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    GlyphView(glyph: .warning, size: 16, weight: 2)
+                        .foregroundStyle(UnfiledTheme.paper)
+                        .accessibilityHidden(true)
+                    Text(errorMessage)
+                        .font(UnfiledType.secondary)
+                        .foregroundStyle(UnfiledTheme.paper)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, UnfiledTheme.screenPadding)
+                .padding(.top, 14)
+                .accessibilityIdentifier("destination.error.\(sheet.id)")
+            }
             Button {
                 Task { @MainActor in
                     await onSubmit(choice)
@@ -237,16 +252,12 @@ struct DestinationPickerView: View {
             } label: {
                 HStack(spacing: 9) {
                     if isSubmitting {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(UnfiledTheme.ink)
-                            .accessibilityHidden(true)
+                        UnfiledLoadingView(size: 18, label: "Saving")
                     }
                     Text(isSubmitting ? "Saving choice…" : submitTitle)
                         .font(UnfiledType.heading)
                     if !isSubmitting {
-                        Image(systemName: "arrow.right")
-                            .font(UnfiledType.label)
+                        GlyphView(glyph: .chevron, size: 16, weight: 2)
                             .accessibilityHidden(true)
                     }
                 }
@@ -255,7 +266,7 @@ struct DestinationPickerView: View {
                 .background(canSubmit ? UnfiledTheme.persimmon : UnfiledTheme.fog)
                 .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.unfiledPress)
             .disabled(!canSubmit)
             .accessibilityIdentifier("destination.submit.\(sheet.id)")
             .padding(.horizontal, UnfiledTheme.screenPadding)
@@ -263,6 +274,32 @@ struct DestinationPickerView: View {
             .padding(.bottom, 10)
         }
         .background(UnfiledTheme.ink)
+    }
+
+    private func choose(_ change: @escaping () -> Void) {
+        UnfiledHaptics.selection()
+        withAnimation(UnfiledMotion.animation(UnfiledMotion.quick)) { change() }
+    }
+
+    private func choiceRow<Content: View>(
+        label: String,
+        identifier: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            EditorialEyebrow(text: label)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: UnfiledTheme.controlGap) {
+                    content()
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(identifier)
+    }
+
+    private var selectedSpaceName: String {
+        spaces.first { $0.id == spaceID }?.name ?? "Unfiled"
     }
 
     private var eligibleNotes: [NotePresentation] {
