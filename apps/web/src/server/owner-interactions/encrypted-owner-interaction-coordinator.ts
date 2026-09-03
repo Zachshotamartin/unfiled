@@ -1335,18 +1335,21 @@ export class EncryptedOwnerInteractionCoordinator {
         "Generated expansions are not correction material"
       );
     }
+    // A plan the organizer deferred to Review carries no operations, so it cannot seed a
+    // note by itself; the capture text becomes the content, as when there is no plan at all.
     const seed: OrganizationPlan =
-      base ??
-      OrganizationPlanSchema.parse({
-        schemaVersion: 1,
-        captureKind: "freeform",
-        decision: "add_to_inbox",
-        destination: { candidateId: null, newNote: null },
-        operations: [{ type: "append_raw", content: rawContent }],
-        generatedExpansion: null,
-        alternatives: [],
-        reasonCodes: []
-      });
+      base !== null && base.operations.length > 0
+        ? base
+        : OrganizationPlanSchema.parse({
+            schemaVersion: 1,
+            captureKind: "freeform",
+            decision: "add_to_inbox",
+            destination: { candidateId: null, newNote: null },
+            operations: [{ type: "append_raw", content: rawContent }],
+            generatedExpansion: null,
+            alternatives: [],
+            reasonCodes: []
+          });
     return OrganizationPlanSchema.parse({
       ...seed,
       decision: destination.expectedRevision === 0 ? "create_note" : "append_to_note",
