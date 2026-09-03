@@ -251,7 +251,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var requestedReviewFocusID: String?
     @Published var bannerMessage: String?
     @Published var navigationPath: [AppRoute] = []
-    @Published var selectedTab: MainTab = .today
+    @Published var selectedTab: MainTab = .inbox
     @Published var captureSheet: CaptureSheet?
     @Published var editorSheet: EditorSheet?
     @Published var destinationPickerSheet: DestinationPickerSheet?
@@ -926,7 +926,7 @@ final class AppModel: ObservableObject {
 
     func showReview(reviewID: String? = nil) {
         navigationPath = []
-        selectedTab = .review
+        selectedTab = .inbox
         requestedReviewFocusID = reviewID
     }
 
@@ -4567,7 +4567,7 @@ final class AppModel: ObservableObject {
         var seen = Set<String>()
         var identities = PaginationIdentityValidator()
         for _ in 0 ..< 200 {
-            let page = try await api.listReviewItems(.init(cursor: cursor, limit: 100))
+            let page = try await api.listReviewItems(.init(cursor: cursor, limit: 50))
             try identities.accept(page.items.map { $0.id.rawValue })
             items.append(contentsOf: page.items)
             guard let next = try validatedNextCursor(page.pageInfo, seen: &seen) else {

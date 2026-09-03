@@ -34,8 +34,8 @@ struct CaptureReceiptDetailView: View {
                 }
             }
             .padding(.horizontal, UnfiledTheme.screenPadding)
-            .padding(.top, 24)
-            .padding(.bottom, 72)
+            .padding(.top, UnfiledTheme.pushedHeaderTop)
+            .padding(.bottom, UnfiledTheme.pushedScreenBottom)
         }
         .refreshable { await onRefresh() }
         .navigationTitle("Receipt")
@@ -46,24 +46,24 @@ struct CaptureReceiptDetailView: View {
     @ViewBuilder
     private func receiptContent(_ receipt: ReceiptPresentation) -> some View {
         Text(receipt.headline)
-            .font(.largeTitle.weight(.bold))
+            .font(UnfiledType.display)
             .tracking(-0.9)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityAddTraits(.isHeader)
-            .padding(.top, 10)
+            .padding(.top, UnfiledTheme.eyebrowToTitle)
 
         Label(receipt.category, systemImage: statusIcon(receipt))
-            .font(.caption.weight(.medium).monospaced())
+            .font(UnfiledType.label)
             .textCase(.uppercase)
             .foregroundStyle(UnfiledTheme.fog)
             .padding(.top, 14)
 
         SectionRule()
-            .padding(.top, 24)
+            .padding(.top, UnfiledTheme.headerBottom)
 
         receiptSection(title: "Original capture") {
             Text(receipt.original)
-                .font(.body.monospaced())
+                .font(UnfiledType.body)
                 .foregroundStyle(UnfiledTheme.paper)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
@@ -73,7 +73,7 @@ struct CaptureReceiptDetailView: View {
             SectionRule()
             receiptSection(title: "Destination") {
                 Label(destinationTitle, systemImage: "arrow.turn.down.right")
-                    .font(.title3.weight(.semibold))
+                    .font(UnfiledType.title)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -92,10 +92,10 @@ struct CaptureReceiptDetailView: View {
         if receipt.pending {
             SectionRule()
             Label("Saved safely; organization is still in progress", systemImage: "clock")
-                .font(.body)
+                .font(UnfiledType.body)
                 .foregroundStyle(UnfiledTheme.fog)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.vertical, 22)
+                .padding(.vertical, UnfiledTheme.rowVertical)
         }
 
         if !receipt.actions.isEmpty {
@@ -116,8 +116,8 @@ struct CaptureReceiptDetailView: View {
                 onShowReview(reviewItemID)
             } label: {
                 Label("Open Review", systemImage: "tray.and.arrow.down")
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .font(UnfiledType.heading)
+                    .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
             }
             .buttonStyle(.plain)
             .foregroundStyle(UnfiledTheme.ink)
@@ -130,7 +130,7 @@ struct CaptureReceiptDetailView: View {
 
         if let interactionError = receiptInteractionError(receipt) {
             Label(interactionError, systemImage: "exclamationmark.circle")
-                .font(.footnote)
+                .font(UnfiledType.secondary)
                 .foregroundStyle(UnfiledTheme.paper)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 18)
@@ -138,7 +138,7 @@ struct CaptureReceiptDetailView: View {
 
         if let errorMessage {
             Label(errorMessage, systemImage: "wifi.exclamationmark")
-                .font(.footnote)
+                .font(UnfiledType.secondary)
                 .foregroundStyle(UnfiledTheme.fog)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 18)
@@ -153,7 +153,7 @@ struct CaptureReceiptDetailView: View {
             EditorialEyebrow(text: title)
             content()
         }
-        .padding(.vertical, 22)
+        .padding(.vertical, UnfiledTheme.rowVertical)
     }
 
     private var loadingView: some View {
@@ -161,7 +161,7 @@ struct CaptureReceiptDetailView: View {
             ProgressView()
                 .tint(UnfiledTheme.persimmon)
             Text("Loading the latest receipt")
-                .font(.body)
+                .font(UnfiledType.body)
                 .foregroundStyle(UnfiledTheme.fog)
         }
         .frame(maxWidth: .infinity, minHeight: 180, alignment: .leading)
@@ -172,21 +172,21 @@ struct CaptureReceiptDetailView: View {
     private var unavailableView: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Receipt unavailable")
-                .font(.title2.weight(.semibold))
+                .font(UnfiledType.title)
             Text(errorMessage ?? "The saved capture could not be loaded right now.")
-                .font(.body)
+                .font(UnfiledType.body)
                 .foregroundStyle(UnfiledTheme.fog)
                 .fixedSize(horizontal: false, vertical: true)
             Button {
                 Task { await onRefresh() }
             } label: {
                 Text("Try again")
-                    .font(.body.weight(.semibold))
+                    .font(UnfiledType.heading)
                     .frame(minHeight: UnfiledTheme.minimumTouchTarget)
             }
             .accessibilityIdentifier("receipt.detail.retry")
         }
-        .padding(.top, 32)
+        .padding(.top, UnfiledTheme.sectionTop)
     }
 
     private func receiptInteractionError(_ receipt: ReceiptPresentation) -> String? {
@@ -227,11 +227,11 @@ struct ReceiptInsertedContentRow: View {
             VStack(alignment: .leading, spacing: 6) {
                 if let provenance = item.provenanceLabel {
                     Text(provenance)
-                        .font(.caption.weight(.medium).monospaced())
+                        .font(UnfiledType.label)
                         .foregroundStyle(UnfiledTheme.persimmon)
                 }
                 Text(item.content)
-                    .font(.body)
+                    .font(UnfiledType.body)
                     .foregroundStyle(UnfiledTheme.paper)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -313,11 +313,11 @@ struct ReceiptActionButtons: View {
                         .accessibilityHidden(true)
                 } else {
                     Image(systemName: systemImage)
-                        .font(.caption.weight(.semibold))
+                        .font(UnfiledType.label)
                         .accessibilityHidden(true)
                 }
                 Text(isBusy ? "Working…" : title)
-                    .font(.body.weight(.semibold))
+                    .font(UnfiledType.heading)
             }
             .frame(minHeight: UnfiledTheme.minimumTouchTarget)
             .contentShape(Rectangle())

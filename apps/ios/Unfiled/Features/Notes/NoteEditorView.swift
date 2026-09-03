@@ -81,11 +81,11 @@ struct NoteEditorView: View {
 
                     VStack(alignment: .leading, spacing: 9) {
                         Text("Title")
-                            .font(.caption.weight(.medium).monospaced())
+                            .font(UnfiledType.label)
                             .foregroundStyle(UnfiledTheme.fog)
 
                         TextField("Untitled note", text: $draft.title, axis: .vertical)
-                            .font(.title.weight(.bold))
+                            .font(UnfiledType.display)
                             .tracking(-1)
                             .foregroundStyle(UnfiledTheme.paper)
                             .focused($focusedField, equals: .title)
@@ -94,32 +94,32 @@ struct NoteEditorView: View {
                             .accessibilityIdentifier("noteEditor.title")
 
                         Text("\(draft.title.utf16.count)/\(NoteEditorDraft.maximumTitleLength)")
-                            .font(.caption2.monospaced())
+                            .font(UnfiledType.caption)
                             .foregroundStyle(
                                 draft.title.utf16.count > NoteEditorDraft.maximumTitleLength
                                     ? UnfiledTheme.persimmon : UnfiledTheme.fog
                             )
                             .frame(maxWidth: .infinity, alignment: .trailing)
                     }
-                    .padding(.vertical, 24)
+                    .padding(.vertical, UnfiledTheme.rowVertical)
 
                     SectionRule()
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Note")
-                            .font(.caption.weight(.medium).monospaced())
+                            .font(UnfiledType.label)
                             .foregroundStyle(UnfiledTheme.fog)
 
                         ZStack(alignment: .topLeading) {
                             if draft.bodyMarkdown.isEmpty {
                                 Text("Start writing")
-                                    .font(.body)
+                                    .font(UnfiledType.body)
                                     .foregroundStyle(UnfiledTheme.fog.opacity(0.72))
                                     .padding(.top, 8)
                                     .accessibilityHidden(true)
                             }
                             TextEditor(text: $draft.bodyMarkdown)
-                                .font(.body)
+                                .font(UnfiledType.body)
                                 .lineSpacing(6)
                                 .scrollContentBackground(.hidden)
                                 .foregroundStyle(UnfiledTheme.paper)
@@ -130,18 +130,18 @@ struct NoteEditorView: View {
                         }
 
                         Text("\(draft.bodyMarkdown.utf16.count)/\(NoteEditorDraft.maximumBodyLength)")
-                            .font(.caption2.monospaced())
+                            .font(UnfiledType.caption)
                             .foregroundStyle(
                                 draft.bodyMarkdown.utf16.count > NoteEditorDraft.maximumBodyLength
                                     ? UnfiledTheme.persimmon : UnfiledTheme.fog
                             )
                             .frame(maxWidth: .infinity, alignment: .trailing)
                     }
-                    .padding(.vertical, 24)
+                    .padding(.vertical, UnfiledTheme.rowVertical)
 
                     if let message = draft.validationIssue ?? errorMessage {
                         Label(message, systemImage: "exclamationmark.circle")
-                            .font(.subheadline.weight(.medium))
+                            .font(UnfiledType.secondaryStrong)
                             .foregroundStyle(UnfiledTheme.persimmon)
                             .padding(.bottom, 20)
                             .accessibilityIdentifier("noteEditor.error")
@@ -176,18 +176,18 @@ struct NoteEditorView: View {
                 Spacer()
                 if let currentRevision {
                     Text("Revision \(currentRevision)")
-                        .font(.caption.weight(.medium).monospaced())
+                        .font(UnfiledType.label)
                         .foregroundStyle(UnfiledTheme.fog)
                 }
             }
 
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 10) { propertyControls }
-                VStack(alignment: .leading, spacing: 10) { propertyControls }
+                HStack(spacing: UnfiledTheme.controlGap) { propertyControls }
+                VStack(alignment: .leading, spacing: UnfiledTheme.controlGap) { propertyControls }
             }
         }
-        .padding(.top, 16)
-        .padding(.bottom, 20)
+        .padding(.top, UnfiledTheme.pushedHeaderTop)
+        .padding(.bottom, UnfiledTheme.headerBottom)
     }
 
     @ViewBuilder
@@ -253,7 +253,7 @@ struct NoteEditorView: View {
 
     private func propertyLabel(_ title: String, systemImage: String) -> some View {
         Label(title, systemImage: systemImage)
-            .font(.footnote.weight(.medium))
+            .font(UnfiledType.caption)
             .foregroundStyle(UnfiledTheme.paper)
             .padding(.horizontal, 12)
             .frame(minHeight: 40)
@@ -295,7 +295,7 @@ struct NoteEditorView: View {
             appendMarkdown(insertion)
         } label: {
             Image(systemName: systemImage)
-                .font(.body.weight(.medium))
+                .font(UnfiledType.heading)
                 .foregroundStyle(UnfiledTheme.paper)
                 .frame(width: 46, height: 44)
         }

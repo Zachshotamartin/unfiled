@@ -171,7 +171,7 @@ enum PresentationMapping {
             insertedContent: receipt.map(receiptContent) ?? [],
             actions: receipt?.actions.map(receiptAction) ?? [],
             pending: value.status == .queued || value.status == .processing,
-            retryable: false
+            retryable: value.status == .failed
         )
     }
 
@@ -189,7 +189,7 @@ enum PresentationMapping {
             insertedContent: [],
             actions: [],
             pending: value.status == .queued || value.status == .processing,
-            retryable: false
+            retryable: value.status == .failed
         )
     }
 

@@ -42,14 +42,14 @@ struct RevisionHistoryView: View {
 
                 if let feedbackMessage {
                     Label(feedbackMessage, systemImage: "exclamationmark.circle")
-                        .font(.subheadline.weight(.medium))
+                        .font(UnfiledType.secondaryStrong)
                         .foregroundStyle(UnfiledTheme.persimmon)
                         .padding(.vertical, 18)
                         .accessibilityIdentifier("revisionHistory.feedback")
                 }
             }
             .padding(.horizontal, UnfiledTheme.screenPadding)
-            .padding(.bottom, 48)
+            .padding(.bottom, UnfiledTheme.pushedScreenBottom)
         }
         .refreshable { await onRefresh() }
         .confirmationDialog(
@@ -74,17 +74,17 @@ struct RevisionHistoryView: View {
         VStack(alignment: .leading, spacing: 14) {
             EditorialEyebrow(text: "Revision history")
             Text(noteTitle)
-                .font(.title.weight(.bold))
+                .font(UnfiledType.display)
                 .tracking(-1.1)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
             Text("Every restore creates a new revision. Nothing here is overwritten.")
-                .font(.subheadline)
+                .font(UnfiledType.secondary)
                 .foregroundStyle(UnfiledTheme.fog)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.top, 16)
-        .padding(.bottom, 24)
+        .padding(.top, UnfiledTheme.pushedHeaderTop)
+        .padding(.bottom, UnfiledTheme.headerBottom)
     }
 
     private func revisionRow(_ revision: RevisionPresentation) -> some View {
@@ -94,28 +94,28 @@ struct RevisionHistoryView: View {
         return VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Revision \(revision.revision)")
-                    .font(.title3.weight(.semibold))
+                    .font(UnfiledType.title)
                 if isCurrent {
                     Text("Current")
-                        .font(.caption2.weight(.semibold).monospaced())
+                        .font(UnfiledType.label)
                         .foregroundStyle(UnfiledTheme.persimmon)
                 }
                 Spacer(minLength: 12)
                 Text(revision.createdLabel)
-                    .font(.caption.monospaced())
+                    .font(UnfiledType.caption)
                     .foregroundStyle(UnfiledTheme.fog)
             }
 
             Text(revision.title)
-                .font(.body)
+                .font(UnfiledType.body)
                 .lineLimit(2)
             Label(sourceLabel(revision.source), systemImage: sourceIcon(revision.source))
-                .font(.footnote.weight(.medium))
+                .font(UnfiledType.caption)
                 .foregroundStyle(UnfiledTheme.fog)
 
             HStack(spacing: 18) {
                 Button("View") { onPreviewRevision(revision.id) }
-                    .font(.subheadline.weight(.semibold))
+                    .font(UnfiledType.secondaryStrong)
                     .foregroundStyle(UnfiledTheme.paper)
                     .frame(minHeight: UnfiledTheme.minimumTouchTarget)
                     .accessibilityIdentifier("revisionHistory.view.\(revision.id)")
@@ -130,7 +130,7 @@ struct RevisionHistoryView: View {
                             Text("Restore")
                         }
                     }
-                    .font(.subheadline.weight(.semibold))
+                    .font(UnfiledType.secondaryStrong)
                     .foregroundStyle(UnfiledTheme.persimmon)
                     .frame(minHeight: UnfiledTheme.minimumTouchTarget)
                     .disabled(restoringRevisionID != nil)
@@ -139,7 +139,7 @@ struct RevisionHistoryView: View {
                 }
             }
         }
-        .padding(.vertical, 20)
+        .padding(.vertical, UnfiledTheme.rowVertical)
         .accessibilityElement(children: .contain)
     }
 
@@ -155,7 +155,7 @@ struct RevisionHistoryView: View {
                         .frame(maxWidth: .infinity)
                         .frame(height: 16)
                 }
-                .padding(.vertical, 22)
+                .padding(.vertical, UnfiledTheme.rowVertical)
                 SectionRule()
             }
         }
@@ -166,19 +166,19 @@ struct RevisionHistoryView: View {
     private func errorState(_ message: String) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Revision history is unavailable")
-                .font(.title3.weight(.semibold))
+                .font(UnfiledType.title)
             Text(message)
-                .font(.subheadline)
+                .font(UnfiledType.secondary)
                 .foregroundStyle(UnfiledTheme.fog)
             Button("Try again") {
                 Task { @MainActor in await onRefresh() }
             }
-            .font(.subheadline.weight(.semibold))
+            .font(UnfiledType.secondaryStrong)
             .foregroundStyle(UnfiledTheme.persimmon)
             .frame(minHeight: UnfiledTheme.minimumTouchTarget)
             .accessibilityIdentifier("revisionHistory.retry")
         }
-        .padding(.vertical, 30)
+        .padding(.vertical, UnfiledTheme.rowVertical)
     }
 
     private func restore(_ revision: RevisionPresentation) {

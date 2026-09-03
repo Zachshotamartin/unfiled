@@ -152,21 +152,21 @@ struct LogFieldsSection: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text("Log")
-                    .font(.title3.weight(.semibold))
+                    .font(UnfiledType.title)
                     .accessibilityAddTraits(.isHeader)
                 Spacer(minLength: 12)
                 Text("\(entries.count) \(entries.count == 1 ? "entry" : "entries")")
-                    .font(.caption.weight(.medium).monospaced())
+                    .font(UnfiledType.label)
                     .foregroundStyle(UnfiledTheme.fog)
             }
-            .padding(.top, 24)
-            .padding(.bottom, 12)
+            .padding(.top, UnfiledTheme.rowVertical)
+            .padding(.bottom, UnfiledTheme.labelToRule)
 
             ForEach(entries) { entry in
                 VStack(alignment: .leading, spacing: 0) {
                     Text(entry.occurredAt, format: .dateTime.month(.abbreviated).day().year()
                         .hour().minute())
-                        .font(.caption.weight(.medium).monospaced())
+                        .font(UnfiledType.label)
                         .foregroundStyle(UnfiledTheme.fog)
                         .padding(.top, 18)
                         .padding(.bottom, 8)
@@ -203,10 +203,10 @@ struct LogFieldsSection: View {
                 HStack(alignment: .center, spacing: 14) {
                     VStack(alignment: .leading, spacing: 5) {
                         Text(field.label)
-                            .font(.body.weight(.semibold))
+                            .font(UnfiledType.heading)
                             .foregroundStyle(UnfiledTheme.paper)
                         Text(LogFieldValuePresentation.label(field.value))
-                            .font(.body.monospacedDigit())
+                            .font(UnfiledType.body.monospacedDigit())
                             .foregroundStyle(UnfiledTheme.fog)
                             .lineLimit(2)
                     }
@@ -215,7 +215,7 @@ struct LogFieldsSection: View {
                         ProgressView().controlSize(.small).tint(UnfiledTheme.persimmon)
                     } else {
                         Image(systemName: isEditing ? "chevron.up" : "square.and.pencil")
-                            .font(.body.weight(.medium))
+                            .font(UnfiledType.heading)
                             .foregroundStyle(UnfiledTheme.persimmon)
                     }
                 }
@@ -237,7 +237,7 @@ struct LogFieldsSection: View {
 
             if let error = errors[identity] {
                 Label(error, systemImage: "exclamationmark.circle")
-                    .font(.footnote)
+                    .font(UnfiledType.secondary)
                     .foregroundStyle(UnfiledTheme.persimmon)
                     .padding(.bottom, 12)
                     .accessibilityIdentifier("\(identity).error")
@@ -255,7 +255,7 @@ struct LogFieldsSection: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Prior value: \(currentDraft.priorLabel)")
-                .font(.caption.monospaced())
+                .font(UnfiledType.caption)
                 .foregroundStyle(UnfiledTheme.fog)
 
             TextField(
@@ -268,9 +268,9 @@ struct LogFieldsSection: View {
             .keyboardType(currentDraft.isNumeric ? .decimalPad : .default)
             .textInputAutocapitalization(currentDraft.isNumeric ? .never : .sentences)
             .autocorrectionDisabled(currentDraft.isNumeric)
-            .font(.body.monospacedDigit())
-            .padding(.horizontal, 14)
-            .frame(maxWidth: .infinity, minHeight: 52)
+            .font(UnfiledType.body.monospacedDigit())
+            .padding(.horizontal, UnfiledTheme.fieldPadding)
+            .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
             .background(UnfiledTheme.raised)
             .overlay {
                 RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius)
@@ -285,7 +285,7 @@ struct LogFieldsSection: View {
             )
 
             if currentDraft.isNumeric {
-                HStack(spacing: 12) {
+                HStack(spacing: UnfiledTheme.controlGap) {
                     stepButton(
                         title: "Decrease \(field.label)",
                         systemImage: "minus",
@@ -309,11 +309,11 @@ struct LogFieldsSection: View {
             }
 
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) {
+                HStack(spacing: UnfiledTheme.controlGap) {
                     cancelButton
                     saveButton(entry: entry, field: field, identity: identity, draft: currentDraft)
                 }
-                VStack(spacing: 12) {
+                VStack(spacing: UnfiledTheme.controlGap) {
                     saveButton(entry: entry, field: field, identity: identity, draft: currentDraft)
                     cancelButton
                 }
@@ -333,8 +333,8 @@ struct LogFieldsSection: View {
         } label: {
             Label(title, systemImage: systemImage)
                 .labelStyle(.iconOnly)
-                .font(.title3.weight(.semibold))
-                .frame(maxWidth: .infinity, minHeight: 50)
+                .font(UnfiledType.title)
+                .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

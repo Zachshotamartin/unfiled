@@ -139,7 +139,7 @@ private struct NoteSourcesSection: View {
                 contextNotice(notice)
             }
         }
-        .padding(.vertical, 24)
+        .padding(.vertical, UnfiledTheme.rowVertical)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(NoteContextAccessibilityIdentifier.sources)
         .onChange(of: sourceIdentities) { _, current in
@@ -166,17 +166,17 @@ private struct NoteSourcesSection: View {
             } label: {
                 HStack(alignment: .center, spacing: 14) {
                     Image(systemName: isRemoved ? "minus.circle" : "tray.and.arrow.down")
-                        .font(.body.weight(.medium))
+                        .font(UnfiledType.heading)
                         .foregroundStyle(isRemoved ? UnfiledTheme.fog : UnfiledTheme.persimmon)
                         .frame(width: 28)
 
                     VStack(alignment: .leading, spacing: 5) {
                         Text(NoteContextPresentation.sourceLabel(source.source))
-                            .font(.body.weight(.semibold))
+                            .font(UnfiledType.heading)
                             .foregroundStyle(UnfiledTheme.paper)
                         Text(source.clientCreatedAt, format: .dateTime.month(.abbreviated)
                             .day().hour().minute())
-                            .font(.caption.monospaced())
+                            .font(UnfiledType.caption)
                             .foregroundStyle(UnfiledTheme.fog)
                     }
 
@@ -184,13 +184,13 @@ private struct NoteSourcesSection: View {
 
                     if isRemoved {
                         Text("REMOVED")
-                            .font(.caption2.weight(.semibold).monospaced())
+                            .font(UnfiledType.label)
                             .tracking(0.6)
                             .foregroundStyle(UnfiledTheme.fog)
                     }
 
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.caption.weight(.semibold))
+                        .font(UnfiledType.label)
                         .foregroundStyle(UnfiledTheme.fog)
                 }
                 .frame(maxWidth: .infinity, minHeight: 62, alignment: .leading)
@@ -208,7 +208,7 @@ private struct NoteSourcesSection: View {
             if isExpanded {
                 VStack(alignment: .leading, spacing: 14) {
                     Text(source.rawContent)
-                        .font(.body)
+                        .font(UnfiledType.body)
                         .lineSpacing(5)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
@@ -218,13 +218,13 @@ private struct NoteSourcesSection: View {
                         NoteContextPresentation.sourceStatus(source.relation),
                         systemImage: isRemoved ? "minus.circle" : "checkmark.circle"
                     )
-                    .font(.footnote.weight(.medium))
+                    .font(UnfiledType.caption)
                     .foregroundStyle(UnfiledTheme.fog)
 
                     if !source.insertedItemIds.isEmpty {
                         Text("\(source.insertedItemIds.count) captured " +
                             (source.insertedItemIds.count == 1 ? "item" : "items"))
-                            .font(.caption.monospaced())
+                            .font(UnfiledType.caption)
                             .foregroundStyle(UnfiledTheme.fog)
                     }
 
@@ -232,7 +232,7 @@ private struct NoteSourcesSection: View {
                         onOpenCapture(source.captureId.rawValue)
                     } label: {
                         Label("Open capture", systemImage: "arrow.right")
-                            .font(.body.weight(.semibold))
+                            .font(UnfiledType.heading)
                             .frame(minHeight: UnfiledTheme.minimumTouchTarget)
                     }
                     .buttonStyle(.plain)
@@ -304,23 +304,23 @@ private struct NoteBacklinksSection: View {
                     } label: {
                         HStack(alignment: .center, spacing: 14) {
                             Image(systemName: "arrow.turn.down.right")
-                                .font(.body.weight(.medium))
+                                .font(UnfiledType.heading)
                                 .foregroundStyle(UnfiledTheme.persimmon)
                                 .frame(width: 28)
 
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(backlink.fromTitle)
-                                    .font(.body.weight(.semibold))
+                                    .font(UnfiledType.heading)
                                     .foregroundStyle(UnfiledTheme.paper)
                                     .multilineTextAlignment(.leading)
                                 Text(NoteContextPresentation.linkLabel(backlink.linkType))
-                                    .font(.caption.monospaced())
+                                    .font(UnfiledType.caption)
                                     .foregroundStyle(UnfiledTheme.fog)
                             }
 
                             Spacer(minLength: 12)
                             Image(systemName: "arrow.right")
-                                .font(.caption.weight(.semibold))
+                                .font(UnfiledType.label)
                                 .foregroundStyle(UnfiledTheme.fog)
                         }
                         .frame(maxWidth: .infinity, minHeight: 62, alignment: .leading)
@@ -351,7 +351,7 @@ private struct NoteBacklinksSection: View {
                 contextNotice(notice)
             }
         }
-        .padding(.vertical, 24)
+        .padding(.vertical, UnfiledTheme.rowVertical)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(NoteContextAccessibilityIdentifier.backlinks)
     }
@@ -364,13 +364,13 @@ private func contextHeader(
     count: Int,
     isLoading: Bool
 ) -> some View {
-    HStack(alignment: .firstTextBaseline, spacing: 12) {
+    HStack(alignment: .center, spacing: 12) {
         VStack(alignment: .leading, spacing: 5) {
             Text(title)
-                .font(.title3.weight(.semibold))
+                .font(UnfiledType.title)
                 .accessibilityAddTraits(.isHeader)
             Text(detail)
-                .font(.caption.monospaced())
+                .font(UnfiledType.caption)
                 .foregroundStyle(UnfiledTheme.fog)
         }
         Spacer(minLength: 12)
@@ -381,7 +381,7 @@ private func contextHeader(
                 .accessibilityHidden(true)
         } else if count > 0 {
             Text("\(count)")
-                .font(.caption.weight(.medium).monospaced())
+                .font(UnfiledType.label)
                 .foregroundStyle(UnfiledTheme.fog)
                 .accessibilityLabel("\(count) loaded")
         }
@@ -391,7 +391,7 @@ private func contextHeader(
 @MainActor
 private func loadingRow(_ label: String) -> some View {
     Label(label, systemImage: "clock")
-        .font(.footnote.weight(.medium))
+        .font(UnfiledType.caption)
         .foregroundStyle(UnfiledTheme.fog)
         .frame(minHeight: UnfiledTheme.minimumTouchTarget)
 }
@@ -400,10 +400,10 @@ private func loadingRow(_ label: String) -> some View {
 private func emptyRow(title: String, message: String, systemImage: String) -> some View {
     VStack(alignment: .leading, spacing: 8) {
         Label(title, systemImage: systemImage)
-            .font(.body.weight(.semibold))
+            .font(UnfiledType.heading)
             .foregroundStyle(UnfiledTheme.paper)
         Text(message)
-            .font(.footnote)
+            .font(UnfiledType.secondary)
             .foregroundStyle(UnfiledTheme.fog)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -418,15 +418,15 @@ private func failureRow(
 ) -> some View {
     VStack(alignment: .leading, spacing: 8) {
         Label(failure.title, systemImage: failure.systemImage)
-            .font(.body.weight(.semibold))
+            .font(UnfiledType.heading)
             .foregroundStyle(UnfiledTheme.paper)
         Text(failure.message)
-            .font(.footnote)
+            .font(UnfiledType.secondary)
             .foregroundStyle(UnfiledTheme.fog)
             .fixedSize(horizontal: false, vertical: true)
         if failure != .deleted {
             Button("Try again") { Task { await retry() } }
-                .font(.body.weight(.semibold))
+                .font(UnfiledType.heading)
                 .foregroundStyle(UnfiledTheme.persimmon)
                 .frame(minHeight: UnfiledTheme.minimumTouchTarget)
                 .accessibilityIdentifier(retryIdentifier)
@@ -455,8 +455,8 @@ private func paginationControls(
             Task { await action() }
         } label: {
             Label("Load more", systemImage: "arrow.down")
-                .font(.body.weight(.semibold))
-                .frame(maxWidth: .infinity, minHeight: 50)
+                .font(UnfiledType.heading)
+                .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -475,7 +475,7 @@ private func paginationControls(
 @MainActor
 private func contextNotice(_ notice: String) -> some View {
     Label(notice, systemImage: "info.circle")
-        .font(.footnote)
+        .font(UnfiledType.secondary)
         .foregroundStyle(UnfiledTheme.fog)
         .fixedSize(horizontal: false, vertical: true)
 }

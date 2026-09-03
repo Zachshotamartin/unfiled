@@ -48,14 +48,14 @@ struct DestinationPickerView: View {
                     EditorialEyebrow(text: eyebrow)
 
                     Text(screenTitle)
-                        .font(.largeTitle.weight(.bold))
+                        .font(UnfiledType.display)
                         .tracking(-0.9)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityAddTraits(.isHeader)
-                        .padding(.top, 10)
+                        .padding(.top, UnfiledTheme.eyebrowToTitle)
 
                     Text(explanation)
-                        .font(.body)
+                        .font(UnfiledType.body)
                         .foregroundStyle(UnfiledTheme.fog)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 12)
@@ -67,11 +67,11 @@ struct DestinationPickerView: View {
                     }
                     .pickerStyle(.segmented)
                     .frame(minHeight: UnfiledTheme.minimumTouchTarget)
-                    .padding(.top, 28)
+                    .padding(.top, UnfiledTheme.sectionTop)
                     .accessibilityIdentifier("destination.mode.\(sheet.id)")
 
                     SectionRule()
-                        .padding(.top, 24)
+                        .padding(.top, UnfiledTheme.headerBottom)
 
                     if mode == .existing {
                         existingNotes
@@ -81,7 +81,7 @@ struct DestinationPickerView: View {
 
                     if let errorMessage {
                         Label(errorMessage, systemImage: "exclamationmark.circle")
-                            .font(.footnote)
+                            .font(UnfiledType.secondary)
                             .foregroundStyle(UnfiledTheme.paper)
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.top, 20)
@@ -89,8 +89,8 @@ struct DestinationPickerView: View {
                     }
                 }
                 .padding(.horizontal, UnfiledTheme.screenPadding)
-                .padding(.top, 24)
-                .padding(.bottom, 132)
+                .padding(.top, UnfiledTheme.pushedHeaderTop)
+                .padding(.bottom, UnfiledTheme.screenBottom)
             }
             .scrollDismissesKeyboard(.interactively)
             .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -118,14 +118,15 @@ struct DestinationPickerView: View {
     private var existingNotes: some View {
         LazyVStack(alignment: .leading, spacing: 0) {
             EditorialEyebrow(text: "Available notes")
-                .padding(.vertical, 18)
+                .padding(.top, UnfiledTheme.rowVertical)
+                .padding(.bottom, UnfiledTheme.labelToRule)
 
             if eligibleNotes.isEmpty {
                 Text("There are no other active notes yet. Create a new note instead.")
-                    .font(.body)
+                    .font(UnfiledType.body)
                     .foregroundStyle(UnfiledTheme.fog)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.vertical, 24)
+                    .padding(.vertical, UnfiledTheme.rowVertical)
             } else {
                 ForEach(eligibleNotes) { note in
                     Button {
@@ -133,7 +134,7 @@ struct DestinationPickerView: View {
                     } label: {
                         HStack(alignment: .top, spacing: 14) {
                             Image(systemName: selectedNoteID == note.id ? "checkmark.circle.fill" : "circle")
-                                .font(.title3)
+                                .font(UnfiledType.title)
                                 .foregroundStyle(
                                     selectedNoteID == note.id
                                         ? UnfiledTheme.persimmon
@@ -143,11 +144,11 @@ struct DestinationPickerView: View {
 
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(note.title)
-                                    .font(.body.weight(.semibold))
+                                    .font(UnfiledType.heading)
                                     .foregroundStyle(UnfiledTheme.paper)
                                     .fixedSize(horizontal: false, vertical: true)
                                 Text("\(note.type.capitalized) · \(note.updatedLabel)")
-                                    .font(.caption.monospaced())
+                                    .font(UnfiledType.caption)
                                     .foregroundStyle(UnfiledTheme.fog)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
@@ -177,9 +178,9 @@ struct DestinationPickerView: View {
                     .textInputAutocapitalization(.sentences)
                     .submitLabel(.done)
                     .focused($titleFocused)
-                    .font(.body)
-                    .padding(.horizontal, 15)
-                    .frame(minHeight: 56)
+                    .font(UnfiledType.body)
+                    .padding(.horizontal, UnfiledTheme.fieldPadding)
+                    .frame(minHeight: UnfiledTheme.controlHeight)
                     .background(UnfiledTheme.graphite)
                     .overlay {
                         RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius)
@@ -200,8 +201,8 @@ struct DestinationPickerView: View {
                     }
                 }
                 .pickerStyle(.menu)
-                .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-                .padding(.horizontal, 15)
+                .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight, alignment: .leading)
+                .padding(.horizontal, UnfiledTheme.fieldPadding)
                 .background(UnfiledTheme.graphite)
                 .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
                 .accessibilityIdentifier("destination.noteType.\(sheet.id)")
@@ -216,8 +217,8 @@ struct DestinationPickerView: View {
                     }
                 }
                 .pickerStyle(.menu)
-                .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-                .padding(.horizontal, 15)
+                .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight, alignment: .leading)
+                .padding(.horizontal, UnfiledTheme.fieldPadding)
                 .background(UnfiledTheme.graphite)
                 .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
                 .accessibilityIdentifier("destination.space.\(sheet.id)")
@@ -242,14 +243,14 @@ struct DestinationPickerView: View {
                             .accessibilityHidden(true)
                     }
                     Text(isSubmitting ? "Saving choice…" : submitTitle)
-                        .font(.body.weight(.semibold))
+                        .font(UnfiledType.heading)
                     if !isSubmitting {
                         Image(systemName: "arrow.right")
-                            .font(.caption.weight(.bold))
+                            .font(UnfiledType.label)
                             .accessibilityHidden(true)
                     }
                 }
-                .frame(maxWidth: .infinity, minHeight: 54)
+                .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
                 .foregroundStyle(UnfiledTheme.ink)
                 .background(canSubmit ? UnfiledTheme.persimmon : UnfiledTheme.fog)
                 .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))

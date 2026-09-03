@@ -21,6 +21,8 @@ enum AppRoute: Hashable {
     case deleted
     case settings
     case routingRules
+    /// A space's notes; nil is the Unfiled space (notes without a space).
+    case space(String?)
 }
 
 struct CaptureSheet: Equatable, Identifiable {

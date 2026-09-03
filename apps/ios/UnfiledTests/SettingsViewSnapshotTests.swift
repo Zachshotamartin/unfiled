@@ -202,8 +202,73 @@ final class SettingsViewSnapshotTests: XCTestCase {
                     providerKeys: bothKeys,
                     isManagedFallbackAvailable: true
                 ))
-            )
+            ),
+            Scenario(name: "ios-settings-page-effort", view: makeEffortPage(openAISol)),
+            Scenario(name: "ios-settings-page-model", view: makeModelPage(openAISol)),
+            Scenario(name: "ios-settings-page-day-boundary", view: makeDayBoundaryPage(openAIAuto))
         ]
+    }
+
+    // MARK: Pushed pages
+
+    /// The choice pages Settings pushes, rendered with the same synthetic settings.
+    private static func makeEffortPage(_ settings: UserSettings) -> AnyView {
+        let draft = AISettingsDraft(settings: settings)
+        return AnyView(
+            SettingsChoicePage(
+                title: "Effort",
+                intro: AISettingsCopy.effortIntro,
+                options: RoutingEffort.allCases.map { effort in
+                    SettingsChoiceOption(
+                        value: effort,
+                        title: AISettingsCopy.routingTitle(effort),
+                        detail: AISettingsCopy.routingDetail(effort)
+                    )
+                },
+                selection: draft.routingEffort,
+                isLocked: false,
+                accessibilityIdentifier: AISettingsAccessibilityIdentifier.routingEffort,
+                onSelect: { _ in }
+            )
+            .environment(\.colorScheme, .dark)
+        )
+    }
+
+    private static func makeModelPage(_ settings: UserSettings) -> AnyView {
+        let draft = AISettingsDraft(settings: settings)
+        return AnyView(
+            SettingsChoicePage(
+                title: "Model",
+                intro: AISettingsCopy.modelIntro,
+                options: AIModelRegistry.selections(for: draft.byokProvider).map { model in
+                    SettingsChoiceOption(
+                        value: model,
+                        title: AIModelRegistry.label(for: model),
+                        detail: SettingsRowPresentation.modelDetail(model, draft: draft)
+                    )
+                },
+                selection: draft.modelSelection,
+                isLocked: false,
+                accessibilityIdentifier: AISettingsAccessibilityIdentifier.model,
+                onSelect: { _ in }
+            )
+            .environment(\.colorScheme, .dark)
+        )
+    }
+
+    private static func makeDayBoundaryPage(_ settings: UserSettings) -> AnyView {
+        AnyView(
+            SettingsDayBoundaryPage(
+                draft: AISettingsDraft(settings: settings),
+                isLocked: false,
+                isSaving: false,
+                hasPendingRetry: false,
+                onSave: { _ in }
+            ) {
+                EmptyView()
+            }
+            .environment(\.colorScheme, .dark)
+        )
     }
 
     private static func makeView(_ fixture: Fixture) -> AnyView {

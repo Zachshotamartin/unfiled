@@ -42,6 +42,11 @@ struct SearchView: View {
     let onSearch: @MainActor (SearchRequest) -> Void
     let onLoadMore: @MainActor () async -> Void
     let onOpenNote: @MainActor (String) async -> Void
+    /// False when the Library shows search in place of itself.
+    let showsHeader: Bool
+    /// Leaves search when the Library hosts it.
+    let onLeave: (@MainActor () -> Void)?
+    @FocusState private var fieldFocused: Bool
 
     init(
         results: [SearchResultPresentation],
@@ -60,7 +65,9 @@ struct SearchView: View {
         debounceDuration: Duration = SearchQueryDebouncer.defaultDelay,
         onSearch: @escaping @MainActor (SearchRequest) -> Void,
         onLoadMore: @escaping @MainActor () async -> Void = {},
-        onOpenNote: @escaping @MainActor (String) async -> Void
+        onOpenNote: @escaping @MainActor (String) async -> Void,
+        showsHeader: Bool = true,
+        onLeave: (@MainActor () -> Void)? = nil
     ) {
         self.results = results
         self.isLoading = isLoading
@@ -76,6 +83,8 @@ struct SearchView: View {
         self.onSearch = onSearch
         self.onLoadMore = onLoadMore
         self.onOpenNote = onOpenNote
+        self.showsHeader = showsHeader
+        self.onLeave = onLeave
         _query = State(initialValue: initialQuery)
         _includesArchived = State(initialValue: includesArchived)
         _scope = State(initialValue: initialScope)
@@ -95,18 +104,33 @@ struct SearchView: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                header
+                if showsHeader {
+                    header
+                        .padding(.bottom, UnfiledTheme.sectionTop)
+                } else {
+                    ScreenHeader(title: "Search", subtitle: "Exact text across every note.") {
+                        if let onLeave {
+                            IconButton(glyph: .close, label: "Leave search", action: onLeave)
+                        }
+                    }
+                    .padding(.bottom, UnfiledTheme.sectionTop)
+                }
                 searchField
                 scopeControl
                 archiveControl
-                resultsHeader
+                if request.hasQuery {
+                    resultsHeader
+                }
                 SectionRule()
                 content
             }
             .padding(.horizontal, UnfiledTheme.screenPadding)
-            .padding(.bottom, 110)
+            .padding(.bottom, UnfiledTheme.screenBottom)
         }
         .scrollDismissesKeyboard(.interactively)
+        .onAppear {
+            if onLeave != nil { fieldFocused = true }
+        }
         .task(id: request) {
             await SearchQueryDebouncer.dispatch(
                 request: request,
@@ -120,30 +144,18 @@ struct SearchView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            UnfiledMark(size: 32)
-            Text("Search")
-                .font(.largeTitle.weight(.bold))
-                .tracking(-1.2)
-                .accessibilityAddTraits(.isHeader)
-                .accessibilityIdentifier("search.title")
-            Text("Find a phrase, destination, or detail across your notes.")
-                .font(.body)
-                .foregroundStyle(UnfiledTheme.fog)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.top, 12)
+        ScreenHeader(title: "Search", subtitle: "Exact text across every note.")
+            .accessibilityIdentifier("search.title")
     }
 
     private var searchField: some View {
         HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .font(.body.weight(.medium))
+            GlyphView(glyph: .search, size: 18, weight: 1.8)
                 .foregroundStyle(UnfiledTheme.fog)
-                .accessibilityHidden(true)
 
             TextField("Search your notes", text: $query)
-                .font(.body)
+                .font(UnfiledType.body)
+                .focused($fieldFocused)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .submitLabel(.search)
@@ -158,8 +170,7 @@ struct SearchView: View {
                 Button {
                     query = ""
                 } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title3)
+                    GlyphView(glyph: .close, size: 16, weight: 1.8)
                         .foregroundStyle(UnfiledTheme.fog)
                         .frame(width: UnfiledTheme.minimumTouchTarget, height: UnfiledTheme.minimumTouchTarget)
                 }
@@ -168,77 +179,34 @@ struct SearchView: View {
                 .accessibilityIdentifier("search.clear")
             }
         }
-        .padding(.leading, 16)
-        .padding(.trailing, query.isEmpty ? 16 : 4)
-        .frame(minHeight: 56)
+        .padding(.leading, UnfiledTheme.fieldPadding)
+        .padding(.trailing, query.isEmpty ? UnfiledTheme.fieldPadding : 4)
+        .frame(minHeight: UnfiledTheme.controlHeight)
         .background(UnfiledTheme.graphite)
         .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
         .overlay {
             RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius)
                 .stroke(UnfiledTheme.border, lineWidth: 1)
         }
-        .padding(.top, 26)
     }
 
     private var scopeControl: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("SEARCH SCOPE")
-                .font(.caption.weight(.medium).monospaced())
-                .tracking(1)
-                .foregroundStyle(UnfiledTheme.fog)
-                .accessibilityAddTraits(.isHeader)
-
-            ForEach(SearchScope.allCases, id: \.self) { option in
-                Button {
-                    scope = option
-                } label: {
-                    HStack(alignment: .top, spacing: 13) {
-                        Image(systemName: scope == option ? "checkmark.circle.fill" : "circle")
-                            .font(.title3)
-                            .foregroundStyle(
-                                scope == option ? UnfiledTheme.persimmon : UnfiledTheme.fog
-                            )
-                            .frame(width: 26, height: 26)
-                            .accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(option.title)
-                                .font(.body.weight(.semibold))
-                                .foregroundStyle(UnfiledTheme.paper)
-                            Text(option.detail)
-                                .font(.caption)
-                                .foregroundStyle(
-                                    option == .aiAssisted && scope == option
-                                        ? UnfiledTheme.paper
-                                        : UnfiledTheme.fog
-                                )
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        Spacer(minLength: 6)
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(scope == option ? UnfiledTheme.raised : .clear)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius)
-                            .stroke(
-                                scope == option
-                                    ? UnfiledTheme.persimmon.opacity(0.6)
-                                    : UnfiledTheme.border,
-                                lineWidth: 1
-                            )
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
-                    .contentShape(Rectangle())
+            HStack(spacing: UnfiledTheme.controlGap) {
+                ForEach(SearchScope.allCases, id: \.self) { option in
+                    Chip(title: option.title, selected: scope == option) { scope = option }
+                        .accessibilityLabel("\(option.title), \(option.detail)")
+                        .accessibilityValue(scope == option ? "Selected" : "Not selected")
+                        .accessibilityIdentifier("search.scope.\(option.rawValue)")
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("\(option.title), \(option.detail)")
-                .accessibilityValue(scope == option ? "Selected" : "Not selected")
-                .accessibilityAddTraits(scope == option ? .isSelected : [])
-                .accessibilityIdentifier("search.scope.\(option.rawValue)")
+                Spacer()
             }
+            Text(scope.detail)
+                .font(UnfiledType.caption)
+                .foregroundStyle(UnfiledTheme.fog)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.top, 22)
+        .padding(.top, 16)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("search.scope")
     }
@@ -247,9 +215,9 @@ struct SearchView: View {
         Toggle(isOn: $includesArchived) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Include archived notes")
-                    .font(.body.weight(.medium))
+                    .font(UnfiledType.body)
                 Text("Archived matches stay marked in the results.")
-                    .font(.caption)
+                    .font(UnfiledType.caption)
                     .foregroundStyle(UnfiledTheme.fog)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -261,11 +229,8 @@ struct SearchView: View {
     }
 
     private var resultsHeader: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(resultCountLabel.uppercased())
-                .font(.caption.weight(.medium).monospaced())
-                .tracking(1)
-                .foregroundStyle(UnfiledTheme.fog)
+        HStack(alignment: .center, spacing: 12) {
+            EditorialEyebrow(text: resultCountLabel)
             Spacer(minLength: 12)
             if searchIsPending {
                 ProgressView()
@@ -276,7 +241,7 @@ struct SearchView: View {
             }
         }
         .padding(.top, 22)
-        .padding(.bottom, 14)
+        .padding(.bottom, UnfiledTheme.labelToRule)
     }
 
     private var resultCountLabel: String {
@@ -341,7 +306,7 @@ struct SearchView: View {
 
                     if let resultFailure = resultFailures[result.id] {
                         Label(resultFailure.message, systemImage: resultFailure.systemImage)
-                            .font(.footnote)
+                            .font(UnfiledType.secondary)
                             .foregroundStyle(UnfiledTheme.persimmon)
                             .padding(.vertical, 8)
                             .accessibilityIdentifier("search.result.\(result.id).error")
@@ -374,7 +339,7 @@ struct SearchView: View {
             HStack(spacing: 12) {
                 ProgressView().tint(UnfiledTheme.persimmon)
                 Text("Loading more results")
-                    .font(.footnote.weight(.medium))
+                    .font(UnfiledType.caption)
                     .foregroundStyle(UnfiledTheme.fog)
             }
             .frame(minHeight: UnfiledTheme.minimumTouchTarget)
@@ -386,7 +351,7 @@ struct SearchView: View {
             .accessibilityIdentifier("search.loadMore.error")
         } else if let paginationNotice {
             Label(paginationNotice, systemImage: "line.3.horizontal.decrease.circle")
-                .font(.footnote)
+                .font(UnfiledType.secondary)
                 .foregroundStyle(UnfiledTheme.fog)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, minHeight: UnfiledTheme.minimumTouchTarget, alignment: .leading)
@@ -397,8 +362,8 @@ struct SearchView: View {
                 Task { await onLoadMore() }
             } label: {
                 Label("Load more results", systemImage: "arrow.down")
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity, minHeight: 50)
+                    .font(UnfiledType.heading)
+                    .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -436,31 +401,28 @@ private struct SearchResultLedgerRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text(result.type.uppercased())
-                    .font(.caption.weight(.medium).monospaced())
-                    .tracking(0.9)
-                    .foregroundStyle(UnfiledTheme.fog)
+                EditorialEyebrow(text: result.type)
                 Spacer(minLength: 12)
                 Text(result.updatedLabel)
-                    .font(.caption.monospaced())
+                    .font(UnfiledType.caption)
                     .foregroundStyle(UnfiledTheme.fog)
                     .multilineTextAlignment(.trailing)
             }
 
             Text(result.title)
-                .font(.title3.weight(.semibold))
+                .font(UnfiledType.title)
                 .foregroundStyle(UnfiledTheme.paper)
                 .fixedSize(horizontal: false, vertical: true)
 
             Text(result.snippet)
-                .font(.body)
+                .font(UnfiledType.body)
                 .foregroundStyle(UnfiledTheme.fog)
                 .fixedSize(horizontal: false, vertical: true)
 
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
                 if !result.path.isEmpty {
                     Text(result.path)
-                        .font(.caption.monospaced())
+                        .font(UnfiledType.caption)
                         .foregroundStyle(UnfiledTheme.fog)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -470,15 +432,15 @@ private struct SearchResultLedgerRow: View {
                         .controlSize(.small)
                         .tint(UnfiledTheme.persimmon)
                 } else {
-                    Label("Open note", systemImage: "arrow.right")
-                        .font(.subheadline.weight(.semibold))
+                    Label { Text("Open note") } icon: { GlyphView(glyph: .chevron, size: 14, weight: 1.8) }
+                        .font(UnfiledType.secondaryStrong)
                         .foregroundStyle(UnfiledTheme.persimmon)
                         .labelStyle(.titleAndIcon)
                 }
             }
         }
         .frame(maxWidth: .infinity, minHeight: 126, alignment: .leading)
-        .padding(.vertical, 22)
+        .padding(.vertical, UnfiledTheme.rowVertical)
         .contentShape(Rectangle())
     }
 }
@@ -489,18 +451,18 @@ private struct SearchDeletedResultLedgerRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label("Deleted note", systemImage: "trash")
-                .font(.headline)
+                .font(UnfiledType.heading)
                 .foregroundStyle(UnfiledTheme.fog)
             Text(result.title)
-                .font(.body.weight(.semibold))
+                .font(UnfiledType.heading)
                 .foregroundStyle(UnfiledTheme.fog)
             Text("This result was deleted after the search. Run the search again to refresh the list.")
-                .font(.footnote)
+                .font(UnfiledType.secondary)
                 .foregroundStyle(UnfiledTheme.fog)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, minHeight: 112, alignment: .leading)
-        .padding(.vertical, 16)
+        .padding(.vertical, UnfiledTheme.rowVertical)
         .accessibilityElement(children: .combine)
     }
 }
@@ -512,9 +474,9 @@ private struct SearchLoadingLedgerView: View {
                 .tint(UnfiledTheme.persimmon)
             VStack(alignment: .leading, spacing: 4) {
                 Text("Searching your notes")
-                    .font(.headline)
+                    .font(UnfiledType.heading)
                 Text("Looking for the closest matches.")
-                    .font(.body)
+                    .font(UnfiledType.body)
                     .foregroundStyle(UnfiledTheme.fog)
             }
         }
@@ -532,21 +494,21 @@ private struct SearchErrorLedgerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Label(failure.title, systemImage: failure.systemImage)
-                .font(.headline)
+                .font(UnfiledType.heading)
                 .foregroundStyle(UnfiledTheme.paper)
             Text(failure.message)
-                .font(.body)
+                .font(UnfiledType.body)
                 .foregroundStyle(UnfiledTheme.fog)
                 .fixedSize(horizontal: false, vertical: true)
             Button("Try again", action: onRetry)
-                .font(.body.weight(.semibold))
+                .font(UnfiledType.heading)
                 .foregroundStyle(UnfiledTheme.persimmon)
                 .frame(minHeight: UnfiledTheme.minimumTouchTarget)
                 .accessibilityHint("Repeats the current search")
                 .accessibilityIdentifier("search.retry")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 24)
+        .padding(.vertical, UnfiledTheme.rowVertical)
         .accessibilityIdentifier("search.error")
     }
 }

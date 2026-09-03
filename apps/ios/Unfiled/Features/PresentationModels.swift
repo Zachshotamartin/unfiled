@@ -220,19 +220,15 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
 }
 
 enum MainTab: String, CaseIterable, Identifiable {
-    case today = "Today"
-    case notes = "Notes"
-    case review = "Review"
-    case search = "Search"
+    case inbox = "Inbox"
+    case library = "Library"
 
     var id: String { rawValue }
 
-    var systemImage: String {
+    var glyph: UnfiledGlyph {
         switch self {
-        case .today: "calendar"
-        case .notes: "note.text"
-        case .review: "checkmark.circle"
-        case .search: "magnifyingglass"
+        case .inbox: .organize
+        case .library: .notes
         }
     }
 }

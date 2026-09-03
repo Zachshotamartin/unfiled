@@ -135,13 +135,13 @@ struct AuthScreenLayout<Content: View>: View {
                     EditorialEyebrow(text: eyebrow)
 
                     Text(title)
-                        .font(.system(.largeTitle, design: .default, weight: .bold))
+                        .font(UnfiledType.display)
                         .tracking(-0.8)
                         .accessibilityAddTraits(.isHeader)
                         .padding(.top, 12)
 
                     Text(message)
-                        .font(.system(.body))
+                        .font(UnfiledType.body)
                         .foregroundStyle(UnfiledTheme.fog)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 13)
@@ -157,7 +157,7 @@ struct AuthScreenLayout<Content: View>: View {
                             .frame(width: 16, height: 3)
                             .accessibilityHidden(true)
                         Text("Write without deciding where it belongs.")
-                            .font(.system(.caption, design: .monospaced, weight: .medium))
+                            .font(UnfiledType.label)
                             .foregroundStyle(UnfiledTheme.fog)
                     }
                 }
@@ -179,7 +179,7 @@ struct AuthWordmark: View {
         HStack(spacing: 11) {
             UnfiledMark(size: 34)
             Text("unfiled")
-                .font(.system(size: 20, weight: .bold))
+                .font(UnfiledType.title)
                 .tracking(-0.25)
         }
         .accessibilityElement(children: .ignore)
@@ -191,11 +191,7 @@ struct AuthFieldLabel: View {
     let text: String
 
     var body: some View {
-        Text(text)
-            .font(.system(.caption, design: .monospaced, weight: .medium))
-            .tracking(0.8)
-            .foregroundStyle(UnfiledTheme.fog)
-            .textCase(.uppercase)
+        EditorialEyebrow(text: text)
     }
 }
 
@@ -218,7 +214,7 @@ struct AuthInlineMessage: View {
 
     var body: some View {
         Label(message, systemImage: kind.systemImage)
-            .font(.system(.footnote))
+            .font(UnfiledType.secondary)
             .foregroundStyle(kind == .error ? UnfiledTheme.paper : UnfiledTheme.fog)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityIdentifier(accessibilityIdentifier)
@@ -244,15 +240,15 @@ struct AuthPrimaryButton: View {
                 }
 
                 Text(isLoading ? loadingTitle : title)
-                    .font(.system(.body, weight: .semibold))
+                    .font(UnfiledType.heading)
 
                 if !isLoading {
                     Image(systemName: "arrow.right")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(UnfiledType.heading)
                         .accessibilityHidden(true)
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 54)
+            .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
             .foregroundStyle(UnfiledTheme.ink)
             .background(isDisabled ? UnfiledTheme.fog : UnfiledTheme.persimmon)
             .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))

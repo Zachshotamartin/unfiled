@@ -75,12 +75,13 @@ struct ReviewView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 header
+                    .padding(.bottom, UnfiledTheme.sectionTop)
                 queueHeader
                 SectionRule()
                 queueContent
             }
             .padding(.horizontal, UnfiledTheme.screenPadding)
-            .padding(.bottom, 110)
+            .padding(.bottom, UnfiledTheme.screenBottom)
         }
         .refreshable { await onRefresh() }
         .onAppear { focusRequestedItem() }
@@ -96,27 +97,13 @@ struct ReviewView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            UnfiledMark(size: 32)
-            Text("Review")
-                .font(.largeTitle.weight(.bold))
-                .tracking(-1.2)
-                .accessibilityAddTraits(.isHeader)
-                .accessibilityIdentifier("review.title")
-            Text("Resolve only the captures that need your decision. Everything else stays out of the way.")
-                .font(.body)
-                .foregroundStyle(UnfiledTheme.fog)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.top, 12)
+        ScreenHeader(title: "Review", subtitle: "Only the captures that need your decision.")
+            .accessibilityIdentifier("review.title")
     }
 
     private var queueHeader: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(ReviewQueueSummary(count: items.count).label.uppercased())
-                .font(.caption.weight(.medium).monospaced())
-                .tracking(1)
-                .foregroundStyle(UnfiledTheme.fog)
+        HStack(alignment: .center, spacing: 12) {
+            EditorialEyebrow(text: ReviewQueueSummary(count: items.count).label)
             Spacer(minLength: 12)
             if isLoading {
                 ProgressView()
@@ -126,8 +113,7 @@ struct ReviewView: View {
                     .accessibilityIdentifier("review.loading.inline")
             }
         }
-        .padding(.top, 30)
-        .padding(.bottom, 14)
+        .padding(.bottom, UnfiledTheme.labelToRule)
     }
 
     @ViewBuilder
@@ -184,7 +170,7 @@ struct ReviewView: View {
     }
 }
 
-private struct ReviewLedgerRow: View {
+struct ReviewLedgerRow: View {
     let item: ReviewPresentation
     let position: Int
     let total: Int
@@ -198,17 +184,17 @@ private struct ReviewLedgerRow: View {
         VStack(alignment: .leading, spacing: 24) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Label("Needs your input", systemImage: "tray.and.arrow.down")
-                    .font(.caption.weight(.medium).monospaced())
+                    .font(UnfiledType.label)
                     .textCase(.uppercase)
                     .foregroundStyle(UnfiledTheme.fog)
                 Spacer(minLength: 12)
                 Text("\(position.formatted(.number.precision(.integerLength(2)))) / \(total.formatted(.number.precision(.integerLength(2))))")
-                    .font(.caption.monospacedDigit())
+                    .font(UnfiledType.caption.monospacedDigit())
                     .foregroundStyle(UnfiledTheme.fog)
             }
 
             Text(item.original)
-                .font(.title2.weight(.semibold))
+                .font(UnfiledType.title)
                 .foregroundStyle(UnfiledTheme.paper)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityLabel("Original capture: \(item.original)")
@@ -216,14 +202,14 @@ private struct ReviewLedgerRow: View {
             VStack(alignment: .leading, spacing: 12) {
                 EditorialEyebrow(text: "Why it stopped")
                 Text(item.actionSummary)
-                    .font(.body)
+                    .font(UnfiledType.body)
                     .foregroundStyle(UnfiledTheme.fog)
                     .fixedSize(horizontal: false, vertical: true)
                 Label(item.proposedDestination, systemImage: "arrow.turn.down.right")
-                    .font(.title3.weight(.semibold))
+                    .font(UnfiledType.title)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.vertical, 18)
+            .padding(.vertical, UnfiledTheme.rowVertical)
             .overlay(alignment: .top) { SectionRule() }
             .overlay(alignment: .bottom) { SectionRule() }
 
@@ -236,7 +222,7 @@ private struct ReviewLedgerRow: View {
                     VStack(alignment: .leading, spacing: 8) {
                         EditorialEyebrow(text: "Why Unfiled suggested this")
                         Text(explanation)
-                            .font(.body)
+                            .font(UnfiledType.body)
                             .foregroundStyle(UnfiledTheme.paper)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -245,7 +231,7 @@ private struct ReviewLedgerRow: View {
                     .accessibilityIdentifier("review.duplicateExplanation.\(item.id)")
                 }
                 Text("Keeping both changes neither note. Dismiss also leaves both notes untouched.")
-                    .font(.footnote)
+                    .font(UnfiledType.secondary)
                     .foregroundStyle(UnfiledTheme.fog)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityLabel(
@@ -265,7 +251,7 @@ private struct ReviewLedgerRow: View {
                         ? "No generated text was persisted. Dismiss removes only this legacy consent hold."
                         : "The persisted AI-generated proposal is unavailable. Refresh before deciding; your note text is unchanged."
                 )
-                .font(.footnote)
+                .font(UnfiledType.secondary)
                 .foregroundStyle(UnfiledTheme.fog)
                 .fixedSize(horizontal: false, vertical: true)
             }
@@ -274,18 +260,18 @@ private struct ReviewLedgerRow: View {
 
             if let errorMessage {
                 Label(errorMessage, systemImage: "exclamationmark.circle")
-                    .font(.footnote)
+                    .font(UnfiledType.secondary)
                     .foregroundStyle(UnfiledTheme.paper)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("review.error.\(item.id)")
             }
 
             Label("Original preserved", systemImage: "doc.badge.clock")
-                .font(.caption)
+                .font(UnfiledType.caption)
                 .foregroundStyle(UnfiledTheme.fog)
                 .accessibilityLabel("Original capture preserved")
         }
-        .padding(.vertical, 26)
+        .padding(.vertical, UnfiledTheme.rowVertical)
         .accessibilityIdentifier("review.item.\(item.id)")
     }
 
@@ -299,15 +285,15 @@ private struct ReviewLedgerRow: View {
                     HStack(alignment: .firstTextBaseline, spacing: 12) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(note.title)
-                                .font(.body.weight(.semibold))
+                                .font(UnfiledType.heading)
                                 .fixedSize(horizontal: false, vertical: true)
                             Text("Revision \(note.revision)")
-                                .font(.caption.monospacedDigit())
+                                .font(UnfiledType.caption.monospacedDigit())
                                 .foregroundStyle(UnfiledTheme.fog)
                         }
                         Spacer(minLength: 8)
                         Image(systemName: "arrow.right")
-                            .font(.caption.weight(.bold))
+                            .font(UnfiledType.label)
                             .accessibilityHidden(true)
                     }
                     .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
@@ -322,7 +308,7 @@ private struct ReviewLedgerRow: View {
     }
 
     private var destinationChoices: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: UnfiledTheme.controlGap) {
             EditorialEyebrow(text: "Suggested destinations")
             ForEach(item.suggestedDestinations.prefix(3)) { destination in
                 Button {
@@ -330,16 +316,16 @@ private struct ReviewLedgerRow: View {
                 } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "arrow.turn.down.right")
-                            .font(.caption.weight(.semibold))
+                            .font(UnfiledType.label)
                             .foregroundStyle(UnfiledTheme.persimmon)
                             .accessibilityHidden(true)
                         Text(destination.title)
-                            .font(.body.weight(.semibold))
+                            .font(UnfiledType.heading)
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 8)
                     }
-                    .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
-                    .padding(.horizontal, 14)
+                    .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight, alignment: .leading)
+                    .padding(.horizontal, UnfiledTheme.fieldPadding)
                     .background(UnfiledTheme.graphite)
                     .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
                 }
@@ -358,7 +344,7 @@ private struct ReviewLedgerRow: View {
                 onAction(item.id, .chooseDestination)
             } label: {
                 Text(item.suggestedDestinations.isEmpty ? "Choose a note" : "Choose another note")
-                    .font(.body.weight(.semibold))
+                    .font(UnfiledType.heading)
                     .frame(minHeight: UnfiledTheme.minimumTouchTarget)
             }
             .buttonStyle(.plain)
@@ -372,29 +358,28 @@ private struct ReviewLedgerRow: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("AI-GENERATED · \(block.kindLabel.uppercased())")
-                    .font(.caption2.weight(.semibold).monospaced())
+                    .font(UnfiledType.label)
                     .tracking(0.8)
                     .foregroundStyle(UnfiledTheme.persimmon)
                 Spacer(minLength: 8)
                 Text(block.stateLabel.uppercased())
-                    .font(.caption2.weight(.semibold).monospaced())
+                    .font(UnfiledType.label)
                     .foregroundStyle(UnfiledTheme.fog)
             }
             Text(block.content)
-                .font(.body)
+                .font(UnfiledType.body)
                 .lineSpacing(5)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
             Text(block.provenanceLabel)
-                .font(.caption2.monospaced())
+                .font(UnfiledType.caption)
                 .foregroundStyle(UnfiledTheme.fog)
                 .fixedSize(horizontal: false, vertical: true)
             Text("This stays separate from editable note text.")
-                .font(.caption)
+                .font(UnfiledType.caption)
                 .foregroundStyle(UnfiledTheme.fog)
         }
-        .padding(.vertical, 18)
-        .padding(.horizontal, 18)
+        .padding(UnfiledTheme.cardPadding)
         .overlay(alignment: .leading) {
             Rectangle().fill(UnfiledTheme.persimmon).frame(width: 3)
         }
@@ -406,10 +391,10 @@ private struct ReviewLedgerRow: View {
     }
 
     private var actionControls: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: UnfiledTheme.controlGap) {
             if isSubmitting {
                 Label("Saving your choice", systemImage: "clock")
-                    .font(.body.weight(.semibold))
+                    .font(UnfiledType.heading)
                     .foregroundStyle(UnfiledTheme.fog)
                     .frame(minHeight: UnfiledTheme.minimumTouchTarget)
                     .accessibilityIdentifier("review.submitting.\(item.id)")
@@ -485,8 +470,8 @@ private struct ReviewLedgerRow: View {
     ) -> some View {
         Button(action: action) {
             Label(title, systemImage: systemImage)
-                .font(.body.weight(.semibold))
-                .frame(maxWidth: .infinity, minHeight: 52)
+                .font(UnfiledType.heading)
+                .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -509,9 +494,9 @@ private struct ReviewLoadingLedgerView: View {
         HStack(spacing: 14) {
             ProgressView().tint(UnfiledTheme.persimmon)
             VStack(alignment: .leading, spacing: 4) {
-                Text("Loading review queue").font(.headline)
+                Text("Loading review queue").font(UnfiledType.heading)
                 Text("Checking for captures that need your decision.")
-                    .font(.body)
+                    .font(UnfiledType.body)
                     .foregroundStyle(UnfiledTheme.fog)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -529,24 +514,27 @@ private struct ReviewErrorLedgerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Review queue is unavailable", systemImage: "exclamationmark.circle")
-                .font(.headline)
+            HStack(alignment: .center, spacing: 8) {
+                GlyphView(glyph: .warning, size: 18, weight: 1.9)
+                Text("Review queue is unavailable")
+            }
+            .font(UnfiledType.heading)
             Text(message)
-                .font(.body)
+                .font(UnfiledType.body)
                 .foregroundStyle(UnfiledTheme.fog)
                 .fixedSize(horizontal: false, vertical: true)
             Button {
                 Task { await onRetry() }
             } label: {
                 Text("Try again")
-                    .font(.body.weight(.semibold))
+                    .font(UnfiledType.heading)
                     .foregroundStyle(UnfiledTheme.persimmon)
                     .frame(minHeight: UnfiledTheme.minimumTouchTarget)
             }
             .accessibilityIdentifier("review.retry")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 24)
+        .padding(.vertical, UnfiledTheme.rowVertical)
         .accessibilityIdentifier("review.error")
     }
 }

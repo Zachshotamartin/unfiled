@@ -48,7 +48,7 @@ struct CaptureComposerView: View {
             VStack(spacing: 0) {
                 if restoredDraft {
                     Label("Unsaved draft", systemImage: "clock.arrow.circlepath")
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .font(UnfiledType.caption)
                         .foregroundStyle(UnfiledTheme.fog)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, UnfiledTheme.screenPadding)
@@ -57,18 +57,30 @@ struct CaptureComposerView: View {
                 }
 
                 TextEditor(text: $content)
-                    .font(.system(size: 29, weight: .semibold))
-                    .lineSpacing(5)
+                    .font(UnfiledType.composer)
+                    .lineSpacing(6)
+                    .scrollDismissesKeyboard(.interactively)
                     .scrollContentBackground(.hidden)
                     .foregroundStyle(UnfiledTheme.paper)
                     .focused($focused)
                     .padding(.horizontal, UnfiledTheme.screenPadding - 5)
                     .padding(.top, 22)
+                    .overlay(alignment: .topLeading) {
+                        if content.isEmpty {
+                            Text("What's on your mind?")
+                                .font(UnfiledType.composer)
+                                .foregroundStyle(UnfiledTheme.fog)
+                                .padding(.horizontal, UnfiledTheme.screenPadding)
+                                .padding(.top, 30)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                        }
+                    }
                     .accessibilityLabel("Capture text")
 
                 if let errorMessage {
                     Text(errorMessage)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(UnfiledType.caption)
                         .foregroundStyle(UnfiledTheme.persimmon)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, UnfiledTheme.screenPadding)
@@ -77,7 +89,7 @@ struct CaptureComposerView: View {
 
                 SectionRule()
 
-                HStack(spacing: 12) {
+                HStack(spacing: UnfiledTheme.controlGap) {
                     Menu {
                         Picker("Privacy", selection: $privacy) {
                             Label("Organize for me", systemImage: "tray.and.arrow.down")
@@ -86,12 +98,16 @@ struct CaptureComposerView: View {
                                 .tag(LocalPrivacyMode.privateManual)
                         }
                     } label: {
-                        Image(systemName: privacy == .privateManual ? "lock" : "plus")
-                            .font(.system(size: 20, weight: .medium))
-                            .foregroundStyle(UnfiledTheme.paper)
-                            .frame(width: 52, height: 52)
-                            .background(UnfiledTheme.raised)
-                            .clipShape(Circle())
+                        HStack(spacing: 6) {
+                            GlyphView(glyph: privacy == .privateManual ? .lock : .organize, size: 15, weight: 1.7)
+                            Text(privacy == .privateManual ? "Private" : "Organize")
+                                .font(UnfiledType.caption)
+                        }
+                        .foregroundStyle(UnfiledTheme.paper)
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 40)
+                        .background(UnfiledTheme.raised)
+                        .clipShape(Capsule())
                     }
                     .accessibilityLabel(
                         privacy == .privateManual ? "Private manual capture" : "AI-assisted capture"
@@ -100,7 +116,7 @@ struct CaptureComposerView: View {
                     Spacer()
 
                     Text("\(content.utf16.count)/10,000")
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(UnfiledType.caption)
                         .foregroundStyle(content.utf16.count > 10_000 ? UnfiledTheme.persimmon : UnfiledTheme.fog)
 
                     Button {
@@ -123,8 +139,7 @@ struct CaptureComposerView: View {
                                 ProgressView()
                                     .tint(UnfiledTheme.ink)
                             } else {
-                                Image(systemName: "arrow.up")
-                                    .font(.system(size: 21, weight: .semibold))
+                                GlyphView(glyph: .send, size: 22, weight: 2.2)
                             }
                         }
                         .foregroundStyle(UnfiledTheme.ink)
@@ -140,14 +155,20 @@ struct CaptureComposerView: View {
             }
             .background(UnfiledTheme.ink)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    UnfiledMark(size: 29)
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { focused = false }
+                        .font(UnfiledType.heading)
+                        .foregroundStyle(UnfiledTheme.persimmon)
+                        .accessibilityIdentifier("capture.keyboard-done")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Close", systemImage: "xmark") { close() }
-                        .labelStyle(.iconOnly)
-                        .foregroundStyle(UnfiledTheme.paper)
-                        .frame(minWidth: 44, minHeight: 44)
+                    Button { close() } label: {
+                        GlyphView(glyph: .close, size: 18, weight: 1.9)
+                            .foregroundStyle(UnfiledTheme.paper)
+                            .frame(minWidth: 44, minHeight: 44)
+                    }
+                    .accessibilityLabel("Close")
                 }
             }
             .onAppear { focused = true }

@@ -28,100 +28,48 @@ struct AccountDataControls: View {
     @State private var confirmation = ""
     @FocusState private var confirmationFocused: Bool
 
+    /// Two rows in the Account group. The export streams into a protected temporary file and
+    /// opens the share sheet; deletion opens a typed confirmation. Both keep their sheets here.
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("YOUR DATA")
-                .font(.caption.weight(.medium).monospaced())
-                .tracking(1)
-                .foregroundStyle(UnfiledTheme.fog)
-                .accessibilityAddTraits(.isHeader)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Label("Private account export", systemImage: "square.and.arrow.up")
-                    .font(.body.weight(.semibold))
-                Text("Streams a private archive directly into a protected temporary file, then opens the iOS share sheet. Unfiled removes its temporary copy when sharing ends.")
-                    .font(.footnote)
-                    .foregroundStyle(UnfiledTheme.fog)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Button {
-                    Task { await onPrepareExport() }
-                } label: {
-                    HStack(spacing: 10) {
-                        if isPreparingExport {
-                            ProgressView().tint(UnfiledTheme.ink)
-                        }
-                        Text(isPreparingExport ? "Preparing private export…" : "Prepare private export")
-                        Spacer(minLength: 8)
-                        Image(systemName: "arrow.right").accessibilityHidden(true)
-                    }
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(UnfiledTheme.ink)
-                    .padding(.horizontal, 15)
-                    .frame(maxWidth: .infinity, minHeight: 50)
-                    .background(isPreparingExport ? UnfiledTheme.fog : UnfiledTheme.persimmon)
-                    .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(isPreparingExport || isDeletingAccount)
-                .accessibilityHint("Downloads without loading the whole archive into memory")
-                .accessibilityIdentifier(AccountDataAccessibilityIdentifier.export)
-
-                if let exportError {
-                    dataError(exportError, identifier: AccountDataAccessibilityIdentifier.exportError)
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsButtonRow(
+                title: isPreparingExport ? "Preparing private export…" : "Export my data",
+                glyph: .send,
+                isBusy: isPreparingExport,
+                isDisabled: isDeletingAccount,
+                accessibilityHint: "Streams a private archive into a protected temporary file, then opens the share sheet",
+                accessibilityIdentifier: AccountDataAccessibilityIdentifier.export
+            ) {
+                Task { await onPrepareExport() }
+            }
+            if let exportError {
+                dataError(exportError, identifier: AccountDataAccessibilityIdentifier.exportError)
+                    .settingsRow()
             }
 
-            SectionRule()
-                .padding(.vertical, 8)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Label("Delete account", systemImage: "trash")
-                    .font(.body.weight(.semibold))
-                Text("Deletes live account data and revokes every session. Encrypted backups expire after 30 days; signing up again starts a new account.")
-                    .font(.footnote)
-                    .foregroundStyle(UnfiledTheme.fog)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                if hasPendingDeletionReplay {
-                    Label(
-                        "An earlier deletion is awaiting confirmation. Retry uses the same protected recovery key.",
-                        systemImage: "arrow.clockwise"
-                    )
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(UnfiledTheme.persimmon)
-                    .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Button(role: .destructive) {
-                    confirmation = ""
-                    showsDeletionConfirmation = true
-                } label: {
-                    Text(hasPendingDeletionReplay ? "Confirm pending deletion" : "Delete my account")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(UnfiledTheme.persimmon)
-                        .frame(maxWidth: .infinity, minHeight: 50)
-                        .background(UnfiledTheme.raised)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius)
-                                .stroke(UnfiledTheme.persimmon.opacity(0.6), lineWidth: 1)
-                        }
-                        .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(isPreparingExport || isDeletingAccount)
-                .accessibilityHint("Opens a typed confirmation before deleting anything")
-                .accessibilityIdentifier(AccountDataAccessibilityIdentifier.delete)
-
-                if let deletionError {
-                    dataError(deletionError, identifier: AccountDataAccessibilityIdentifier.deleteError)
-                }
+            SettingsButtonRow(
+                title: hasPendingDeletionReplay ? "Confirm pending deletion" : "Delete account",
+                glyph: .trash,
+                emphasis: .accent,
+                isDisabled: isPreparingExport || isDeletingAccount,
+                accessibilityHint: "Opens a typed confirmation before deleting anything",
+                accessibilityIdentifier: AccountDataAccessibilityIdentifier.delete
+            ) {
+                confirmation = ""
+                showsDeletionConfirmation = true
+            }
+            if hasPendingDeletionReplay {
+                SettingsInlineMessage(
+                    message: "An earlier deletion is awaiting confirmation. Retry uses the same protected recovery key.",
+                    kind: .warning
+                )
+                .settingsRow()
+            }
+            if let deletionError {
+                dataError(deletionError, identifier: AccountDataAccessibilityIdentifier.deleteError)
+                    .settingsRow()
             }
         }
-        .padding(.vertical, 22)
-        .overlay(alignment: .bottom) { SectionRule() }
         .sheet(isPresented: exportSheetBinding) {
             if let exportArtifact {
                 ZStack {
@@ -166,26 +114,23 @@ struct AccountDataControls: View {
                 VStack(alignment: .leading, spacing: 18) {
                     EditorialEyebrow(text: "Permanent action")
                     Text("Delete your Unfiled account?")
-                        .font(.largeTitle.weight(.bold))
-                        .tracking(-1.2)
+                        .font(UnfiledType.display)
+                        .tracking(UnfiledType.displayTracking)
                         .accessibilityAddTraits(.isHeader)
                     Text("Live notes, captures, indexes, settings, and sessions are deleted. Backups age out after 30 days. This cannot be undone from the app.")
-                        .font(.body)
+                        .font(UnfiledType.body)
                         .foregroundStyle(UnfiledTheme.fog)
                         .fixedSize(horizontal: false, vertical: true)
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("TYPE DELETE TO CONTINUE")
-                            .font(.caption.weight(.medium).monospaced())
-                            .tracking(0.8)
-                            .foregroundStyle(UnfiledTheme.fog)
+                        EditorialEyebrow(text: "Type DELETE to continue")
                         TextField("DELETE", text: $confirmation)
                             .textInputAutocapitalization(.characters)
                             .autocorrectionDisabled()
                             .keyboardType(.asciiCapable)
-                            .font(.body.monospaced())
-                            .padding(.horizontal, 14)
-                            .frame(minHeight: 52)
+                            .font(UnfiledType.body)
+                            .padding(.horizontal, UnfiledTheme.fieldPadding)
+                            .frame(minHeight: UnfiledTheme.controlHeight)
                             .background(UnfiledTheme.raised)
                             .overlay {
                                 RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius)
@@ -218,9 +163,9 @@ struct AccountDataControls: View {
                             if isDeletingAccount { ProgressView().tint(UnfiledTheme.paper) }
                             Text(isDeletingAccount ? "Deleting account…" : "Permanently delete account")
                         }
-                        .font(.body.weight(.semibold))
+                        .font(UnfiledType.heading)
                         .foregroundStyle(UnfiledTheme.paper)
-                        .frame(maxWidth: .infinity, minHeight: 52)
+                        .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
                         .background(confirmationIsExact ? UnfiledTheme.persimmon : UnfiledTheme.fog)
                         .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
                         .contentShape(Rectangle())
@@ -232,7 +177,7 @@ struct AccountDataControls: View {
                     Button("Cancel") { showsDeletionConfirmation = false }
                         .buttonStyle(.bordered)
                         .tint(UnfiledTheme.fog)
-                        .frame(maxWidth: .infinity, minHeight: 50)
+                        .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
                 }
                 .padding(UnfiledTheme.screenPadding)
             }
@@ -252,11 +197,7 @@ struct AccountDataControls: View {
     }
 
     private func dataError(_ message: String, identifier: String) -> some View {
-        Label(message, systemImage: "exclamationmark.triangle.fill")
-            .font(.footnote)
-            .foregroundStyle(UnfiledTheme.persimmon)
-            .fixedSize(horizontal: false, vertical: true)
-            .accessibilityIdentifier(identifier)
+        SettingsInlineMessage(message: message, kind: .error, accessibilityIdentifier: identifier)
     }
 }
 
@@ -286,33 +227,34 @@ struct AccountDeletionReceiptView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    UnfiledMark(size: 42)
                     EditorialEyebrow(text: "Deletion receipt")
                     Text("Account deleted")
-                        .font(.largeTitle.weight(.bold))
-                        .tracking(-1.2)
+                        .font(UnfiledType.display)
+                        .tracking(UnfiledType.displayTracking)
                         .accessibilityAddTraits(.isHeader)
-                    Label("All sessions revoked", systemImage: "checkmark.shield")
-                        .font(.headline)
+                    Label {
+                        Text("All sessions revoked")
+                    } icon: {
+                        GlyphView(glyph: .check, size: 16, weight: 2)
+                            .foregroundStyle(UnfiledTheme.persimmon)
+                    }
+                    .font(UnfiledType.heading)
                     receiptRow("Deleted", value: presentation.receipt.deletedAt)
                     receiptRow("Backups expire", value: presentation.receipt.backupExpiresAt)
                     Text("\(presentation.deletedRecordCount) live records were removed. Signing up again starts fresh.")
-                        .font(.body)
+                        .font(UnfiledType.body)
                         .foregroundStyle(UnfiledTheme.fog)
                     if !presentation.localCleanupComplete {
-                        Label(
-                            "The server deletion succeeded, but this iPhone could not finish clearing its encrypted local profile or credentials. Reinstall Unfiled before lending or selling this device.",
-                            systemImage: "exclamationmark.triangle.fill"
+                        SettingsInlineMessage(
+                            message: "The server deletion succeeded, but this iPhone could not finish clearing its encrypted local profile or credentials. Reinstall Unfiled before lending or selling this device.",
+                            kind: .error
                         )
-                        .font(.footnote.weight(.medium))
-                        .foregroundStyle(UnfiledTheme.persimmon)
-                        .fixedSize(horizontal: false, vertical: true)
                     }
                     Button("Done", action: onDismiss)
                         .buttonStyle(.borderedProminent)
                         .tint(UnfiledTheme.persimmon)
                         .foregroundStyle(UnfiledTheme.ink)
-                        .frame(maxWidth: .infinity, minHeight: 52)
+                        .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
                 }
                 .padding(UnfiledTheme.screenPadding)
             }
@@ -339,6 +281,6 @@ struct AccountDeletionReceiptView: View {
 
     private func receiptDate(_ value: Date) -> some View {
         Text(value, format: .dateTime.month(.abbreviated).day().year().hour().minute())
-            .font(.footnote.monospaced())
+            .font(UnfiledType.caption)
     }
 }

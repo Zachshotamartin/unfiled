@@ -61,11 +61,11 @@ struct NoteDetailView: View {
 
                 if !readableBody.isEmpty {
                     Text(NoteDetailContent.markdown(readableBody))
-                        .font(.body)
-                        .lineSpacing(6)
+                        .font(UnfiledType.thought)
+                        .lineSpacing(7)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 26)
+                        .padding(.vertical, UnfiledTheme.rowVertical)
                         .accessibilityIdentifier("noteDetail.body")
 
                     SectionRule()
@@ -120,10 +120,10 @@ struct NoteDetailView: View {
                     Button(action: onOpenProvenance) {
                         HStack(spacing: 12) {
                             Image(systemName: "tray.and.arrow.down")
-                                .font(.body.weight(.medium))
+                                .font(UnfiledType.heading)
                                 .foregroundStyle(UnfiledTheme.persimmon)
                             Text(provenance)
-                                .font(.subheadline)
+                                .font(UnfiledType.secondary)
                                 .foregroundStyle(UnfiledTheme.fog)
                                 .multilineTextAlignment(.leading)
                             Spacer(minLength: 12)
@@ -140,14 +140,14 @@ struct NoteDetailView: View {
 
                 if let feedbackMessage {
                     Label(feedbackMessage, systemImage: "exclamationmark.circle")
-                        .font(.subheadline.weight(.medium))
+                        .font(UnfiledType.secondaryStrong)
                         .foregroundStyle(UnfiledTheme.persimmon)
                         .padding(.vertical, 18)
                         .accessibilityIdentifier("noteDetail.feedback")
                 }
             }
             .padding(.horizontal, UnfiledTheme.screenPadding)
-            .padding(.bottom, 52)
+            .padding(.bottom, UnfiledTheme.pushedScreenBottom)
         }
         .toolbar { toolbar }
         .confirmationDialog(
@@ -177,18 +177,15 @@ struct NoteDetailView: View {
 
     private var noteHeader: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .center, spacing: 10) {
-                UnfiledMark(size: 30)
-                Spacer()
-                if isArchived {
-                    Label("Archived", systemImage: "archivebox")
-                        .font(.caption.weight(.medium).monospaced())
-                        .foregroundStyle(UnfiledTheme.fog)
-                }
+            if isArchived {
+                Label("Archived", systemImage: "archivebox")
+                    .font(UnfiledType.label)
+                    .foregroundStyle(UnfiledTheme.fog)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             }
 
             Text(note.title)
-                .font(.largeTitle.weight(.bold))
+                .font(UnfiledType.display)
                 .tracking(-1.7)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
@@ -196,7 +193,7 @@ struct NoteDetailView: View {
 
             if !note.spacePath.isEmpty {
                 Text(note.spacePath)
-                    .font(.footnote.weight(.medium).monospaced())
+                    .font(UnfiledType.caption)
                     .foregroundStyle(UnfiledTheme.fog)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityLabel("Space, \(note.spacePath)")
@@ -206,11 +203,11 @@ struct NoteDetailView: View {
                 HStack(spacing: 18) { metadata }
                 VStack(alignment: .leading, spacing: 8) { metadata }
             }
-            .font(.footnote.weight(.medium))
+            .font(UnfiledType.caption)
             .foregroundStyle(UnfiledTheme.fog)
         }
-        .padding(.top, 12)
-        .padding(.bottom, 24)
+        .padding(.top, UnfiledTheme.pushedHeaderTop)
+        .padding(.bottom, UnfiledTheme.headerBottom)
         .overlay(alignment: .bottom) { SectionRule() }
     }
 
@@ -225,15 +222,15 @@ struct NoteDetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Checklist")
-                    .font(.title3.weight(.semibold))
+                    .font(UnfiledType.title)
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
                 Text(progress.shortLabel)
-                    .font(.caption.weight(.medium).monospaced())
+                    .font(UnfiledType.label)
                     .foregroundStyle(UnfiledTheme.fog)
             }
-            .padding(.top, 24)
-            .padding(.bottom, 10)
+            .padding(.top, UnfiledTheme.rowVertical)
+            .padding(.bottom, UnfiledTheme.labelToRule)
 
             ForEach(openItems) { item in
                 checklistRow(item)
@@ -249,9 +246,9 @@ struct NoteDetailView: View {
                 } label: {
                     HStack {
                         Text("Completed")
-                            .font(.body.weight(.semibold))
+                            .font(UnfiledType.heading)
                         Text("\(completedItems.count)")
-                            .font(.caption.weight(.medium).monospaced())
+                            .font(UnfiledType.label)
                             .foregroundStyle(UnfiledTheme.fog)
                         Spacer()
                         Image(systemName: showsCompleted ? "chevron.up" : "chevron.down")
@@ -293,7 +290,7 @@ struct NoteDetailView: View {
                             .fill(UnfiledTheme.persimmon)
                             .frame(width: 30, height: 30)
                         Image(systemName: "checkmark")
-                            .font(.caption.weight(.bold))
+                            .font(UnfiledType.label)
                             .foregroundStyle(UnfiledTheme.ink)
                     } else if isUpdating {
                         ProgressView()
@@ -304,7 +301,7 @@ struct NoteDetailView: View {
                 .frame(width: UnfiledTheme.minimumTouchTarget, height: UnfiledTheme.minimumTouchTarget)
 
                 Text(item.text)
-                    .font(.body)
+                    .font(UnfiledType.body)
                     .foregroundStyle(isChecked ? UnfiledTheme.fog : UnfiledTheme.paper)
                     .strikethrough(isChecked)
                     .multilineTextAlignment(.leading)
@@ -330,7 +327,7 @@ struct NoteDetailView: View {
         ToolbarItemGroup(placement: .topBarTrailing) {
             Button("Edit", systemImage: "square.and.pencil", action: onEdit)
                 .labelStyle(.iconOnly)
-                .frame(minWidth: 44, minHeight: 44)
+                .frame(minWidth: UnfiledTheme.minimumTouchTarget, minHeight: UnfiledTheme.minimumTouchTarget)
                 .accessibilityIdentifier("noteDetail.edit")
 
             Menu {
@@ -348,9 +345,9 @@ struct NoteDetailView: View {
                 }
             } label: {
                 Image(systemName: "ellipsis.circle")
-                    .font(.title3)
+                    .font(UnfiledType.title)
                     .foregroundStyle(UnfiledTheme.paper)
-                    .frame(width: 44, height: 44)
+                    .frame(width: UnfiledTheme.minimumTouchTarget, height: UnfiledTheme.minimumTouchTarget)
             }
             .disabled(isPerformingNoteAction)
             .accessibilityLabel("Note actions")

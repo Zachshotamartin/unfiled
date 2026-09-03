@@ -8,8 +8,8 @@ struct UnfiledApp: App {
     init() {
         let navigation = UINavigationBarAppearance()
         navigation.configureWithOpaqueBackground()
-        navigation.backgroundColor = UIColor(red: 11 / 255, green: 12 / 255, blue: 14 / 255, alpha: 1)
-        navigation.titleTextAttributes = [.foregroundColor: UIColor(red: 242 / 255, green: 239 / 255, blue: 232 / 255, alpha: 1)]
+        navigation.backgroundColor = UIColor(red: 243 / 255, green: 244 / 255, blue: 246 / 255, alpha: 1)
+        navigation.titleTextAttributes = [.foregroundColor: UIColor(red: 20 / 255, green: 23 / 255, blue: 27 / 255, alpha: 1)]
         navigation.largeTitleTextAttributes = navigation.titleTextAttributes
         UINavigationBar.appearance().standardAppearance = navigation
         UINavigationBar.appearance().scrollEdgeAppearance = navigation

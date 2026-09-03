@@ -54,13 +54,13 @@ struct GeneratedBlocksSection: View {
         if !visibleBlocks.isEmpty || isLoading || loadError != nil || hasMore ||
             isLoadingMore || loadMoreError != nil || paginationNotice != nil {
             VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                HStack(alignment: .center, spacing: 12) {
                     VStack(alignment: .leading, spacing: 5) {
                         Text("Generated additions")
-                            .font(.title3.weight(.semibold))
+                            .font(UnfiledType.title)
                             .accessibilityAddTraits(.isHeader)
                         Text("Shown separately from your note text")
-                            .font(.caption.monospaced())
+                            .font(UnfiledType.caption)
                             .foregroundStyle(UnfiledTheme.fog)
                     }
                     Spacer(minLength: 12)
@@ -81,7 +81,7 @@ struct GeneratedBlocksSection: View {
 
                 if let paginationNotice, !paginationNotice.isEmpty {
                     Label(paginationNotice, systemImage: "info.circle")
-                        .font(.footnote)
+                        .font(UnfiledType.secondary)
                         .foregroundStyle(UnfiledTheme.fog)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier(
@@ -92,18 +92,18 @@ struct GeneratedBlocksSection: View {
                 if let loadError, !loadError.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Label(loadError, systemImage: "exclamationmark.circle")
-                            .font(.footnote)
+                            .font(UnfiledType.secondary)
                             .foregroundStyle(UnfiledTheme.fog)
                             .fixedSize(horizontal: false, vertical: true)
                         Button("Try again") { Task { await onRefresh() } }
-                            .font(.body.weight(.semibold))
+                            .font(UnfiledType.heading)
                             .foregroundStyle(UnfiledTheme.persimmon)
                             .frame(minHeight: UnfiledTheme.minimumTouchTarget)
                             .accessibilityIdentifier("noteDetail.generatedBlocks.retry")
                     }
                 }
             }
-            .padding(.vertical, 24)
+            .padding(.vertical, UnfiledTheme.rowVertical)
             .accessibilityIdentifier(GeneratedBlockAccessibilityIdentifier.section)
             .onChange(of: visibleBlocks.map(\.id)) { previous, current in
                 if let focusedBlockID,
@@ -119,7 +119,7 @@ struct GeneratedBlocksSection: View {
     private var loadMoreControls: some View {
         if isLoadingMore {
             Label("Loading more additions", systemImage: "clock")
-                .font(.footnote.weight(.medium))
+                .font(UnfiledType.caption)
                 .foregroundStyle(UnfiledTheme.fog)
                 .frame(minHeight: UnfiledTheme.minimumTouchTarget)
                 .accessibilityLabel(
@@ -133,7 +133,7 @@ struct GeneratedBlocksSection: View {
             VStack(alignment: .leading, spacing: 8) {
                 if let loadMoreError, !loadMoreError.isEmpty {
                     Label(loadMoreError, systemImage: "exclamationmark.circle")
-                        .font(.footnote)
+                        .font(UnfiledType.secondary)
                         .foregroundStyle(UnfiledTheme.fog)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -146,8 +146,8 @@ struct GeneratedBlocksSection: View {
                         ),
                         systemImage: "arrow.down"
                     )
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity, minHeight: 50)
+                    .font(UnfiledType.heading)
+                    .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -177,30 +177,30 @@ struct GeneratedBlocksSection: View {
         return VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("AI-GENERATED · \(block.kindLabel.uppercased())")
-                    .font(.caption2.weight(.semibold).monospaced())
+                    .font(UnfiledType.label)
                     .tracking(0.8)
                     .foregroundStyle(UnfiledTheme.persimmon)
                 Spacer(minLength: 8)
                 Text(block.stateLabel.uppercased())
-                    .font(.caption2.weight(.semibold).monospaced())
+                    .font(UnfiledType.label)
                     .foregroundStyle(UnfiledTheme.fog)
             }
 
             Text(block.content)
-                .font(.body)
+                .font(UnfiledType.body)
                 .lineSpacing(5)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
 
             Text("Model \(block.modelID) · Prompt \(block.promptVersion)")
-                .font(.caption2.monospaced())
+                .font(UnfiledType.caption)
                 .foregroundStyle(UnfiledTheme.fog)
                 .fixedSize(horizontal: false, vertical: true)
 
             if block.isActionable {
                 if isSubmitting {
                     Label("Saving your decision", systemImage: "clock")
-                        .font(.footnote.weight(.medium))
+                        .font(UnfiledType.caption)
                         .foregroundStyle(UnfiledTheme.fog)
                         .frame(minHeight: UnfiledTheme.minimumTouchTarget)
                 }
@@ -210,19 +210,18 @@ struct GeneratedBlocksSection: View {
                     "Accepted as a separate generated addition",
                     systemImage: "checkmark.circle"
                 )
-                .font(.footnote.weight(.medium))
+                .font(UnfiledType.caption)
                 .foregroundStyle(UnfiledTheme.fog)
             }
 
             if let errorMessage, !errorMessage.isEmpty {
                 Label(errorMessage, systemImage: "exclamationmark.circle")
-                    .font(.footnote)
+                    .font(UnfiledType.secondary)
                     .foregroundStyle(UnfiledTheme.paper)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(.vertical, 18)
-        .padding(.horizontal, 18)
+        .padding(UnfiledTheme.cardPadding)
         .overlay(alignment: .leading) {
             Rectangle()
                 .fill(UnfiledTheme.persimmon)
@@ -242,11 +241,11 @@ struct GeneratedBlocksSection: View {
         disabled: Bool
     ) -> some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 10) {
+            HStack(spacing: UnfiledTheme.controlGap) {
                 acceptButton(block, disabled: disabled)
                 rejectButton(block, disabled: disabled)
             }
-            VStack(spacing: 10) {
+            VStack(spacing: UnfiledTheme.controlGap) {
                 acceptButton(block, disabled: disabled)
                 rejectButton(block, disabled: disabled)
             }
@@ -261,8 +260,8 @@ struct GeneratedBlocksSection: View {
             onResolve(block.id, .accept)
         } label: {
             Label("Accept", systemImage: "checkmark")
-                .font(.body.weight(.semibold))
-                .frame(maxWidth: .infinity, minHeight: 50)
+                .font(UnfiledType.heading)
+                .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -283,8 +282,8 @@ struct GeneratedBlocksSection: View {
             onResolve(block.id, .reject)
         } label: {
             Label("Reject", systemImage: "xmark")
-                .font(.body.weight(.semibold))
-                .frame(maxWidth: .infinity, minHeight: 50)
+                .font(UnfiledType.heading)
+                .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
