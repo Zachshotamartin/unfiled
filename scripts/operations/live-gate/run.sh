@@ -5,7 +5,7 @@
 #
 # Usage: scripts/operations/live-gate/run.sh [production|<origin>] [--skip-phone]
 # Secrets are read from the environment or the login keychain and are never printed:
-#   UNFILED_GATE_OPENAI_API_KEY   (or keychain service "unfiled-gate" account "OPENAI_API_KEY")
+#   UNFILED_GATE_OPENAI_API_KEY   (or .env.live-gate at the repo root, or keychain "unfiled-gate"/"OPENAI_API_KEY")
 #   UNFILED_GATE_CRON_SECRET      (or keychain service "unfiled-beta-web-secret" account "CRON_SECRET")
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -20,6 +20,8 @@ COMMIT="$(git -C "$ROOT" rev-parse HEAD)"
 OUT_DIR="${UNFILED_GATE_DIR:-$ROOT/.live-gate}"
 mkdir -p "$OUT_DIR"
 keychain() { security find-generic-password -s "$1" -a "$2" -w 2>/dev/null || true; }
+# A gitignored .env.live-gate at the repo root is the other way to supply the secrets.
+if [ -f "$ROOT/.env.live-gate" ]; then set -a; . "$ROOT/.env.live-gate"; set +a; fi
 export UNFILED_GATE_WEB_ORIGIN="$ORIGIN"
 export UNFILED_GATE_OPENAI_API_KEY="${UNFILED_GATE_OPENAI_API_KEY:-$(keychain unfiled-gate OPENAI_API_KEY)}"
 export UNFILED_GATE_CRON_SECRET="${UNFILED_GATE_CRON_SECRET:-$(keychain unfiled-beta-web-secret CRON_SECRET)}"

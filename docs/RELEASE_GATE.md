@@ -37,7 +37,7 @@ Read from the environment or the login keychain; never printed and never committ
 | Drain the capture and indexing queues at once | `UNFILED_GATE_CRON_SECRET`    | `unfiled-beta-web-secret` / `CRON_SECRET` |
 
 Without the organizer key every organizer-dependent step fails as `no_key`, so the gate is red.
-Add the key to the keychain with `security add-generic-password -s unfiled-gate -a OPENAI_API_KEY -w` (it prompts; nothing is echoed).
+Or put `UNFILED_GATE_OPENAI_API_KEY=…` in a gitignored `.env.live-gate` at the repo root, which the runner loads. Add the key to the keychain with `security add-generic-password -s unfiled-gate -a OPENAI_API_KEY -w` (it prompts; nothing is echoed).
 
 ## The release procedure
 

@@ -196,14 +196,16 @@ let refreshToken = null;
     code: code(patched)
   });
   const status = await api("GET", "/me/provider-key?provider=openai", { token });
-  record("provider_key.status_absent", status.status === 200 && status.json?.hasKey !== true, {
+  record("provider_key.status_absent", status.status === 200 && status.json?.providerKey === null, {
     status: status.status,
     code: code(status)
   });
   if (OPENAI_KEY) {
-    const put = await api("PUT", "/me/provider-key", {
-      token,
-      body: { provider: "openai", apiKey: OPENAI_KEY, idempotencyKey: key() }
+    const put = await write("PUT", "/me/provider-key", token, {
+      provider: "openai",
+      apiKey: OPENAI_KEY,
+      idempotencyKey: key(),
+      expectedCredentialRevision: null
     });
     record("provider_key.put", put.status === 200 || put.status === 201, {
       status: put.status,
@@ -212,8 +214,8 @@ let refreshToken = null;
     const after = await api("GET", "/me/provider-key?provider=openai", { token });
     record(
       "provider_key.status_present",
-      after.status === 200 && (after.json?.hasKey === true || after.json?.status === "present"),
-      { status: after.status, hasKey: after.json?.hasKey ?? after.json?.status ?? null }
+      after.status === 200 && after.json?.providerKey?.status === "active",
+      { status: after.status, keyStatus: after.json?.providerKey?.status ?? null }
     );
     const latest = await api("GET", "/me/settings", { token });
     const byok = await write("PATCH", "/me/settings", token, {
@@ -622,6 +624,9 @@ let secondNoteId = null;
 }
 
 // ---------------------------------------------------------------- routing rules
+let liveRulePrefix = null;
+let liveRuleId = null;
+let liveRuleRevision = 1;
 {
   const list = await api("GET", "/routing-rules", { token });
   record("routing_rules.list", list.status === 200, {
@@ -654,55 +659,50 @@ let secondNoteId = null;
         code: code(disabled)
       });
       const latest = disabled.json?.rule ?? disabled.json?.routingRule ?? rule;
-      const removed = await write("DELETE", `/routing-rules/${ruleId}`, token, {
+      const reenabled = await write("PATCH", `/routing-rules/${ruleId}`, token, {
         expectedRevision: latest?.revision ?? latest?.currentRevision ?? 1,
-        idempotencyKey: key()
+        idempotencyKey: key(),
+        enabled: true
       });
-      record("routing_rules.delete", removed.status === 200 || removed.status === 204, {
-        status: removed.status,
-        code: code(removed)
+      record("routing_rules.enable", reenabled.status === 200, {
+        status: reenabled.status,
+        code: code(reenabled)
       });
+      const live = reenabled.json?.rule ?? reenabled.json?.routingRule ?? latest;
+      liveRulePrefix = `gate-${stamp}:`;
+      liveRuleId = ruleId;
+      liveRuleRevision = live?.revision ?? live?.currentRevision ?? 1;
     }
   }
 }
 
 // ---------------------------------------------------------------- captures and the organizer
-let organizedCaptureId = null;
-let receipt = null;
-{
-  const canary = `gate-${stamp}`;
+// Capture A: an unmatched capture. With a key the organizer plans it (the account's first
+// captures go to review by policy), the review is decided into a new note, and the placement is
+// undone. Without a key it fails as provider_unavailable and is retried.
+async function organize(rawContent, label) {
   const clientCaptureId = `cap_${ulid()}`;
   const created = await api("POST", "/captures", {
     token,
     idempotencyKey: clientCaptureId,
     body: {
       clientCaptureId,
-      rawContent: `Groceries ${canary}: milk, eggs, bread`,
+      rawContent,
       source: "web",
       privacy: "ai_assisted",
       clientCreatedAt: new Date().toISOString(),
       clientTimezone: "UTC"
     }
   });
-  organizedCaptureId = created.json?.capture?.id ?? clientCaptureId;
-  record("captures.create", created.status === 201 || created.status === 202, {
+  const captureId = created.json?.capture?.id ?? clientCaptureId;
+  record(`${label}.create`, created.status === 201 || created.status === 202, {
     status: created.status,
     code: code(created),
     captureStatus: created.json?.capture?.status ?? null
   });
-  const list = await api("GET", "/captures?limit=50", { token });
-  record(
-    "captures.list_contains_new",
-    list.status === 200 && (list.json?.items ?? []).some((c) => c.id === organizedCaptureId),
-    { status: list.status, count: (list.json?.items ?? []).length }
-  );
   const drained = await drainQueues();
-  record("cron.drain", drained.skipped === true || drained.captures === 200, {
-    ...drained,
-    note: drained.skipped ? "no cron secret; waiting for the schedule" : undefined
-  });
-  const outcome = await pollUntil("captures.organized", async () => {
-    const detail = await api("GET", `/captures/${organizedCaptureId}`, { token });
+  const outcome = await pollUntil(`${label}.organized`, async () => {
+    const detail = await api("GET", `/captures/${captureId}`, { token });
     const capture = detail.json?.capture ?? {};
     const done = ["done", "needs_review", "failed", "inbox"].includes(capture.status);
     if (!done && drained.skipped !== true) await drainQueues();
@@ -714,28 +714,71 @@ let receipt = null;
       receipt: capture.receipt ?? null
     };
   });
-  receipt = outcome.receipt;
+  return { captureId, outcome, drained };
+}
+const receiptOf = async (captureId) =>
+  (await api("GET", `/captures/${captureId}`, { token })).json?.capture?.receipt ?? null;
+async function undoReceipt(captureId, receipt, label) {
+  const undo = receipt?.actions?.find((action) => action.type === "undo");
+  if (!undo || !receipt?.destination?.noteId) {
+    record(`${label}.undo`, false, {
+      reason: receipt ? "no_undo_action" : "no_receipt",
+      outcome: receipt?.outcome ?? null
+    });
+    return;
+  }
+  const note = await api("GET", `/notes/${receipt.destination.noteId}`, { token });
+  const undone = await write("POST", `/mutation-batches/${undo.mutationId}/undo`, token, {
+    expectedRevision: note.json?.note?.currentRevision ?? undo.expectedRevision,
+    idempotencyKey: key()
+  });
+  record(`${label}.undo`, undone.status === 200, { status: undone.status, code: code(undone) });
+  const after = await receiptOf(captureId);
+  const undoStillOffered = after?.actions?.some((action) => action.type === "undo") === true;
+  record(`${label}.undo_reflected_on_receipt`, after !== null && !undoStillOffered, {
+    outcome: after?.outcome ?? null,
+    undoStillOffered
+  });
+}
+
+let organizedCaptureId = null;
+let receipt = null;
+{
+  const canary = `gate-${stamp}`;
+  const a = await organize(`Groceries ${canary}: milk, eggs, bread`, "capture_a");
+  organizedCaptureId = a.captureId;
+  receipt = a.outcome.receipt;
+  const list = await api("GET", "/captures?limit=50", { token });
+  record(
+    "captures.list_contains_new",
+    list.status === 200 && (list.json?.items ?? []).some((c) => c.id === organizedCaptureId),
+    { status: list.status, count: (list.json?.items ?? []).length }
+  );
+  record("cron.drain", a.drained.skipped === true || a.drained.captures === 200, {
+    ...a.drained,
+    note: a.drained.skipped ? "no cron secret; waiting for the schedule" : undefined
+  });
   if (OPENAI_KEY) {
     record(
-      "captures.organized_with_key",
-      !outcome.timedOut && ["done", "needs_review"].includes(outcome.captureStatus),
+      "capture_a.organized_with_key",
+      !a.outcome.timedOut && ["done", "needs_review"].includes(a.outcome.captureStatus),
       {
-        captureStatus: outcome.captureStatus,
-        lastErrorCode: outcome.lastErrorCode,
-        timedOut: outcome.timedOut === true,
+        captureStatus: a.outcome.captureStatus,
+        lastErrorCode: a.outcome.lastErrorCode,
+        timedOut: a.outcome.timedOut === true,
         receiptOutcome: receipt?.outcome ?? null
       }
     );
   } else {
     record(
-      "captures.keyless_capture_fails_with_provider_unavailable",
-      !outcome.timedOut &&
-        outcome.captureStatus === "failed" &&
-        outcome.lastErrorCode === "provider_unavailable",
+      "capture_a.keyless_fails_with_provider_unavailable",
+      !a.outcome.timedOut &&
+        a.outcome.captureStatus === "failed" &&
+        a.outcome.lastErrorCode === "provider_unavailable",
       {
-        captureStatus: outcome.captureStatus,
-        lastErrorCode: outcome.lastErrorCode,
-        timedOut: outcome.timedOut === true
+        captureStatus: a.outcome.captureStatus,
+        lastErrorCode: a.outcome.lastErrorCode,
+        timedOut: a.outcome.timedOut === true
       }
     );
     record("captures.organizer_path", false, {
@@ -748,7 +791,7 @@ let receipt = null;
     status: receiptRead.status,
     code: code(receiptRead)
   });
-  if (outcome.captureStatus === "failed") {
+  if (a.outcome.captureStatus === "failed") {
     const retry = await write("POST", `/captures/${organizedCaptureId}/retry`, token, {
       idempotencyKey: key()
     });
@@ -760,8 +803,8 @@ let receipt = null;
   }
 }
 
-// ---------------------------------------------------------------- review, undo, correction (organizer-dependent)
-if (OPENAI_KEY && receipt) {
+// ---------------------------------------------------------------- review and undo (capture A)
+if (receipt) {
   const reviews = await api("GET", "/review-items?state=open&limit=50", { token });
   const open = reviews.json?.items ?? [];
   record("review.list_open", reviews.status === 200, {
@@ -781,8 +824,7 @@ if (OPENAI_KEY && receipt) {
         resolved.status === 200 && resolved.json?.reviewItem?.state === "resolved",
         { status: resolved.status, code: code(resolved) }
       );
-      const afterReceipt = await api("GET", `/captures/${organizedCaptureId}`, { token });
-      receipt = afterReceipt.json?.capture?.receipt ?? receipt;
+      receipt = (await receiptOf(organizedCaptureId)) ?? receipt;
       record(
         "review.receipt_updated_after_resolution",
         ["created_note", "added_to_note"].includes(receipt?.outcome),
@@ -797,31 +839,80 @@ if (OPENAI_KEY && receipt) {
       );
     }
   }
-  const undo = receipt?.actions?.find((action) => action.type === "undo");
-  if (undo && receipt.destination?.noteId) {
-    const note = await api("GET", `/notes/${receipt.destination.noteId}`, { token });
-    const undone = await write("POST", `/mutation-batches/${undo.mutationId}/undo`, token, {
-      expectedRevision: note.json?.note?.currentRevision ?? undo.expectedRevision,
-      idempotencyKey: key()
-    });
-    record("receipt.undo", undone.status === 200, { status: undone.status, code: code(undone) });
-  } else {
-    record("receipt.undo", false, {
-      reason: receipt ? "no_undo_action" : "no_receipt",
-      outcome: receipt?.outcome ?? null
-    });
-  }
-  const move = receipt?.actions?.find((action) => action.type === "move");
-  if (move && secondNoteId) {
+  await undoReceipt(organizedCaptureId, receipt, "capture_a");
+}
+
+// ---------------------------------------------------------------- rule-filed capture, move, undo (capture B)
+// Capture B carries the routing-rule prefix, so it files into the rule's note deterministically
+// (no provider needed). Its decision is corrected into another generic note, then undone.
+if (liveRulePrefix && secondNoteId) {
+  const b = await organize(
+    `${liveRulePrefix} Rule-filed ${stamp}: call the plumber back`,
+    "capture_b"
+  );
+  let receiptB = b.outcome.receipt;
+  record(
+    "capture_b.filed_by_rule",
+    ["done"].includes(b.outcome.captureStatus) &&
+      ["added_to_note", "created_note"].includes(receiptB?.outcome),
+    {
+      captureStatus: b.outcome.captureStatus,
+      outcome: receiptB?.outcome ?? null,
+      lastErrorCode: b.outcome.lastErrorCode,
+      timedOut: b.outcome.timedOut === true
+    }
+  );
+  const move = receiptB?.actions?.find((action) => action.type === "move");
+  const target = await write("POST", "/notes", token, {
+    idempotencyKey: key(),
+    title: "Gate move target",
+    type: "generic",
+    spaceId: null,
+    privacy: "ai_assisted",
+    bodyMarkdown: "A generic note that receives the moved capture."
+  });
+  const targetId = target.json?.note?.id ?? null;
+  record("notes.create_move_target", target.status === 201 && targetId !== null, {
+    status: target.status,
+    code: code(target)
+  });
+  if (move && targetId && receiptB?.destination?.noteId) {
+    const sourceNote = await api("GET", `/notes/${receiptB.destination.noteId}`, { token });
     const corrected = await write("POST", `/decisions/${move.decisionId}/correct`, token, {
       idempotencyKey: key(),
-      destination: { type: "existing", noteId: secondNoteId }
+      source: {
+        noteId: receiptB.destination.noteId,
+        expectedRevision: sourceNote.json?.note?.currentRevision ?? 1
+      },
+      destination: {
+        type: "existing_note",
+        noteId: targetId,
+        expectedRevision: target.json?.note?.currentRevision ?? 1
+      }
     });
     record("decision.correct_move", corrected.status === 200, {
       status: corrected.status,
-      code: code(corrected)
+      code: code(corrected),
+      applied: corrected.json?.outcome ?? corrected.json?.applied ?? null
+    });
+    receiptB = (await receiptOf(b.captureId)) ?? receiptB;
+    record("decision.receipt_shows_new_destination", receiptB?.destination?.noteId === targetId, {
+      moved: receiptB?.destination?.noteId === targetId,
+      outcome: receiptB?.outcome ?? null
+    });
+    const targetAfter = await api("GET", `/notes/${targetId}`, { token });
+    record(
+      "decision.target_note_changed",
+      (targetAfter.json?.note?.currentRevision ?? 1) > (target.json?.note?.currentRevision ?? 1),
+      { revision: targetAfter.json?.note?.currentRevision ?? null }
+    );
+  } else {
+    record("decision.correct_move", false, {
+      reason: move ? "no_target" : "no_move_action",
+      outcome: receiptB?.outcome ?? null
     });
   }
+  await undoReceipt(b.captureId, receiptB, "capture_b");
 }
 
 // ---------------------------------------------------------------- search and export
@@ -893,13 +984,31 @@ if (OPENAI_KEY && receipt) {
     code: code(removed)
   });
   if (OPENAI_KEY) {
-    const removedKey = await write("DELETE", "/me/provider-key", token, {
-      provider: "openai",
+    const stored = await api("GET", "/me/provider-key?provider=openai", { token });
+    if (stored.json?.providerKey) {
+      const removedKey = await write("DELETE", "/me/provider-key", token, {
+        provider: "openai",
+        idempotencyKey: key(),
+        expectedCredentialRevision: stored.json.providerKey.credentialRevision
+      });
+      record("provider_key.delete", removedKey.status === 200 || removedKey.status === 204, {
+        status: removedKey.status,
+        code: code(removedKey)
+      });
+    } else {
+      record("provider_key.delete", false, { reason: "no_stored_key" });
+    }
+  }
+  if (liveRuleId) {
+    const rules = await api("GET", "/routing-rules", { token });
+    const current = (rules.json?.items ?? []).find((rule) => rule.id === liveRuleId);
+    const removed = await write("DELETE", `/routing-rules/${liveRuleId}`, token, {
+      expectedRevision: current?.revision ?? liveRuleRevision,
       idempotencyKey: key()
     });
-    record("provider_key.delete", removedKey.status === 200 || removedKey.status === 204, {
-      status: removedKey.status,
-      code: code(removedKey)
+    record("routing_rules.delete", removed.status === 200 || removed.status === 204, {
+      status: removed.status,
+      code: code(removed)
     });
   }
   const signedOut = await api("POST", "/auth/sign-out", { token });
