@@ -4,7 +4,8 @@
 # the new deployments; on red, promotes the previous deployments back and exits non-zero.
 #
 # Usage: scripts/operations/deploy-production.sh [--skip-phone]
-# Requires: vercel CLI logged in and each app linked; git tree clean apart from apps/ios and
+# Requires: a current vercel CLI logged in (the API refuses old ones) with each app linked at
+# apps/<app>/.vercel; git tree clean apart from apps/ios and
 # CLAUDE_FABLE_HANDOFF.md; the gate secrets in the environment or the login keychain.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -41,12 +42,19 @@ current="$OUT_DIR/deployments-$commit.json"
 META=(-m "githubCommitSha=$commit" -m "githubCommitRef=$ref" -m "githubCommitMessage=$message" -m "githubCommitOrg=Zachshotamartin" -m "githubCommitRepo=unfiled" -m "githubCommitAuthorName=Zachary Martin" -m "githubCommitAuthorLogin=Zachshotamartin" -m "githubOrg=Zachshotamartin" -m "githubRepo=unfiled")
 echo "{\"commit\":\"$commit\",\"deployments\":{" > "$current.tmp"
 first=1
+# Each project sets its own Root Directory (apps/<app>), so the CLI has to run from the repo
+# root with that project's link in place; running inside apps/<app> makes Vercel look for
+# apps/<app>/apps/<app> and refuse. The link for each app is kept beside its own source.
 for app in organizer worker verifier search web; do
   echo "== deploying $app"
   log="$OUT_DIR/$app.deploy.log"
-  (cd "apps/$app" && "$VERCEL" deploy --prod --yes --force "${META[@]}" -e "VERCEL_GIT_COMMIT_SHA=$commit" -b "VERCEL_GIT_COMMIT_SHA=$commit" >/dev/null 2>"$log")
+  link="apps/$app/.vercel/project.json"
+  [[ -f "$link" ]] || { echo "apps/$app is not linked to its Vercel project ($link)" >&2; exit 1; }
+  mkdir -p "$ROOT/.vercel"
+  cp "$link" "$ROOT/.vercel/project.json"
+  "$VERCEL" deploy --prod --yes --force "${META[@]}" -e "VERCEL_GIT_COMMIT_SHA=$commit" -b "VERCEL_GIT_COMMIT_SHA=$commit" >/dev/null 2>"$log"
   url="$(grep -oE "https://unfiled(-$app)?-[a-z0-9]+-zach-2267\.vercel\.app" "$log" | head -1)"
-  id="$(cd "apps/$app" && "$VERCEL" inspect "$url" 2>&1 | awk '/^ *id/ {print $2; exit}')"
+  id="$("$VERCEL" inspect "$url" 2>&1 | awk '/^ *id/ {print $2; exit}')"
   [[ $first -eq 0 ]] && echo "," >> "$current.tmp"; first=0
   printf '"%s":{"url":"%s","id":"%s"}' "$app" "$url" "$id" >> "$current.tmp"
   echo "$app -> $url (id ${id:-unknown})"
@@ -64,7 +72,8 @@ echo "== post-deploy gate is RED; promoting the previous deployments back" >&2
 if [[ -f "$previous" ]]; then
   for app in web search verifier worker organizer; do
     url="$(node -e 'console.log(require(process.argv[1]).deployments[process.argv[2]].url)' "$previous" "$app")"
-    (cd "apps/$app" && "$VERCEL" promote "$url" --yes >/dev/null 2>&1) && echo "$app -> restored $url" || echo "$app -> restore FAILED; promote $url by hand" >&2
+    cp "apps/$app/.vercel/project.json" "$ROOT/.vercel/project.json" 2>/dev/null || true
+    "$VERCEL" promote "$url" --yes >/dev/null 2>&1 && echo "$app -> restored $url" || echo "$app -> restore FAILED; promote $url by hand" >&2
   done
   cp "$previous" "$OUT_DIR/deployments-current.json"
 else
