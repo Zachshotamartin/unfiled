@@ -98,4 +98,13 @@ final class NoteDetailViewTests: XCTestCase {
             promptVersion: "expansion-v1"
         )
     }
+
+    func testBodyProjectionDropsHeadingsThatOnlyIntroduceChecklistLines() {
+        let body = "Intro line\n\n## Completed\n- [x] eggs\n- [x] milk"
+        XCTAssertEqual(NoteDetailContent.bodyWithoutChecklistProjection(body), "Intro line")
+        let mixed = "## Notes\nSome text\n\n## Completed\n- [x] eggs"
+        XCTAssertEqual(NoteDetailContent.bodyWithoutChecklistProjection(mixed), "## Notes\nSome text")
+        let onlyChecklist = "## Completed\n- [x] eggs"
+        XCTAssertEqual(NoteDetailContent.bodyWithoutChecklistProjection(onlyChecklist), "")
+    }
 }

@@ -420,12 +420,35 @@ struct ChecklistProgress: Equatable {
 }
 
 enum NoteDetailContent {
+    /// The body without its checklist projection: the checklist lines themselves, and any
+    /// heading whose section holds nothing but checklist lines (the "Completed" section).
     static func bodyWithoutChecklistProjection(_ body: String) -> String {
-        body
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .filter { !isChecklistLine(String($0)) }
-            .joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let lines = body.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var kept: [String] = []
+        var index = 0
+        while index < lines.count {
+            let line = lines[index]
+            if isHeadingLine(line) {
+                var end = index + 1
+                var sectionHasProse = false
+                while end < lines.count, !isHeadingLine(lines[end]) {
+                    let body = lines[end].trimmingCharacters(in: .whitespaces)
+                    if !body.isEmpty, !isChecklistLine(lines[end]) { sectionHasProse = true }
+                    end += 1
+                }
+                if !sectionHasProse {
+                    index = end
+                    continue
+                }
+            }
+            if !isChecklistLine(line) { kept.append(line) }
+            index += 1
+        }
+        return kept.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func isHeadingLine(_ line: String) -> Bool {
+        line.trimmingCharacters(in: .whitespaces).hasPrefix("#")
     }
 
     static func markdown(_ source: String) -> AttributedString {
