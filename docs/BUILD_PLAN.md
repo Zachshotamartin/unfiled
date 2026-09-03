@@ -720,7 +720,7 @@ Avoid a custom block editor in the first milestone. Use revision checks for writ
 
 A note type is not only a routing label. Each type renders an interaction surface appropriate to its data, so the note is usable in place rather than read-only output of the AI pipeline:
 
-- **`list`:** every item renders with a tappable checkbox. Toggling an item is a first-class typed operation, not a hand-edit of Markdown syntax. Checked items collapse into a `Completed` group, a fully checked list can be marked complete, and completing a list updates the open-state signal that candidate retrieval already uses.
+- **`list`:** every item renders with a tappable checkbox. Toggling an item is a first-class typed operation, not a hand-edit of Markdown syntax. Checked items stay in place with their check, a fully checked list can be marked complete, and completing a list updates the open-state signal that candidate retrieval already uses.
 - **`log`:** each entry renders its extracted fields as compact editable values. For a workout entry, exercise name is text, and weight, repetitions, and sets are numeric fields. Tapping a numeric value opens the platform numeric keypad with plus and minus steppers; the most recent prior entry for the same exercise pre-fills as a placeholder so logging a repeat set takes one or two taps. Field edits update `structured_data` and re-render the readable entry.
 - **`project`:** checklist blocks inside a project note behave exactly like `list` items, including toggling and completion state.
 - **`generic` and `principle`:** standard Markdown editing. Checklists authored with checkbox syntax are tappable; no other interactive blocks exist for these types in MVP.

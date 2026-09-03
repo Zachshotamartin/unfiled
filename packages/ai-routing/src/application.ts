@@ -353,7 +353,8 @@ function listFragment(
     const section = validatedSection(item.section);
     if (section !== priorSection) {
       if (chunks.length > 0) chunks.push("");
-      // The list parser treats this heading as the canonical reset to a null section.
+      // The list parser reads a "Completed" heading as a return to no section. It lives only
+      // in this appended fragment; the canonical body keeps items in place and never carries it.
       chunks.push(`## ${section ?? "Completed"}`, "");
       priorSection = section;
     }

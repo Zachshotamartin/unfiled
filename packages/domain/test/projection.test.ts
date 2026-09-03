@@ -14,6 +14,7 @@ import {
 
 const ITEM_A = "itm_01J6M9Q7G4BMKB33GSG3NJ6D1A" as const;
 const ITEM_B = "itm_01J6M9Q7G4BMKB33GSG3NJ6D1B" as const;
+const ITEM_C = "itm_01J6M9Q7G4BMKB33GSG3NJ6D1C" as const;
 const ENTRY_A = "ent_01J6M9Q7G4BMKB33GSG3NJ6D1A" as const;
 const ENTRY_B = "ent_01J6M9Q7G4BMKB33GSG3NJ6D1B" as const;
 const ENTRY_C = "ent_01J6M9Q7G4BMKB33GSG3NJ6D1C" as const;
@@ -37,7 +38,7 @@ function propertyEntryId(ordinal: number): EntityId<"ent"> {
 }
 
 describe("structured Markdown projections", () => {
-  it("renders list bytes deterministically and separates completed items", () => {
+  it("renders list bytes deterministically with checked items in place", () => {
     const data = {
       schemaVersion: 1 as const,
       items: [
@@ -45,7 +46,7 @@ describe("structured Markdown projections", () => {
         { id: ITEM_A, text: "milk", checked: false, ordinal: 0, section: null }
       ]
     };
-    expect(renderListMarkdown(data)).toBe("- [ ] milk\n\n## Completed\n\n- [x] eggs");
+    expect(renderListMarkdown(data)).toBe("- [ ] milk\n- [x] eggs");
     expect(listView(data)).toMatchObject({ remainingCount: 1 });
     expect(listView(data).openItems.map(({ text }) => text)).toEqual(["milk"]);
     expect(listView(data).completedItems.map(({ text }) => text)).toEqual(["eggs"]);
@@ -61,7 +62,37 @@ describe("structured Markdown projections", () => {
           { id: ITEM_B, text: "eggs", checked: false, ordinal: 1, section: null }
         ]
       })
-    ).toBe("## Market\n\n- [ ] milk\n\n- [ ] eggs");
+    ).toBe("- [ ] eggs\n\n## Market\n\n- [ ] milk");
+  });
+
+  it("keeps each section's items in order with their checks in place", () => {
+    expect(
+      renderListMarkdown({
+        schemaVersion: 1,
+        items: [
+          { id: ITEM_A, text: "eggs", checked: true, ordinal: 0, section: "Dairy" },
+          { id: ITEM_B, text: "bread", checked: false, ordinal: 1, section: null },
+          { id: ITEM_C, text: "milk", checked: false, ordinal: 2, section: "Dairy" }
+        ]
+      })
+    ).toBe("- [ ] bread\n\n## Dairy\n\n- [x] eggs\n- [ ] milk");
+  });
+
+  it("reads a legacy Completed heading as no section and never renders it back", () => {
+    const previous = {
+      schemaVersion: 1 as const,
+      items: [{ id: ITEM_A, text: "milk", checked: false, ordinal: 0, section: null }]
+    };
+    const reconciled = reconcileListMarkdown(
+      previous,
+      "- [ ] milk\n\n## Completed\n\n- [x] eggs",
+      nextItemId
+    );
+    expect(reconciled.items.map(({ text, checked, section }) => ({ text, checked, section }))).toEqual([
+      { text: "milk", checked: false, section: null },
+      { text: "eggs", checked: true, section: null }
+    ]);
+    expect(renderListMarkdown(reconciled)).toBe("- [ ] milk\n- [x] eggs");
   });
 
   it("renders log fields in stable order without locale-dependent output", () => {

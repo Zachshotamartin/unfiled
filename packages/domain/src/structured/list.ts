@@ -18,18 +18,15 @@ function sortedItems(items: readonly ListItem[]): ListItem[] {
   );
 }
 
-function renderGroup(items: readonly ListItem[]): string[] {
-  const chunks: string[] = [];
-  let currentSection: string | null | undefined;
-  for (const item of items) {
-    if (item.section !== currentSection) {
-      if (chunks.length > 0) chunks.push("");
-      if (item.section !== null) chunks.push(`## ${item.section}`, "");
-      currentSection = item.section;
-    }
-    chunks.push(`- [${item.checked ? "x" : " "}] ${item.text}`);
-  }
-  return chunks;
+function itemLine(item: ListItem): string {
+  return `- [${item.checked ? "x" : " "}] ${item.text}`;
+}
+
+function itemsBySection(items: readonly ListItem[]): ReadonlyMap<string, readonly ListItem[]> {
+  return items.reduce((sections, item) => {
+    if (item.section === null) return sections;
+    return new Map(sections).set(item.section, [...(sections.get(item.section) ?? []), item]);
+  }, new Map<string, readonly ListItem[]>());
 }
 
 export function listView(data: ListStructuredData): {
@@ -48,14 +45,22 @@ export function listView(data: ListStructuredData): {
   });
 }
 
+/**
+ * Items keep their order and their checked state in place; nothing moves to a "Completed"
+ * group. Items without a section come first, since they carry no heading, and each section
+ * follows in order of first appearance. The parser still reads a legacy `## Completed`
+ * heading as a return to no section, so older bodies round-trip into this shape.
+ */
 export function renderListMarkdown(data: ListStructuredData): string {
-  const { openItems, completedItems } = listView(data);
-  const chunks = renderGroup(openItems);
-  if (completedItems.length > 0) {
-    if (chunks.length > 0) chunks.push("");
-    chunks.push("## Completed", "", ...renderGroup(completedItems));
-  }
-  return chunks.join("\n");
+  const ordered = sortedItems(ListStructuredDataSchema.parse(data).items);
+  const unsectioned = ordered.filter(({ section }) => section === null).map(itemLine);
+  const sections = [...itemsBySection(ordered)].flatMap(([section, items], index) => [
+    ...(index > 0 || unsectioned.length > 0 ? [""] : []),
+    `## ${section}`,
+    "",
+    ...items.map(itemLine)
+  ]);
+  return [...unsectioned, ...sections].join("\n");
 }
 
 interface ParsedListItem {
@@ -71,6 +76,8 @@ function parseListMarkdown(markdown: string): ParsedListItem[] {
     if (line.trim().length === 0) continue;
     const heading = /^\s*#{2,6}\s+(.+?)\s*$/u.exec(line);
     if (heading?.[1]) {
+      // "Completed" is never a section: older bodies used it to group checked items, and an
+      // appended fragment uses it to return to no section.
       section = /^completed$/iu.test(heading[1].trim()) ? null : heading[1].trim();
       continue;
     }

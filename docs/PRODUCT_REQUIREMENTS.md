@@ -181,7 +181,7 @@ AC:
 
 - Tapping an item's checkbox toggles it optimistically within 100 ms perceived and syncs as a typed operation with expected revision.
 - A rejected toggle (stale revision) rolls back visibly with a one-line explanation and a refreshed note.
-- Checked items collapse into `Completed`; a fully checked list can be marked complete, updating the open-state routing signal.
+- Checked items stay in place with their check; a fully checked list can be marked complete, updating the open-state routing signal.
 - Toggles are undoable and appear in revision history; screen reader announces `item, checked, N of M remaining`.
 - Touch target ≥ 44 pt; keyboard-operable on web.
 

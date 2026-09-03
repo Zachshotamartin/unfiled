@@ -101,7 +101,7 @@ export const manualNoteCreationFixtures = [
       links: []
     },
     expected: {
-      bodyMarkdown: "## Market\n\n- [ ] milk\n\n## Completed\n\n## Market\n\n- [x] eggs",
+      bodyMarkdown: "## Market\n\n- [ ] milk\n- [x] eggs",
       isOpen: true,
       structure: {
         kind: "list",
@@ -156,7 +156,7 @@ export const manualNoteCreationFixtures = [
 export const structuredMarkdownParityFixtures = {
   list: {
     replacement: "## Market\n\n- renamed milk\n- [x] eggs",
-    canonical: "## Market\n\n- [ ] renamed milk\n\n## Completed\n\n## Market\n\n- [x] eggs",
+    canonical: "## Market\n\n- [ ] renamed milk\n- [x] eggs",
     conflicts: ["- milk\nplain prose", "- duplicate\n- DUPLICATE"]
   },
   log: {
