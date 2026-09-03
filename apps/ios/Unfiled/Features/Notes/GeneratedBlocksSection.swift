@@ -28,6 +28,12 @@ enum GeneratedBlockVisibility {
     static func visible(_ blocks: [GeneratedBlockPresentation]) -> [GeneratedBlockPresentation] {
         blocks.filter(\.isVisibleInNote)
     }
+
+    /// The section exists only when a block does. Loading and load errors never show it on
+    /// their own, so opening a note does not flash an empty "Generated additions" heading.
+    static func showsSection(blocks: [GeneratedBlockPresentation]) -> Bool {
+        !visible(blocks).isEmpty
+    }
 }
 
 struct GeneratedBlocksSection: View {
@@ -51,8 +57,7 @@ struct GeneratedBlocksSection: View {
     }
 
     var body: some View {
-        if !visibleBlocks.isEmpty || isLoading || loadError != nil || hasMore ||
-            isLoadingMore || loadMoreError != nil || paginationNotice != nil {
+        if GeneratedBlockVisibility.showsSection(blocks: blocks) {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(alignment: .center, spacing: 12) {
                     VStack(alignment: .leading, spacing: 5) {

@@ -49,6 +49,7 @@ struct AppShellView: View {
                         draft: sheet.draft,
                         spaces: model.spaces,
                         currentRevision: sheet.currentRevision,
+                        failureMessage: sheet.failureMessage,
                         onCancel: { model.editorSheet = nil },
                         onSave: { draft in
                             try await model.saveNote(

@@ -42,6 +42,8 @@ struct CaptureSheet: Equatable, Identifiable {
 struct EditorSheet: Equatable, Identifiable {
     let draft: NoteEditorDraft
     let currentRevision: Int?
+    /// Set when a save was refused: the editor reopens with the draft and this reason.
+    var failureMessage: String? = nil
 
     var id: String { draft.noteID ?? "new-note" }
 }

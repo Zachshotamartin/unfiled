@@ -2,8 +2,6 @@ import SwiftUI
 
 struct NoteDetailView: View {
 
-    @State private var optimisticChecks: [String: Bool] = [:]
-    @State private var updatingItemIDs: Set<String> = []
     @State private var pendingNoteAction: PendingNoteAction?
     @State private var isPerformingNoteAction = false
     @State private var feedbackMessage: String?
@@ -37,7 +35,7 @@ struct NoteDetailView: View {
     var onLoadMoreBacklinks: @MainActor () async -> Void = {}
 
     private var progress: ChecklistProgress {
-        ChecklistProgress(items: note.checklistItems, overrides: optimisticChecks)
+        ChecklistProgress(items: note.checklistItems)
     }
 
     private var readableBody: String {
@@ -87,11 +85,7 @@ struct NoteDetailView: View {
                     onResolve: onResolveGeneratedBlock
                 )
 
-                if !GeneratedBlockVisibility.visible(generatedBlocks).isEmpty ||
-                    isLoadingGeneratedBlocks || generatedBlocksError != nil ||
-                    hasMoreGeneratedBlocks || isLoadingMoreGeneratedBlocks ||
-                    generatedBlocksLoadMoreError != nil ||
-                    generatedBlocksPaginationNotice != nil {
+                if GeneratedBlockVisibility.showsSection(blocks: generatedBlocks) {
                     SectionRule()
                 }
 
@@ -125,8 +119,6 @@ struct NoteDetailView: View {
             Text(pendingNoteAction?.message ?? "")
         }
         .onChange(of: note.currentRevision) { _, _ in
-            optimisticChecks.removeAll()
-            updatingItemIDs.removeAll()
             feedbackMessage = nil
         }
         .unfiledScreen()
@@ -179,7 +171,7 @@ struct NoteDetailView: View {
             .padding(.bottom, UnfiledTheme.labelToRule)
 
             ForEach(note.checklistItems) { item in
-                checklistRow(item)
+                checklistRow(item, isLast: item.id == note.checklistItems.last?.id)
             }
         }
         .padding(.bottom, 14)
@@ -187,9 +179,8 @@ struct NoteDetailView: View {
         .accessibilityLabel("Checklist, \(progress.accessibilityLabel)")
     }
 
-    private func checklistRow(_ item: ChecklistItemPresentation) -> some View {
-        let isChecked = resolvedCheck(for: item)
-        let isUpdating = updatingItemIDs.contains(item.id)
+    private func checklistRow(_ item: ChecklistItemPresentation, isLast: Bool) -> some View {
+        let isChecked = item.checked
 
         return Button {
             toggle(item, to: !isChecked)
@@ -208,9 +199,6 @@ struct NoteDetailView: View {
                         .foregroundStyle(UnfiledTheme.ink)
                         .scaleEffect(isChecked ? 1 : 0.4)
                         .opacity(isChecked ? 1 : 0)
-                    if isUpdating && !isChecked {
-                        UnfiledLoadingView(size: 16, label: "Updating")
-                    }
                 }
                 .animation(UnfiledMotion.animation(UnfiledMotion.emphasis), value: isChecked)
                 .frame(width: UnfiledTheme.minimumTouchTarget, height: UnfiledTheme.minimumTouchTarget)
@@ -225,10 +213,9 @@ struct NoteDetailView: View {
             }
             .frame(maxWidth: .infinity, minHeight: 62, alignment: .leading)
             .contentShape(Rectangle())
-            .overlay(alignment: .bottom) { SectionRule() }
+            .overlay(alignment: .bottom) { if !isLast { SectionRule() } }
         }
         .buttonStyle(.plain)
-        .disabled(isUpdating)
         .accessibilityLabel(item.text)
         .accessibilityValue(
             "\(isChecked ? "Checked" : "Not checked"), \(progress.remaining) remaining"
@@ -276,20 +263,10 @@ struct NoteDetailView: View {
         }
     }
 
-    private func resolvedCheck(for item: ChecklistItemPresentation) -> Bool {
-        optimisticChecks[item.id] ?? item.checked
-    }
-
+    /// The check shows at once; the model keeps it pending until the server confirms it.
     private func toggle(_ item: ChecklistItemPresentation, to checked: Bool) {
-        guard !updatingItemIDs.contains(item.id) else { return }
-        let previous = resolvedCheck(for: item)
         UnfiledHaptics.selection()
-        withAnimation(UnfiledMotion.animation(UnfiledMotion.quick)) {
-            optimisticChecks[item.id] = checked
-        }
-        updatingItemIDs.insert(item.id)
         feedbackMessage = nil
-
         Task { @MainActor in
             do {
                 try await onToggleChecklistItem(item.id, checked)
@@ -298,11 +275,9 @@ struct NoteDetailView: View {
                     argument: "\(item.text), \(checked ? "checked" : "not checked")"
                 )
             } catch {
-                optimisticChecks[item.id] = previous
                 feedbackMessage = "That item was not updated. The latest note has been restored."
                 UIAccessibility.post(notification: .announcement, argument: feedbackMessage)
             }
-            updatingItemIDs.remove(item.id)
         }
     }
 

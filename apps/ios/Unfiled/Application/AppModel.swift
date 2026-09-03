@@ -256,6 +256,10 @@ final class AppModel: ObservableObject {
     @Published var navigationPath: [AppRoute] = []
     /// The tail of each note's serial operation chain, keyed by note id.
     private var noteOperationChains: [String: Task<Void, Never>] = [:]
+    /// Checks the owner has tapped that the server has not confirmed yet, by note and item.
+    /// Every presentation rebuild lays them over the note, so a reply for one item never
+    /// hides another item's pending check.
+    private var pendingChecklistToggles: [String: [String: Bool]] = [:]
     @Published var selectedTab: MainTab = .inbox
     @Published var captureSheet: CaptureSheet?
     @Published var editorSheet: EditorSheet?
@@ -897,16 +901,26 @@ final class AppModel: ObservableObject {
         context: AccountContext
     ) async {
         guard let remoteID = CaptureID(rawValue: captureID) else { return }
+        // The earlier version leaves the Inbox at once; it returns only if the server keeps it.
+        let removedIndex = receipts.firstIndex { $0.id == captureID }
+        let removedReceipt = removedIndex.map { receipts[$0] }
+        let removedReviews = reviewItems.filter { $0.captureID == captureID }
+        receipts.removeAll { $0.id == captureID }
+        reviewItems.removeAll { $0.captureID == captureID }
         do {
             _ = try await runtime.authenticatedAPI.deleteCapture(
                 remoteID,
                 request: try CaptureDeleteRequest(idempotencyKey: UUID().uuidString.lowercased())
             )
             guard isCurrent(context) else { return }
-            receipts.removeAll { $0.id == captureID }
-            reviewItems.removeAll { $0.captureID == captureID }
+            for review in removedReviews { reviewItemsByID.removeValue(forKey: review.id) }
         } catch {
             guard isCurrent(context) else { return }
+            if let removedReceipt, !receipts.contains(where: { $0.id == captureID }) {
+                receipts.insert(removedReceipt, at: min(removedIndex ?? 0, receipts.count))
+            }
+            let missing = removedReviews.filter { removed in !reviewItems.contains { $0.id == removed.id } }
+            reviewItems.insert(contentsOf: missing, at: 0)
             bannerMessage = "The new version is saved, but the earlier one could not be removed."
         }
     }
@@ -941,20 +955,25 @@ final class AppModel: ObservableObject {
 
     /// Retries a failed capture. A capture that never left this device is retried from the local
     /// outbox; one the server already has (its organizer job failed) is retried on the server.
+    /// The row reads as organizing again at once; it goes back to failed only on refusal.
     func retryCapture(captureID: String) async {
         guard let runtime, let user = currentUser else { return }
         let context = currentAccountContext(for: user)
+        let snapshot = captureDetails[captureID] ?? receipts.first { $0.id == captureID }
+        if let snapshot { replaceReceipt(snapshot.retrying()) }
         do {
             try await runtime.captureSync.retryFailedCapture(
                 profileID: user.id,
                 captureID: captureID
             )
+            guard isCurrent(context) else { return }
             await refreshAll()
             return
         } catch {
             // Not a local outbox item; fall through to the server.
         }
         guard let remoteID = CaptureID(rawValue: captureID) else {
+            if let snapshot { replaceReceipt(snapshot) }
             bannerMessage = "That saved capture could not be retried. Try again."
             return
         }
@@ -964,9 +983,10 @@ final class AppModel: ObservableObject {
                 request: CaptureRetryRequest(idempotencyKey: UUID().uuidString.lowercased())
             )
             guard isCurrent(context) else { return }
-            await refreshAll()
+            await loadCaptureDetail(captureID: captureID, force: true)
         } catch {
             guard isCurrent(context) else { return }
+            if let snapshot { replaceReceipt(snapshot) }
             bannerMessage = "That saved capture could not be retried. Try again."
         }
     }
@@ -2096,61 +2116,80 @@ final class AppModel: ObservableObject {
         )
     }
 
+    /// Saving shows the edit at once: the editor closes and the note reads as saved. If the
+    /// server refuses, the note returns to its last confirmed text and the editor reopens with
+    /// the unsaved draft and the reason.
     func saveNote(_ draft: NoteEditorDraft, expectedRevision: Int?) async throws {
         guard let runtime, let user = currentUser else { throw AuthenticationError.signedOut }
         let context = currentAccountContext(for: user)
         let idempotencyKey = UUID().uuidString.lowercased()
-        let result: MutationResult
-        if let rawNoteID = draft.noteID {
-            guard let noteID = NoteID(rawValue: rawNoteID), let expectedRevision else {
+        let spaceID: SpaceID?
+        if let rawSpaceID = draft.spaceID {
+            guard let parsed = SpaceID(rawValue: rawSpaceID) else {
                 throw APIClientError.invalidRequest
             }
-            let spaceField: PatchField<SpaceID>
-            if let rawSpaceID = draft.spaceID {
-                guard let spaceID = SpaceID(rawValue: rawSpaceID) else {
-                    throw APIClientError.invalidRequest
-                }
-                spaceField = .value(spaceID)
-            } else {
-                spaceField = .null
-            }
-            result = try await runtime.authenticatedAPI.updateNote(
-                noteID,
-                request: try NoteUpdateRequest(
-                    expectedRevision: expectedRevision,
-                    idempotencyKey: idempotencyKey,
-                    title: .value(draft.title),
-                    bodyMarkdown: .value(draft.bodyMarkdown),
-                    privacy: .value(draft.privacy),
-                    spaceId: spaceField
-                )
-            )
+            spaceID = parsed
         } else {
-            let spaceID: SpaceID?
-            if let rawSpaceID = draft.spaceID {
-                guard let parsed = SpaceID(rawValue: rawSpaceID) else {
-                    throw APIClientError.invalidRequest
-                }
-                spaceID = parsed
-            } else {
-                spaceID = nil
-            }
-            result = try await runtime.authenticatedAPI.createNote(
-                NoteCreateRequest(
-                    idempotencyKey: idempotencyKey,
+            spaceID = nil
+        }
+        let confirmed = draft.noteID.flatMap { notesByID[$0] }
+        if let confirmed {
+            overlayNoteLocally(
+                confirmed.edited(
                     title: draft.title,
-                    type: draft.type,
+                    bodyMarkdown: draft.bodyMarkdown,
                     spaceId: spaceID,
                     privacy: draft.privacy,
-                    bodyMarkdown: draft.bodyMarkdown
+                    updatedAt: Date()
                 )
             )
         }
+        editorSheet = nil
+        let result: MutationResult
+        do {
+            if let rawNoteID = draft.noteID {
+                guard let noteID = NoteID(rawValue: rawNoteID), let expectedRevision else {
+                    throw APIClientError.invalidRequest
+                }
+                let spaceField: PatchField<SpaceID> = spaceID.map { .value($0) } ?? .null
+                result = try await runtime.authenticatedAPI.updateNote(
+                    noteID,
+                    request: try NoteUpdateRequest(
+                        expectedRevision: expectedRevision,
+                        idempotencyKey: idempotencyKey,
+                        title: .value(draft.title),
+                        bodyMarkdown: .value(draft.bodyMarkdown),
+                        privacy: .value(draft.privacy),
+                        spaceId: spaceField
+                    )
+                )
+            } else {
+                result = try await runtime.authenticatedAPI.createNote(
+                    NoteCreateRequest(
+                        idempotencyKey: idempotencyKey,
+                        title: draft.title,
+                        type: draft.type,
+                        spaceId: spaceID,
+                        privacy: draft.privacy,
+                        bodyMarkdown: draft.bodyMarkdown
+                    )
+                )
+            }
+        } catch {
+            guard isCurrent(context) else { throw AuthenticationError.signedOut }
+            if let confirmed { overlayNoteLocally(confirmed) }
+            editorSheet = EditorSheet(
+                draft: draft,
+                currentRevision: expectedRevision,
+                failureMessage: Self.interactionFailureMessage(
+                    error,
+                    fallback: "Your note was not saved. Review the latest version and try again."
+                )
+            )
+            throw error
+        }
         guard isCurrent(context) else { throw AuthenticationError.signedOut }
         await applyNoteBatch([result.note], user: user, runtime: runtime, context: context)
-        guard isCurrent(context) else { throw AuthenticationError.signedOut }
-        editorSheet = nil
-        await refreshAll()
     }
 
     func loadNote(_ rawNoteID: String, force: Bool = false) async -> Note? {
@@ -2703,6 +2742,17 @@ final class AppModel: ObservableObject {
     /// previous reply returned, so two quick taps both land instead of the second being
     /// refused as stale and reverted. The reply's note is applied directly; no full refresh.
     func toggleChecklistItem(noteID: String, itemID: String, checked: Bool) async throws {
+        pendingChecklistToggles[noteID, default: [:]][itemID] = checked
+        rebuildNoteDetails()
+        defer {
+            if pendingChecklistToggles[noteID]?[itemID] == checked {
+                pendingChecklistToggles[noteID]?.removeValue(forKey: itemID)
+                if pendingChecklistToggles[noteID]?.isEmpty == true {
+                    pendingChecklistToggles.removeValue(forKey: noteID)
+                }
+                rebuildNoteDetails()
+            }
+        }
         let previous = noteOperationChains[noteID]
         let operation = Task<Result<Void, Error>, Never> { [weak self] in
             await previous?.value
@@ -2857,6 +2907,7 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// The note reads as archived, or back, at once; it reverts only if the server refuses.
     func setArchived(noteID: String, archived: Bool) async throws {
         guard let runtime,
               let user = currentUser,
@@ -2864,20 +2915,28 @@ final class AppModel: ObservableObject {
               let note = notesByID[noteID]
         else { throw APIClientError.invalidRequest }
         let context = currentAccountContext(for: user)
-        let result = try await runtime.authenticatedAPI.archiveNote(
-            id,
-            request: NoteArchiveRequest(
-                expectedRevision: note.currentRevision,
-                idempotencyKey: UUID().uuidString.lowercased(),
-                archived: archived
+        overlayNoteLocally(note.archived(at: archived ? Date() : nil))
+        let result: MutationResult
+        do {
+            result = try await runtime.authenticatedAPI.archiveNote(
+                id,
+                request: NoteArchiveRequest(
+                    expectedRevision: note.currentRevision,
+                    idempotencyKey: UUID().uuidString.lowercased(),
+                    archived: archived
+                )
             )
-        )
+        } catch {
+            guard isCurrent(context) else { throw AuthenticationError.signedOut }
+            overlayNoteLocally(note)
+            throw error
+        }
         guard isCurrent(context) else { throw AuthenticationError.signedOut }
         await applyNoteBatch([result.note], user: user, runtime: runtime, context: context)
-        guard isCurrent(context) else { throw AuthenticationError.signedOut }
-        await refreshAll()
     }
 
+    /// The note leaves the Library and its page closes at once. If the server refuses, the
+    /// note comes back and a banner says so.
     func deleteNote(noteID: String) async throws {
         guard let runtime,
               let user = currentUser,
@@ -2885,21 +2944,31 @@ final class AppModel: ObservableObject {
               let note = notesByID[noteID]
         else { throw APIClientError.invalidRequest }
         let context = currentAccountContext(for: user)
-        let result = try await runtime.authenticatedAPI.softDeleteNote(
-            id,
-            request: .init(
-                expectedRevision: note.currentRevision,
-                idempotencyKey: UUID().uuidString.lowercased()
-            )
-        )
-        guard isCurrent(context) else { throw AuthenticationError.signedOut }
-        await applyNoteBatch([result.note], user: user, runtime: runtime, context: context)
-        guard isCurrent(context) else { throw AuthenticationError.signedOut }
+        overlayNoteLocally(note.deleted(at: Date()))
         navigationPath.removeAll { route in
             if case .note(noteID) = route { return true }
             return false
         }
-        await refreshAll()
+        let result: MutationResult
+        do {
+            result = try await runtime.authenticatedAPI.softDeleteNote(
+                id,
+                request: .init(
+                    expectedRevision: note.currentRevision,
+                    idempotencyKey: UUID().uuidString.lowercased()
+                )
+            )
+        } catch {
+            guard isCurrent(context) else { throw AuthenticationError.signedOut }
+            overlayNoteLocally(note)
+            bannerMessage = Self.interactionFailureMessage(
+                error,
+                fallback: "The note could not be deleted. It is back in your Library."
+            )
+            throw error
+        }
+        guard isCurrent(context) else { throw AuthenticationError.signedOut }
+        await applyNoteBatch([result.note], user: user, runtime: runtime, context: context)
     }
 
     func loadRevisions(noteID: String) async {
@@ -2964,7 +3033,9 @@ final class AppModel: ObservableObject {
         let context = currentAccountContext(for: user)
         let intentID = "\(operationID)|\(mutationID)|\(expectedRevision)"
         defer { endInteraction(operationID, context: context) }
-
+        // The row reads as undone at once; the undo returns only if the server refuses.
+        let snapshot = captureDetails[captureID] ?? receipts.first { $0.id == captureID }
+        if let snapshot { replaceReceipt(snapshot.undoing()) }
         do {
             let request: MutationUndoRequest
             if let existing = undoAttempts[intentID] {
@@ -3005,6 +3076,7 @@ final class AppModel: ObservableObject {
             announce(bannerMessage ?? "The organized change was undone.")
         } catch {
             guard isCurrent(context) else { return }
+            if let snapshot { replaceReceipt(snapshot) }
             if !Self.isAmbiguousInteractionFailure(error) {
                 undoAttempts.removeValue(forKey: intentID)
             }
@@ -3257,6 +3329,11 @@ final class AppModel: ObservableObject {
             resolution: resolution
         )
         defer { endInteraction(operationID, context: context) }
+        // The card leaves at once and the picker closes; both return only if the server refuses.
+        let removedIndex = reviewItems.firstIndex { $0.id == reviewID }
+        let removedPresentation = removedIndex.map { reviewItems[$0] }
+        reviewItems.removeAll { $0.id == reviewID }
+        destinationPickerSheet = nil
 
         do {
             let request: ReviewResolveRequest
@@ -3294,7 +3371,16 @@ final class AppModel: ObservableObject {
                     context: context
                 )
             } else if case .create = request.resolution {
-                await refreshAll()
+                if let noteID = response.reviewItem.noteId {
+                    _ = await refreshNotesAtomically(
+                        [noteID],
+                        user: user,
+                        runtime: runtime,
+                        context: context
+                    )
+                } else {
+                    await refreshAll()
+                }
             }
             if let captureID = item.captureId?.rawValue {
                 await loadCaptureDetail(captureID: captureID, force: true)
@@ -3308,6 +3394,9 @@ final class AppModel: ObservableObject {
             guard isCurrent(context) else { return }
             if !Self.isAmbiguousInteractionFailure(error) {
                 reviewAttempts.removeValue(forKey: intentID)
+            }
+            if let removedPresentation, !reviewItems.contains(where: { $0.id == reviewID }) {
+                reviewItems.insert(removedPresentation, at: min(removedIndex ?? 0, reviewItems.count))
             }
             interactionErrors[operationID] = Self.interactionFailureMessage(
                 error,
@@ -3489,18 +3578,32 @@ final class AppModel: ObservableObject {
         } else {
             throw APIClientError.invalidRequest
         }
-        let result = try await runtime.authenticatedAPI.restoreDeletedNote(
-            id,
-            request: .init(
-                expectedRevision: note.currentRevision,
-                idempotencyKey: UUID().uuidString.lowercased()
+        // The note returns to the Library at once; it goes back to Deleted only on refusal.
+        overlayNoteLocally(note.deleted(at: nil))
+        let removedIndex = deletedNotes.firstIndex { $0.id == noteID }
+        let removedPresentation = removedIndex.map { deletedNotes[$0] }
+        deletedNotes.removeAll { $0.id == noteID }
+        let result: MutationResult
+        do {
+            result = try await runtime.authenticatedAPI.restoreDeletedNote(
+                id,
+                request: .init(
+                    expectedRevision: note.currentRevision,
+                    idempotencyKey: UUID().uuidString.lowercased()
+                )
             )
-        )
+        } catch {
+            guard isCurrent(context) else { throw AuthenticationError.signedOut }
+            overlayNoteLocally(note)
+            if let removedPresentation, !deletedNotes.contains(where: { $0.id == noteID }) {
+                deletedNotes.insert(removedPresentation, at: min(removedIndex ?? 0, deletedNotes.count))
+            }
+            throw error
+        }
         guard isCurrent(context) else { throw AuthenticationError.signedOut }
         await applyNoteBatch([result.note], user: user, runtime: runtime, context: context)
         guard isCurrent(context) else { throw AuthenticationError.signedOut }
         await loadDeleted()
-        await refreshAll()
     }
 
     func isSubmittingInteraction(_ operationID: String) -> Bool {
@@ -3846,8 +3949,25 @@ final class AppModel: ObservableObject {
         .sorted(by: Self.noteSort)
     }
 
-    private nonisolated static func isActiveNote(_ note: Note) -> Bool {
+    nonisolated static func isActiveNote(_ note: Note) -> Bool {
         note.archivedAt == nil && note.deletedAt == nil
+    }
+
+    /// Shows a note as the user expects it before the server confirms. Nothing is cached
+    /// until the reply arrives; the reply, or the restored snapshot, replaces this copy.
+    private func overlayNoteLocally(_ note: Note) {
+        notesByID[note.id.rawValue] = note
+        activeNoteMembership.update(noteID: note.id.rawValue, isActive: Self.isActiveNote(note))
+        rebuildActiveNotes()
+        rebuildNoteDetails()
+    }
+
+    /// Shows a receipt as the user expects it before the server confirms.
+    private func replaceReceipt(_ presentation: ReceiptPresentation) {
+        captureDetails[presentation.id] = presentation
+        if let index = receipts.firstIndex(where: { $0.id == presentation.id }) {
+            receipts[index] = presentation
+        }
     }
 
     private func announce(_ message: String) {
@@ -4525,9 +4645,18 @@ final class AppModel: ObservableObject {
 
     private func rebuildNoteDetails() {
         let rawSpaces = Array(spacesByID.values)
-        noteDetails = notesByID.mapValues {
+        var details = notesByID.mapValues {
             PresentationMapping.detail($0, spaces: rawSpaces)
         }
+        for (noteID, overrides) in pendingChecklistToggles {
+            guard var detail = details[noteID] else { continue }
+            detail.checklistItems = detail.checklistItems.map { item in
+                guard let checked = overrides[item.id] else { return item }
+                return ChecklistItemPresentation(id: item.id, text: item.text, checked: checked)
+            }
+            details[noteID] = detail
+        }
+        noteDetails = details
     }
 
     private static func noteSort(_ lhs: NotePresentation, _ rhs: NotePresentation) -> Bool {

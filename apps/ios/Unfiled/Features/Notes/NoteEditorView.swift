@@ -55,11 +55,13 @@ struct NoteEditorView: View {
         draft: NoteEditorDraft,
         spaces: [SpacePresentation],
         currentRevision: Int?,
+        failureMessage: String? = nil,
         onCancel: @escaping @MainActor () -> Void,
         onSave: @escaping @MainActor (NoteEditorDraft) async throws -> Void
     ) {
         _draft = State(initialValue: draft)
         _savedDraft = State(initialValue: draft)
+        _errorMessage = State(initialValue: failureMessage)
         self.spaces = spaces
         self.currentRevision = currentRevision
         self.onCancel = onCancel
@@ -69,7 +71,7 @@ struct NoteEditorView: View {
     private var isNewNote: Bool { draft.noteID == nil }
     private var isDirty: Bool { draft != savedDraft }
     private var canSave: Bool {
-        isDirty && draft.validationIssue == nil && !isSaving
+        (isDirty || errorMessage != nil) && draft.validationIssue == nil && !isSaving
     }
 
     var body: some View {
@@ -166,7 +168,7 @@ struct NoteEditorView: View {
         } message: {
             Text("This edit has not been saved.")
         }
-        .interactiveDismissDisabled(isDirty || isSaving)
+        .interactiveDismissDisabled(isDirty || errorMessage != nil || isSaving)
         .onAppear { focusedField = isNewNote ? .title : .body }
         .unfiledScreen()
     }
@@ -283,7 +285,7 @@ struct NoteEditorView: View {
     private var navigationToolbar: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
             Button("Cancel") {
-                if isDirty {
+                if isDirty || errorMessage != nil {
                     confirmsDiscard = true
                 } else {
                     onCancel()
