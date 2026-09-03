@@ -43,6 +43,12 @@ struct ReceiptPresentation: Equatable, Identifiable, Sendable {
     let actions: [ReceiptActionPresentation]
     let pending: Bool
     let retryable: Bool
+
+    /// A capture that is waiting on a retry or a review can still have its text changed; the
+    /// change becomes a new capture and this one is removed.
+    var canEditText: Bool {
+        !pending && (retryable || outcome == .needsReview)
+    }
 }
 
 struct NotePresentation: Equatable, Identifiable, Sendable {

@@ -251,11 +251,6 @@ private struct ReceiptLedgerRow: View {
     let onRetryCapture: @MainActor (String) -> Void
     let onEditCapture: @MainActor (String) -> Void
 
-    /// A capture that is waiting on a retry or a review can still have its text changed.
-    private var editable: Bool {
-        !receipt.pending && (receipt.retryable || receipt.outcome == .needsReview)
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 15) {
             HStack(alignment: .center, spacing: 9) {
@@ -349,7 +344,7 @@ private struct ReceiptLedgerRow: View {
                 }
             }
 
-            if editable {
+            if receipt.canEditText {
                 Button {
                     onEditCapture(receipt.id)
                 } label: {

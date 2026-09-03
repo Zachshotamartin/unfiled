@@ -112,7 +112,7 @@ struct CaptureReceiptDetailView: View {
             )
         }
 
-        if !receipt.pending, receipt.retryable || receipt.outcome == .needsReview {
+        if receipt.canEditText {
             Button {
                 onEditCapture(receipt.id)
             } label: {
