@@ -87,6 +87,8 @@ The owner asked for this to be intuitive. The rules the phone work follows:
 
 ## 3. Phases, each one PR with its tests
 
+Status on 2026-09-03 (branch `feat/capture-attachments`, draft PR #25): P1 through P5 are implemented with their tests, and the live API gate and phone gate carry photo steps (P9 for photos). P6 (voice on the phone), P7 (provider transcription), P8 (receipts, review, export, deletion) and the voice half of P9 remain.
+
 | Phase | Scope                                                                                                                                                                                                               | Tests                                                                                                                           |
 | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | P1    | Attachment payload schema, `capture_attachment` kind, seal/open, `attachmentIds` on the create contract, `att` ids, OpenAPI                                                                                         | vitest bounds and 1 MiB boundary, round-trip and MAC-tamper, contract snapshot                                                  |

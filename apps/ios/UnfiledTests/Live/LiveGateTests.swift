@@ -1,3 +1,5 @@
+import ImageIO
+import UniformTypeIdentifiers
 import XCTest
 @testable import Unfiled
 
@@ -42,6 +44,27 @@ final class LiveGateTests: XCTestCase {
         }
         return await condition()
     }
+
+    /// A small real JPEG, drawn here so the gate never reads a file from the phone.
+    private static func gatePhoto() throws -> Data {
+        let width = 96, height = 64
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ))
+        context.setFillColor(CGColor(red: 0.78, green: 0.71, blue: 0.9, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.setFillColor(CGColor(red: 0.24, green: 0.47, blue: 0.27, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: 22))
+        let image = try XCTUnwrap(context.makeImage())
+        let data = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else { throw LiveGateFailure.fixture }
+        return data as Data
+    }
+
+    private enum LiveGateFailure: Error { case fixture }
 
     /// Saves a capture the way the composer does: prepare (which loads the generation), save, close.
     private func capture(_ content: String, privacy: LocalPrivacyMode) async throws {
@@ -189,6 +212,44 @@ final class LiveGateTests: XCTestCase {
             await model.editCapture(captureID: receipt.id)
             step("capture.edit_opens_composer_prefilled", model.captureSheet?.replacingCaptureID == receipt.id)
             model.captureSheet = nil
+        }
+
+        // A photo capture: prepared like the composer does, uploaded before the capture, filed by
+        // reference, and read back through the note.
+        let photo = try Self.gatePhoto()
+        let prepared = try CaptureImagePreparation.prepare(imageData: photo)
+        let attachment = CaptureAttachmentDraft(
+            id: try await PrefixedULIDGenerator().next(.attachment), kind: .image, mediaType: prepared.mediaType,
+            bytes: prepared.data, width: prepared.width, height: prepared.height, durationMs: nil
+        )
+        await model.prepareCapture(source: .mobile)
+        let photoGeneration = model.captureSheet?.composerGeneration ?? 1
+        try await model.saveCapture(
+            content: CaptureComposerRules.rawContent(content: "", kinds: [.image]),
+            privacy: .aiAssisted, source: .mobile, composerGeneration: photoGeneration, attachments: [attachment]
+        )
+        model.captureSheet = nil
+        let photoReceiptArrived = await waitUntil(30) { self.model.receipts.contains { $0.original == "Photo" } }
+        step("photo.receipt_row_at_once", photoReceiptArrived, "receipts \(model.receipts.count)")
+        let photoSettled = await waitUntil(300, every: 10) {
+            await self.model.refreshAll()
+            guard let receipt = self.model.receipts.first(where: { $0.original == "Photo" }) else { return false }
+            return !receipt.pending
+        }
+        let photoReceipt = model.receipts.first { $0.original == "Photo" }
+        let readBack = await model.attachmentBytes(id: attachment.id)
+        step("photo.bytes_read_back_unchanged", readBack == prepared.data, "bytes \(readBack?.count ?? 0)")
+        if Self.organizerKey != nil {
+            step("photo.organized", photoSettled && photoReceipt?.outcome != nil, "outcome \(photoReceipt?.outcome.map { "\($0)" } ?? "nil")")
+            if let noteID = photoReceipt?.destinationNoteID {
+                await model.refreshAll()
+                let body = model.noteDetail(noteID)?.bodyMarkdown ?? ""
+                step("photo.filed_note_references_photo", body.contains("unfiled-attachment:\(attachment.id)"), "note \(noteID)")
+            } else {
+                step("photo.filed_note_references_photo", photoReceipt?.outcome == .needsReview, "no destination; outcome \(photoReceipt?.outcome.map { "\($0)" } ?? "nil")")
+            }
+        } else {
+            step("photo.keyless_fails_retryable", photoSettled && photoReceipt?.retryable == true, "retryable \(photoReceipt?.retryable ?? false)")
         }
 
         // Sign out and delete the account
