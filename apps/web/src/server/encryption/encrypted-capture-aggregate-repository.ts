@@ -27,7 +27,11 @@ import {
   type CaptureSummary,
   type EntityId,
   type NoteSnapshot,
-  type RoutingRuleMatchSnapshot
+  type RoutingRuleMatchSnapshot,
+  CAPTURE_ATTACHMENT_MAX_BYTES,
+  CaptureAttachmentSchema,
+  CaptureAttachmentUploadSchema,
+  type CaptureAttachment
 } from "@unfiled/contracts";
 import {
   applyNoteOperations,
@@ -37,6 +41,7 @@ import {
   type NoteMutation
 } from "@unfiled/domain";
 import {
+  CaptureAttachmentPayloadSchema,
   CapturePayloadSchema,
   CaptureReceiptPayloadSchema,
   MAX_CAPTURE_RECEIPT_UNDO_TARGETS,
@@ -65,8 +70,10 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 
 import type {
+  CaptureAttachmentRead,
   CaptureRepository,
   CaptureRepositoryContext,
+  NormalizedAttachmentUploadInput,
   NormalizedCaptureCreateInput,
   NormalizedCaptureDeleteInput
 } from "@/server/captures/repository";
@@ -858,6 +865,126 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
           noteMutation: keyedMacForRpc(mutationVerification)
         })
       })
+    });
+  }
+
+  public async createAttachment(
+    context: CaptureRepositoryContext,
+    inputValue: NormalizedAttachmentUploadInput
+  ): Promise<CaptureAttachment> {
+    this.assertContext(context);
+    const { bytes, ...description } = inputValue;
+    const parsed = CaptureAttachmentUploadSchema.safeParse(description);
+    if (
+      !parsed.success ||
+      !(bytes instanceof Uint8Array) ||
+      bytes.byteLength < 1 ||
+      bytes.byteLength > CAPTURE_ATTACHMENT_MAX_BYTES
+    )
+      return invalidInput();
+    const input = parsed.data;
+    const dataBase64 = Buffer.from(bytes).toString("base64");
+    const payload = CaptureAttachmentPayloadSchema.parse({
+      schemaVersion: 1,
+      captureId: input.captureId,
+      kind: input.kind,
+      mediaType: input.mediaType,
+      dataBase64,
+      byteLength: bytes.byteLength,
+      ...(input.width === null ? {} : { width: input.width }),
+      ...(input.height === null ? {} : { height: input.height }),
+      ...(input.durationMs === null ? {} : { durationMs: input.durationMs })
+    });
+    const expected = Object.freeze({
+      attachmentId: input.attachmentId,
+      captureId: input.captureId,
+      recordVersion: 1,
+      privacy: input.privacy
+    });
+    this.assertNotAborted();
+    const sealed = await this.dependencies.aggregate.sealCaptureAttachment(
+      this.dependencies.access,
+      { ...expected, payload }
+    );
+    const opened = await this.dependencies.aggregate.openCaptureAttachment(
+      this.dependencies.access,
+      sealed,
+      expected
+    );
+    if (opened.dataBase64 !== dataBase64 || opened.byteLength !== bytes.byteLength)
+      return unavailable();
+    this.assertNotAborted();
+    const result = await this.dependencies.adapter.createAttachment({
+      ownerId: this.ownerId,
+      attachment: {
+        attachmentId: input.attachmentId,
+        captureId: input.captureId,
+        kind: input.kind,
+        mediaType: input.mediaType,
+        byteLength: bytes.byteLength,
+        width: input.width,
+        height: input.height,
+        durationMs: input.durationMs,
+        privacy: input.privacy,
+        contentCipher: encryptedFieldForRpc(sealed.encrypted),
+        contentMac: keyedMacForRpc(sealed.contentMac)
+      }
+    });
+    return CaptureAttachmentSchema.parse({
+      id: input.attachmentId,
+      kind: input.kind,
+      mediaType: input.mediaType,
+      byteLength: bytes.byteLength,
+      width: input.width,
+      height: input.height,
+      durationMs: input.durationMs,
+      createdAt: result.createdAt
+    });
+  }
+
+  public async getAttachment(
+    context: CaptureRepositoryContext,
+    attachmentId: EntityId<"att">
+  ): Promise<CaptureAttachmentRead | null> {
+    this.assertContext(context);
+    const parsedId = entityIdSchema("att").safeParse(attachmentId);
+    if (!parsedId.success) return invalidInput();
+    this.assertNotAborted();
+    const row = await this.dependencies.adapter.getAttachment({
+      ownerId: this.ownerId,
+      attachmentId: parsedId.data
+    });
+    if (row === null) return null;
+    const payload = await this.dependencies.aggregate.openCaptureAttachment(
+      this.dependencies.access,
+      Object.freeze({ encrypted: row.contentCipher, contentMac: row.contentMac }),
+      {
+        attachmentId: row.attachmentId,
+        captureId: row.captureId,
+        recordVersion: 1,
+        privacy: row.privacy
+      }
+    );
+    const bytes = new Uint8Array(Buffer.from(payload.dataBase64, "base64"));
+    if (
+      payload.kind !== row.kind ||
+      payload.mediaType !== row.mediaType ||
+      payload.byteLength !== row.byteLength ||
+      bytes.byteLength !== row.byteLength
+    )
+      return unavailable();
+    return Object.freeze({
+      attachment: CaptureAttachmentSchema.parse({
+        id: row.attachmentId,
+        kind: row.kind,
+        mediaType: row.mediaType,
+        byteLength: row.byteLength,
+        width: row.width,
+        height: row.height,
+        durationMs: row.durationMs,
+        createdAt: row.createdAt
+      }),
+      bytes
     });
   }
 

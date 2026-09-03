@@ -15,7 +15,12 @@ import {
   type CaptureSource,
   type EntityId,
   type PrivacyMode,
-  type RoutingRuleMatchSnapshot
+  type RoutingRuleMatchSnapshot,
+  CAPTURE_ATTACHMENT_MAX_BYTES,
+  MAX_CAPTURE_IMAGE_EDGE_PIXELS,
+  MAX_CAPTURE_RECORDING_MS,
+  type CaptureAttachmentKind,
+  type CaptureAttachmentMediaType
 } from "@unfiled/contracts";
 import { parseContentEnvelope, serializeContentEnvelope } from "@unfiled/content-crypto";
 import { stickyKeyClass } from "@unfiled/encrypted-aggregate";
@@ -173,7 +178,10 @@ export const encryptedCaptureRpcFunctions = Object.freeze([
   "get_encrypted_capture_delete_context",
   "retry_encrypted_capture",
   "delete_encrypted_capture",
-  "delete_encrypted_capture_with_undo"
+  "delete_encrypted_capture_with_undo",
+  "create_encrypted_capture_attachment",
+  "get_encrypted_capture_attachment",
+  "list_encrypted_capture_attachments"
 ] as const);
 
 export type EncryptedCaptureRpcFunction = (typeof encryptedCaptureRpcFunctions)[number];
@@ -380,7 +388,55 @@ export type EncryptedCaptureListPage = Readonly<{
   nextCursor: EncryptedCaptureCursor | null;
 }>;
 
+export type CreateEncryptedCaptureAttachmentCommand = Readonly<{
+  ownerId: string;
+  attachment: Readonly<{
+    attachmentId: EntityId<"att">;
+    captureId: EntityId<"cap">;
+    kind: CaptureAttachmentKind;
+    mediaType: CaptureAttachmentMediaType;
+    byteLength: number;
+    width: number | null;
+    height: number | null;
+    durationMs: number | null;
+    privacy: PrivacyMode;
+    contentCipher: EncryptedFieldRpcValue<"capture_attachment">;
+    contentMac: KeyedMacRpcValue;
+  }>;
+}>;
+
+export type CreateEncryptedCaptureAttachmentResult = Readonly<{
+  attachmentId: EntityId<"att">;
+  createdAt: string;
+  replayed: boolean;
+}>;
+
+export type EncryptedCaptureAttachmentRead = Readonly<{
+  attachmentId: EntityId<"att">;
+  captureId: EntityId<"cap">;
+  kind: CaptureAttachmentKind;
+  mediaType: CaptureAttachmentMediaType;
+  byteLength: number;
+  width: number | null;
+  height: number | null;
+  durationMs: number | null;
+  privacy: PrivacyMode;
+  boundAt: string | null;
+  createdAt: string;
+  contentCipher: StoredEncryptedFieldRpcValue<"capture_attachment">;
+  contentMac: KeyedMacRecord;
+}>;
+
 export type EncryptedCaptureRpcAdapter = Readonly<{
+  createAttachment(
+    input: CreateEncryptedCaptureAttachmentCommand
+  ): Promise<CreateEncryptedCaptureAttachmentResult>;
+  getAttachment(
+    input: Readonly<{ ownerId: string; attachmentId: EntityId<"att"> }>
+  ): Promise<EncryptedCaptureAttachmentRead | null>;
+  listAttachments(
+    input: Readonly<{ ownerId: string; captureId: EntityId<"cap"> }>
+  ): Promise<readonly EncryptedCaptureAttachmentRead[]>;
   createCapture(input: CreateEncryptedCaptureCommand): Promise<CreateEncryptedCaptureResult>;
   listCaptures(
     input: Readonly<{
@@ -457,11 +513,9 @@ function canonicalOwnerId(value: unknown, failure: Failure): string {
   return value.toLowerCase();
 }
 
-function entityId<Kind extends "blk" | "cap" | "dec" | "job" | "mut" | "note" | "rev" | "rvw">(
-  value: unknown,
-  kind: Kind,
-  failure: Failure
-): EntityId<Kind> {
+function entityId<
+  Kind extends "att" | "blk" | "cap" | "dec" | "job" | "mut" | "note" | "rev" | "rvw"
+>(value: unknown, kind: Kind, failure: Failure): EntityId<Kind> {
   if (typeof value !== "string") return failure();
   try {
     parseEntityId(value, kind);
@@ -958,6 +1012,136 @@ function parseGeneratedBlock(
       },
       failure
     )
+  });
+}
+
+const ATTACHMENT_COMMAND_KEYS = [
+  "attachmentId",
+  "captureId",
+  "kind",
+  "mediaType",
+  "byteLength",
+  "width",
+  "height",
+  "durationMs",
+  "privacy",
+  "contentCipher",
+  "contentMac"
+] as const;
+
+const ATTACHMENT_READ_KEYS = [...ATTACHMENT_COMMAND_KEYS, "boundAt", "createdAt"] as const;
+
+function attachmentKind(value: unknown, failure: Failure): CaptureAttachmentKind {
+  return value === "image" || value === "audio" ? value : failure();
+}
+
+function attachmentMediaType(value: unknown, failure: Failure): CaptureAttachmentMediaType {
+  return value === "image/jpeg" || value === "audio/mp4" ? value : failure();
+}
+
+function nullableBoundedInteger(value: unknown, maximum: number, failure: Failure): number | null {
+  return value === null ? null : positiveInteger(value, maximum, failure);
+}
+
+/// Photos carry width and height and no duration; recordings the reverse.
+function attachmentMeasurementsFit(
+  kind: CaptureAttachmentKind,
+  mediaType: CaptureAttachmentMediaType,
+  width: number | null,
+  height: number | null,
+  durationMs: number | null
+): boolean {
+  const image = kind === "image";
+  if (image !== (mediaType === "image/jpeg")) return false;
+  return image
+    ? width !== null && height !== null && durationMs === null
+    : durationMs !== null && width === null && height === null;
+}
+
+type AttachmentDescription = Readonly<{
+  attachmentId: EntityId<"att">;
+  captureId: EntityId<"cap">;
+  kind: CaptureAttachmentKind;
+  mediaType: CaptureAttachmentMediaType;
+  byteLength: number;
+  width: number | null;
+  height: number | null;
+  durationMs: number | null;
+  privacy: PrivacyMode;
+}>;
+
+function parseAttachmentDescription(row: UnknownRecord, failure: Failure): AttachmentDescription {
+  const attachmentId = entityId(row.attachmentId, "att", failure);
+  const captureId = entityId(row.captureId, "cap", failure);
+  const kind = attachmentKind(row.kind, failure);
+  const mediaType = attachmentMediaType(row.mediaType, failure);
+  const byteLength = positiveInteger(row.byteLength, CAPTURE_ATTACHMENT_MAX_BYTES, failure);
+  const width = nullableBoundedInteger(row.width, MAX_CAPTURE_IMAGE_EDGE_PIXELS, failure);
+  const height = nullableBoundedInteger(row.height, MAX_CAPTURE_IMAGE_EDGE_PIXELS, failure);
+  const durationMs = nullableBoundedInteger(row.durationMs, MAX_CAPTURE_RECORDING_MS, failure);
+  if (!attachmentMeasurementsFit(kind, mediaType, width, height, durationMs)) return failure();
+  return Object.freeze({
+    attachmentId,
+    captureId,
+    kind,
+    mediaType,
+    byteLength,
+    width,
+    height,
+    durationMs,
+    privacy: privacy(row.privacy, failure)
+  });
+}
+
+function parseAttachmentCommand(
+  input: CreateEncryptedCaptureAttachmentCommand
+): CreateEncryptedCaptureAttachmentCommand {
+  const outer = exactRecord(input, ["ownerId", "attachment"], inputFailure);
+  const ownerId = canonicalOwnerId(outer.ownerId, inputFailure);
+  const row = exactRecord(outer.attachment, ATTACHMENT_COMMAND_KEYS, inputFailure);
+  const description = parseAttachmentDescription(row, inputFailure);
+  const contentCipher = parseSealedCipher(
+    row.contentCipher,
+    {
+      ownerId,
+      resourceId: description.attachmentId,
+      recordVersion: 1,
+      kind: "capture_attachment",
+      keyClass: description.privacy
+    },
+    inputFailure
+  );
+  const contentMac = parseMacForRpc(row.contentMac, description.privacy, inputFailure);
+  return Object.freeze({
+    ownerId,
+    attachment: Object.freeze({ ...description, contentCipher, contentMac })
+  });
+}
+
+function parseAttachmentRead(
+  value: unknown,
+  ownerId: string,
+  failure: Failure
+): EncryptedCaptureAttachmentRead {
+  const row = exactRecord(value, ATTACHMENT_READ_KEYS, failure);
+  const description = parseAttachmentDescription(row, failure);
+  const contentCipher = parseStoredCipher(
+    row.contentCipher,
+    {
+      ownerId,
+      resourceId: description.attachmentId,
+      recordVersion: 1,
+      kind: "capture_attachment",
+      keyClass: description.privacy
+    },
+    failure
+  );
+  return Object.freeze({
+    ...description,
+    boundAt: nullableTimestamp(row.boundAt, failure),
+    createdAt: timestamp(row.createdAt, failure),
+    contentCipher,
+    contentMac: parseMac(row.contentMac, description.privacy, failure)
   });
 }
 
@@ -1513,6 +1697,56 @@ export function createEncryptedCaptureRpcAdapter(
       )
         return projectionFailure();
       return Object.freeze({ captureId, jobId, replayed: value.replayed });
+    },
+
+    async createAttachment(input) {
+      const parsed = parseAttachmentCommand(input);
+      const value = exactRecord(
+        await client.rpc("create_encrypted_capture_attachment", {
+          p_owner_id: parsed.ownerId,
+          p_attachment: parsed.attachment
+        }),
+        ["attachmentId", "createdAt", "replayed"],
+        projectionFailure
+      );
+      const attachmentId = entityId(value.attachmentId, "att", projectionFailure);
+      if (attachmentId !== parsed.attachment.attachmentId || typeof value.replayed !== "boolean")
+        return projectionFailure();
+      return Object.freeze({
+        attachmentId,
+        createdAt: timestamp(value.createdAt, projectionFailure),
+        replayed: value.replayed
+      });
+    },
+
+    async getAttachment(input) {
+      const parsedInput = exactRecord(input, ["ownerId", "attachmentId"], inputFailure);
+      const ownerId = canonicalOwnerId(parsedInput.ownerId, inputFailure);
+      const attachmentId = entityId(parsedInput.attachmentId, "att", inputFailure);
+      const value = await client.rpc("get_encrypted_capture_attachment", {
+        p_owner_id: ownerId,
+        p_attachment_id: attachmentId
+      });
+      if (value === null) return null;
+      const read = parseAttachmentRead(value, ownerId, projectionFailure);
+      return read.attachmentId === attachmentId ? read : projectionFailure();
+    },
+
+    async listAttachments(input) {
+      const parsedInput = exactRecord(input, ["ownerId", "captureId"], inputFailure);
+      const ownerId = canonicalOwnerId(parsedInput.ownerId, inputFailure);
+      const captureId = entityId(parsedInput.captureId, "cap", inputFailure);
+      const value = await client.rpc("list_encrypted_capture_attachments", {
+        p_owner_id: ownerId,
+        p_capture_id: captureId
+      });
+      if (!Array.isArray(value) || value.length > 5) return projectionFailure();
+      return Object.freeze(
+        value.map((item) => {
+          const read = parseAttachmentRead(item, ownerId, projectionFailure);
+          return read.captureId === captureId ? read : projectionFailure();
+        })
+      );
     },
 
     async listCaptures(input) {

@@ -65,6 +65,39 @@ const inboxReceipt: CaptureReceiptResponse = {
   }
 };
 
+const ATTACHMENT_ID = "att_01J6M9Q7G4BMKB33GSG3NJ6D1Z";
+const JPEG_BYTES = new Uint8Array([255, 216, 255, 224, 0, 16, 74, 70]);
+const uploadedAttachment = {
+  id: ATTACHMENT_ID,
+  kind: "image",
+  mediaType: "image/jpeg",
+  byteLength: JPEG_BYTES.byteLength,
+  width: 1568,
+  height: 1044,
+  durationMs: null,
+  createdAt: "2026-09-03T10:00:00.000Z"
+} as const;
+
+function upload(
+  bytes: Uint8Array<ArrayBuffer>,
+  headers: Record<string, string>,
+  idempotencyKey: string | null = ATTACHMENT_ID
+): Request {
+  return new Request("https://unfiled.test/api/v1/captures/attachments", {
+    method: "POST",
+    headers: {
+      "content-type": "image/jpeg",
+      "x-unfiled-capture-id": captureV1Fixture.clientCaptureId,
+      "x-unfiled-privacy": "ai_assisted",
+      "x-unfiled-width": "1568",
+      "x-unfiled-height": "1044",
+      ...(idempotencyKey === null ? {} : { "idempotency-key": idempotencyKey }),
+      ...headers
+    },
+    body: bytes
+  });
+}
+
 const deletedCapture: CaptureDeleteResponse = {
   captureId: captureV1Fixture.clientCaptureId,
   deletedAt: "2026-08-30T18:35:00.000Z",
@@ -81,7 +114,11 @@ function repository(overrides: Partial<CaptureRepository> = {}): CaptureReposito
     getCapture: overrides.getCapture ?? vi.fn().mockResolvedValue(queuedDetail),
     getReceipt: overrides.getReceipt ?? vi.fn().mockResolvedValue(inboxReceipt),
     listCaptures: overrides.listCaptures ?? vi.fn().mockResolvedValue(captureV1ListFixture),
-    retryCapture: overrides.retryCapture ?? vi.fn().mockResolvedValue(captureV1ResponseFixture)
+    retryCapture: overrides.retryCapture ?? vi.fn().mockResolvedValue(captureV1ResponseFixture),
+    createAttachment: overrides.createAttachment ?? vi.fn().mockResolvedValue(uploadedAttachment),
+    getAttachment:
+      overrides.getAttachment ??
+      vi.fn().mockResolvedValue({ attachment: uploadedAttachment, bytes: JPEG_BYTES })
   };
 }
 
@@ -268,5 +305,140 @@ describe("capture route handlers", () => {
     expect(response.status).toBe(500);
     expect(body.message).not.toContain("sensitive");
     expect(scheduleDrain).not.toHaveBeenCalled();
+  });
+});
+
+describe("capture attachment handlers", () => {
+  it("stores an uploaded photo under the owner's capture id and answers without the bytes", async () => {
+    const captureRepository = repository();
+    const handlers = createCaptureHandlers({
+      authenticate: authenticated,
+      repository: captureRepository
+    });
+
+    const response = await handlers.uploadAttachment(upload(JPEG_BYTES, {}));
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    await expect(response.json()).resolves.toEqual(uploadedAttachment);
+    expect(captureRepository.createAttachment).toHaveBeenCalledWith(
+      { accessToken: "test-access-token", userId: USER_ID },
+      {
+        attachmentId: ATTACHMENT_ID,
+        captureId: captureV1Fixture.clientCaptureId,
+        kind: "image",
+        mediaType: "image/jpeg",
+        privacy: "ai_assisted",
+        width: 1568,
+        height: 1044,
+        durationMs: null,
+        bytes: JPEG_BYTES
+      }
+    );
+  });
+
+  it("stores a recording with its duration", async () => {
+    const captureRepository = repository();
+    const handlers = createCaptureHandlers({
+      authenticate: authenticated,
+      repository: captureRepository
+    });
+    const request = new Request("https://unfiled.test/api/v1/captures/attachments", {
+      method: "POST",
+      headers: {
+        "content-type": "audio/mp4",
+        "idempotency-key": ATTACHMENT_ID,
+        "x-unfiled-capture-id": captureV1Fixture.clientCaptureId,
+        "x-unfiled-privacy": "private_manual",
+        "x-unfiled-duration-ms": "4200"
+      },
+      body: new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112])
+    });
+
+    const response = await handlers.uploadAttachment(request);
+
+    expect(response.status).toBe(201);
+    expect(captureRepository.createAttachment).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        kind: "audio",
+        mediaType: "audio/mp4",
+        privacy: "private_manual",
+        durationMs: 4200,
+        width: null,
+        height: null
+      })
+    );
+  });
+
+  it("refuses uploads with a missing or foreign idempotency key, a bad capture id, or dimensions that do not fit the kind", async () => {
+    const captureRepository = repository();
+    const handlers = createCaptureHandlers({
+      authenticate: authenticated,
+      repository: captureRepository
+    });
+
+    expect((await handlers.uploadAttachment(upload(JPEG_BYTES, {}, null))).status).toBe(400);
+    expect(
+      (await handlers.uploadAttachment(upload(JPEG_BYTES, {}, "cap_01J6M9Q7G4BMKB33GSG3NJ6D1Z")))
+        .status
+    ).toBe(400);
+    expect(
+      (await handlers.uploadAttachment(upload(JPEG_BYTES, { "x-unfiled-capture-id": "nope" })))
+        .status
+    ).toBe(400);
+    expect(
+      (await handlers.uploadAttachment(upload(JPEG_BYTES, { "x-unfiled-width": "0" }))).status
+    ).toBe(400);
+    expect(
+      (await handlers.uploadAttachment(upload(JPEG_BYTES, { "x-unfiled-duration-ms": "10" })))
+        .status
+    ).toBe(400);
+    expect(
+      (await handlers.uploadAttachment(upload(JPEG_BYTES, { "x-unfiled-privacy": "secret" })))
+        .status
+    ).toBe(400);
+    expect(captureRepository.createAttachment).not.toHaveBeenCalled();
+  });
+
+  it("serves the owner's attachment bytes with its media type and never caches them", async () => {
+    const captureRepository = repository();
+    const handlers = createCaptureHandlers({
+      authenticate: authenticated,
+      repository: captureRepository
+    });
+
+    const response = await handlers.getAttachment(
+      request(`/api/v1/captures/attachments/${ATTACHMENT_ID}`),
+      { attachmentId: ATTACHMENT_ID }
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/jpeg");
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("content-length")).toBe(String(JPEG_BYTES.byteLength));
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(JPEG_BYTES);
+    expect(captureRepository.getAttachment).toHaveBeenCalledWith(
+      { accessToken: "test-access-token", userId: USER_ID },
+      ATTACHMENT_ID
+    );
+  });
+
+  it("answers not found for a missing attachment and rejects malformed ids", async () => {
+    const captureRepository = repository({ getAttachment: vi.fn().mockResolvedValue(null) });
+    const handlers = createCaptureHandlers({
+      authenticate: authenticated,
+      repository: captureRepository
+    });
+
+    const missing = await handlers.getAttachment(
+      request(`/api/v1/captures/attachments/${ATTACHMENT_ID}`),
+      { attachmentId: ATTACHMENT_ID }
+    );
+    expect(missing.status).toBe(404);
+    const malformed = await handlers.getAttachment(request("/api/v1/captures/attachments/x"), {
+      attachmentId: "x"
+    });
+    expect(malformed.status).toBe(400);
   });
 });

@@ -39,6 +39,45 @@ export const CaptureAttachmentSchema = z.strictObject({
 });
 export type CaptureAttachment = z.infer<typeof CaptureAttachmentSchema>;
 
+/// What the phone tells the API about an upload, beside the raw bytes: the kind follows the
+/// media type, photos carry dimensions and no duration, recordings the reverse.
+export const CaptureAttachmentUploadSchema = z
+  .strictObject({
+    attachmentId: entityIdSchema("att"),
+    captureId: entityIdSchema("cap"),
+    kind: CaptureAttachmentKindSchema,
+    mediaType: CaptureAttachmentMediaTypeSchema,
+    privacy: PrivacyModeSchema,
+    width: z.number().int().min(1).max(MAX_CAPTURE_IMAGE_EDGE_PIXELS).nullable(),
+    height: z.number().int().min(1).max(MAX_CAPTURE_IMAGE_EDGE_PIXELS).nullable(),
+    durationMs: z.number().int().min(1).max(MAX_CAPTURE_RECORDING_MS).nullable()
+  })
+  .superRefine((value, context) => {
+    const image = value.kind === "image";
+    if (image !== (value.mediaType === "image/jpeg")) {
+      context.addIssue({
+        code: "custom",
+        message: "Media type must match the kind",
+        path: ["mediaType"]
+      });
+    }
+    if (image && (value.width === null || value.height === null || value.durationMs !== null)) {
+      context.addIssue({
+        code: "custom",
+        message: "Photos carry width and height only",
+        path: ["width"]
+      });
+    }
+    if (!image && (value.durationMs === null || value.width !== null || value.height !== null)) {
+      context.addIssue({
+        code: "custom",
+        message: "Recordings carry a duration only",
+        path: ["durationMs"]
+      });
+    }
+  });
+export type CaptureAttachmentUpload = z.infer<typeof CaptureAttachmentUploadSchema>;
+
 const CaptureAttachmentIdsSchema = z
   .array(entityIdSchema("att"))
   .max(MAX_CAPTURE_ATTACHMENTS)

@@ -45,7 +45,7 @@ Why Postgres envelopes and not Supabase Storage: Storage would add a second key 
 
 - `POST /api/v1/captures/attachments`: raw binary body (`content-type: image/jpeg` or `audio/mp4`), `idempotency-key` is the client-generated attachment id, non-content metadata in `x-unfiled-*` headers. Bounded by a binary reader beside the JSON reader (700,000 bytes; 413 above). Returns the attachment id and byte length. Raw binary rather than base64 JSON because the JSON cap is fixed at 250,000 bytes, and rather than multipart because there is no parser to audit and nothing else needs one.
 - `POST /api/v1/captures` gains `attachmentIds` (at most four images and one recording). The server binds only attachments the caller owns that are not yet bound.
-- `GET /api/v1/notes/{noteId}/attachments/{attachmentId}` returns decrypted bytes with `cache-control: private, no-store`. The path carries only opaque ids, like every other resource path.
+- `GET /api/v1/captures/attachments/{attachmentId}` returns decrypted bytes with `cache-control: private, no-store`. The path carries only opaque ids, like every other resource path.
 - Export writes one JSONL line per attachment with base64 bytes. Account deletion cascades from captures and notes and the deletion receipt counts attachments removed.
 
 ### 2.3 Organizer
@@ -71,6 +71,14 @@ If on-device recognition is unavailable and no provider engine applies, the capt
 Recordings are kept with the note by default (transcripts are lossy and Review exists to correct them) with a per-note "Delete recording, keep transcript" action.
 
 ### 2.5 Phone
+
+The owner asked for this to be intuitive. The rules the phone work follows:
+
+- **One capture surface.** The composer keeps its text field and gains three plain controls under it: a photo button (library), a camera button, and a microphone button. No modes to switch, no separate "new photo note" flow. Text, photos and a recording can all sit in the same capture.
+- **You see what you are sending.** Chosen photos appear as thumbnails above the send arrow with a remove control on each; a recording shows its length and a play control; the transcript appears in the text field while you are still on the page, so you can fix a word before sending.
+- **Recording is unmistakable.** One tap starts, the button turns into a red stop control with a running timer and a level indicator, one tap stops. A two-minute limit shows as the timer nears it. Denied microphone or speech permission explains itself in one line with a button to Settings.
+- **Nothing silent.** A photo that could not be read, a recording that could not be transcribed, or an upload that is still pending says so in the Inbox row with the reasons already used there, and organize-again works the same way.
+- **Notes show media where it belongs.** A photo renders inline at the place the organizer put it, tappable to full screen; a recording renders as a play row with its length under the transcript. Nothing about attachments changes the note's text layout.
 
 - Composer: photo picker, camera, and microphone controls beside the text field; a thumbnail strip with remove; a recorder with states `idle → recording → stopped → transcribing → ready | failed`. Usage strings for camera, microphone and speech recognition added to `Info.plist`.
 - Outbox migration `native-v4-capture-attachments`: attachment bytes stored in the SQLCipher database beside the outbox row, so offline captures with photos survive relaunch. The sync engine uploads attachments (idempotent by id) before posting the capture and never re-uploads a finished one.

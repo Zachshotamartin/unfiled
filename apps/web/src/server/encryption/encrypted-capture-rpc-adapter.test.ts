@@ -219,7 +219,7 @@ async function expectFailure(
 }
 
 describe("encrypted capture RPC adapter", () => {
-  it("exposes only the ten encrypted service-role RPCs", () => {
+  it("exposes only the thirteen encrypted service-role RPCs", () => {
     expect(encryptedCaptureRpcFunctions).toEqual([
       "create_encrypted_capture_with_job",
       "list_encrypted_captures",
@@ -230,7 +230,10 @@ describe("encrypted capture RPC adapter", () => {
       "get_encrypted_capture_delete_context",
       "retry_encrypted_capture",
       "delete_encrypted_capture",
-      "delete_encrypted_capture_with_undo"
+      "delete_encrypted_capture_with_undo",
+      "create_encrypted_capture_attachment",
+      "get_encrypted_capture_attachment",
+      "list_encrypted_capture_attachments"
     ]);
   });
 

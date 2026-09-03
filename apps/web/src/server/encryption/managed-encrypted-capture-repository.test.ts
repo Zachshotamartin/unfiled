@@ -17,7 +17,9 @@ const mocks = vi.hoisted(() => ({
     getCapture: vi.fn(),
     getReceipt: vi.fn(),
     listCaptures: vi.fn(),
-    retryCapture: vi.fn()
+    retryCapture: vi.fn(),
+    createAttachment: vi.fn(),
+    getAttachment: vi.fn()
   },
   createCaptureAdapter: vi.fn(),
   createKeyRuntime: vi.fn(),

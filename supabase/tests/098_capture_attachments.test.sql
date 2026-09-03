@@ -242,6 +242,18 @@ insert into public.user_content_keys (
     'c5d.capture.ai.mac.v1', 'ai_assisted', 'content_mac', 1,
     'arn:aws:kms:us-west-2:123456789012:key/98000000-0000-4000-8000-000000000002',
     decode(repeat('12', 32), 'hex'), 'active', now()
+  ),
+  (
+    '55555555-5555-4555-8555-555555555555',
+    'c5d.capture.private.object.v1', 'private_manual', 'object_wrap', 1,
+    'arn:aws:kms:us-west-2:123456789012:key/98000000-0000-4000-8000-000000000003',
+    decode(repeat('13', 32), 'hex'), 'active', now()
+  ),
+  (
+    '55555555-5555-4555-8555-555555555555',
+    'c5d.capture.private.mac.v1', 'private_manual', 'content_mac', 1,
+    'arn:aws:kms:us-west-2:123456789012:key/98000000-0000-4000-8000-000000000004',
+    decode(repeat('14', 32), 'hex'), 'active', now()
   );
 
 set local role service_role;

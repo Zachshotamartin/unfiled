@@ -3,6 +3,7 @@ import type { ContentEnvelopeV1 } from "@unfiled/content-crypto";
 import {
   CaptureReceiptPayloadSchema,
   authorizeAggregateOwner,
+  keyedMacForRpc,
   type AggregateContentKind,
   type CaptureReceiptPayload,
   type EncryptedAggregateRecord,
@@ -43,6 +44,8 @@ const AFTER_REVISION = "rev_01J6M9Q7G4BMKB33GSG3NJ6D1X" as const;
 const ITEM = "itm_01J6M9Q7G4BMKB33GSG3NJ6D1X" as const;
 const BLOCK = "blk_01J6M9Q7G4BMKB33GSG3NJ6D1X" as const;
 const RAW = "buy milk and batteries";
+const ATTACHMENT = "att_01J6M9Q7G4BMKB33GSG3NJ6D1Z" as const;
+const JPEG = new Uint8Array([255, 216, 255, 224, 0, 16, 74, 70, 73, 70, 0, 1]);
 const AI_TEXT = "A concise generated summary";
 const CLIENT_AT = "2026-08-31T10:59:59.123-07:00";
 const CLIENT_AT_CANONICAL = "2026-08-31T17:59:59.123000+00:00";
@@ -341,6 +344,9 @@ function adapter(overrides: Partial<EncryptedCaptureRpcAdapter> = {}): Encrypted
       overrides.getDeleteContext ??
       vi.fn(() => Promise.resolve({ captureId: CAPTURE, sourceNoteIds: [] })),
     retryCapture: overrides.retryCapture ?? vi.fn(notFound),
+    createAttachment: overrides.createAttachment ?? vi.fn(notFound),
+    getAttachment: overrides.getAttachment ?? vi.fn(() => Promise.resolve(null)),
+    listAttachments: overrides.listAttachments ?? vi.fn(() => Promise.resolve([])),
     deleteCapture: overrides.deleteCapture ?? vi.fn(notFound),
     deleteCaptureWithUndo: overrides.deleteCaptureWithUndo ?? vi.fn(notFound)
   });
@@ -1389,5 +1395,182 @@ describe("encrypted capture aggregate repository", () => {
       ),
       ServiceRpcErrorCode.FORBIDDEN
     );
+  });
+});
+
+describe("capture attachments", () => {
+  function attachmentInput() {
+    return Object.freeze({
+      attachmentId: ATTACHMENT,
+      captureId: CAPTURE,
+      kind: "image" as const,
+      mediaType: "image/jpeg" as const,
+      privacy: "ai_assisted" as const,
+      width: 1568,
+      height: 1044,
+      durationMs: null,
+      bytes: JPEG
+    });
+  }
+
+  it("seals the bytes as a capture attachment and submits only the cipher and MAC", async () => {
+    const aggregate = aggregateMocks();
+    const sealedAttachment = sealed(
+      "capture_attachment",
+      ATTACHMENT,
+      "ai_assisted",
+      "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+    );
+    const sealCaptureAttachment = vi.fn(() =>
+      Promise.resolve({ encrypted: sealedAttachment, contentMac: mac("ai_assisted") })
+    );
+    const openCaptureAttachment = vi.fn((_access, _record, expected: { attachmentId: string }) =>
+      Promise.resolve({
+        schemaVersion: 1,
+        captureId: CAPTURE,
+        kind: "image",
+        mediaType: "image/jpeg",
+        dataBase64: Buffer.from(JPEG).toString("base64"),
+        byteLength: JPEG.byteLength,
+        width: 1568,
+        height: 1044,
+        ...(expected.attachmentId === ATTACHMENT ? {} : { byteLength: 0 })
+      })
+    );
+    Object.assign(aggregate.aggregate, { sealCaptureAttachment, openCaptureAttachment });
+    const rpc = vi.fn<ServiceRpcClient["rpc"]>((name, parameters) => {
+      if (name === "create_encrypted_capture_attachment") {
+        const command = parameters.p_attachment as Record<string, unknown>;
+        expect(command).toMatchObject({
+          attachmentId: ATTACHMENT,
+          captureId: CAPTURE,
+          kind: "image",
+          mediaType: "image/jpeg",
+          byteLength: JPEG.byteLength,
+          width: 1568,
+          height: 1044,
+          durationMs: null,
+          privacy: "ai_assisted",
+          contentCipher: {
+            keyClass: "ai_assisted",
+            reservationId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+          }
+        });
+        expect(JSON.stringify(command)).not.toContain(Buffer.from(JPEG).toString("base64"));
+        return Promise.resolve({
+          attachmentId: ATTACHMENT,
+          createdAt: "2026-09-03T10:00:00.000Z",
+          replayed: false
+        });
+      }
+      return Promise.reject(new Error("unexpected_rpc"));
+    });
+
+    await expect(
+      repository(aggregate.aggregate, createEncryptedCaptureRpcAdapter({ rpc })).createAttachment(
+        context,
+        attachmentInput()
+      )
+    ).resolves.toEqual({
+      id: ATTACHMENT,
+      kind: "image",
+      mediaType: "image/jpeg",
+      byteLength: JPEG.byteLength,
+      width: 1568,
+      height: 1044,
+      durationMs: null,
+      createdAt: "2026-09-03T10:00:00.000Z"
+    });
+    expect(sealCaptureAttachment).toHaveBeenCalledWith(
+      access,
+      expect.objectContaining({
+        attachmentId: ATTACHMENT,
+        captureId: CAPTURE,
+        recordVersion: 1,
+        privacy: "ai_assisted",
+        payload: {
+          schemaVersion: 1,
+          captureId: CAPTURE,
+          kind: "image",
+          mediaType: "image/jpeg",
+          dataBase64: Buffer.from(JPEG).toString("base64"),
+          byteLength: JPEG.byteLength,
+          width: 1568,
+          height: 1044
+        }
+      })
+    );
+    expect(openCaptureAttachment).toHaveBeenCalled();
+  });
+
+  it("opens a stored attachment back into bytes and returns null when the owner has none", async () => {
+    const aggregate = aggregateMocks();
+    const openCaptureAttachment = vi.fn(() =>
+      Promise.resolve({
+        schemaVersion: 1,
+        captureId: CAPTURE,
+        kind: "audio",
+        mediaType: "audio/mp4",
+        dataBase64: Buffer.from(JPEG).toString("base64"),
+        byteLength: JPEG.byteLength,
+        durationMs: 4200
+      })
+    );
+    Object.assign(aggregate.aggregate, { openCaptureAttachment });
+    const storedRecord = encrypted("capture_attachment", ATTACHMENT, "ai_assisted", 1);
+    const stored = Object.freeze({
+      envelope: storedRecord.envelope,
+      keyId: storedRecord.keyId,
+      keyClass: storedRecord.keyClass,
+      keyPurpose: storedRecord.keyPurpose,
+      keyVersion: storedRecord.keyVersion
+    });
+    const rpc = vi.fn<ServiceRpcClient["rpc"]>((name, parameters) => {
+      if (name === "get_encrypted_capture_attachment") {
+        expect(parameters).toEqual({ p_owner_id: OWNER, p_attachment_id: ATTACHMENT });
+        return Promise.resolve({
+          attachmentId: ATTACHMENT,
+          captureId: CAPTURE,
+          kind: "audio",
+          mediaType: "audio/mp4",
+          byteLength: JPEG.byteLength,
+          width: null,
+          height: null,
+          durationMs: 4200,
+          privacy: "ai_assisted",
+          boundAt: "2026-09-03T10:00:01.000Z",
+          createdAt: "2026-09-03T10:00:00.000Z",
+          contentCipher: stored,
+          contentMac: keyedMacForRpc(mac("ai_assisted"))
+        });
+      }
+      return Promise.reject(new Error("unexpected_rpc"));
+    });
+    const subject = repository(aggregate.aggregate, createEncryptedCaptureRpcAdapter({ rpc }));
+
+    const read = await subject.getAttachment(context, ATTACHMENT);
+    expect(read).not.toBeNull();
+    expect(read?.attachment).toEqual({
+      id: ATTACHMENT,
+      kind: "audio",
+      mediaType: "audio/mp4",
+      byteLength: JPEG.byteLength,
+      width: null,
+      height: null,
+      durationMs: 4200,
+      createdAt: "2026-09-03T10:00:00.000Z"
+    });
+    expect([...(read?.bytes ?? [])]).toEqual([...JPEG]);
+    expect(openCaptureAttachment).toHaveBeenCalledWith(
+      access,
+      { encrypted: stored, contentMac: mac("ai_assisted") },
+      { attachmentId: ATTACHMENT, captureId: CAPTURE, recordVersion: 1, privacy: "ai_assisted" }
+    );
+
+    const missing = repository(
+      aggregate.aggregate,
+      createEncryptedCaptureRpcAdapter({ rpc: vi.fn(() => Promise.resolve(null)) })
+    );
+    await expect(missing.getAttachment(context, ATTACHMENT)).resolves.toBeNull();
   });
 });

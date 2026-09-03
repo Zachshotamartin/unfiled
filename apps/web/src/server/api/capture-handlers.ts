@@ -5,7 +5,11 @@ import {
   CaptureListQuerySchema,
   CaptureRetryRequestSchema,
   entityIdSchema,
-  type EntityId
+  type EntityId,
+  CAPTURE_ATTACHMENT_MAX_BYTES,
+  CaptureAttachmentMediaTypeSchema,
+  CaptureAttachmentUploadSchema,
+  PrivacyModeSchema
 } from "@unfiled/contracts";
 
 import { authenticateRequest, type AuthenticatedRequest } from "@/server/auth/session";
@@ -17,6 +21,7 @@ import {
   errorResponse,
   HttpError,
   jsonResponse,
+  readBoundedBinaryBody,
   readJsonObject,
   requireIdempotencyKey
 } from "./errors";
@@ -61,6 +66,20 @@ function requireCaptureIdempotency(request: Request, expected: string): void {
       "The idempotency key must match the client capture identifier."
     );
   }
+}
+
+/// A small whole number from an upload header, or null when the header is absent.
+function measurementHeader(request: Request, name: string): number | null {
+  const value = request.headers.get(name);
+  if (value === null || value === "") return null;
+  if (!/^\d{1,9}$/u.test(value)) {
+    throw new HttpError(
+      400,
+      ApiErrorCode.VALIDATION_FAILED,
+      "Check the attachment measurements and try again."
+    );
+  }
+  return Number(value);
 }
 
 function noStore(value: unknown, status = 200): Response {
@@ -113,6 +132,58 @@ export function createCaptureHandlers(dependencies: CaptureHandlerDependencies) 
         const result = await repository.createCapture(context, input);
         scheduleDrain();
         return noStore(result, 202);
+      });
+    },
+
+    uploadAttachment(request: Request) {
+      return run(request, async (repository, context) => {
+        const attachmentId = parse(entityIdSchema("att"), requireIdempotencyKey(request));
+        const captureId = parse(
+          entityIdSchema("cap"),
+          request.headers.get("x-unfiled-capture-id") ?? undefined
+        );
+        const privacy = parse(
+          PrivacyModeSchema,
+          request.headers.get("x-unfiled-privacy") ?? "ai_assisted"
+        );
+        const { bytes, mediaType } = await readBoundedBinaryBody(request, {
+          allowedContentTypes: CaptureAttachmentMediaTypeSchema.options,
+          maximumBytes: CAPTURE_ATTACHMENT_MAX_BYTES
+        });
+        const upload = parse(CaptureAttachmentUploadSchema, {
+          attachmentId,
+          captureId,
+          kind: mediaType === "image/jpeg" ? "image" : "audio",
+          mediaType,
+          privacy,
+          width: measurementHeader(request, "x-unfiled-width"),
+          height: measurementHeader(request, "x-unfiled-height"),
+          durationMs: measurementHeader(request, "x-unfiled-duration-ms")
+        });
+        return noStore(await repository.createAttachment(context, { ...upload, bytes }), 201);
+      });
+    },
+
+    getAttachment(request: Request, parameters: RouteParameters) {
+      return run(request, async (repository, context) => {
+        const attachmentId = parse(entityIdSchema("att"), parameters.attachmentId);
+        const read = await repository.getAttachment(context, attachmentId);
+        if (read === null) {
+          throw new HttpError(
+            404,
+            ApiErrorCode.NOT_FOUND,
+            "That attachment is not in your library."
+          );
+        }
+        return new Response(read.bytes.slice(), {
+          status: 200,
+          headers: {
+            "cache-control": "private, no-store",
+            "content-length": String(read.bytes.byteLength),
+            "content-type": read.attachment.mediaType,
+            pragma: "no-cache"
+          }
+        });
       });
     },
 

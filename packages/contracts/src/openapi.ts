@@ -31,6 +31,7 @@ import {
   CaptureReceiptSchema,
   CaptureRetryRequestSchema,
   CaptureRetryResponseSchema,
+  CaptureAttachmentSchema,
   CaptureSummarySchema
 } from "./captures.js";
 import {
@@ -252,6 +253,30 @@ function privateJsonResponse(description: string, name: string) {
   } as const;
 }
 
+const binaryAttachmentContent = {
+  "image/jpeg": { schema: { type: "string", contentEncoding: "binary" } },
+  "audio/mp4": { schema: { type: "string", contentEncoding: "binary" } }
+} as const;
+
+function privateAttachmentResponse(description: string) {
+  return {
+    description,
+    content: binaryAttachmentContent,
+    headers: {
+      "Cache-Control": {
+        description: "Prevents storage of the owner's decrypted photo or recording.",
+        required: true,
+        schema: { type: "string", const: "private, no-store" }
+      },
+      Pragma: {
+        description: "Prevents legacy intermediary caching.",
+        required: true,
+        schema: { type: "string", const: "no-cache" }
+      }
+    }
+  } as const;
+}
+
 function privateArchiveResponse(description: string) {
   return {
     description,
@@ -321,6 +346,52 @@ const spaceId = pathId("spaceId", "^spc_[0-9A-HJKMNP-TV-Z]{26}$");
 const tagId = pathId("tagId", "^tag_[0-9A-HJKMNP-TV-Z]{26}$");
 const mutationId = pathId("mutationId", "^mut_[0-9A-HJKMNP-TV-Z]{26}$");
 const captureId = pathId("captureId", "^cap_[0-9A-HJKMNP-TV-Z]{26}$");
+const attachmentId = pathId("attachmentId", "^att_[0-9A-HJKMNP-TV-Z]{26}$");
+const attachmentIdempotencyHeader = {
+  ...idempotencyHeader,
+  description: "The client-generated attachment id. It must remain byte-identical across retries.",
+  schema: {
+    type: "string",
+    pattern: "^att_[0-9A-HJKMNP-TV-Z]{26}$",
+    minLength: 30,
+    maxLength: 30
+  }
+} as const;
+const attachmentCaptureHeader = {
+  name: "X-Unfiled-Capture-Id",
+  in: "header",
+  required: true,
+  description: "The clientCaptureId this photo or recording belongs to.",
+  schema: { type: "string", pattern: "^cap_[0-9A-HJKMNP-TV-Z]{26}$" }
+} as const;
+const attachmentPrivacyHeader = {
+  name: "X-Unfiled-Privacy",
+  in: "header",
+  required: false,
+  description: "The capture's privacy mode; ai_assisted when omitted.",
+  schema: { type: "string", enum: ["ai_assisted", "private_manual"] }
+} as const;
+const attachmentWidthHeader = {
+  name: "X-Unfiled-Width",
+  in: "header",
+  required: false,
+  description: "Photo width in pixels. Required for image/jpeg uploads.",
+  schema: { type: "integer", minimum: 1, maximum: 8000 }
+} as const;
+const attachmentHeightHeader = {
+  name: "X-Unfiled-Height",
+  in: "header",
+  required: false,
+  description: "Photo height in pixels. Required for image/jpeg uploads.",
+  schema: { type: "integer", minimum: 1, maximum: 8000 }
+} as const;
+const attachmentDurationHeader = {
+  name: "X-Unfiled-Duration-Ms",
+  in: "header",
+  required: false,
+  description: "Recording length in milliseconds. Required for audio/mp4 uploads.",
+  schema: { type: "integer", minimum: 1, maximum: 120000 }
+} as const;
 const decisionId = pathId("decisionId", "^dec_[0-9A-HJKMNP-TV-Z]{26}$");
 const reviewItemId = pathId("reviewItemId", "^rvw_[0-9A-HJKMNP-TV-Z]{26}$");
 const routingRuleId = pathId("routingRuleId", "^rule_[0-9A-HJKMNP-TV-Z]{26}$");
@@ -626,6 +697,40 @@ export const openApiDocument = {
         responses: {
           "200": jsonResponse("Capture organization receipt", "CaptureReceiptResponse"),
           ...commonErrors
+        }
+      }
+    },
+    "/captures/attachments": {
+      post: {
+        operationId: "uploadCaptureAttachment",
+        summary: "Upload one photo or recording for a capture as raw bytes",
+        description:
+          "The body is the file itself (a JPEG at most 1568 px on its long edge, or an AAC recording in an m4a container), at most 700,000 bytes. The attachment is sealed under the capture's key class and waits, unbound, until the capture that names it is created.",
+        security: authenticated,
+        parameters: [
+          attachmentIdempotencyHeader,
+          attachmentCaptureHeader,
+          attachmentPrivacyHeader,
+          attachmentWidthHeader,
+          attachmentHeightHeader,
+          attachmentDurationHeader
+        ],
+        requestBody: { required: true, content: binaryAttachmentContent },
+        responses: {
+          "201": jsonResponse("Attachment sealed and waiting for its capture", "CaptureAttachment"),
+          ...commonErrors
+        }
+      }
+    },
+    "/captures/attachments/{attachmentId}": {
+      get: {
+        operationId: "getCaptureAttachment",
+        summary: "Read the owner's photo or recording bytes",
+        security: authenticated,
+        parameters: [attachmentId],
+        responses: {
+          "200": privateAttachmentResponse("The decrypted bytes with their media type"),
+          ...privateCommonErrors
         }
       }
     },
@@ -1245,6 +1350,7 @@ export const openApiDocument = {
       AuthSignOutResponse: openApiSchema(AuthSignOutResponseSchema),
       CaptureCreateRequest: openApiSchema(CaptureCreateRequestSchema),
       CaptureCreateResponse: openApiSchema(CaptureCreateResponseSchema),
+      CaptureAttachment: openApiSchema(CaptureAttachmentSchema),
       CaptureContentRemovalMutation: openApiSchema(CaptureContentRemovalMutationSchema),
       CaptureSummary: openApiSchema(CaptureSummarySchema),
       CaptureListQuery: openApiSchema(CaptureListQuerySchema),

@@ -78,6 +78,14 @@ function contract<T>(schema: ContractSchema<T>, value: unknown): T {
   return result.data;
 }
 
+function attachmentsNeedEncryptedLibrary(): HttpError {
+  return new HttpError(
+    503,
+    ApiErrorCode.PROVIDER_UNAVAILABLE,
+    "Photos and recordings need the encrypted library, which is still being set up for this account."
+  );
+}
+
 function providerResponseError(): HttpError {
   return new HttpError(
     503,
@@ -419,6 +427,14 @@ export class SupabaseHttpCaptureRepository implements CaptureRepository {
       jobId: response.jobId,
       replayed: response.replayed
     });
+  }
+
+  public createAttachment(): Promise<never> {
+    return Promise.reject(attachmentsNeedEncryptedLibrary());
+  }
+
+  public getAttachment(): Promise<never> {
+    return Promise.reject(attachmentsNeedEncryptedLibrary());
   }
 
   public async deleteCapture(

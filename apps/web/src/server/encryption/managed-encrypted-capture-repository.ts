@@ -245,4 +245,12 @@ export class ManagedEncryptedCaptureRepository implements CaptureRepository {
       repository.retryCapture(context, captureId, idempotencyKey)
     );
   }
+
+  public createAttachment(...parameters: Parameters<CaptureRepository["createAttachment"]>) {
+    return this.scoped(parameters[0], (repository) => repository.createAttachment(...parameters));
+  }
+
+  public getAttachment(...parameters: Parameters<CaptureRepository["getAttachment"]>) {
+    return this.scoped(parameters[0], (repository) => repository.getAttachment(...parameters));
+  }
 }
