@@ -845,12 +845,16 @@ final class AppModel: ObservableObject {
         content: String,
         privacy: LocalPrivacyMode,
         source: LocalCaptureSource,
-        composerGeneration: Int
+        composerGeneration: Int,
+        attachments: [CaptureAttachmentDraft] = []
     ) async throws {
         guard let runtime, let user = currentUser else { throw AuthenticationError.signedOut }
         let context = currentAccountContext(for: user)
         let replacingCaptureID = captureSheet?.replacingCaptureID
-        if privacy == .privateManual, await createPrivateNote(content: content, runtime: runtime, user: user, context: context) {
+        // A private capture with photos keeps them sealed beside the capture; only text-only
+        // private captures become a note on the spot.
+        if privacy == .privateManual, attachments.isEmpty,
+           await createPrivateNote(content: content, runtime: runtime, user: user, context: context) {
             if let replacingCaptureID {
                 await removeReplacedCapture(replacingCaptureID, runtime: runtime, context: context)
             }
@@ -862,7 +866,8 @@ final class AppModel: ObservableObject {
             source: source,
             privacy: privacy,
             deviceID: deviceIdentifier(),
-            composerGeneration: composerGeneration
+            composerGeneration: composerGeneration,
+            attachments: attachments
         )
         guard isCurrent(context) else { throw AuthenticationError.signedOut }
         if let replacingCaptureID {
@@ -892,6 +897,17 @@ final class AppModel: ObservableObject {
             guard self.isCurrent(context) else { return }
             await self.refreshAll()
         }
+    }
+
+    private var attachmentBytesCache: [String: Data] = [:]
+
+    /// The decrypted bytes of one of the owner's photos or recordings, fetched once per launch.
+    func attachmentBytes(id: String) async -> Data? {
+        if let cached = attachmentBytesCache[id] { return cached }
+        guard let runtime, currentUser != nil else { return nil }
+        guard let read = try? await runtime.authenticatedAPI.captureAttachment(id: id) else { return nil }
+        attachmentBytesCache[id] = read.bytes
+        return read.bytes
     }
 
     /// Removes the capture an edit replaced. Its review item or failed job closes with it.

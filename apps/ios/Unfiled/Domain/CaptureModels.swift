@@ -19,17 +19,66 @@ public struct CaptureCreateRequest: Codable, Equatable, Sendable {
     public let privacy: PrivacyMode
     public let explicitDestinationNoteId: NoteID?
     public let expansionDisabled: Bool
+    /// Photos and recordings already uploaded for this capture, in the order they were added.
+    public let attachmentIds: [String]?
 
     public init(clientCaptureId: CaptureID, rawContent: String, source: CaptureSource,
                 deviceId: String? = nil, clientCreatedAt: Date, clientTimezone: String,
                 privacy: PrivacyMode = .aiAssisted, explicitDestinationNoteId: NoteID? = nil,
-                expansionDisabled: Bool = false) {
+                expansionDisabled: Bool = false, attachmentIds: [String]? = nil) {
         self.clientCaptureId = clientCaptureId; self.rawContent = rawContent; self.source = source
         self.deviceId = deviceId; self.clientCreatedAt = clientCreatedAt
         self.clientTimezone = clientTimezone; self.privacy = privacy
         self.explicitDestinationNoteId = explicitDestinationNoteId
         self.expansionDisabled = expansionDisabled
+        self.attachmentIds = attachmentIds
     }
+}
+
+public enum CaptureAttachmentKind: String, Codable, Equatable, Sendable {
+    case image, audio
+}
+
+/// A photo or recording the API holds for a capture, described without its bytes.
+public struct CaptureAttachment: Codable, Equatable, Sendable {
+    public let id: String
+    public let kind: CaptureAttachmentKind
+    public let mediaType: String
+    public let byteLength: Int
+    public let width: Int?
+    public let height: Int?
+    public let durationMs: Int?
+    public let createdAt: Date
+}
+
+/// What the phone sends when it uploads a photo or recording: the bytes as the body, the rest
+/// as headers.
+public struct CaptureAttachmentUpload: Equatable, Sendable {
+    public static let maximumBytes = 700_000
+    public static let mediaTypes: Set<String> = ["image/jpeg", "audio/mp4"]
+
+    public let attachmentId: String
+    public let captureId: String
+    public let kind: CaptureAttachmentKind
+    public let mediaType: String
+    public let privacy: PrivacyMode
+    public let width: Int?
+    public let height: Int?
+    public let durationMs: Int?
+    public let bytes: Data
+
+    public init(attachmentId: String, captureId: String, kind: CaptureAttachmentKind, mediaType: String,
+                privacy: PrivacyMode, width: Int?, height: Int?, durationMs: Int?, bytes: Data) {
+        self.attachmentId = attachmentId; self.captureId = captureId; self.kind = kind
+        self.mediaType = mediaType; self.privacy = privacy; self.width = width; self.height = height
+        self.durationMs = durationMs; self.bytes = bytes
+    }
+}
+
+/// Decrypted attachment bytes read back from the API.
+public struct CaptureAttachmentBytes: Equatable, Sendable {
+    public let bytes: Data
+    public let mediaType: String
 }
 
 public struct Capture: Codable, Equatable, Sendable {

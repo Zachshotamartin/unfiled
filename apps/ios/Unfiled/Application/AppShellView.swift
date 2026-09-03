@@ -32,7 +32,15 @@ struct AppShellView: View {
                     initialContent: sheet.initialContent,
                     initialPrivacy: sheet.initialPrivacy,
                     restoredDraft: sheet.restoredDraft,
-                    onSave: model.saveCapture,
+                    onSave: { content, privacy, source, generation, attachments in
+                        try await model.saveCapture(
+                            content: content,
+                            privacy: privacy,
+                            source: source,
+                            composerGeneration: generation,
+                            attachments: attachments
+                        )
+                    },
                     onDraftChange: model.saveCaptureDraft,
                     onDiscardDraft: model.discardCaptureDraft
                 )
@@ -423,6 +431,7 @@ private struct NoteDestinationView: View {
                     generatedBlocksPaginationNotice: model.generatedBlockPaginationNotices[noteID],
                     submittingInteractionIDs: model.submittingInteractionIDs,
                     interactionErrors: model.interactionErrors,
+                    onLoadAttachment: { await model.attachmentBytes(id: $0) },
                     noteContext: model.noteContext(
                         noteID: noteID,
                         revision: note.currentRevision

@@ -232,6 +232,104 @@ public final class APIClient: Sendable {
         )
     }
 
+    /// A request whose body is raw bytes rather than JSON, answered with raw bytes. Used for
+    /// photos and recordings; every other request stays JSON.
+    func rawRequest(
+        _ method: String,
+        path: String,
+        body: Data?,
+        contentType: String?,
+        headers: [String: String] = [:],
+        idempotencyKey: String? = nil,
+        explicitToken: String? = nil,
+        maximumResponseBytes: Int
+    ) async throws -> (data: Data, http: HTTPURLResponse) {
+        let authentication: Authentication = explicitToken.map(Authentication.explicit) ?? .required
+        let firstCredential: AccessTokenCredential?
+        let firstToken: String
+        switch authentication {
+        case .none:
+            throw APIClientError.authenticationRequired
+        case let .explicit(token):
+            firstCredential = nil
+            firstToken = token
+        case .required:
+            guard let tokenProvider else { throw APIClientError.authenticationRequired }
+            do {
+                let credential = try await tokenProvider.accessTokenCredential()
+                firstCredential = credential
+                firstToken = credential.token
+            }
+            catch { throw sanitized(error) }
+        }
+        let first = try await performRaw(method, path: path, body: body, contentType: contentType,
+                                         headers: headers, idempotencyKey: idempotencyKey,
+                                         token: firstToken, maximumResponseBytes: maximumResponseBytes)
+        if first.http.statusCode == 401, case .required = authentication, let tokenProvider,
+           let rejectedCredential = firstCredential {
+            let refreshed: AccessTokenCredential
+            do {
+                refreshed = try await tokenProvider.refreshAfterUnauthorized(
+                    rejectedCredential: rejectedCredential
+                )
+            }
+            catch { throw sanitized(error) }
+            guard refreshed.userID == rejectedCredential.userID,
+                  refreshed.sessionGeneration == rejectedCredential.sessionGeneration else {
+                throw APIClientError.authenticationRequired
+            }
+            return try await performRaw(method, path: path, body: body, contentType: contentType,
+                                        headers: headers, idempotencyKey: idempotencyKey,
+                                        token: refreshed.token, maximumResponseBytes: maximumResponseBytes)
+        }
+        return first
+    }
+
+    func decodeJSON<Response: Decodable>(
+        _ data: Data,
+        response: HTTPURLResponse,
+        as: Response.Type
+    ) throws -> Response {
+        try decode(data, response: response, requirePrivateNoStore: false, as: Response.self)
+    }
+
+    private func performRaw(_ method: String, path: String, body: Data?, contentType: String?,
+                            headers: [String: String], idempotencyKey: String?, token: String,
+                            maximumResponseBytes: Int) async throws -> (data: Data, http: HTTPURLResponse) {
+        guard !path.contains(".."), var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+            throw APIClientError.invalidRequest
+        }
+        let root = components.path.hasSuffix("/") ? String(components.path.dropLast()) : components.path
+        components.path = root + (path.hasPrefix("/") ? path : "/\(path)")
+        components.queryItems = nil
+        guard let url = components.url else { throw APIClientError.invalidRequest }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 60)
+        request.httpMethod = method
+        request.setValue("*/*", forHTTPHeaderField: "Accept")
+        request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+        request.setValue("no-cache", forHTTPHeaderField: "Pragma")
+        guard !token.isEmpty, !token.contains(where: { $0.isNewline }) else { throw APIClientError.authenticationRequired }
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let idempotencyKey {
+            guard Self.isValidIdempotencyKey(idempotencyKey) else { throw APIClientError.invalidRequest }
+            request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
+        }
+        for (name, value) in headers {
+            guard !value.contains(where: { $0.isNewline }) else { throw APIClientError.invalidRequest }
+            request.setValue(value, forHTTPHeaderField: name)
+        }
+        if let body {
+            guard let contentType, !body.isEmpty else { throw APIClientError.invalidRequest }
+            request.httpBody = body
+            request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        }
+        let responseLimit = min(maximumResponseBytes, max(limits.responseBodyBytes, maximumResponseBytes))
+        guard responseLimit > 0 else { throw APIClientError.invalidRequest }
+        do { return try await transport.data(for: request, maxResponseBytes: responseLimit) }
+        catch let error as APIClientError { throw error }
+        catch { throw APIClientError.transportFailure }
+    }
+
     private func perform<Body: Encodable>(_ method: String, path: String, query: [URLQueryItem],
                                            body: Body?, idempotencyKey: String?, token: String?,
                                            maximumRequestBytes: Int?,

@@ -33,6 +33,29 @@ struct CaptureDraft: Codable, Equatable, Identifiable, Sendable {
     let expansionDisabled: Bool
 }
 
+enum LocalAttachmentKind: String, Codable, CaseIterable, Hashable, Sendable {
+    case image
+    case audio
+}
+
+/// A photo or recording waiting in the encrypted outbox beside its capture.
+struct CaptureAttachmentDraft: Codable, Equatable, Identifiable, Sendable {
+    let id: String
+    let kind: LocalAttachmentKind
+    let mediaType: String
+    let bytes: Data
+    let width: Int?
+    let height: Int?
+    let durationMs: Int?
+}
+
+struct StoredCaptureAttachment: Codable, Equatable, Identifiable, Sendable {
+    let draft: CaptureAttachmentDraft
+    let uploadedAt: String?
+
+    var id: String { draft.id }
+}
+
 struct CaptureOutboxEntry: Codable, Equatable, Identifiable, Sendable {
     let draft: CaptureDraft
     let state: CaptureOutboxState

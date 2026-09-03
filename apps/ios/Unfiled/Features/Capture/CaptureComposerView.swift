@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 
 struct CaptureComposerView: View {
@@ -9,11 +10,17 @@ struct CaptureComposerView: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var confirmsClose = false
+    @State private var attachments: [PendingCaptureAttachment] = []
+    @State private var pickerItems: [PhotosPickerItem] = []
+    @State private var showsPhotoPicker = false
+    @State private var showsCamera = false
+    @State private var attachmentNotice: String?
+    @State private var idGenerator = PrefixedULIDGenerator()
 
     let source: LocalCaptureSource
     let composerGeneration: Int
     let restoredDraft: Bool
-    let onSave: @MainActor (String, LocalPrivacyMode, LocalCaptureSource, Int) async throws -> Void
+    let onSave: @MainActor (String, LocalPrivacyMode, LocalCaptureSource, Int, [CaptureAttachmentDraft]) async throws -> Void
     let onDraftChange: @MainActor (String, LocalPrivacyMode, LocalCaptureSource, Int) async throws -> Void
     let onDiscardDraft: @MainActor (LocalCaptureSource, Int) async throws -> Void
 
@@ -23,7 +30,7 @@ struct CaptureComposerView: View {
         initialContent: String = "",
         initialPrivacy: LocalPrivacyMode = .aiAssisted,
         restoredDraft: Bool = false,
-        onSave: @escaping @MainActor (String, LocalPrivacyMode, LocalCaptureSource, Int) async throws -> Void,
+        onSave: @escaping @MainActor (String, LocalPrivacyMode, LocalCaptureSource, Int, [CaptureAttachmentDraft]) async throws -> Void,
         onDraftChange: @escaping @MainActor (String, LocalPrivacyMode, LocalCaptureSource, Int) async throws -> Void,
         onDiscardDraft: @escaping @MainActor (LocalCaptureSource, Int) async throws -> Void
     ) {
@@ -38,10 +45,12 @@ struct CaptureComposerView: View {
     }
 
     private var canSave: Bool {
-        !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && content.utf16.count <= 10_000
-            && !isSaving
+        CaptureComposerRules.canSend(content: content, attachmentCount: attachments.count) && !isSaving
     }
+
+    private var attachmentKinds: [LocalAttachmentKind] { attachments.map(\.kind) }
+    private var remainingPhotos: Int { CaptureComposerRules.remainingPhotos(given: attachmentKinds) }
+    private var isEmpty: Bool { content.isEmpty && attachments.isEmpty }
 
     var body: some View {
         NavigationStack {
@@ -78,6 +87,22 @@ struct CaptureComposerView: View {
                     }
                     .accessibilityLabel("Capture text")
 
+                if !attachments.isEmpty {
+                    CaptureAttachmentStrip(attachments: attachments) { id in
+                        attachments.removeAll { $0.id == id }
+                    }
+                }
+
+                if let attachmentNotice {
+                    Text(attachmentNotice)
+                        .font(UnfiledType.caption)
+                        .foregroundStyle(UnfiledTheme.fog)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, UnfiledTheme.screenPadding)
+                        .padding(.bottom, 6)
+                        .accessibilityIdentifier("capture.attachment-notice")
+                }
+
                 if let errorMessage {
                     Text(errorMessage)
                         .font(UnfiledType.caption)
@@ -113,6 +138,26 @@ struct CaptureComposerView: View {
                         privacy == .privateManual ? "Private manual capture" : "AI-assisted capture"
                     )
 
+                    IconButton(glyph: .photo, label: "Add photo") {
+                        guard remainingPhotos > 0 else {
+                            attachmentNotice = "Four photos is the most one capture can carry."
+                            return
+                        }
+                        showsPhotoPicker = true
+                    }
+                    .accessibilityIdentifier("capture.add-photo")
+
+                    if CameraCaptureView.isAvailable {
+                        IconButton(glyph: .camera, label: "Take photo") {
+                            guard remainingPhotos > 0 else {
+                                attachmentNotice = "Four photos is the most one capture can carry."
+                                return
+                            }
+                            showsCamera = true
+                        }
+                        .accessibilityIdentifier("capture.add-camera")
+                    }
+
                     Spacer()
 
                     Text("\(content.utf16.count)/10,000")
@@ -125,7 +170,13 @@ struct CaptureComposerView: View {
                         errorMessage = nil
                         Task { @MainActor in
                             do {
-                                try await onSave(content, privacy, source, composerGeneration)
+                                try await onSave(
+                                    CaptureComposerRules.rawContent(content: content, kinds: attachmentKinds),
+                                    privacy,
+                                    source,
+                                    composerGeneration,
+                                    attachments.map(\.draft)
+                                )
                                 UnfiledHaptics.saved()
                                 dismiss()
                             } catch {
@@ -173,6 +224,24 @@ struct CaptureComposerView: View {
                 }
             }
             .onAppear { focused = true }
+            .photosPicker(
+                isPresented: $showsPhotoPicker,
+                selection: $pickerItems,
+                maxSelectionCount: max(remainingPhotos, 1),
+                matching: .images,
+                preferredItemEncoding: .compatible
+            )
+            .onChange(of: pickerItems) { _, items in
+                guard !items.isEmpty else { return }
+                pickerItems = []
+                Task { @MainActor in await addPickedPhotos(items) }
+            }
+            .fullScreenCover(isPresented: $showsCamera) {
+                CameraCaptureView { data in
+                    Task { @MainActor in await addPhoto(data: data) }
+                }
+                .ignoresSafeArea()
+            }
             .task(id: draftChangeIdentifier) {
                 guard !isSaving else { return }
                 do {
@@ -215,7 +284,7 @@ struct CaptureComposerView: View {
         } message: {
             Text("Unfiled can restore a kept draft the next time you open this capture.")
         }
-        .interactiveDismissDisabled(isSaving || !content.isEmpty)
+        .interactiveDismissDisabled(isSaving || !isEmpty)
         .unfiledScreen()
     }
 
@@ -223,8 +292,41 @@ struct CaptureComposerView: View {
         "\(composerGeneration):\(isSaving):\(privacy.rawValue):\(content)"
     }
 
+    /// Downsizes and strips each picked photo before it can go anywhere.
+    private func addPickedPhotos(_ items: [PhotosPickerItem]) async {
+        for item in items {
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else {
+                    attachmentNotice = "That photo could not be read."
+                    continue
+                }
+                await addPhoto(data: data)
+            } catch {
+                attachmentNotice = "That photo could not be read."
+            }
+        }
+    }
+
+    private func addPhoto(data: Data) async {
+        guard CaptureComposerRules.canAdd(.image, to: attachmentKinds) else {
+            attachmentNotice = "Four photos is the most one capture can carry."
+            return
+        }
+        do {
+            let prepared = try CaptureImagePreparation.prepare(imageData: data)
+            let id = try await idGenerator.next(.attachment)
+            attachments.append(PendingCaptureAttachment(
+                id: id, kind: .image, mediaType: prepared.mediaType, bytes: prepared.data,
+                width: prepared.width, height: prepared.height, durationMs: nil
+            ))
+            attachmentNotice = nil
+        } catch {
+            attachmentNotice = "That photo could not be read."
+        }
+    }
+
     private func close() {
-        if content.isEmpty {
+        if isEmpty {
             isSaving = true
             Task { @MainActor in
                 try? await onDiscardDraft(source, composerGeneration)

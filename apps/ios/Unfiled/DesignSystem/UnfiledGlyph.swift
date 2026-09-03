@@ -9,6 +9,7 @@ enum UnfiledGlyph: CaseIterable {
     case lock, organize, clock, warning, tray, check, archive, trash
     case heading, bullets, checklist, quote, link
     case arrow, down, up, move, undo, info, minus, circle, checkCircle, card
+    case photo, camera, microphone
 }
 
 /// A text label with one of the app's glyphs where a system symbol would otherwise sit.
@@ -247,6 +248,42 @@ struct GlyphStroke: Shape {
             path.move(to: point(8, 12.3)); path.addLine(to: point(11, 15.3)); path.addLine(to: point(16.3, 9.3))
         case .card:
             path.addPath(GlyphGeometry.card(center: point(12, 12), width: 12 * unit, height: 15.5 * unit, radius: 1.6 * unit))
+        case .photo:
+            // A slanted card holding a small sun and a hill, the way a print sits on a desk.
+            path.addPath(GlyphGeometry.card(center: point(12, 12), width: 13 * unit, height: 15 * unit, radius: 1.6 * unit))
+            var scene = Path()
+            scene.addEllipse(in: box(13.2, 7.4, 2.8, 2.8))
+            scene.move(to: point(7.4, 16.2))
+            scene.addLine(to: point(10.4, 12.2))
+            scene.addLine(to: point(12.6, 14.6))
+            scene.addLine(to: point(14.2, 12.8))
+            scene.addLine(to: point(16.8, 16.2))
+            path.addPath(GlyphGeometry.tilted(scene, about: point(12, 12)))
+        case .camera:
+            // A tray-shaped body with a lens; the top is the mark's square-capped stroke.
+            path.addRoundedRect(
+                in: box(3.5, 7.5, 17, 12),
+                cornerSize: CGSize(width: 1.6 * unit, height: 1.6 * unit),
+                style: .continuous
+            )
+            path.move(to: point(8.5, 7.5))
+            path.addLine(to: point(9.8, 4.8))
+            path.addLine(to: point(14.2, 4.8))
+            path.addLine(to: point(15.5, 7.5))
+            path.addEllipse(in: box(9, 10.3, 6, 6))
+        case .microphone:
+            // A capsule on a stand: the recording control.
+            path.addRoundedRect(
+                in: box(9, 3.2, 6, 11.2),
+                cornerSize: CGSize(width: 3 * unit, height: 3 * unit),
+                style: .continuous
+            )
+            path.move(to: point(6.2, 11.2))
+            path.addQuadCurve(to: point(17.8, 11.2), control: point(12, 19.4))
+            path.move(to: point(12, 16.4))
+            path.addLine(to: point(12, 20.6))
+            path.move(to: point(8.6, 20.6))
+            path.addLine(to: point(15.4, 20.6))
         case .quote, .more:
             break
         }

@@ -17,6 +17,7 @@ struct NoteDetailView: View {
     var generatedBlocksPaginationNotice: String?
     var submittingInteractionIDs: Set<String> = []
     var interactionErrors: [String: String] = [:]
+    var onLoadAttachment: @MainActor (String) async -> Data? = { _ in nil }
     let noteContext: NoteContextViewState
     let onEdit: @MainActor () -> Void
     let onShowRevisionHistory: @MainActor () -> Void
@@ -47,14 +48,26 @@ struct NoteDetailView: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 noteHeader
 
-                if !readableBody.isEmpty {
-                    Text(NoteDetailContent.markdown(readableBody))
-                        .font(UnfiledType.thought)
-                        .lineSpacing(7)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, UnfiledTheme.rowVertical)
-                        .accessibilityIdentifier("noteDetail.body")
+                let segments = NoteBodySegment.segments(of: readableBody)
+                if !segments.isEmpty {
+                    VStack(alignment: .leading, spacing: 14) {
+                        ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                            switch segment {
+                            case let .text(text):
+                                Text(NoteDetailContent.markdown(text))
+                                    .font(UnfiledType.thought)
+                                    .lineSpacing(7)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            case let .image(attachmentID):
+                                NoteAttachmentImage(attachmentID: attachmentID, load: onLoadAttachment)
+                            case let .recording(attachmentID):
+                                NoteAttachmentRecordingRow(attachmentID: attachmentID)
+                            }
+                        }
+                    }
+                    .padding(.vertical, UnfiledTheme.rowVertical)
+                    .accessibilityIdentifier("noteDetail.body")
 
                     SectionRule()
                 }
