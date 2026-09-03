@@ -1563,7 +1563,7 @@ describe("capture attachments", () => {
     expect([...(read?.bytes ?? [])]).toEqual([...JPEG]);
     expect(openCaptureAttachment).toHaveBeenCalledWith(
       access,
-      { encrypted: stored, contentMac: mac("ai_assisted") },
+      { encrypted: storedRecord, contentMac: mac("ai_assisted") },
       { attachmentId: ATTACHMENT, captureId: CAPTURE, recordVersion: 1, privacy: "ai_assisted" }
     );
 
