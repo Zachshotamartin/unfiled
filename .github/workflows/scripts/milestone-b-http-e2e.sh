@@ -3843,49 +3843,27 @@ node -e '
   if (value.code !== "not_found") process.exit(1);
 ' "$e2e_tmp_dir/deleted-capture.json"
 
-# A photo travels the whole real path here: the server seals raw bytes with the owner's
-# content key, stores them through the encrypted RPC, returns them byte for byte under
-# private/no-store, and binds them to a capture. The SQL tests cover the RPC in isolation
-# and cannot see the app's own sealing, so without this stage the upload can be green in
-# CI and refuse every real photo in production.
+# A photo travels the whole real path here: the server seals raw bytes with the encrypted
+# owner's content key, stores them through the encrypted RPC, returns them byte for byte under
+# private/no-store, and binds them to a capture. The SQL tests cover the RPC in isolation and
+# cannot see the app's own sealing, so without this stage a release can be green everywhere and
+# still refuse every photo in production.
 e2e_stage="g-capture-attachment"
-e2e_attachment_id="$(node -e '
-  const { randomBytes } = require("node:crypto");
-  const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-  let time = Date.now();
-  let out = "";
-  for (let index = 0; index < 10; index += 1) {
-    out = alphabet[time % 32] + out;
-    time = Math.floor(time / 32);
-  }
-  const random = randomBytes(16);
-  for (let index = 0; index < 16; index += 1) out += alphabet[random[index] % 32];
-  process.stdout.write(`att_${out}`);
-')"
-e2e_attachment_capture_id="$(node -e '
-  const { randomBytes } = require("node:crypto");
-  const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-  let time = Date.now();
-  let out = "";
-  for (let index = 0; index < 10; index += 1) {
-    out = alphabet[time % 32] + out;
-    time = Math.floor(time / 32);
-  }
-  const random = randomBytes(16);
-  for (let index = 0; index < 16; index += 1) out += alphabet[random[index] % 32];
-  process.stdout.write(`cap_${out}`);
-')"
+e2e_attachment_id="$(e2e_new_entity_id att)"
+e2e_attachment_capture_id="$(e2e_new_entity_id cap)"
 e2e_photo_fixture="scripts/operations/live-gate/fixtures/photo.jpg"
 if [[ ! -f "$e2e_photo_fixture" ]]; then
   echo "The capture attachment stage requires $e2e_photo_fixture." >&2
   exit 1
 fi
-e2e_attachment_upload_status="$(
+
+e2e_upload_photo() {
+  local output_path="$1"
   curl --silent --show-error \
-    --output "$e2e_tmp_dir/attachment-upload.json" \
+    --output "$output_path" \
     --write-out '%{http_code}' \
     --request POST \
-    --header "authorization: Bearer $e2e_access_token" \
+    --header "authorization: Bearer $e2e_encrypted_access_token" \
     --header "content-type: image/jpeg" \
     --header "idempotency-key: $e2e_attachment_id" \
     --header "x-unfiled-capture-id: $e2e_attachment_capture_id" \
@@ -3894,30 +3872,21 @@ e2e_attachment_upload_status="$(
     --header "x-unfiled-height: 64" \
     --data-binary "@$e2e_photo_fixture" \
     "$e2e_app_url/api/v1/captures/attachments"
-)"
+}
+
+e2e_attachment_upload_status="$(e2e_upload_photo "$e2e_tmp_dir/attachment-upload.json")"
 if [[ "$e2e_attachment_upload_status" != "201" ]]; then
   echo "The photo upload returned $e2e_attachment_upload_status instead of 201." >&2
   cat "$e2e_tmp_dir/attachment-upload.json" >&2
   echo >&2
+  # The server names the refusal in its own content-free failure line; showing it here means a
+  # red run explains itself instead of sending the next person guessing.
+  grep "web.request_failed" "$e2e_tmp_dir/web.log" | tail -5 >&2 || true
   exit 1
 fi
 
 # The replayed upload is the same sealed row, not a second one.
-e2e_attachment_replay_status="$(
-  curl --silent --show-error \
-    --output "$e2e_tmp_dir/attachment-replay.json" \
-    --write-out '%{http_code}' \
-    --request POST \
-    --header "authorization: Bearer $e2e_access_token" \
-    --header "content-type: image/jpeg" \
-    --header "idempotency-key: $e2e_attachment_id" \
-    --header "x-unfiled-capture-id: $e2e_attachment_capture_id" \
-    --header "x-unfiled-privacy: ai_assisted" \
-    --header "x-unfiled-width: 96" \
-    --header "x-unfiled-height: 64" \
-    --data-binary "@$e2e_photo_fixture" \
-    "$e2e_app_url/api/v1/captures/attachments"
-)"
+e2e_attachment_replay_status="$(e2e_upload_photo "$e2e_tmp_dir/attachment-replay.json")"
 if [[ "$e2e_attachment_replay_status" != "201" ]]; then
   echo "The replayed photo upload returned $e2e_attachment_replay_status instead of 201." >&2
   cat "$e2e_tmp_dir/attachment-replay.json" >&2
@@ -3931,7 +3900,7 @@ e2e_attachment_read_status="$(
     --dump-header "$e2e_tmp_dir/attachment-read.headers" \
     --write-out '%{http_code}' \
     --request GET \
-    --header "authorization: Bearer $e2e_access_token" \
+    --header "authorization: Bearer $e2e_encrypted_access_token" \
     "$e2e_app_url/api/v1/captures/attachments/$e2e_attachment_id"
 )"
 if [[ "$e2e_attachment_read_status" != "200" ]]; then
@@ -3946,12 +3915,12 @@ assert_private_cache_headers "$e2e_tmp_dir/attachment-read.headers"
 node -e '
   const headers = require("node:fs").readFileSync(process.argv[1], "utf8").replaceAll("\r", "");
   if (!/^content-type:\s*image\/jpeg\s*$/imu.test(headers)) {
-    process.stderr.write("The photo read back did not come as image/jpeg.\n");
+    process.stderr.write("The photo did not come back as image/jpeg.\n");
     process.exit(1);
   }
 ' "$e2e_tmp_dir/attachment-read.headers"
 
-# The sealed row keeps no readable image: no JPEG signature, no base64 of one.
+# The stored row keeps no readable image: a sealed payload, and no JPEG base64 signature.
 psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
   --no-psqlrc --set=ON_ERROR_STOP=1 --quiet \
   --set=attachment_id="$e2e_attachment_id" <<'SQL' >/dev/null
@@ -3976,11 +3945,25 @@ psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
   $attachment_canary$;
 SQL
 
-# The capture binds the photo the same way a phone does.
-e2e_attachment_capture_key="milestone-g-http-attachment-capture-$e2e_run_id"
-request_json POST /captures \
-  "{\"captureId\":\"$e2e_attachment_capture_id\",\"text\":\"A photo capture from the local HTTP end-to-end pass.\",\"source\":\"ios_share\",\"privacy\":\"ai_assisted\",\"attachmentIds\":[\"$e2e_attachment_id\"],\"idempotencyKey\":\"$e2e_attachment_capture_key\"}" \
-  "$e2e_attachment_capture_key" >/dev/null
+# The capture binds the photo the way a phone does.
+e2e_attachment_capture_body="$({
+  E2E_CAPTURE_ID="$e2e_attachment_capture_id" \
+    E2E_ATTACHMENT_ID="$e2e_attachment_id" \
+    E2E_CREATED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" node -e '
+      process.stdout.write(JSON.stringify({
+        clientCaptureId: process.env.E2E_CAPTURE_ID,
+        rawContent: "A photo capture from the local HTTP end-to-end pass.",
+        source: "web",
+        clientCreatedAt: process.env.E2E_CREATED_AT,
+        clientTimezone: "UTC",
+        privacy: "ai_assisted",
+        expansionDisabled: false,
+        attachmentIds: [process.env.E2E_ATTACHMENT_ID]
+      }));
+    '
+})"
+e2e_encrypted_request_json POST /captures "$e2e_attachment_capture_body" \
+  "$e2e_attachment_capture_id" >/dev/null
 
 # Leave the shared local database reusable for a subsequent test pass. The API
 # deliberately soft-deletes notes, which removes their searchable plaintext
