@@ -51,13 +51,28 @@ final class LiveGateTests: XCTestCase {
         model.captureSheet = nil
     }
 
+    /// The auth endpoints rate-limit one address; a run right after another waits for the window
+    /// the server names (bounded) instead of reporting a false failure.
+    private func signUpWaitingForRateLimit(email: String, password: String) async throws -> AuthSession {
+        for attempt in 0 ..< 3 {
+            do {
+                return try await model.signUp(try AuthPasswordRequest(email: email, password: password))
+            } catch let APIClientError.http(status, _, _, retryAfterSeconds) where status == 429 && attempt < 2 {
+                let wait = min(retryAfterSeconds ?? 60, 360)
+                print("wait  auth.sign_up rate limited; retrying in \(wait)s")
+                try await Task.sleep(for: .seconds(wait + 1))
+            }
+        }
+        return try await model.signUp(try AuthPasswordRequest(email: email, password: password))
+    }
+
     func testLiveGate() async throws {
         let stamp = String(Int(Date().timeIntervalSince1970), radix: 36)
         let email = "gate-phone-\(stamp)@example.com"
         let password = "Gate-\(UUID().uuidString.prefix(20))-1"
 
         // Account
-        let session = try await model.signUp(try AuthPasswordRequest(email: email, password: password))
+        let session = try await signUpWaitingForRateLimit(email: email, password: password)
         step("auth.sign_up", !session.accessToken.isEmpty)
         await model.acceptVerifiedSession(session)
         step("auth.signed_in_phase", model.phase == .signedIn, "\(model.phase)")

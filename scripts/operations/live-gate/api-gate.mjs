@@ -50,7 +50,23 @@ function ulid() {
   return out;
 }
 
-async function api(method, path, { token, body, headers, idempotencyKey } = {}) {
+const MAX_RATE_LIMIT_WAIT_MS = 6 * 60_000;
+async function api(method, path, options = {}) {
+  // The auth endpoints rate-limit one address; a gate run right after another waits for the
+  // window the server names instead of reporting a false failure.
+  for (let attempt = 0; ; attempt += 1) {
+    const response = await request(method, path, options);
+    const retryAfter = Number(
+      response.headers.get("retry-after") ?? response.json?.retryAfterSeconds ?? 0
+    );
+    const waitMs = Math.min(retryAfter * 1000, MAX_RATE_LIMIT_WAIT_MS);
+    if (response.status !== 429 || attempt >= 2 || !path.startsWith("/auth/") || waitMs <= 0)
+      return response;
+    console.log(`wait  ${path} rate limited; retrying in ${Math.ceil(waitMs / 1000)}s`);
+    await sleep(waitMs + 1000);
+  }
+}
+async function request(method, path, { token, body, headers, idempotencyKey } = {}) {
   const requestHeaders = {
     accept: "application/json",
     ...(body !== undefined ? { "content-type": "application/json" } : {}),
