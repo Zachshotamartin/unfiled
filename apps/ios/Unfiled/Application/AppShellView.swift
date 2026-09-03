@@ -194,6 +194,27 @@ struct AppShellView: View {
                 onRestore: model.restoreDeleted
             )
             .task { await model.loadDeleted() }
+        case let .review(reviewID):
+            ReviewView(
+                items: model.reviewItems.filter { $0.id == reviewID },
+                isLoading: model.isLoadingReview,
+                errorMessage: model.reviewError,
+                submittingInteractionIDs: model.submittingInteractionIDs,
+                interactionErrors: model.interactionErrors,
+                requestedFocusID: reviewID,
+                onRefresh: model.refreshAll,
+                onOpenRelatedNote: model.openNote,
+                onAction: { id, action in
+                    Task { @MainActor in
+                        await model.handleReviewAction(reviewID: id, action: action)
+                    }
+                }
+            )
+            .onChange(of: model.reviewItems.map(\.id)) { _, ids in
+                if !model.isLoadingReview, !ids.contains(reviewID) {
+                    model.closeReviewPage(reviewID: reviewID)
+                }
+            }
         case .settings:
             SettingsView(
                 email: model.currentUser?.email ?? "",

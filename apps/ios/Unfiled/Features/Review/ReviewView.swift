@@ -97,7 +97,7 @@ struct ReviewView: View {
     }
 
     private var header: some View {
-        ScreenHeader(title: "Review", subtitle: "Only the captures that need your decision.")
+        ScreenHeader(title: "Review", subtitle: "A capture that needs your decision.", showsMark: false)
             .accessibilityIdentifier("review.title")
     }
 
@@ -106,10 +106,7 @@ struct ReviewView: View {
             EditorialEyebrow(text: ReviewQueueSummary(count: items.count).label)
             Spacer(minLength: 12)
             if isLoading {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(UnfiledTheme.persimmon)
-                    .accessibilityLabel("Refreshing review queue")
+                UnfiledLoadingView(size: 18, label: "Refreshing review queue")
                     .accessibilityIdentifier("review.loading.inline")
             }
         }

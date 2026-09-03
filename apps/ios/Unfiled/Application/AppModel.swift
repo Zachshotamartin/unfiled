@@ -972,10 +972,24 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Opens one review item on its own page, or the Inbox when no item is named.
     func showReview(reviewID: String? = nil) {
-        navigationPath = []
-        selectedTab = .inbox
+        guard let reviewID else {
+            navigationPath = []
+            selectedTab = .inbox
+            requestedReviewFocusID = nil
+            return
+        }
         requestedReviewFocusID = reviewID
+        if navigationPath.last != .review(reviewID) {
+            navigationPath.append(.review(reviewID))
+        }
+    }
+
+    /// Leaves the review page once its item is no longer open.
+    func closeReviewPage(reviewID: String) {
+        guard case let .review(openID)? = navigationPath.last, openID == reviewID else { return }
+        navigationPath.removeLast()
     }
 
     func loadAISettings() async {

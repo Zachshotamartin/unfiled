@@ -140,6 +140,7 @@ struct InboxView: View {
             receipt: receipt,
             inCard: inCard,
             retryAvailable: retryAvailable,
+            reviewOpen: receipt.reviewItemID.map { id in reviewItems.contains { $0.id == id } } ?? false,
             actionsDisabled: isLoading,
             submittingInteractionIDs: submittingInteractionIDs,
             interactionErrors: interactionErrors,
@@ -235,6 +236,8 @@ private struct ReceiptLedgerRow: View {
     var inCard = false
     /// Retry is offered only when a retry can succeed (a provider key exists).
     var retryAvailable = true
+    /// Open Review is offered only while the receipt's review item is still open.
+    var reviewOpen = false
     let actionsDisabled: Bool
     let submittingInteractionIDs: Set<String>
     let interactionErrors: [String: String]
@@ -318,16 +321,24 @@ private struct ReceiptLedgerRow: View {
             }
 
             if let reviewItemID = receipt.reviewItemID {
-                Button {
-                    onShowReview(reviewItemID)
-                } label: {
-                    Label { Text("Open Review") } icon: { GlyphView(glyph: .tray, size: 16, weight: 1.8) }
-                        .font(UnfiledType.heading)
-                        .frame(minHeight: UnfiledTheme.minimumTouchTarget)
+                if reviewOpen {
+                    Button {
+                        onShowReview(reviewItemID)
+                    } label: {
+                        Label { Text("Open Review") } icon: { GlyphView(glyph: .tray, size: 16, weight: 1.8) }
+                            .font(UnfiledType.heading)
+                            .frame(minHeight: UnfiledTheme.minimumTouchTarget)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(UnfiledTheme.persimmon)
+                    .accessibilityIdentifier(ReceiptAccessibilityIdentifier.review(receipt.id))
+                } else {
+                    Text("Review dismissed. The capture stays in your Inbox.")
+                        .font(UnfiledType.caption)
+                        .foregroundStyle(UnfiledTheme.fog)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier(ReceiptAccessibilityIdentifier.review(receipt.id))
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(UnfiledTheme.persimmon)
-                .accessibilityIdentifier(ReceiptAccessibilityIdentifier.review(receipt.id))
             }
 
             if receipt.retryable && retryAvailable {

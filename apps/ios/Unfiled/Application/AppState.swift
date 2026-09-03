@@ -23,6 +23,8 @@ enum AppRoute: Hashable {
     case routingRules
     /// A space's notes; nil is the Unfiled space (notes without a space).
     case space(String?)
+    /// One review item on its own page.
+    case review(String)
 }
 
 struct CaptureSheet: Equatable, Identifiable {

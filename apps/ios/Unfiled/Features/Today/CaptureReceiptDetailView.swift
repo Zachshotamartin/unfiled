@@ -115,7 +115,7 @@ struct CaptureReceiptDetailView: View {
             Button {
                 onShowReview(reviewItemID)
             } label: {
-                Label("Open Review", systemImage: "tray.and.arrow.down")
+                Label { Text("Open Review") } icon: { GlyphView(glyph: .tray, size: 16, weight: 1.8) }
                     .font(UnfiledType.heading)
                     .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
             }
