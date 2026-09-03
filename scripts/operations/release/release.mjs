@@ -57,7 +57,6 @@ function requirements() {
   }
 }
 
-
 /** A laptop that has already linked the Supabase project can push through that link. */
 function linkedProject() {
   return existsSync("supabase/.temp/project-ref");
@@ -65,9 +64,7 @@ function linkedProject() {
 
 /** How the migration commands reach production: an explicit URL in CI, the link locally. */
 function migrationTarget() {
-  return process.env.SUPABASE_DB_URL
-    ? ["--db-url", process.env.SUPABASE_DB_URL]
-    : ["--linked"];
+  return process.env.SUPABASE_DB_URL ? ["--db-url", process.env.SUPABASE_DB_URL] : ["--linked"];
 }
 function run(command, args, options = {}) {
   return new Promise((resolve) => {
@@ -170,7 +167,14 @@ async function applyMigrations() {
     return;
   }
   console.log(`pending: ${pending.join(", ")}`);
-  const push = await run("npx", ["--yes", "supabase@latest", "db", "push", ...migrationTarget(), "--yes"]);
+  const push = await run("npx", [
+    "--yes",
+    "supabase@latest",
+    "db",
+    "push",
+    ...migrationTarget(),
+    "--yes"
+  ]);
   if (push.code !== 0) fail("Applying migrations failed; nothing was deployed.");
   console.log(`applied ${pending.length} migration(s)`);
 }
@@ -186,25 +190,29 @@ async function deployAll(commit) {
       join(linkDir, "project.json"),
       JSON.stringify({ projectId: projectIdFor(app), orgId: process.env.VERCEL_ORG_ID })
     );
-    const result = await run("npx", [
-      "--yes",
-      "vercel@latest",
-      "deploy",
-      "--prod",
-      "--yes",
-      "--force",
-      "--token",
-      process.env.VERCEL_TOKEN,
-      "--env",
-      `VERCEL_GIT_COMMIT_SHA=${commit}`,
-      "--build-env",
-      `VERCEL_GIT_COMMIT_SHA=${commit}`
-    ], {
-      env: {
-        VERCEL_ORG_ID: process.env.VERCEL_ORG_ID,
-        VERCEL_PROJECT_ID: projectIdFor(app)
+    const result = await run(
+      "npx",
+      [
+        "--yes",
+        "vercel@latest",
+        "deploy",
+        "--prod",
+        "--yes",
+        "--force",
+        "--token",
+        process.env.VERCEL_TOKEN,
+        "--env",
+        `VERCEL_GIT_COMMIT_SHA=${commit}`,
+        "--build-env",
+        `VERCEL_GIT_COMMIT_SHA=${commit}`
+      ],
+      {
+        env: {
+          VERCEL_ORG_ID: process.env.VERCEL_ORG_ID,
+          VERCEL_PROJECT_ID: projectIdFor(app)
+        }
       }
-    });
+    );
     if (result.code !== 0) return { deployed, failedApp: app };
     const url = (result.out.match(/https:\/\/[a-z0-9-]+\.vercel\.app/giu) ?? []).pop() ?? null;
     deployed[app] = url;
