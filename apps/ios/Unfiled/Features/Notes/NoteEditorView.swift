@@ -191,74 +191,64 @@ struct NoteEditorView: View {
     }
 
     @ViewBuilder
+    /// Three plain choices as three labeled chip rows. No menus: every option is visible and
+    /// one tap away, and the selected chip is the only dark one.
+    /// Three plain choices as three labeled chip rows. No menus: every option is visible and
+    /// one tap away, and the selected chip is the only dark one.
     private var propertyControls: some View {
-        if isNewNote {
-            Menu {
-                ForEach(NoteType.allCases, id: \.self) { type in
-                    Button {
-                        draft.type = type
-                    } label: {
-                        if draft.type == type {
-                            Label(type.rawValue.capitalized, systemImage: "checkmark")
-                        } else {
-                            Text(type.rawValue.capitalized)
+        VStack(alignment: .leading, spacing: UnfiledTheme.controlGap) {
+            if isNewNote {
+                choiceRow(label: "Kind", identifier: "noteEditor.type") {
+                    ForEach(NoteType.allCases, id: \.self) { type in
+                        Chip(title: type.rawValue.capitalized, selected: draft.type == type) {
+                            choose { draft.type = type }
                         }
                     }
                 }
-            } label: {
-                propertyLabel(draft.type.rawValue.capitalized, systemImage: "note.text")
+                .accessibilityLabel("Note type, \(draft.type.rawValue)")
             }
-            .accessibilityLabel("Note type, \(draft.type.rawValue)")
-            .accessibilityIdentifier("noteEditor.type")
-        }
-
-        Menu {
-            Button {
-                draft.privacy = .aiAssisted
-            } label: {
-                Label("AI assisted", systemImage: draft.privacy == .aiAssisted ? "checkmark" : "tray.and.arrow.down")
+            choiceRow(label: "Privacy", identifier: "noteEditor.privacy") {
+                Chip(title: "Organize", selected: draft.privacy == .aiAssisted) {
+                    choose { draft.privacy = .aiAssisted }
+                }
+                Chip(title: "Private", selected: draft.privacy == .privateManual) {
+                    choose { draft.privacy = .privateManual }
+                }
             }
-            Button {
-                draft.privacy = .privateManual
-            } label: {
-                Label("Private manual", systemImage: draft.privacy == .privateManual ? "checkmark" : "lock")
-            }
-        } label: {
-            propertyLabel(
-                draft.privacy == .privateManual ? "Private" : "AI assisted",
-                systemImage: draft.privacy == .privateManual ? "lock" : "tray.and.arrow.down"
-            )
-        }
-        .accessibilityIdentifier("noteEditor.privacy")
-
-        Menu {
-            Button("No space") { draft.spaceID = nil }
-            ForEach(spaces) { space in
-                Button {
-                    draft.spaceID = space.id
-                } label: {
-                    if draft.spaceID == space.id {
-                        Label(space.name, systemImage: "checkmark")
-                    } else {
-                        Text(space.name)
+            choiceRow(label: "Space", identifier: "noteEditor.space") {
+                Chip(title: "None", selected: draft.spaceID == nil) {
+                    choose { draft.spaceID = nil }
+                }
+                ForEach(spaces) { space in
+                    Chip(title: space.name, selected: draft.spaceID == space.id) {
+                        choose { draft.spaceID = space.id }
                     }
                 }
             }
-        } label: {
-            propertyLabel(selectedSpaceName, systemImage: "tray.full")
+            .accessibilityLabel("Space, \(selectedSpaceName)")
         }
-        .accessibilityLabel("Space, \(selectedSpaceName)")
-        .accessibilityIdentifier("noteEditor.space")
     }
 
-    private func propertyLabel(_ title: String, systemImage: String) -> some View {
-        Label(title, systemImage: systemImage)
-            .font(UnfiledType.caption)
-            .foregroundStyle(UnfiledTheme.paper)
-            .padding(.horizontal, 12)
-            .frame(minHeight: 40)
-            .background(UnfiledTheme.graphite)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+    private func choose(_ change: @escaping () -> Void) {
+        UnfiledHaptics.selection()
+        withAnimation(UnfiledMotion.animation(UnfiledMotion.quick)) { change() }
+    }
+
+    private func choiceRow<Content: View>(
+        label: String,
+        identifier: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            EditorialEyebrow(text: label)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: UnfiledTheme.controlGap) {
+                    content()
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(identifier)
     }
 
     private var selectedSpaceName: String {

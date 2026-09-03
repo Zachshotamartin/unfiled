@@ -51,7 +51,10 @@ capture that has not become a note is visible in Capture activity but absent fro
 The iPhone app moved to the Paper direction on 2026-09-02; the Next.js app still uses the earlier
 dark treatment. Deliver the same tokens (ground, ink, one green accent), the same type scale with
 serif titles and serif thoughts, the mark once per page, and the tray-and-card glyph set in the web
-app, with the composer and Notes library structured the same way. Evidence: the public pages and
+app, with the composer and Notes library structured the same way. Apply the same rules the phone now
+follows: the Desk model (Inbox and Library, no Review or Search tabs), one motion system, and one way
+to create (the composer; Private captures become private notes; the web's separate new-note form goes
+away and its editor is for editing only). Evidence: the public pages and
 the signed-in app rendered side by side with the phone.
 
 ### G2. Prove the hosted topology

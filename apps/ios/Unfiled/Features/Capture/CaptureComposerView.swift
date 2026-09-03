@@ -126,7 +126,7 @@ struct CaptureComposerView: View {
                         Task { @MainActor in
                             do {
                                 try await onSave(content, privacy, source, composerGeneration)
-                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                UnfiledHaptics.saved()
                                 dismiss()
                             } catch {
                                 errorMessage = "That capture was not saved. Try again."
@@ -147,6 +147,7 @@ struct CaptureComposerView: View {
                         .background(canSave ? UnfiledTheme.persimmon : UnfiledTheme.fog.opacity(0.35))
                         .clipShape(Circle())
                     }
+                    .buttonStyle(UnfiledPressStyle(scale: 0.9))
                     .disabled(!canSave)
                     .accessibilityLabel("Save capture")
                 }

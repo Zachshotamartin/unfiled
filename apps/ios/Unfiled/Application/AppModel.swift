@@ -388,6 +388,27 @@ final class AppModel: ObservableObject {
         return try await runtime.unauthenticatedAPI.signUp(email: request.email, password: request.password)
     }
 
+    /// A Private capture is a private note, created directly while online. Returns false when the
+    /// note could not be created (offline, rejected) so the capture path keeps the text safe.
+    private func createPrivateNote(
+        content: String,
+        runtime: Runtime,
+        user: AuthUser,
+        context: AccountContext
+    ) async -> Bool {
+        let request = PrivateNoteDraft.request(content: content, idempotencyKey: UUID().uuidString.lowercased())
+        do {
+            let result = try await runtime.authenticatedAPI.createNote(request)
+            guard isCurrent(context) else { return true }
+            await applyNoteBatch([result.note], user: user, runtime: runtime, context: context)
+            guard isCurrent(context) else { return true }
+            await refreshAll()
+            return true
+        } catch {
+            return false
+        }
+    }
+
     func acceptVerifiedSession(_ session: AuthSession) async {
         guard let runtime else { return }
         do {
@@ -782,6 +803,9 @@ final class AppModel: ObservableObject {
     ) async throws {
         guard let runtime, let user = currentUser else { throw AuthenticationError.signedOut }
         let context = currentAccountContext(for: user)
+        if privacy == .privateManual, await createPrivateNote(content: content, runtime: runtime, user: user, context: context) {
+            return
+        }
         let captureID = try await runtime.captureSync.enqueue(
             profileID: user.id,
             rawContent: content,

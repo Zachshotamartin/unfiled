@@ -294,8 +294,7 @@ private struct ProviderKeyStatusRow: View {
     @ViewBuilder
     private var trailing: some View {
         if mutation?.provider == provider {
-            ProgressView()
-                .tint(UnfiledTheme.paper)
+            UnfiledLoadingView(size: 18)
                 .accessibilityLabel(mutationTitle)
         } else {
             Button("Remove", role: .destructive, action: onRemove)

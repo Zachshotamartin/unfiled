@@ -9,7 +9,6 @@ struct LibraryView<Search: View>: View {
     let onRefresh: @MainActor () async -> Void
     let onOpenNote: @MainActor (String) -> Void
     let onOpenSpace: @MainActor (String?) -> Void
-    let onCreateNote: @MainActor () -> Void
     let onOpenArchive: @MainActor () -> Void
     let onOpenDeleted: @MainActor () -> Void
     /// Builds the search screen in place; the closure it receives leaves search.
@@ -18,10 +17,16 @@ struct LibraryView<Search: View>: View {
     @State private var isSearching = false
 
     var body: some View {
-        if isSearching {
-            searchView { isSearching = false }
-        } else {
-            library
+        ZStack {
+            if isSearching {
+                searchView {
+                    withAnimation(UnfiledMotion.animation(UnfiledMotion.settle)) { isSearching = false }
+                }
+                .transition(UnfiledMotion.rise)
+            } else {
+                library
+                    .transition(.opacity)
+            }
         }
     }
 
@@ -46,9 +51,7 @@ struct LibraryView<Search: View>: View {
                 if notes.isEmpty && !isLoading {
                     EmptyLedgerView(
                         title: "Nothing filed yet",
-                        message: "Write something and let it find its place, or start a note by hand.",
-                        actionTitle: "New note",
-                        action: onCreateNote
+                        message: "Write something in the Inbox. Organized thoughts land here; private ones go to Unfiled."
                     )
                     .padding(.top, UnfiledTheme.sectionTop - UnfiledTheme.rowVertical)
                 } else {
@@ -61,7 +64,7 @@ struct LibraryView<Search: View>: View {
                             Button { onOpenNote(note.id) } label: {
                                 NoteLibraryRow(note: note, spaceName: spaceName(for: note))
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.unfiledPress)
                             .accessibilityIdentifier("notes.row.\(note.id)")
                             SectionRule()
                         }
@@ -78,7 +81,6 @@ struct LibraryView<Search: View>: View {
     private var header: some View {
         ScreenHeader(title: "Library", subtitle: librarySummary) {
             Menu {
-                Button("New note", systemImage: "square.and.pencil", action: onCreateNote)
                 Button("Archive", systemImage: "archivebox", action: onOpenArchive)
                 Button("Recently deleted", systemImage: "trash", action: onOpenDeleted)
             } label: {
@@ -94,7 +96,10 @@ struct LibraryView<Search: View>: View {
 
     /// Looks like the field it opens; tapping it hands the page to search.
     private var searchEntry: some View {
-        Button { isSearching = true } label: {
+        Button {
+            UnfiledHaptics.tap()
+            withAnimation(UnfiledMotion.animation(UnfiledMotion.settle)) { isSearching = true }
+        } label: {
             HStack(spacing: UnfiledTheme.controlGap) {
                 GlyphView(glyph: .search, size: 18, weight: 1.8)
                     .foregroundStyle(UnfiledTheme.fog)
@@ -113,7 +118,7 @@ struct LibraryView<Search: View>: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.unfiledPress)
         .accessibilityLabel("Search your notes")
         .accessibilityIdentifier("library.search-entry")
     }
@@ -181,7 +186,7 @@ private struct SpaceCard: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.unfiledPress)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("library.space.\(space.id)")
     }
@@ -213,7 +218,7 @@ struct SpaceNotesView: View {
                         Button { onOpenNote(note.id) } label: {
                             NoteLibraryRow(note: note, spaceName: nil)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.unfiledPress)
                         .accessibilityIdentifier("notes.row.\(note.id)")
                         SectionRule()
                     }

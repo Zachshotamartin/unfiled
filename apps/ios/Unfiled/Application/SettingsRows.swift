@@ -160,8 +160,7 @@ struct SettingsButtonRow: View {
                     .multilineTextAlignment(.leading)
                 Spacer(minLength: 8)
                 if isBusy {
-                    ProgressView()
-                        .tint(color)
+                    UnfiledLoadingView(size: 18)
                         .accessibilityHidden(true)
                 } else if let glyph {
                     GlyphView(glyph: glyph, size: 16, weight: 1.8)

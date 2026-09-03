@@ -184,7 +184,7 @@ struct IconButton: View {
                 .background(UnfiledTheme.graphite)
                 .clipShape(Circle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.unfiledPress)
         .accessibilityLabel(label)
     }
 }
@@ -205,7 +205,7 @@ struct Chip: View {
                 .background(selected ? UnfiledTheme.paper : UnfiledTheme.graphite)
                 .clipShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.unfiledPress)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 }
@@ -243,7 +243,7 @@ struct PrimaryActionButton: View {
             .background(disabled ? UnfiledTheme.fog : UnfiledTheme.persimmon)
             .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.unfiledPress)
         .disabled(disabled)
         .accessibilityAddTraits(.isButton)
     }

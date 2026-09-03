@@ -124,7 +124,7 @@ struct SettingsView: View {
 
     private var loadingState: some View {
         HStack(spacing: 12) {
-            ProgressView()
+            UnfiledLoadingView(size: 18)
             Text("Loading protected AI settings…")
                 .font(UnfiledType.secondary)
                 .foregroundStyle(UnfiledTheme.fog)

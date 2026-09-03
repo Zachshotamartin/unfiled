@@ -6,7 +6,11 @@ struct AppShellView: View {
 
     var body: some View {
         NavigationStack(path: $model.navigationPath) {
-            selectedTab
+            ZStack {
+                selectedTab
+                    .id(model.selectedTab)
+                    .transition(UnfiledMotion.page)
+            }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     BottomLedgerNavigation(
                         selectedTab: $model.selectedTab,
@@ -127,7 +131,6 @@ struct AppShellView: View {
                 onRefresh: model.refreshAll,
                 onOpenNote: model.openNote,
                 onOpenSpace: { model.navigationPath.append(.space($0)) },
-                onCreateNote: model.presentNewNote,
                 onOpenArchive: { model.navigationPath.append(.archive) },
                 onOpenDeleted: { model.navigationPath.append(.deleted) }
             ) { leave in
@@ -291,19 +294,23 @@ private struct BottomLedgerNavigation: View {
     @Binding var selectedTab: MainTab
     let reviewCount: Int
     let onCapture: @MainActor () -> Void
+    @Namespace private var bubble
 
     var body: some View {
         HStack(spacing: 2) {
             tab(.inbox)
 
-            Button(action: onCapture) {
+            Button {
+                UnfiledHaptics.tap()
+                onCapture()
+            } label: {
                 GlyphView(glyph: .pen, size: 24, weight: 2.2)
                     .foregroundStyle(UnfiledTheme.ink)
                     .frame(width: 56, height: 56)
                     .background(UnfiledTheme.persimmon)
                     .clipShape(Circle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(UnfiledPressStyle(scale: 0.9))
             .accessibilityLabel("Write something")
             .padding(.horizontal, 4)
 
@@ -318,11 +325,16 @@ private struct BottomLedgerNavigation: View {
 
     private func tab(_ tab: MainTab) -> some View {
         Button {
-            selectedTab = tab
+            guard selectedTab != tab else { return }
+            UnfiledHaptics.selection()
+            withAnimation(UnfiledMotion.animation(UnfiledMotion.settle)) {
+                selectedTab = tab
+            }
         } label: {
             VStack(spacing: 3) {
                 ZStack(alignment: .topTrailing) {
                     GlyphView(glyph: tab.glyph, size: 22, weight: 1.9)
+                        .glyphNudge(on: selectedTab == tab)
                     if tab == .inbox && reviewCount > 0 {
                         Text("\(min(reviewCount, 99))")
                             .font(UnfiledType.label)
@@ -339,9 +351,18 @@ private struct BottomLedgerNavigation: View {
             }
             .foregroundStyle(selectedTab == tab ? UnfiledTheme.paper : UnfiledTheme.fog)
             .frame(maxWidth: .infinity, minHeight: 48)
+            .background {
+                if selectedTab == tab {
+                    Capsule()
+                        .fill(UnfiledTheme.raised)
+                        .matchedGeometryEffect(id: "dock.bubble", in: bubble)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                }
+            }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.unfiledPress)
         .accessibilityLabel(tab.rawValue)
         .accessibilityAddTraits(selectedTab == tab ? .isSelected : [])
     }

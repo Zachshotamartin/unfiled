@@ -86,13 +86,18 @@ struct InboxView: View {
                     )
                 } else {
                     ForEach(filed) { receipt in
-                        receiptRow(receipt)
-                        SectionRule()
+                        VStack(alignment: .leading, spacing: 0) {
+                            receiptRow(receipt)
+                            SectionRule()
+                        }
+                        .transition(UnfiledMotion.row)
                     }
                 }
             }
             .padding(.horizontal, UnfiledTheme.screenPadding)
             .padding(.bottom, UnfiledTheme.screenBottom)
+            .animation(UnfiledMotion.animation(UnfiledMotion.settle), value: receipts.map(\.id))
+            .animation(UnfiledMotion.animation(UnfiledMotion.settle), value: reviewItems.map(\.id))
         }
         .refreshable { await onRefresh() }
         .unfiledScreen()
@@ -115,9 +120,7 @@ struct InboxView: View {
             EditorialEyebrow(text: text)
             Spacer()
             if showsSpinner {
-                ProgressView()
-                    .tint(UnfiledTheme.persimmon)
-                    .accessibilityLabel("Refreshing")
+                UnfiledLoadingView(size: 18, label: "Refreshing")
             }
         }
     }
@@ -183,7 +186,7 @@ private struct CaptureCard: View {
                 }
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.unfiledPress)
         .accessibilityLabel("Write something")
         .accessibilityIdentifier("inbox.capture-card")
     }
@@ -260,7 +263,7 @@ private struct ReceiptLedgerRow: View {
                        alignment: .leading)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.unfiledPress)
             .accessibilityLabel("\(receipt.headline). Open receipt details")
             .accessibilityIdentifier(ReceiptAccessibilityIdentifier.detail(receipt.id))
 

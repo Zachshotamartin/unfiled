@@ -233,10 +233,7 @@ struct SearchView: View {
             EditorialEyebrow(text: resultCountLabel)
             Spacer(minLength: 12)
             if searchIsPending {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(UnfiledTheme.persimmon)
-                    .accessibilityLabel("Searching notes")
+                UnfiledLoadingView(size: 18, label: "Searching notes")
                     .accessibilityIdentifier("search.loading.inline")
             }
         }
@@ -337,7 +334,7 @@ struct SearchView: View {
     private var searchPagination: some View {
         if isLoadingMore {
             HStack(spacing: 12) {
-                ProgressView().tint(UnfiledTheme.persimmon)
+                UnfiledLoadingView(size: 18).tint(UnfiledTheme.persimmon)
                 Text("Loading more results")
                     .font(UnfiledType.caption)
                     .foregroundStyle(UnfiledTheme.fog)
@@ -428,9 +425,7 @@ private struct SearchResultLedgerRow: View {
                 }
                 Spacer(minLength: 12)
                 if isOpening {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(UnfiledTheme.persimmon)
+                    UnfiledLoadingView(size: 18)
                 } else {
                     Label { Text("Open note") } icon: { GlyphView(glyph: .chevron, size: 14, weight: 1.8) }
                         .font(UnfiledType.secondaryStrong)
@@ -470,8 +465,7 @@ private struct SearchDeletedResultLedgerRow: View {
 private struct SearchLoadingLedgerView: View {
     var body: some View {
         HStack(spacing: 14) {
-            ProgressView()
-                .tint(UnfiledTheme.persimmon)
+            UnfiledLoadingView(size: 18)
             VStack(alignment: .leading, spacing: 4) {
                 Text("Searching your notes")
                     .font(UnfiledType.heading)
