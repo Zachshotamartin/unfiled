@@ -57,6 +57,7 @@ export type OrganizerJobFailure = Readonly<{
   retryable: boolean;
   errorName: string;
   origin?: string;
+  providerStatus?: number;
 }>;
 export type OrganizerDrainResult = Readonly<{
   claimed: number;
@@ -1195,11 +1196,14 @@ export function createOrganizerDrain(
     } catch (error: unknown) {
       const failure = safeFailure(error);
       const origin = errorOrigin(error);
+      const providerStatus =
+        error instanceof OrganizerProviderError && error.status !== null ? error.status : undefined;
       options.onJobFailure?.({
         errorCode: failure.errorCode,
         retryable: failure.retryable,
         errorName: error instanceof Error ? error.name : typeof error,
-        ...(origin === undefined ? {} : { origin })
+        ...(origin === undefined ? {} : { origin }),
+        ...(providerStatus === undefined ? {} : { providerStatus })
       });
       const providerSelection = providerCredential?.lastSelection() ?? null;
       try {

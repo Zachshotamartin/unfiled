@@ -14,20 +14,19 @@ function objectSchema(
   };
 }
 
-const nullableString = (maximum: number): JsonSchema => ({
-  maxLength: maximum,
-  type: ["string", "null"]
-});
+/**
+ * Strict mode accepts only `pattern` and `format` on strings, so lengths are not expressed
+ * here; OrganizationPlanSchema enforces every bound after the response returns.
+ */
+const nullableString: JsonSchema = Object.freeze({ type: ["string", "null"] });
 
 const oneLine = Object.freeze({
-  maxLength: 500,
-  minLength: 1,
   pattern: "^[^\\r\\n]+$",
   type: "string"
 });
 
 const appendRaw = objectSchema({
-  content: { maxLength: 10_000, minLength: 1, type: "string" },
+  content: { type: "string" },
   type: { const: "append_raw" }
 });
 const appendParagraphs = objectSchema({
@@ -36,7 +35,7 @@ const appendParagraphs = objectSchema({
 });
 const appendListItems = objectSchema({
   items: { items: oneLine, maxItems: 50, minItems: 1, type: "array" },
-  section: nullableString(100),
+  section: nullableString,
   type: { const: "append_list_items" }
 });
 const addRelation = objectSchema({
@@ -83,7 +82,7 @@ export const OPENAI_ORGANIZATION_PLAN_SCHEMA: JsonSchema = Object.freeze({
               type: "string"
             },
             spaceCandidateId: { type: "null" },
-            title: { maxLength: 60, minLength: 1, type: "string" }
+            title: { type: "string" }
           }),
           { type: "null" }
         ]
@@ -96,7 +95,7 @@ export const OPENAI_ORGANIZATION_PLAN_SCHEMA: JsonSchema = Object.freeze({
             enum: ["summary", "interpretation", "suggestion", "label"],
             type: "string"
           },
-          text: { maxLength: 600, minLength: 1, type: "string" }
+          text: { type: "string" }
         }),
         { type: "null" }
       ]
