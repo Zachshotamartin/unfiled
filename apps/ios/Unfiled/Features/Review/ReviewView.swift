@@ -202,6 +202,10 @@ struct ReviewLedgerRow: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityLabel("Original capture: \(item.original)")
 
+            if !item.attachments.isEmpty {
+                AttachmentThumbnailRow(attachments: item.attachments)
+            }
+
             VStack(alignment: .leading, spacing: 12) {
                 EditorialEyebrow(text: "Why it stopped")
                 Text(item.actionSummary)

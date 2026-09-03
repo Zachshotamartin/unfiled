@@ -129,7 +129,8 @@ enum PresentationMapping {
                 for: value,
                 capture: capture,
                 generatedBlock: generatedBlock
-            )
+            ),
+            attachments: attachmentPresentations(capture?.attachments ?? [])
         )
     }
 
@@ -171,8 +172,15 @@ enum PresentationMapping {
             insertedContent: receipt.map(receiptContent).map(ReceiptContentPresentation.collapsingRepeatedCaptures) ?? [],
             actions: receipt?.actions.map(receiptAction) ?? [],
             pending: value.status == .queued || value.status == .processing,
-            retryable: value.status == .failed
+            retryable: value.status == .failed,
+            attachments: attachmentPresentations(value.attachments)
         )
+    }
+
+    static func attachmentPresentations(_ attachments: [CaptureAttachment]) -> [ReceiptAttachmentPresentation] {
+        attachments.map {
+            ReceiptAttachmentPresentation(id: $0.id, kind: $0.kind == .image ? .image : .audio)
+        }
     }
 
     static func receipt(_ value: CaptureSummary, now: Date = Date()) -> ReceiptPresentation {

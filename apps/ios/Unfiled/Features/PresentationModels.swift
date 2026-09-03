@@ -41,6 +41,12 @@ enum ReceiptActionPresentation: Equatable, Identifiable, Sendable {
     }
 }
 
+/// A photo or recording that travels with a capture, enough to show a thumbnail.
+struct ReceiptAttachmentPresentation: Equatable, Identifiable, Sendable {
+    let id: String
+    let kind: LocalAttachmentKind
+}
+
 struct ReceiptPresentation: Equatable, Identifiable, Sendable {
     let id: String
     let category: String
@@ -55,6 +61,7 @@ struct ReceiptPresentation: Equatable, Identifiable, Sendable {
     let actions: [ReceiptActionPresentation]
     let pending: Bool
     let retryable: Bool
+    var attachments: [ReceiptAttachmentPresentation] = []
 
     /// A capture that is waiting on a retry or a review can still have its text changed; the
     /// change becomes a new capture and this one is removed.
@@ -224,6 +231,7 @@ struct ReviewPresentation: Equatable, Identifiable, Sendable {
     let suggestedNewNote: ReviewNewNotePresentation?
     let relatedNotes: [ReviewDestinationPresentation]
     let allowedActions: [ReviewActionKind]
+    var attachments: [ReceiptAttachmentPresentation] = []
 
     func allows(_ action: ReviewActionKind) -> Bool {
         allowedActions.contains(action)

@@ -46,6 +46,10 @@
   </array>
   <key>UIUserInterfaceStyle</key>
   <string>Dark</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Unfiled uses the microphone to record a voice note. Recordings stay sealed with your notes.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Unfiled writes down what you say on this iPhone. Nothing is sent to Apple for recognition.</string>
   <key>NSCameraUsageDescription</key>
   <string>Unfiled uses the camera to add a photo to a capture. Photos stay sealed with your notes and go only to your own organizer provider.</string>
   <key>UnfiledAPIBaseURL</key>

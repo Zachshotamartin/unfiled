@@ -491,11 +491,13 @@ public struct CaptureDetail: Codable, Equatable, Sendable {
     public let clientCreatedAt: Date; public let clientTimezone: String; public let receivedAt: Date
     public let status: CaptureProcessingState; @RequiredNullable public var lastErrorCode: APIErrorCode?
     public let jobId: JobID; @RequiredNullable public var receipt: CaptureReceipt?
+    /// Photos and recordings bound to this capture, in upload order.
+    public let attachments: [CaptureAttachment]
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case id, rawContent, source, deviceId, privacy, explicitDestinationNoteId
         case expansionDisabled, clientCreatedAt, clientTimezone, receivedAt, status, lastErrorCode
-        case jobId, receipt
+        case jobId, receipt, attachments
     }
 
     public init(from decoder: Decoder) throws {
@@ -521,8 +523,10 @@ public struct CaptureDetail: Codable, Equatable, Sendable {
         )
         jobId = try container.decode(JobID.self, forKey: .jobId)
         _receipt = try container.decode(RequiredNullable<CaptureReceipt>.self, forKey: .receipt)
+        attachments = try container.decode([CaptureAttachment].self, forKey: .attachments)
 
         guard (1 ... 10_000).contains(rawContent.utf16.count),
+              attachments.count <= 5,
               !rawContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               deviceId.utf16.count <= 120,
               (1 ... 100).contains(clientTimezone.utf16.count),
@@ -551,6 +555,7 @@ public struct CaptureDetail: Codable, Equatable, Sendable {
         try container.encode(_lastErrorCode, forKey: .lastErrorCode)
         try container.encode(jobId, forKey: .jobId)
         try container.encode(_receipt, forKey: .receipt)
+        try container.encode(attachments, forKey: .attachments)
     }
 
     private static func receipt(

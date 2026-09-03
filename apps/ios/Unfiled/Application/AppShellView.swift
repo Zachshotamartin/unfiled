@@ -50,6 +50,7 @@ struct AppShellView: View {
                 }
             }
         }
+        .environment(\.attachmentLoader, { id in await model.attachmentBytes(id: id) })
         .sheet(item: $model.editorSheet) { sheet in
             ZStack {
                 NavigationStack {
