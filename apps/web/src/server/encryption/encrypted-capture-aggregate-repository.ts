@@ -1567,8 +1567,27 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
     });
     const opened = await this.openCapture(detail);
     const receipt = detail.receipt === null ? null : await this.openReceipt(detail.receipt, opened);
+    const attachments = (
+      await this.dependencies.adapter.listAttachments({ ownerId: this.ownerId, captureId })
+    ).map((row) =>
+      CaptureAttachmentSchema.parse({
+        id: row.attachmentId,
+        kind: row.kind,
+        mediaType: row.mediaType,
+        byteLength: row.byteLength,
+        width: row.width,
+        height: row.height,
+        durationMs: row.durationMs,
+        createdAt: row.createdAt
+      })
+    );
     return contract(CaptureDetailResponseSchema, {
-      capture: { ...publicCapture(detail, opened.rawContent), jobId: detail.jobId, receipt }
+      capture: {
+        ...publicCapture(detail, opened.rawContent),
+        jobId: detail.jobId,
+        receipt,
+        attachments
+      }
     });
   }
 

@@ -43,7 +43,8 @@ const queuedDetail: CaptureDetailResponse = {
   capture: {
     ...captureV1ResponseFixture.capture,
     jobId: captureV1ResponseFixture.jobId,
-    receipt: null
+    receipt: null,
+    attachments: []
   }
 };
 

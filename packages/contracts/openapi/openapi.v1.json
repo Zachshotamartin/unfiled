@@ -7033,6 +7033,53 @@
                   },
                   { "type": "null" }
                 ]
+              },
+              "attachments": {
+                "maxItems": 5,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string", "pattern": "^att_[0-9A-HJKMNP-TV-Z]{26}$" },
+                    "kind": { "type": "string", "enum": ["image", "audio"] },
+                    "mediaType": { "type": "string", "enum": ["image/jpeg", "audio/mp4"] },
+                    "byteLength": { "type": "integer", "minimum": 1, "maximum": 700000 },
+                    "width": {
+                      "anyOf": [
+                        { "type": "integer", "minimum": 1, "maximum": 8000 },
+                        { "type": "null" }
+                      ]
+                    },
+                    "height": {
+                      "anyOf": [
+                        { "type": "integer", "minimum": 1, "maximum": 8000 },
+                        { "type": "null" }
+                      ]
+                    },
+                    "durationMs": {
+                      "anyOf": [
+                        { "type": "integer", "minimum": 1, "maximum": 120000 },
+                        { "type": "null" }
+                      ]
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "mediaType",
+                    "byteLength",
+                    "width",
+                    "height",
+                    "durationMs",
+                    "createdAt"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [
@@ -7049,7 +7096,8 @@
               "status",
               "lastErrorCode",
               "jobId",
-              "receipt"
+              "receipt",
+              "attachments"
             ],
             "additionalProperties": false
           }

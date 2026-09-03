@@ -369,7 +369,9 @@ export type CaptureReceipt = z.infer<typeof CaptureReceiptSchema>;
 
 export const CaptureDetailSchema = CaptureSchema.extend({
   jobId: entityIdSchema("job"),
-  receipt: CaptureReceiptSchema.nullable()
+  receipt: CaptureReceiptSchema.nullable(),
+  /// The photos and recordings bound to this capture, in upload order, described without bytes.
+  attachments: z.array(CaptureAttachmentSchema).max(MAX_CAPTURE_ATTACHMENTS)
 }).superRefine((capture, context) => {
   if (
     capture.receipt !== null &&

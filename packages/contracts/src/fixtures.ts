@@ -93,7 +93,8 @@ export const captureV1DetailFixture = Object.freeze({
     ...captureV1ResponseFixture.capture,
     status: "done",
     jobId: captureV1ResponseFixture.jobId,
-    receipt: captureV1ReceiptFixture
+    receipt: captureV1ReceiptFixture,
+    attachments: []
   })
 }) satisfies CaptureDetailResponse;
 

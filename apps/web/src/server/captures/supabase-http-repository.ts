@@ -388,7 +388,8 @@ export class SupabaseHttpCaptureRepository implements CaptureRepository {
       capture: {
         ...publicCapture(row, rawContent),
         jobId: row.jobId,
-        receipt
+        receipt,
+        attachments: []
       }
     });
   }
