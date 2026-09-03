@@ -58,6 +58,10 @@ export type OrganizerJobFailure = Readonly<{
   errorName: string;
   origin?: string;
   providerStatus?: number;
+  providerErrorType?: string;
+  providerErrorCode?: string;
+  providerErrorParam?: string;
+  providerSchemaError?: string;
 }>;
 export type OrganizerDrainResult = Readonly<{
   claimed: number;
@@ -1198,12 +1202,19 @@ export function createOrganizerDrain(
       const origin = errorOrigin(error);
       const providerStatus =
         error instanceof OrganizerProviderError && error.status !== null ? error.status : undefined;
+      const identity = error instanceof OrganizerProviderError ? error.identity : null;
       options.onJobFailure?.({
         errorCode: failure.errorCode,
         retryable: failure.retryable,
         errorName: error instanceof Error ? error.name : typeof error,
         ...(origin === undefined ? {} : { origin }),
-        ...(providerStatus === undefined ? {} : { providerStatus })
+        ...(providerStatus === undefined ? {} : { providerStatus }),
+        ...(identity?.type === undefined ? {} : { providerErrorType: identity.type }),
+        ...(identity?.code === undefined ? {} : { providerErrorCode: identity.code }),
+        ...(identity?.param === undefined ? {} : { providerErrorParam: identity.param }),
+        ...(identity?.schemaError === undefined
+          ? {}
+          : { providerSchemaError: identity.schemaError })
       });
       const providerSelection = providerCredential?.lastSelection() ?? null;
       try {

@@ -24,6 +24,10 @@ export type OrganizerJobFailureEvent = Readonly<{
   errorName?: string;
   origin?: string;
   providerStatus?: number;
+  providerErrorType?: string;
+  providerErrorCode?: string;
+  providerErrorParam?: string;
+  providerSchemaError?: string;
 }>;
 
 export type OrganizerOperationalEvent = OrganizerRequestEvent | OrganizerJobFailureEvent;
@@ -51,6 +55,10 @@ const SAFE_FIELDS = [
   "errorCode",
   "errorName",
   "providerStatus",
+  "providerErrorType",
+  "providerErrorCode",
+  "providerErrorParam",
+  "providerSchemaError",
   "event",
   "level",
   "method",
