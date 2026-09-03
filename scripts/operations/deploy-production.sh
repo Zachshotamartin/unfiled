@@ -12,7 +12,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SKIP_PHONE="${1:-}"
 cd "$ROOT"
 
-if [[ -n "$(git status --porcelain -- . ':!CLAUDE_FABLE_HANDOFF.md' ':!apps/ios' ':!.live-gate')" ]]; then
+if [[ -n "$(git status --porcelain -- . ':!CLAUDE_FABLE_HANDOFF.md' ':!apps/ios' ':!apps/mobile' ':!.live-gate')" ]]; then
   echo "Working tree has uncommitted product changes; commit first so provenance matches." >&2
   exit 1
 fi

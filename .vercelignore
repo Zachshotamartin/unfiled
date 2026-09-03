@@ -1,0 +1,40 @@
+# Every service deploys from the repository root, because each project's own root directory
+# resolves from there. Without this file Vercel falls back to .gitignore, which does not exclude
+# the native app checkouts: a release from a laptop would upload a gigabyte of iOS build products
+# that CI, with a clean checkout, never has. This keeps both uploads identical.
+#
+# It replaces .gitignore for uploads, so everything .gitignore excludes is repeated here.
+.DS_Store
+.env
+.env.*
+!.env.example
+.next
+.turbo
+coverage
+DerivedData
+dist
+node_modules
+playwright-report
+test-results
+results.sarif
+*.xcuserstate
+xcuserdata
+.terraform/
+*.tfplan
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+*.tfbackend
+!*.tfbackend.example
+supabase/.branches
+supabase/.temp
+supabase/.env
+*.log
+.vercel
+.live-gate/
+live-gate-api.json
+
+# Nothing a serverless function needs, and the largest things in a working copy.
+.git
+apps/ios
+apps/mobile
