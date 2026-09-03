@@ -326,19 +326,36 @@ select is(
   ),
   'the recording is described without its bytes'
 );
-select ok(
+-- Each part of the projection is its own assertion, so a failure names the part.
+select is(
   (select value #>> '{attachments,0,source,envelope,context,kind}'
-   from organizer_attachment_values where key = 'attachments') = 'capture_attachment'
-    and (select value #>> '{attachments,0,source,keyRecord,keyClass}'
-      from organizer_attachment_values where key = 'attachments') = 'ai_assisted'
-    and (select value #>> '{attachments,0,source,contentMacKeyRecord,keyPurpose}'
-      from organizer_attachment_values where key = 'attachments') = 'content_mac'
-    and (select value #>> '{attachments,0,source,contentMac,mac}'
-      from organizer_attachment_values where key = 'attachments')
-      = encode(extensions.digest('att_99000000000000000000000001', 'sha256'), 'hex')
-    and (select value #>> '{attachments,0,source,encryptedByteLength}'
-      from organizer_attachment_values where key = 'attachments') = '48',
-  'each attachment carries its sealed envelope, both key records, and its MAC'
+   from organizer_attachment_values where key = 'attachments'),
+  'capture_attachment',
+  'the sealed envelope is the attachment itself'
+);
+select is(
+  (select value #>> '{attachments,0,source,keyRecord,keyClass}'
+   from organizer_attachment_values where key = 'attachments'),
+  'ai_assisted',
+  'the object key the organizer can unwrap comes with it'
+);
+select is(
+  (select value #>> '{attachments,0,source,contentMacKeyRecord,purpose}'
+   from organizer_attachment_values where key = 'attachments'),
+  'content_mac',
+  'so does the key that authenticates it'
+);
+select is(
+  (select value #>> '{attachments,0,source,contentMac,mac}'
+   from organizer_attachment_values where key = 'attachments'),
+  encode(extensions.digest('att_99000000000000000000000001', 'sha256'), 'hex'),
+  'the attachment carries its own MAC'
+);
+select is(
+  (select value #>> '{attachments,0,source,encryptedByteLength}'
+   from organizer_attachment_values where key = 'attachments'),
+  '48',
+  'the ciphertext length is projected for the reader'
 );
 select throws_ok(
   $$select private.list_encrypted_organizer_attachments_impl(
