@@ -869,15 +869,34 @@ final class AppModel: ObservableObject {
         )
     }
 
+    /// Retries a failed capture. A capture that never left this device is retried from the local
+    /// outbox; one the server already has (its organizer job failed) is retried on the server.
     func retryCapture(captureID: String) async {
         guard let runtime, let user = currentUser else { return }
+        let context = currentAccountContext(for: user)
         do {
             try await runtime.captureSync.retryFailedCapture(
                 profileID: user.id,
                 captureID: captureID
             )
             await refreshAll()
+            return
         } catch {
+            // Not a local outbox item; fall through to the server.
+        }
+        guard let remoteID = CaptureID(rawValue: captureID) else {
+            bannerMessage = "That saved capture could not be retried. Try again."
+            return
+        }
+        do {
+            _ = try await runtime.authenticatedAPI.retryCapture(
+                remoteID,
+                request: CaptureRetryRequest(idempotencyKey: UUID().uuidString.lowercased())
+            )
+            guard isCurrent(context) else { return }
+            await refreshAll()
+        } catch {
+            guard isCurrent(context) else { return }
             bannerMessage = "That saved capture could not be retried. Try again."
         }
     }

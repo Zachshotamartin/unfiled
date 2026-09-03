@@ -68,7 +68,13 @@ struct InboxView: View {
                         }
                         ForEach(waiting) { receipt in
                             DeskCard {
-                                receiptRow(receipt, inCard: true)
+                                receiptRow(receipt, inCard: true, retryAvailable: !needsProviderKey)
+                                if needsProviderKey {
+                                    Text("Add a key above and this will organize on the next try.")
+                                        .font(UnfiledType.caption)
+                                        .foregroundStyle(UnfiledTheme.fog)
+                                        .padding(.top, 6)
+                                }
                             }
                         }
                     }
@@ -125,10 +131,15 @@ struct InboxView: View {
         }
     }
 
-    private func receiptRow(_ receipt: ReceiptPresentation, inCard: Bool = false) -> some View {
+    private func receiptRow(
+        _ receipt: ReceiptPresentation,
+        inCard: Bool = false,
+        retryAvailable: Bool = true
+    ) -> some View {
         ReceiptLedgerRow(
             receipt: receipt,
             inCard: inCard,
+            retryAvailable: retryAvailable,
             actionsDisabled: isLoading,
             submittingInteractionIDs: submittingInteractionIDs,
             interactionErrors: interactionErrors,
@@ -222,6 +233,8 @@ private struct ReceiptLedgerRow: View {
     let receipt: ReceiptPresentation
     /// Inside a card the card supplies the padding; in a list the row does.
     var inCard = false
+    /// Retry is offered only when a retry can succeed (a provider key exists).
+    var retryAvailable = true
     let actionsDisabled: Bool
     let submittingInteractionIDs: Set<String>
     let interactionErrors: [String: String]
@@ -317,8 +330,9 @@ private struct ReceiptLedgerRow: View {
                 .accessibilityIdentifier(ReceiptAccessibilityIdentifier.review(receipt.id))
             }
 
-            if receipt.retryable {
+            if receipt.retryable && retryAvailable {
                 Button {
+                    UnfiledHaptics.tap()
                     onRetryCapture(receipt.id)
                 } label: {
                     Label { Text("Retry") } icon: { GlyphView(glyph: .send, size: 14, weight: 1.8) }

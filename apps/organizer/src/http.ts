@@ -20,7 +20,12 @@ import {
   type OrganizerKeyManagementAdapter,
   unconfiguredKeyManagementAdapter
 } from "./key-management.js";
-import { createStructuredLogger, type OrganizerLogger, type OrganizerRoute } from "./logging.js";
+import {
+  createStructuredLogger,
+  errorOrigin,
+  type OrganizerLogger,
+  type OrganizerRoute
+} from "./logging.js";
 
 const METHOD = /^[A-Z]{1,12}$/u;
 type Clock = Readonly<{ now(): number }>;
@@ -247,20 +252,6 @@ async function deadline<T>(
  * paths, line numbers, and any argument text. It names where an unavailability was
  * raised without carrying request or note content.
  */
-function throwSite(error: unknown): string | undefined {
-  if (!(error instanceof Error) || typeof error.stack !== "string") return undefined;
-  const frame = error.stack.split("\n").find((line) => /^\s*at /u.test(line));
-  if (frame === undefined) return undefined;
-  const match = /at (?:async )?([A-Za-z0-9_.$<>]+)? ?\(?([^()\s]+?)(?::\d+){1,2}\)?$/u.exec(
-    frame.trim()
-  );
-  if (match === null) return undefined;
-  const fn = match[1] ?? "anonymous";
-  const file = (match[2] ?? "").split("/").pop() ?? "";
-  const site = `${file.replace(/[^A-Za-z0-9_.-]/gu, "")}:${fn.replace(/[^A-Za-z0-9_.$<>]/gu, "")}`;
-  return site.length > 1 && site.length <= 120 ? site : undefined;
-}
-
 export function createOrganizerApp(dependencies: OrganizerAppDependencies): OrganizerApp {
   const { config } = dependencies;
   const clock = dependencies.clock ?? { now: () => Date.now() };
@@ -362,7 +353,7 @@ export function createOrganizerApp(dependencies: OrganizerAppDependencies): Orga
       /^[A-Za-z0-9_]{1,40}$/u.test(reported.cause.name)
         ? reported.cause.name
         : undefined;
-    const origin = causeName === undefined ? throwSite(reported) : undefined;
+    const origin = causeName === undefined ? errorOrigin(reported) : undefined;
     logger.log({
       durationMs: Math.max(0, clock.now() - started),
       ...(classified === undefined ? {} : { errorClass: classified.errorClass }),

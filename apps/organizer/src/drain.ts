@@ -47,8 +47,17 @@ import {
   OrganizerProviderError,
   OrganizerUnavailableError
 } from "./errors.js";
+import { errorOrigin } from "./logging.js";
 
 export type DrainTrigger = "manual" | "recovery" | "schedule";
+
+/** What the drain reports for a failed job: safe code, retry decision, error class, throw site. */
+export type OrganizerJobFailure = Readonly<{
+  errorCode: string;
+  retryable: boolean;
+  errorName: string;
+  origin?: string;
+}>;
 export type OrganizerDrainResult = Readonly<{
   claimed: number;
   completed: number;
@@ -666,6 +675,8 @@ export function createOrganizerDrain(
     claimLimit: number;
     concurrency: number;
     leaseSeconds: number;
+    /** Receives one content-free record per failed job. */
+    onJobFailure?: (failure: OrganizerJobFailure) => void;
     planner: OrganizerPlanner;
     recoveryLimit: number;
     repository: OrganizerRepository;
@@ -1183,6 +1194,13 @@ export function createOrganizerDrain(
       }
     } catch (error: unknown) {
       const failure = safeFailure(error);
+      const origin = errorOrigin(error);
+      options.onJobFailure?.({
+        errorCode: failure.errorCode,
+        retryable: failure.retryable,
+        errorName: error instanceof Error ? error.name : typeof error,
+        ...(origin === undefined ? {} : { origin })
+      });
       const providerSelection = providerCredential?.lastSelection() ?? null;
       try {
         const result = await options.repository.fail({
