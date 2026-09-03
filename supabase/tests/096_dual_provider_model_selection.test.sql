@@ -1002,8 +1002,8 @@ select is(
       and has_function_privilege(
         'unfiled_organizer_worker', procedure.oid, 'EXECUTE'
       )),
-  11::bigint,
-  'the organizer allowlist remains exactly eleven public functions'
+  12::bigint,
+  'the organizer allowlist remains exactly twelve public functions'
 );
 select is(
   (select count(*)

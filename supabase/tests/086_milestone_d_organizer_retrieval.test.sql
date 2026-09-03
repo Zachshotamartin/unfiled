@@ -93,7 +93,7 @@ select ok(
 );
 select ok(
   (
-    select count(*) = 11
+    select count(*) = 12
     from pg_proc as procedure
     join pg_namespace as namespace on namespace.oid = procedure.pronamespace
     where namespace.nspname = 'public'
@@ -101,7 +101,7 @@ select ok(
         'unfiled_organizer_worker', procedure.oid, 'EXECUTE'
       )
   ),
-  'the organizer capability is the reviewed eleven-function surface after E4'
+  'the organizer capability is the reviewed twelve-function surface after attachments'
 );
 select ok(
   (

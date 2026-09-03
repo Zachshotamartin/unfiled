@@ -181,8 +181,8 @@ select is(
         'unfiled_organizer_worker', procedure.oid, 'EXECUTE'
       )
   ),
-  11::bigint,
-  'the organizer allowlist is exactly eleven public functions'
+  12::bigint,
+  'the organizer allowlist is exactly twelve public functions'
 );
 select ok(
   has_function_privilege(

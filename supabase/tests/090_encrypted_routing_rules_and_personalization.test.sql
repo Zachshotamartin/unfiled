@@ -379,8 +379,8 @@ select is(
     )
       and namespace.nspname = 'public'
   ),
-  11::bigint,
-  'the organizer remains bounded to exactly eleven public RPCs after E4'
+  12::bigint,
+  'the organizer remains bounded to exactly twelve public RPCs after E4'
 );
 
 -- Frozen JSON, projection, ordering, caps, and lock/replay contracts.
