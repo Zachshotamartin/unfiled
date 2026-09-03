@@ -45,6 +45,9 @@ export const CaptureProcessingStateSchema = z.enum([
 ]);
 export type CaptureProcessingState = z.infer<typeof CaptureProcessingStateSchema>;
 
+/** The owner's directions for one capture: where to file it or how to shape it. Never note text. */
+export const CaptureGuidanceSchema = z.string().trim().min(1).max(500);
+
 export const CaptureCreateRequestSchema = z.strictObject({
   clientCaptureId: entityIdSchema("cap"),
   rawContent: CaptureContentSchema,
@@ -54,7 +57,8 @@ export const CaptureCreateRequestSchema = z.strictObject({
   clientTimezone: z.string().min(1).max(100),
   privacy: PrivacyModeSchema.default("ai_assisted"),
   explicitDestinationNoteId: entityIdSchema("note").optional(),
-  expansionDisabled: z.boolean().default(false)
+  expansionDisabled: z.boolean().default(false),
+  guidance: CaptureGuidanceSchema.nullable().optional()
 });
 export type CaptureCreateRequest = z.input<typeof CaptureCreateRequestSchema>;
 

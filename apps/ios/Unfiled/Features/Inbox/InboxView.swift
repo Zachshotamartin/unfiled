@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The Inbox: where thoughts land. A capture card first, then whatever needs a decision, then
-/// the record of what was filed. Cards are for acting; rows are for reading.
+/// The Inbox: where thoughts land. A capture card first, then only what needs a decision. Filed
+/// captures are notes in the Library and never show here.
 struct InboxView: View {
     let receipts: [ReceiptPresentation]
     let reviewItems: [ReviewPresentation]
@@ -18,16 +18,14 @@ struct InboxView: View {
     let onShowReview: @MainActor (String) -> Void
     let onRetryCapture: @MainActor (String) -> Void
     let onEditCapture: @MainActor (String) -> Void
+    let onOrganizeAgain: @MainActor (String, String?) -> Void
+    let onDeleteCapture: @MainActor (String) -> Void
     let onCapture: @MainActor () -> Void
     let onReviewAction: @MainActor (String, ReviewUserAction) -> Void
 
-    /// Captures whose organization failed wait for the owner's decision.
+    /// Captures that need the owner and are not already an open review card.
     private var waiting: [ReceiptPresentation] {
-        receipts.filter { $0.retryable && !$0.pending }
-    }
-
-    private var filed: [ReceiptPresentation] {
-        receipts.filter { !($0.retryable && !$0.pending) }
+        InboxAttention.rows(receipts, openReviewIDs: Set(reviewItems.map(\.id)))
     }
 
     private var waitingCount: Int {
@@ -44,10 +42,16 @@ struct InboxView: View {
                     .padding(.top, UnfiledTheme.sectionTop)
                     .padding(.bottom, UnfiledTheme.labelToRule)
                 if waitingCount == 0 {
-                    Text("Nothing waiting.")
-                        .font(UnfiledType.secondary)
-                        .foregroundStyle(UnfiledTheme.fog)
-                        .accessibilityIdentifier("inbox.nothing-waiting")
+                    HStack(alignment: .center, spacing: 10) {
+                        if isLoading {
+                            UnfiledLoadingView(size: 18, label: "Checking what needs you")
+                        }
+                        Text(InboxAttention.emptyCopy(isLoading: isLoading))
+                            .font(UnfiledType.secondary)
+                            .foregroundStyle(UnfiledTheme.fog)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .accessibilityIdentifier(isLoading ? "inbox.checking" : "inbox.nothing-waiting")
                 } else {
                     VStack(spacing: UnfiledTheme.controlGap) {
                         if needsProviderKey {
@@ -80,26 +84,6 @@ struct InboxView: View {
                         }
                     }
                 }
-                sectionLabel("Filed", showsSpinner: isLoading)
-                    .padding(.top, UnfiledTheme.sectionTop)
-                    .padding(.bottom, UnfiledTheme.labelToRule)
-                SectionRule()
-                if filed.isEmpty && !isLoading {
-                    EmptyLedgerView(
-                        title: "Nothing filed yet",
-                        message: "Write one thought. It lands here after it is safely saved.",
-                        actionTitle: "Write something",
-                        action: onCapture
-                    )
-                } else {
-                    ForEach(filed) { receipt in
-                        VStack(alignment: .leading, spacing: 0) {
-                            receiptRow(receipt)
-                            SectionRule()
-                        }
-                        .transition(UnfiledMotion.row)
-                    }
-                }
             }
             .padding(.horizontal, UnfiledTheme.screenPadding)
             .padding(.bottom, UnfiledTheme.screenBottom)
@@ -117,9 +101,7 @@ struct InboxView: View {
     }
 
     private var summary: String {
-        let waitingLabel = waitingCount == 1 ? "1 waiting" : "\(waitingCount) waiting"
-        let filedLabel = filed.count == 1 ? "1 filed" : "\(filed.count) filed"
-        return "\(waitingLabel)  ·  \(filedLabel)"
+        InboxAttention.summary(waitingCount: waitingCount, isLoading: isLoading)
     }
 
     private func sectionLabel(_ text: String, showsSpinner: Bool) -> some View {
@@ -151,7 +133,9 @@ struct InboxView: View {
             onUndo: onUndo,
             onShowReview: onShowReview,
             onRetryCapture: onRetryCapture,
-            onEditCapture: onEditCapture
+            onEditCapture: onEditCapture,
+            onOrganizeAgain: onOrganizeAgain,
+            onDeleteCapture: onDeleteCapture
         )
     }
 }
@@ -250,6 +234,9 @@ private struct ReceiptLedgerRow: View {
     let onShowReview: @MainActor (String) -> Void
     let onRetryCapture: @MainActor (String) -> Void
     let onEditCapture: @MainActor (String) -> Void
+    let onOrganizeAgain: @MainActor (String, String?) -> Void
+    let onDeleteCapture: @MainActor (String) -> Void
+    @State private var directions = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 15) {
@@ -323,6 +310,18 @@ private struct ReceiptLedgerRow: View {
                 )
             }
 
+            if !receipt.reasons.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(receipt.reasons, id: \.self) { reason in
+                        GlyphLabel(reason, glyph: .info, size: 14, weight: 1.8)
+                            .font(UnfiledType.secondary)
+                            .foregroundStyle(UnfiledTheme.fog)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .accessibilityIdentifier("receipt.reasons.\(receipt.id)")
+            }
+
             if let reviewItemID = receipt.reviewItemID {
                 if reviewOpen {
                     Button {
@@ -336,12 +335,20 @@ private struct ReceiptLedgerRow: View {
                     .foregroundStyle(UnfiledTheme.persimmon)
                     .accessibilityIdentifier(ReceiptAccessibilityIdentifier.review(receipt.id))
                 } else {
-                    Text("Review dismissed. The capture stays in your Inbox.")
+                    Text("This review was closed without filing.")
                         .font(UnfiledType.caption)
                         .foregroundStyle(UnfiledTheme.fog)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier(ReceiptAccessibilityIdentifier.review(receipt.id))
                 }
+            }
+
+            if receipt.canOrganizeAgain && retryAvailable {
+                OrganizeAgainField(
+                    directions: $directions,
+                    identifier: "receipt.directions.\(receipt.id)",
+                    onSubmit: { onOrganizeAgain(receipt.id, directions) }
+                )
             }
 
             if receipt.canEditText {
@@ -371,6 +378,20 @@ private struct ReceiptLedgerRow: View {
                 .accessibilityIdentifier("capture.retry.\(receipt.id)")
             }
 
+            if !receipt.pending {
+                Button {
+                    UnfiledHaptics.warning()
+                    onDeleteCapture(receipt.id)
+                } label: {
+                    Label { Text("Delete capture") } icon: { GlyphView(glyph: .trash, size: 14, weight: 1.8) }
+                        .font(UnfiledType.heading)
+                        .frame(minHeight: UnfiledTheme.minimumTouchTarget)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(UnfiledTheme.fog)
+                .accessibilityIdentifier("capture.delete.\(receipt.id)")
+            }
+
             if let interactionError {
                 Label { Text(interactionError) } icon: { GlyphView(glyph: .warning, size: 14, weight: 1.6) }
                     .font(UnfiledType.secondary)
@@ -396,4 +417,42 @@ private struct ReceiptLedgerRow: View {
         return nil
     }
 
+}
+
+/// A line for the owner's directions and the button that organizes the capture again with them.
+struct OrganizeAgainField: View {
+    @Binding var directions: String
+    let identifier: String
+    let onSubmit: @MainActor () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("Tell Unfiled what to do (optional)", text: $directions, axis: .vertical)
+                .font(UnfiledType.body)
+                .lineLimit(1 ... 4)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .background(UnfiledTheme.graphite)
+                .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius, style: .continuous)
+                        .stroke(UnfiledTheme.border, lineWidth: 1)
+                }
+                .accessibilityIdentifier(identifier)
+            Button {
+                UnfiledHaptics.tap()
+                onSubmit()
+            } label: {
+                Label { Text("Organize again") } icon: { GlyphView(glyph: .organize, size: 16, weight: 1.9) }
+                    .font(UnfiledType.heading)
+                    .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
+            }
+            .buttonStyle(.unfiledPress)
+            .foregroundStyle(UnfiledTheme.ink)
+            .background(UnfiledTheme.persimmon)
+            .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
+            .accessibilityHint("Files this capture again, following your directions if you gave any")
+            .accessibilityIdentifier("\(identifier).submit")
+        }
+    }
 }

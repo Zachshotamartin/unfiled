@@ -754,9 +754,9 @@ actor LocalDatabase {
             INSERT INTO capture_outbox (
               profile_id, capture_id, raw_content, source, device_id,
               client_created_at, client_timezone, privacy,
-              explicit_destination_note_id, expansion_disabled, state,
+              explicit_destination_note_id, expansion_disabled, guidance, state,
               attempt_count, next_attempt_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
             ON CONFLICT(profile_id, capture_id) DO NOTHING
             """,
             arguments: [
@@ -770,6 +770,7 @@ actor LocalDatabase {
                 draft.privacy.rawValue,
                 draft.explicitDestinationNoteID,
                 draft.expansionDisabled,
+                draft.guidance,
                 now,
                 now,
                 now
@@ -908,7 +909,8 @@ actor LocalDatabase {
                 clientTimezone: row["client_timezone"],
                 privacy: privacy,
                 explicitDestinationNoteID: row["explicit_destination_note_id"],
-                expansionDisabled: row["expansion_disabled"]
+                expansionDisabled: row["expansion_disabled"],
+                guidance: row["guidance"]
             ),
             state: state,
             attemptCount: row["attempt_count"],
@@ -981,6 +983,11 @@ actor LocalDatabase {
                 table.primaryKey(["profile_id", "source"])
                 table.check(sql: "length(raw_content) BETWEEN 1 AND 10000")
                 table.check(sql: "privacy IN ('ai_assisted', 'private_manual')")
+            }
+        }
+        migrator.registerMigration("native-v3-capture-guidance") { database in
+            try database.alter(table: "capture_outbox") { table in
+                table.add(column: "guidance", .text)
             }
         }
         migrator.registerMigration("native-v2-composer-generations") { database in

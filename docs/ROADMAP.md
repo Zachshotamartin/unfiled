@@ -57,7 +57,7 @@ to create (the composer; Private captures become private notes; the web's separa
 away and its editor is for editing only). Evidence: the public pages and
 the signed-in app rendered side by side with the phone.
 
-### G1f. Revise a filed capture with owner guidance (owner request, 2026-09-02)
+### G1f. Revise a filed capture with owner guidance (owner request, 2026-09-02) — delivered 2026-09-03 as "Organize again" with the owner's directions sealed in the capture (ADR-0019, decision 9)
 
 A filed receipt offers Move and Undo; the owner also wants Revise: send the capture back to the
 organizer with a sentence of extra context. Proposed design: the guidance is sealed with the

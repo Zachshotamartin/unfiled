@@ -31,6 +31,7 @@ struct CaptureDraft: Codable, Equatable, Identifiable, Sendable {
     let privacy: LocalPrivacyMode
     let explicitDestinationNoteID: String?
     let expansionDisabled: Bool
+    var guidance: String? = nil
 }
 
 struct CaptureOutboxEntry: Codable, Equatable, Identifiable, Sendable {

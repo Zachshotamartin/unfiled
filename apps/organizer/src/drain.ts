@@ -765,7 +765,11 @@ export function createOrganizerDrain(
           activeReplanCount: replanCount,
           authority,
           candidates,
-          capture: Object.freeze({ controls, rawContent: capture.rawContent }),
+          capture: Object.freeze({
+            controls,
+            rawContent: capture.rawContent,
+            guidance: capture.guidance ?? null
+          }),
           controls,
           destination: null,
           job,
@@ -839,7 +843,11 @@ export function createOrganizerDrain(
         }
         const encryptedCandidates = page.candidates;
         const controls = page.controls;
-        const currentCapture = Object.freeze({ controls, rawContent: capture.rawContent });
+        const currentCapture = Object.freeze({
+          controls,
+          rawContent: capture.rawContent,
+          guidance: capture.guidance ?? null
+        });
         const isRoutingRulePath =
           controls.explicitDestinationNoteId === null && controls.ruleMatch !== null;
         const deterministicRoutingRulePlan = isRoutingRulePath

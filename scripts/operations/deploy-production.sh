@@ -22,8 +22,18 @@ commit="$(git rev-parse HEAD)"
 ref="$(git rev-parse --abbrev-ref HEAD)"
 message="$(git log -1 --format=%s)"
 
-echo "== gate 1 of 2: live gate for $commit against current production"
-"$GATE" production $SKIP_PHONE || { echo "Pre-deploy gate is red; not deploying." >&2; exit 1; }
+# Gate 1 asks whether what is live still works, so it runs the gate that matches the deployed
+# commit (new steps that need the new deployment belong to gate 2). The phone gate is HEAD's
+# code and may need the new server too, so gate 1 is the API gate only.
+live_commit="$(curl -s --max-time 20 -D - -o /dev/null https://unfiled-web.vercel.app/api/health | tr -d '\r' | awk -F': ' 'tolower($1)=="x-unfiled-commit" {print $2}')"
+deployed_gate="$OUT_DIR/api-gate-live-${live_commit:-unknown}.mjs"
+if [[ -n "$live_commit" ]] && git cat-file -e "$live_commit:scripts/operations/live-gate/api-gate.mjs" 2>/dev/null; then
+  git show "$live_commit:scripts/operations/live-gate/api-gate.mjs" > "$deployed_gate"
+else
+  cp "$ROOT/scripts/operations/live-gate/api-gate.mjs" "$deployed_gate"
+fi
+echo "== gate 1 of 2: what is live (${live_commit:0:7}) still works, with its own gate"
+UNFILED_GATE_API_SCRIPT="$deployed_gate" "$GATE" production --skip-phone || { echo "Pre-deploy gate is red; not deploying." >&2; exit 1; }
 
 previous="$OUT_DIR/deployments-previous.json"
 current="$OUT_DIR/deployments-$commit.json"
@@ -45,7 +55,7 @@ echo "}}" >> "$current.tmp"
 mv "$current.tmp" "$current"
 cp "$current" "$OUT_DIR/deployments-current.json"
 
-echo "== gate 2 of 2: live gate against the new deployments"
+echo "== gate 2 of 2: this commit's full gate against the new deployments"
 if "$GATE" production $SKIP_PHONE; then
   echo "== release GREEN: $commit is live and verified"
   exit 0
