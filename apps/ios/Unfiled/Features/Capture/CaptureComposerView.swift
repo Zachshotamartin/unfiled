@@ -19,6 +19,8 @@ struct CaptureComposerView: View {
     @State private var voicePhase: VoiceRecorderPhase = .idle
     @State private var recorder = VoiceRecorder()
     @State private var recordingTicker: Task<Void, Never>?
+    /// Recording is offered only where the words can be written down on this phone.
+    @State private var offersVoice = VoiceAvailability.canRecordOnThisPhone()
     private let transcriber: any SpeechTranscribing = OnDeviceSpeechTranscriber()
 
     let source: LocalCaptureSource
@@ -175,17 +177,21 @@ struct CaptureComposerView: View {
                     .accessibilityLabel("Add photo")
                     .accessibilityIdentifier("capture.add-photo")
 
-                    VoiceRecorderControl(
-                        phase: voicePhase,
-                        onTapRecord: { Task { @MainActor in await startRecording() } },
-                        onTapStop: { Task { @MainActor in await stopRecording() } },
-                        onOpenSettings: {
-                            if let url = URL(string: UIApplication.openSettingsURLString) {
-                                UIApplication.shared.open(url)
+                    if offersVoice {
+                        VoiceRecorderControl(
+                            phase: voicePhase,
+                            onTapRecord: { Task { @MainActor in await startRecording() } },
+                            onTapStop: { Task { @MainActor in await stopRecording() } },
+                            onOpenSettings: {
+                                if let url = URL(string: UIApplication.openSettingsURLString) {
+                                    UIApplication.shared.open(url)
+                                }
+                            },
+                            onDismissFailure: {
+                                voicePhase = VoiceRecorderMachine.apply(.reset, to: voicePhase, now: Date())
                             }
-                        },
-                        onDismissFailure: { voicePhase = VoiceRecorderMachine.apply(.reset, to: voicePhase, now: Date()) }
-                    )
+                        )
+                    }
 
                     Spacer(minLength: 4)
 
@@ -285,7 +291,12 @@ struct CaptureComposerView: View {
                 }
             }
             .onChange(of: scenePhase) { _, newPhase in
-                guard newPhase != .active, !isSaving else { return }
+                // Coming back may mean a language was downloaded or permission changed.
+                if newPhase == .active {
+                    offersVoice = VoiceAvailability.canRecordOnThisPhone()
+                    return
+                }
+                guard !isSaving else { return }
                 Task { @MainActor in
                     try? await onDraftChange(content, privacy, source, composerGeneration)
                 }
@@ -348,6 +359,7 @@ struct CaptureComposerView: View {
 
     /// One tap starts a recording, after the microphone is allowed; one recording per capture.
     private func startRecording() async {
+        guard offersVoice else { return }
         guard CaptureComposerRules.canAdd(.audio, to: attachmentKinds) else {
             attachmentNotice = "One recording is the most one capture can carry."
             return
