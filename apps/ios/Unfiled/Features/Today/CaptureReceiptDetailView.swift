@@ -14,6 +14,8 @@ struct CaptureReceiptDetailView: View {
     let errorMessage: String?
     let submittingInteractionIDs: Set<String>
     let interactionErrors: [String: String]
+    /// Open Review is offered only while the receipt's review item is still open.
+    var reviewOpen = false
     let onRefresh: @MainActor () async -> Void
     let onOpenNote: @MainActor (String) -> Void
     let onMove: @MainActor (String, String, String) -> Void
@@ -127,7 +129,16 @@ struct CaptureReceiptDetailView: View {
             .accessibilityIdentifier("receipt.edit.\(receipt.id)")
         }
 
-        if let reviewItemID = receipt.reviewItemID {
+        if let reviewItemID = receipt.reviewItemID, !reviewOpen {
+            GlyphLabel(ReviewClosedCopy.receiptLine, glyph: .info, size: 14, weight: 1.9)
+                .font(UnfiledType.secondary)
+                .foregroundStyle(UnfiledTheme.fog)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 18)
+                .accessibilityIdentifier(ReceiptAccessibilityIdentifier.review(receipt.id))
+        }
+
+        if let reviewItemID = receipt.reviewItemID, reviewOpen {
             Button {
                 onShowReview(reviewItemID)
             } label: {

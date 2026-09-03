@@ -19,7 +19,7 @@ struct AppConfiguration: Sendable {
         guard let bundleIdentifier = bundle.bundleIdentifier, !bundleIdentifier.isEmpty else {
             throw AppConfigurationError.missingBundleIdentifier
         }
-        guard let rawURL = bundle.object(forInfoDictionaryKey: "UnfiledAPIBaseURL") as? String else {
+        guard let rawURL = liveGateOverride() ?? bundle.object(forInfoDictionaryKey: "UnfiledAPIBaseURL") as? String else {
             throw AppConfigurationError.invalidAPIBaseURL
         }
         return try validated(
@@ -67,5 +67,20 @@ struct AppConfiguration: Sendable {
 
     private static func isLoopback(_ host: String) -> Bool {
         host == "127.0.0.1" || host == "localhost" || host == "::1"
+    }
+}
+
+extension AppConfiguration {
+    /// The live gate runs the app's own code against a deployed origin. The override is read only
+    /// inside a test process of a debug build, so a shipped app never honors it.
+    static func liveGateOverride() -> String? {
+        #if DEBUG
+        guard NSClassFromString("XCTestCase") != nil,
+              let value = ProcessInfo.processInfo.environment["UNFILED_LIVE_GATE_API_BASE_URL"],
+              !value.isEmpty else { return nil }
+        return value
+        #else
+        return nil
+        #endif
     }
 }

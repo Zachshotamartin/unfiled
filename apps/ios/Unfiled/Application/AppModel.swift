@@ -1065,11 +1065,22 @@ final class AppModel: ObservableObject {
             requestedReviewFocusID = nil
             return
         }
+        guard reviewItems.contains(where: { $0.id == reviewID }) else {
+            bannerMessage = ReviewClosedCopy.receiptLine
+            return
+        }
         requestedReviewFocusID = reviewID
         if navigationPath.last != .review(reviewID) {
             navigationPath.append(.review(reviewID))
         }
     }
+
+    #if DEBUG
+    /// Tests seed the review queue directly; the app only fills it from the server.
+    func seedReviewItemsForTesting(_ items: [ReviewPresentation]) {
+        reviewItems = items
+    }
+    #endif
 
     /// Leaves the review page once its item is no longer open.
     func closeReviewPage(reviewID: String) {

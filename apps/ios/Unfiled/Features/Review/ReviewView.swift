@@ -125,6 +125,12 @@ struct ReviewView: View {
                 EmptyView()
             } else if isLoading {
                 ReviewLoadingLedgerView()
+            } else if requestedFocusID != nil {
+                EmptyLedgerView(
+                    title: ReviewClosedCopy.pageTitle,
+                    message: ReviewClosedCopy.pageMessage
+                )
+                .accessibilityIdentifier("review.closed")
             } else {
                 EmptyLedgerView(
                     title: "Everything has a place",
@@ -543,4 +549,12 @@ private struct ReviewErrorLedgerView: View {
         .padding(.vertical, UnfiledTheme.rowVertical)
         .accessibilityIdentifier("review.error")
     }
+}
+
+
+/// Copy for a review that was already decided or dismissed, on the receipt and on its page.
+enum ReviewClosedCopy {
+    static let receiptLine = "This review was already decided. The capture stays in your Inbox; edit its text to organize it again."
+    static let pageTitle = "Already decided"
+    static let pageMessage = "This review was resolved or dismissed. The capture stays in your Inbox."
 }
