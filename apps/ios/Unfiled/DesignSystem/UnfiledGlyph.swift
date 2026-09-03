@@ -249,41 +249,41 @@ struct GlyphStroke: Shape {
         case .card:
             path.addPath(GlyphGeometry.card(center: point(12, 12), width: 12 * unit, height: 15.5 * unit, radius: 1.6 * unit))
         case .photo:
-            // A slanted card holding a small sun and a hill, the way a print sits on a desk.
-            path.addPath(GlyphGeometry.card(center: point(12, 12), width: 13 * unit, height: 15 * unit, radius: 1.6 * unit))
-            var scene = Path()
-            scene.addEllipse(in: box(13.2, 7.4, 2.8, 2.8))
-            scene.move(to: point(7.4, 16.2))
-            scene.addLine(to: point(10.4, 12.2))
-            scene.addLine(to: point(12.6, 14.6))
-            scene.addLine(to: point(14.2, 12.8))
-            scene.addLine(to: point(16.8, 16.2))
-            path.addPath(GlyphGeometry.tilted(scene, about: point(12, 12)))
-        case .camera:
-            // A tray-shaped body with a lens; the top is the mark's square-capped stroke.
+            // A print: an upright frame with one ridge across it and the sun above. No tilt;
+            // the card slants only where a card is the subject.
             path.addRoundedRect(
-                in: box(3.5, 7.5, 17, 12),
+                in: box(4.5, 6, 15, 12),
                 cornerSize: CGSize(width: 1.6 * unit, height: 1.6 * unit),
                 style: .continuous
             )
-            path.move(to: point(8.5, 7.5))
-            path.addLine(to: point(9.8, 4.8))
-            path.addLine(to: point(14.2, 4.8))
-            path.addLine(to: point(15.5, 7.5))
-            path.addEllipse(in: box(9, 10.3, 6, 6))
+            path.move(to: point(6.6, 15.4))
+            path.addLine(to: point(11.2, 10.4))
+            path.addLine(to: point(17.4, 15.4))
+        case .camera:
+            // The mark's open tray for the body, a lens ring inside it, and a square-capped hood.
+            path.addPath(GlyphGeometry.tray(in: box(3.5, 8, 17, 11.5)))
+            path.move(to: point(8.6, 8))
+            path.addLine(to: point(9.9, 5.2))
+            path.addLine(to: point(14.1, 5.2))
+            path.addLine(to: point(15.4, 8))
+            path.addEllipse(in: box(9, 10.4, 6, 6))
         case .microphone:
-            // A capsule on a stand: the recording control.
+            // A capsule standing in its cradle, upright and open, with the same square caps.
             path.addRoundedRect(
-                in: box(9, 3.2, 6, 11.2),
-                cornerSize: CGSize(width: 3 * unit, height: 3 * unit),
+                in: box(9.6, 4, 4.8, 9.6),
+                cornerSize: CGSize(width: 2.4 * unit, height: 2.4 * unit),
                 style: .continuous
             )
-            path.move(to: point(6.2, 11.2))
-            path.addQuadCurve(to: point(17.8, 11.2), control: point(12, 19.4))
-            path.move(to: point(12, 16.4))
-            path.addLine(to: point(12, 20.6))
-            path.move(to: point(8.6, 20.6))
-            path.addLine(to: point(15.4, 20.6))
+            path.move(to: point(17, 12))
+            path.addArc(
+                center: point(12, 12),
+                radius: 5 * unit,
+                startAngle: .degrees(0),
+                endAngle: .degrees(180),
+                clockwise: false
+            )
+            path.move(to: point(12, 17))
+            path.addLine(to: point(12, 20))
         case .quote, .more:
             break
         }
@@ -302,6 +302,9 @@ struct GlyphFill: Shape {
         }
         var path = Path()
         switch glyph {
+        case .photo:
+            // The sun in the frame, the same solid dot the day page uses.
+            path.addEllipse(in: CGRect(x: rect.minX + 14.4 * unit, y: rect.minY + 7.6 * unit, width: 2.6 * unit, height: 2.6 * unit))
         case .today:
             path.addEllipse(in: CGRect(x: rect.minX + 10.3 * unit, y: rect.minY + 13.2 * unit, width: 3.4 * unit, height: 3.4 * unit))
         case .notes:

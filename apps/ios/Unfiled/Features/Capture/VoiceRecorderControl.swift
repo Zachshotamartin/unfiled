@@ -13,8 +13,20 @@ struct VoiceRecorderControl: View {
     var body: some View {
         switch phase {
         case .idle, .stopped, .ready:
-            IconButton(glyph: .microphone, label: "Record a voice note", action: onTapRecord)
-                .accessibilityIdentifier("capture.record")
+            // The same circle as the photo control beside it, so the row reads as one set.
+            Button(action: onTapRecord) {
+                GlyphView(glyph: .microphone, size: 20, weight: 1.9)
+                    .foregroundStyle(UnfiledTheme.paper)
+                    .frame(
+                        width: UnfiledTheme.minimumTouchTarget,
+                        height: UnfiledTheme.minimumTouchTarget
+                    )
+                    .background(UnfiledTheme.raised)
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.unfiledPress)
+            .accessibilityLabel("Record a voice note")
+            .accessibilityIdentifier("capture.record")
         case let .recording(startedAt):
             TimelineView(.periodic(from: startedAt, by: 1)) { context in
                 let duration = context.date.timeIntervalSince(startedAt)

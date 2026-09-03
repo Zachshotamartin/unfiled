@@ -127,40 +127,53 @@ struct CaptureComposerView: View {
                                 .tag(LocalPrivacyMode.privateManual)
                         }
                     } label: {
+                        // Organizing is the default and needs no word; only the private mode
+                        // names itself, which keeps the row from crowding on a narrow phone.
                         HStack(spacing: 6) {
-                            GlyphView(glyph: privacy == .privateManual ? .lock : .organize, size: 15, weight: 1.7)
-                            Text(privacy == .privateManual ? "Private" : "Organize")
-                                .font(UnfiledType.caption)
+                            GlyphView(glyph: privacy == .privateManual ? .lock : .organize, size: 18, weight: 1.9)
+                            if privacy == .privateManual {
+                                Text("Private")
+                                    .font(UnfiledType.caption)
+                                    .fixedSize()
+                            }
                         }
                         .foregroundStyle(UnfiledTheme.paper)
-                        .padding(.horizontal, 14)
-                        .frame(minHeight: 40)
+                        .padding(.horizontal, privacy == .privateManual ? 14 : 12)
+                        .frame(minHeight: UnfiledTheme.minimumTouchTarget)
                         .background(UnfiledTheme.raised)
                         .clipShape(Capsule())
                     }
+                    .fixedSize()
                     .accessibilityLabel(
                         privacy == .privateManual ? "Private manual capture" : "AI-assisted capture"
                     )
 
-                    IconButton(glyph: .photo, label: "Add photo") {
-                        guard remainingPhotos > 0 else {
-                            attachmentNotice = "Four photos is the most one capture can carry."
-                            return
+                    // One control for photos: the library, or the camera when there is one.
+                    Menu {
+                        Button {
+                            addPhotoTapped { showsPhotoPicker = true }
+                        } label: {
+                            Label { Text("Choose photo") } icon: { GlyphImage.image(.photo) }
                         }
-                        showsPhotoPicker = true
-                    }
-                    .accessibilityIdentifier("capture.add-photo")
-
-                    if CameraCaptureView.isAvailable {
-                        IconButton(glyph: .camera, label: "Take photo") {
-                            guard remainingPhotos > 0 else {
-                                attachmentNotice = "Four photos is the most one capture can carry."
-                                return
+                        if CameraCaptureView.isAvailable {
+                            Button {
+                                addPhotoTapped { showsCamera = true }
+                            } label: {
+                                Label { Text("Take photo") } icon: { GlyphImage.image(.camera) }
                             }
-                            showsCamera = true
                         }
-                        .accessibilityIdentifier("capture.add-camera")
+                    } label: {
+                        GlyphView(glyph: .photo, size: 20, weight: 1.9)
+                            .foregroundStyle(UnfiledTheme.paper)
+                            .frame(
+                                width: UnfiledTheme.minimumTouchTarget,
+                                height: UnfiledTheme.minimumTouchTarget
+                            )
+                            .background(UnfiledTheme.raised)
+                            .clipShape(Circle())
                     }
+                    .accessibilityLabel("Add photo")
+                    .accessibilityIdentifier("capture.add-photo")
 
                     VoiceRecorderControl(
                         phase: voicePhase,
@@ -174,11 +187,18 @@ struct CaptureComposerView: View {
                         onDismissFailure: { voicePhase = VoiceRecorderMachine.apply(.reset, to: voicePhase, now: Date()) }
                     )
 
-                    Spacer()
+                    Spacer(minLength: 4)
 
-                    Text("\(content.utf16.count)/10,000")
-                        .font(UnfiledType.caption)
-                        .foregroundStyle(content.utf16.count > 10_000 ? UnfiledTheme.persimmon : UnfiledTheme.fog)
+                    // The count matters only as the limit comes into view; until then it is noise.
+                    if content.utf16.count >= 9_000 {
+                        Text("\(content.utf16.count)/10,000")
+                            .font(UnfiledType.caption)
+                            .monospacedDigit()
+                            .fixedSize()
+                            .foregroundStyle(
+                                content.utf16.count > 10_000 ? UnfiledTheme.persimmon : UnfiledTheme.fog
+                            )
+                    }
 
                     Button {
                         guard canSave else { return }
@@ -223,13 +243,6 @@ struct CaptureComposerView: View {
             }
             .background(UnfiledTheme.ink)
             .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") { focused = false }
-                        .font(UnfiledType.heading)
-                        .foregroundStyle(UnfiledTheme.persimmon)
-                        .accessibilityIdentifier("capture.keyboard-done")
-                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { close() } label: {
                         GlyphView(glyph: .close, size: 18, weight: 1.9)
@@ -321,6 +334,16 @@ struct CaptureComposerView: View {
                 attachmentNotice = "That photo could not be read."
             }
         }
+    }
+
+    /// Opens one of the photo sources, or says why it cannot.
+    private func addPhotoTapped(_ open: () -> Void) {
+        guard remainingPhotos > 0 else {
+            attachmentNotice = "Four photos is the most one capture can carry."
+            return
+        }
+        attachmentNotice = nil
+        open()
     }
 
     /// One tap starts a recording, after the microphone is allowed; one recording per capture.
