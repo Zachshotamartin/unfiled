@@ -915,6 +915,68 @@ if (liveRulePrefix && secondNoteId) {
   await undoReceipt(b.captureId, receiptB, "capture_b");
 }
 
+// ---------------------------------------------------------------- directions (capture C)
+if (OPENAI_KEY && secondNoteId) {
+  const directions = `put this in the note titled Gate second`;
+  const clientCaptureId = `cap_${ulid()}`;
+  const created = await api("POST", "/captures", {
+    token,
+    idempotencyKey: clientCaptureId,
+    body: {
+      clientCaptureId,
+      rawContent: `Directions gate ${stamp}: the plumber comes Thursday at nine`,
+      source: "web",
+      privacy: "ai_assisted",
+      clientCreatedAt: new Date().toISOString(),
+      clientTimezone: "UTC",
+      guidance: directions
+    }
+  });
+  const captureId = created.json?.capture?.id ?? clientCaptureId;
+  record("capture_c.create_with_directions", created.status === 202 || created.status === 201, {
+    status: created.status,
+    code: code(created)
+  });
+  await drainQueues();
+  const outcome = await pollUntil("capture_c.organized", async () => {
+    const detail = await api("GET", `/captures/${captureId}`, { token });
+    const capture = detail.json?.capture ?? {};
+    const done = ["done", "needs_review", "failed", "inbox"].includes(capture.status);
+    if (!done) await drainQueues();
+    return {
+      done,
+      captureStatus: capture.status ?? null,
+      lastErrorCode: capture.lastErrorCode ?? null,
+      receipt: capture.receipt ?? null
+    };
+  });
+  record(
+    "capture_c.organized_with_directions",
+    !outcome.timedOut && ["done", "needs_review"].includes(outcome.captureStatus),
+    {
+      captureStatus: outcome.captureStatus,
+      outcome: outcome.receipt?.outcome ?? null,
+      lastErrorCode: outcome.lastErrorCode
+    }
+  );
+  const destinationId = outcome.receipt?.destination?.noteId ?? null;
+  if (destinationId) {
+    const note = await api("GET", `/notes/${destinationId}`, { token });
+    const body = String(note.json?.note?.bodyMarkdown ?? "");
+    record(
+      "capture_c.directions_never_enter_the_note",
+      note.status === 200 && !body.includes(directions) && body.includes("plumber comes Thursday"),
+      { status: note.status, destinationIsSecond: destinationId === secondNoteId }
+    );
+  } else {
+    record(
+      "capture_c.directions_never_enter_the_note",
+      outcome.receipt?.outcome === "needs_review",
+      { reason: "no_destination", outcome: outcome.receipt?.outcome ?? null }
+    );
+  }
+}
+
 // ---------------------------------------------------------------- search and export
 {
   await drainQueues();
