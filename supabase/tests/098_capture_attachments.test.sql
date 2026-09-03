@@ -544,6 +544,7 @@ select is(
 
 reset role;
 create temporary table pg_temp.attachment_rollout(key text primary key, value jsonb);
+grant all on pg_temp.attachment_rollout to service_role;
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select is(
