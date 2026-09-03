@@ -260,7 +260,10 @@ function parseCreateInput(input: NormalizedCaptureCreateInput): NormalizedCaptur
     ...(parsed.data.explicitDestinationNoteId === undefined
       ? {}
       : { explicitDestinationNoteId: parsed.data.explicitDestinationNoteId }),
-    expansionDisabled: parsed.data.expansionDisabled
+    expansionDisabled: parsed.data.expansionDisabled,
+    ...(parsed.data.guidance === undefined || parsed.data.guidance === null
+      ? {}
+      : { guidance: parsed.data.guidance })
   });
 }
 
@@ -1038,7 +1041,8 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
     const jobId = assertEntity(this.createJobId(), "job", unavailable);
     const capturePayload = CapturePayloadSchema.parse({
       schemaVersion: 1,
-      rawContent: input.rawContent
+      rawContent: input.rawContent,
+      ...(input.guidance === undefined ? {} : { guidance: input.guidance })
     });
     const sealedCapture = await this.dependencies.aggregate.sealCapture(this.dependencies.access, {
       captureId: input.clientCaptureId,

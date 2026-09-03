@@ -191,6 +191,26 @@ final class LiveGateTests: XCTestCase {
             model.captureSheet = nil
         }
 
+        // Organize again with directions: the old row leaves, a new one organizes, and the
+        // Inbox shows only what needs the owner.
+        if let receipt, receipt.canOrganizeAgain {
+            await model.organizeAgain(captureID: receipt.id, guidance: "start a new note for this")
+            let replaced = await waitUntil(20) { !self.model.receipts.contains { $0.id == receipt.id } }
+            step("capture.organize_again_replaces_row", replaced, "receipts \(model.receipts.count)")
+            let organizedAgain = await waitUntil(300, every: 10) {
+                await self.model.refreshAll()
+                return self.model.receipts.allSatisfy { !$0.pending }
+            }
+            step("capture.organize_again_settles", organizedAgain, "pending \(model.receipts.filter(\.pending).count)")
+            let filedLeavesInbox = model.receipts.filter(InboxAttention.needsYou).count <= model.reviewItems.count + model.receipts.filter(\.retryable).count
+            step("inbox.holds_only_what_needs_you", filedLeavesInbox, "needsYou \(model.receipts.filter(InboxAttention.needsYou).count)")
+        }
+        if let stray = model.receipts.first(where: { InboxAttention.needsYou($0) && !$0.pending }) {
+            await model.deleteCapture(captureID: stray.id)
+            let gone = await waitUntil(20) { !self.model.receipts.contains { $0.id == stray.id } }
+            step("capture.delete_removes_row", gone, model.bannerMessage ?? "")
+        }
+
         // Sign out and delete the account
         await model.signOut()
         step("auth.signed_out", model.phase == .signedOut, "\(model.phase)")

@@ -6267,7 +6267,10 @@
             "type": "string",
             "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$"
           },
-          "expansionDisabled": { "default": false, "type": "boolean" }
+          "expansionDisabled": { "default": false, "type": "boolean" },
+          "guidance": {
+            "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 500 }, { "type": "null" }]
+          }
         },
         "required": [
           "clientCaptureId",

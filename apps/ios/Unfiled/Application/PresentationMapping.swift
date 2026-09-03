@@ -129,7 +129,8 @@ enum PresentationMapping {
                 for: value,
                 capture: capture,
                 generatedBlock: generatedBlock
-            )
+            ),
+            reasons: ReviewReasonCopy.sentences(for: capture?.receipt?.reasonCodes ?? [])
         )
     }
 
@@ -171,7 +172,8 @@ enum PresentationMapping {
             insertedContent: receipt.map(receiptContent).map(ReceiptContentPresentation.collapsingRepeatedCaptures) ?? [],
             actions: receipt?.actions.map(receiptAction) ?? [],
             pending: value.status == .queued || value.status == .processing,
-            retryable: value.status == .failed
+            retryable: value.status == .failed,
+            reasonCodes: (receipt?.reasonCodes ?? []) + (value.lastErrorCode.map { [$0.rawValue] } ?? [])
         )
     }
 

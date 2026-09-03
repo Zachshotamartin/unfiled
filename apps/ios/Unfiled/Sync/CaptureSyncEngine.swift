@@ -59,7 +59,8 @@ actor CaptureSyncEngine {
         deviceID: String,
         composerGeneration: Int,
         explicitDestinationNoteID: String? = nil,
-        expansionDisabled: Bool = false
+        expansionDisabled: Bool = false,
+        guidance: String? = nil
     ) async throws -> String {
         guard await profileAuthorizer.authorizesCaptureProfile(profileID) else {
             throw CaptureSyncEngineError.invalidProfile
@@ -77,7 +78,8 @@ actor CaptureSyncEngine {
             clientTimezone: TimeZone.current.identifier,
             privacy: privacy,
             explicitDestinationNoteID: explicitDestinationNoteID,
-            expansionDisabled: expansionDisabled
+            expansionDisabled: expansionDisabled,
+            guidance: CaptureCreateRequest.normalizedGuidance(guidance)
         )
         try await database.enqueue(
             draft,
@@ -85,6 +87,39 @@ actor CaptureSyncEngine {
             composerGeneration: composerGeneration,
             now: encodedNow
         )
+        return captureID
+    }
+
+    /// Enqueues a capture that did not come from the composer: organizing an existing capture
+    /// again, with the owner's directions attached.
+    @discardableResult
+    func enqueueAgain(
+        profileID: UUID,
+        rawContent: String,
+        source: LocalCaptureSource,
+        privacy: LocalPrivacyMode,
+        deviceID: String,
+        guidance: String?
+    ) async throws -> String {
+        guard await profileAuthorizer.authorizesCaptureProfile(profileID) else {
+            throw CaptureSyncEngineError.invalidProfile
+        }
+        let captureID = try await idGenerator.next(.capture)
+        let encodedNow = APIJSON.dateString(clock())
+        let draft = CaptureDraft(
+            id: captureID,
+            profileID: profileID.uuidString.lowercased(),
+            rawContent: rawContent,
+            source: source,
+            deviceID: deviceID,
+            clientCreatedAt: encodedNow,
+            clientTimezone: TimeZone.current.identifier,
+            privacy: privacy,
+            explicitDestinationNoteID: nil,
+            expansionDisabled: false,
+            guidance: CaptureCreateRequest.normalizedGuidance(guidance)
+        )
+        try await database.enqueue(draft, now: encodedNow)
         return captureID
     }
 
@@ -264,7 +299,8 @@ actor CaptureSyncEngine {
                 clientTimezone: entry.draft.clientTimezone,
                 privacy: apiPrivacy(entry.draft.privacy),
                 explicitDestinationNoteId: entry.draft.explicitDestinationNoteID.flatMap(NoteID.init(rawValue:)),
-                expansionDisabled: entry.draft.expansionDisabled
+                expansionDisabled: entry.draft.expansionDisabled,
+                guidance: entry.draft.guidance
             )
             let response: CaptureCreateResponse
             do {

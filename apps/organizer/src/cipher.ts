@@ -1282,7 +1282,11 @@ export function createProductionOrganizerCipher(): OrganizerCipher {
           }
         );
         assertActive(input.signal);
-        return Object.freeze({ controls: input.job.controls, rawContent: payload.rawContent });
+        return Object.freeze({
+          controls: input.job.controls,
+          rawContent: payload.rawContent,
+          guidance: payload.guidance ?? null
+        });
       } catch {
         return unavailable();
       }
