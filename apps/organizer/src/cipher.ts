@@ -51,7 +51,11 @@ import {
   type OrganizerKeyAuthority
 } from "./key-management.js";
 import { organizerLocalDate } from "./local-date.js";
-import { sameOrganizerCaptureControls, type DecryptedCandidate } from "./planner.js";
+import {
+  sameOrganizerCaptureControls,
+  type DecryptedAttachment,
+  type DecryptedCandidate
+} from "./planner.js";
 
 const CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const INDEXABLE_HEADING = /^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/u;
@@ -1283,6 +1287,66 @@ export function createProductionOrganizerCipher(): OrganizerCipher {
         );
         assertActive(input.signal);
         return Object.freeze({ controls: input.job.controls, rawContent: payload.rawContent });
+      } catch {
+        return unavailable();
+      }
+    },
+    async openCaptureAttachments(input) {
+      assertActive(input.signal);
+      try {
+        const parseRecord = managedKeyRecordParserForOrganizerAuthority(input.authority);
+        const access = authorizeAggregateOwner({
+          authenticatedOwnerId: input.job.ownerId,
+          resourceOwnerId: input.job.ownerId
+        });
+        const opened: DecryptedAttachment[] = [];
+        for (const attachment of input.attachments) {
+          const bound = parsedProjection(input.job.ownerId, attachment.source, parseRecord, {
+            keyClass: "ai_assisted",
+            kind: "capture_attachment",
+            recordVersion: 1,
+            resourceId: attachment.attachmentId
+          });
+          const authentication = captureAuthentication(
+            input.job.ownerId,
+            attachment.source,
+            parseRecord
+          );
+          const aggregate = readAggregate(input.authority, [bound.key, authentication.key]);
+          const payload = await aggregate.openCaptureAttachment(
+            access,
+            Object.freeze({ encrypted: bound.record, contentMac: authentication.contentMac }),
+            {
+              attachmentId: attachment.attachmentId,
+              captureId: input.job.captureId,
+              privacy: "ai_assisted",
+              recordVersion: 1
+            }
+          );
+          if (
+            payload.kind !== attachment.kind ||
+            payload.mediaType !== attachment.mediaType ||
+            payload.byteLength !== attachment.byteLength ||
+            (payload.width ?? null) !== attachment.width ||
+            (payload.height ?? null) !== attachment.height ||
+            (payload.durationMs ?? null) !== attachment.durationMs
+          )
+            return unavailable();
+          opened.push(
+            Object.freeze({
+              attachmentId: attachment.attachmentId,
+              kind: attachment.kind,
+              mediaType: attachment.mediaType,
+              dataBase64: payload.dataBase64,
+              byteLength: attachment.byteLength,
+              width: attachment.width,
+              height: attachment.height,
+              durationMs: attachment.durationMs
+            })
+          );
+          assertActive(input.signal);
+        }
+        return Object.freeze(opened);
       } catch {
         return unavailable();
       }

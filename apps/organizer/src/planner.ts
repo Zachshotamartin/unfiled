@@ -39,9 +39,22 @@ export type OrganizerCaptureControls = Readonly<{
   explicitDestinationNoteId: `note_${string}` | null;
   ruleMatch: RoutingRuleMatchSnapshot | null;
 }>;
+/// A photo or recording opened beside its capture. Bytes stay base64 because that is how
+/// they travel to a provider; identifiers never leave the organizer.
+export type DecryptedAttachment = Readonly<{
+  attachmentId: `att_${string}`;
+  kind: "image" | "audio";
+  mediaType: "image/jpeg" | "audio/mp4";
+  dataBase64: string;
+  byteLength: number;
+  width: number | null;
+  height: number | null;
+  durationMs: number | null;
+}>;
 export type DecryptedCapture = Readonly<{
   controls: OrganizerCaptureControls;
   rawContent: string;
+  attachments?: readonly DecryptedAttachment[];
 }>;
 export type DecryptedCandidate = Readonly<{
   bodyMarkdown: string;

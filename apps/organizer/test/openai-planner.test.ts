@@ -822,3 +822,79 @@ describe("OpenAI Responses organizer planner", () => {
     expect(String(caught)).not.toContain(canary);
   });
 });
+
+describe("OpenAI Responses organizer planner with photos", () => {
+  it("sends photos as image parts beside the disclosure and never their identifiers", async () => {
+    const fetchImplementation = successfulFetchImplementation();
+    const service = createOpenAIOrganizerPlanner({ apiKey: API_KEY, fetchImplementation });
+
+    await expect(
+      service.plan(
+        plannerInput({
+          capture: {
+            controls,
+            rawContent: "Whiteboard from the kitchen",
+            attachments: [
+              {
+                attachmentId: "att_01ARZ3NDEKTSV4RRFFQ69G5FAZ",
+                kind: "image" as const,
+                mediaType: "image/jpeg" as const,
+                dataBase64: "/9j/AAAA",
+                byteLength: 6,
+                width: 4,
+                height: 3,
+                durationMs: null
+              },
+              {
+                attachmentId: "att_01ARZ3NDEKTSV4RRFFQ69G5FAY",
+                kind: "audio" as const,
+                mediaType: "audio/mp4" as const,
+                dataBase64: "AAAA",
+                byteLength: 3,
+                width: null,
+                height: null,
+                durationMs: 4200
+              }
+            ]
+          }
+        })
+      )
+    ).resolves.toEqual(plan);
+
+    const [, init] = fetchImplementation.mock.calls[0] ?? [];
+    if (typeof init?.body !== "string") throw new Error("Expected the Responses JSON body.");
+    const request = JSON.parse(init.body) as { input: { content: Record<string, unknown>[] }[] };
+    const content = request.input[0]?.content ?? [];
+    expect(content).toHaveLength(2);
+    expect(content[0]?.type).toBe("input_text");
+    expect(content[1]).toEqual({
+      type: "input_image",
+      image_url: "data:image/jpeg;base64,/9j/AAAA",
+      detail: "high"
+    });
+    expect(init.body).not.toContain("att_01ARZ3NDEKTSV4RRFFQ69G5FAZ");
+    expect(init.body).not.toContain("att_01ARZ3NDEKTSV4RRFFQ69G5FAY");
+    const providerInput = disclosedProviderInput(init) as DisclosedProviderInput & {
+      capture: Record<string, unknown>;
+    };
+    expect(providerInput.capture).toEqual({
+      inferredKind: "freeform",
+      text: "Whiteboard from the kitchen",
+      attachments: { images: [{ width: 4, height: 3 }], recordings: 1 }
+    });
+  });
+
+  it("sends only the text part when a capture carries nothing", async () => {
+    const fetchImplementation = successfulFetchImplementation();
+    const service = createOpenAIOrganizerPlanner({ apiKey: API_KEY, fetchImplementation });
+    await service.plan(plannerInput());
+    const [, init] = fetchImplementation.mock.calls[0] ?? [];
+    if (typeof init?.body !== "string") throw new Error("Expected the Responses JSON body.");
+    const request = JSON.parse(init.body) as { input: { content: unknown[] }[] };
+    expect(request.input[0]?.content).toHaveLength(1);
+    const providerInput = disclosedProviderInput(init) as DisclosedProviderInput & {
+      capture: Record<string, unknown>;
+    };
+    expect(providerInput.capture).toMatchObject({ attachments: { images: [], recordings: 0 } });
+  });
+});

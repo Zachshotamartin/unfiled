@@ -5,6 +5,7 @@ import {
   inferOrganizerCaptureKind,
   sameOrganizerCaptureControls,
   type DeterministicDestinationMatch,
+  type DecryptedAttachment,
   type PlannerInput
 } from "./planner.js";
 import { ORGANIZER_PROMPT_VERSION, ORGANIZER_SCHEMA_VERSION } from "./prompt.js";
@@ -29,6 +30,11 @@ const MAX_HEADING_CHARACTERS = 200;
 const MAX_SNIPPET_CHARACTERS = 200;
 const MAX_USER_INPUT_BYTES = 64 * 1_024;
 const MAX_BRIEF_EXPANSION_CHARACTERS = 200;
+const MAX_IMAGES = 4;
+const MAX_RECORDINGS = 1;
+const MAX_IMAGE_EDGE_PIXELS = 8_000;
+const MAX_IMAGE_BASE64_CHARACTERS = 933_336;
+const MAX_IMAGE_DISCLOSURE_CHARACTERS = MAX_IMAGES * MAX_IMAGE_BASE64_CHARACTERS;
 
 export const ORGANIZER_DISCLOSURE_CONTRACT = "unfiled.routing.input.v1" as const;
 
@@ -46,7 +52,14 @@ type ProviderCandidate = Readonly<{
 
 type ProviderInput = Readonly<{
   candidates: readonly ProviderCandidate[];
-  capture: Readonly<{ inferredKind: string; text: string }>;
+  capture: Readonly<{
+    inferredKind: string;
+    text: string;
+    attachments: Readonly<{
+      images: readonly Readonly<{ width: number; height: number }>[];
+      recordings: number;
+    }>;
+  }>;
   contract: typeof ORGANIZER_DISCLOSURE_CONTRACT;
   controls: Readonly<{
     expansionDisabled: boolean;
@@ -55,13 +68,60 @@ type ProviderInput = Readonly<{
   }>;
 }>;
 
+export type DisclosedImage = Readonly<{ mediaType: "image/jpeg"; dataBase64: string }>;
+
 export type PreparedProviderDisclosure = Readonly<{
   deterministicEphemeralCandidateId: EphemeralCandidateId | null;
   ephemeralToInternalCandidateId: ReadonlyMap<EphemeralCandidateId, string>;
   expansionStyle: OrganizerExpansionPreference;
+  /** Photos the provider sees beside the serialized input, bounded and id-free. */
+  images: readonly DisclosedImage[];
   internalToEphemeralCandidateId: ReadonlyMap<string, EphemeralCandidateId>;
   serialized: string;
 }>;
+
+function disclosedAttachments(attachments: readonly DecryptedAttachment[]): Readonly<{
+  images: readonly DisclosedImage[];
+  summary: ProviderInput["capture"]["attachments"];
+}> {
+  const images: DisclosedImage[] = [];
+  const dimensions: Readonly<{ width: number; height: number }>[] = [];
+  let recordings = 0;
+  let imageCharacters = 0;
+  for (const attachment of attachments) {
+    if (attachment.kind === "audio") {
+      recordings += 1;
+      continue;
+    }
+    if (
+      attachment.mediaType !== "image/jpeg" ||
+      attachment.dataBase64.length === 0 ||
+      attachment.dataBase64.length > MAX_IMAGE_BASE64_CHARACTERS ||
+      attachment.width === null ||
+      attachment.height === null ||
+      !Number.isSafeInteger(attachment.width) ||
+      !Number.isSafeInteger(attachment.height) ||
+      attachment.width < 1 ||
+      attachment.height < 1 ||
+      attachment.width > MAX_IMAGE_EDGE_PIXELS ||
+      attachment.height > MAX_IMAGE_EDGE_PIXELS
+    )
+      disclosureBoundsFailure();
+    imageCharacters += attachment.dataBase64.length;
+    images.push(Object.freeze({ mediaType: "image/jpeg", dataBase64: attachment.dataBase64 }));
+    dimensions.push(Object.freeze({ width: attachment.width, height: attachment.height }));
+  }
+  if (
+    images.length > MAX_IMAGES ||
+    recordings > MAX_RECORDINGS ||
+    imageCharacters > MAX_IMAGE_DISCLOSURE_CHARACTERS
+  )
+    disclosureBoundsFailure();
+  return Object.freeze({
+    images: Object.freeze(images),
+    summary: Object.freeze({ images: Object.freeze(dimensions), recordings })
+  });
+}
 
 function characterLength(value: string): number {
   return Array.from(value).length;
@@ -190,12 +250,14 @@ export function prepareProviderDisclosure(
   if (deterministicDestination !== null && deterministicEphemeralCandidateId === null)
     disclosureBoundsFailure();
   const expansionStyle = effectiveExpansionStyle(input);
+  const attachments = disclosedAttachments(input.capture.attachments ?? []);
 
   const providerInput: ProviderInput = Object.freeze({
     candidates: Object.freeze(candidates),
     capture: Object.freeze({
       inferredKind: inferOrganizerCaptureKind(input.capture.rawContent),
-      text: input.capture.rawContent
+      text: input.capture.rawContent,
+      attachments: attachments.summary
     }),
     contract: ORGANIZER_DISCLOSURE_CONTRACT,
     controls: Object.freeze({
@@ -211,6 +273,7 @@ export function prepareProviderDisclosure(
     deterministicEphemeralCandidateId,
     ephemeralToInternalCandidateId,
     expansionStyle,
+    images: attachments.images,
     internalToEphemeralCandidateId,
     serialized
   });
