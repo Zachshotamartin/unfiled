@@ -405,7 +405,7 @@ select ok(
 );
 select ok(
   (
-    select count(*) = 11
+    select count(*) = 12
     from pg_proc as procedure
     join pg_namespace as namespace on namespace.oid = procedure.pronamespace
     where namespace.nspname = 'public'
@@ -413,7 +413,7 @@ select ok(
         'unfiled_organizer_worker', procedure.oid, 'EXECUTE'
       )
   ),
-  'E4 widens the organizer boundary by exactly its lease-bound resolver'
+  'the organizer boundary is its lease-bound resolver plus the attachment listing'
 );
 select ok(
   not has_function_privilege(

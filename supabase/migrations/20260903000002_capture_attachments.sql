@@ -661,3 +661,18 @@ grant execute on function public.get_encrypted_capture_attachment(uuid, text)
 to service_role;
 grant execute on function public.list_encrypted_capture_attachments(uuid, text)
 to service_role;
+
+-- The reservation table's own list of consumers must admit the new surface too.
+alter table public.content_key_operation_reservations
+  drop constraint content_key_operation_reservations_consumed_by_type_check,
+  add constraint content_key_operation_reservations_consumed_by_type_check check (
+    consumed_by_type is null
+    or consumed_by_type in (
+      'capture', 'capture_reseal', 'encrypted_note_create',
+      'encrypted_note_mutation', 'library_backfill', 'note_rag_index',
+      'encrypted_organizer', 'encrypted_capture_command',
+      'encrypted_taxonomy_command', 'encrypted_note_retention',
+      'encrypted_owner_interaction', 'encrypted_routing_rule_command',
+      'capture_attachment'
+    )
+  );
