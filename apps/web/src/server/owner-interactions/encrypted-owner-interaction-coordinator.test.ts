@@ -2081,6 +2081,106 @@ describe("encrypted owner-interaction coordinator", () => {
     expect(JSON.stringify(sealedContent ?? {})).toContain(rawContent);
   });
 
+  it("creates a list note from a Review with the capture split into items", async () => {
+    const crypto = cryptoHarness();
+    const base = privateReviewCreatePreparation();
+    if (base.completed || base.source.receipt === null || base.source.capture === null) {
+      throw new Error("Review create fixture requires a source capture and receipt");
+    }
+    const rawContent = "Groceries: milk, eggs, bread";
+    const preparation: PrepareReviewResolutionResult = Object.freeze({
+      ...base,
+      source: Object.freeze({
+        ...base.source,
+        capture: Object.freeze({ ...base.source.capture, contentLength: rawContent.length }),
+        receipt: Object.freeze({
+          ...base.source.receipt,
+          reasonCodes: Object.freeze(["ambiguous_intent"])
+        })
+      })
+    });
+    crypto.sourcePayloads.set(`capture:${CAPTURE}:1`, { schemaVersion: 1, rawContent });
+    crypto.sourcePayloads.set(
+      `capture_receipt:${CAPTURE}:1`,
+      CaptureReceiptPayloadSchema.parse({
+        schemaVersion: 2,
+        captureId: CAPTURE,
+        jobId: JOB,
+        decisionId: DECISION,
+        reviewItemId: REVIEW,
+        mutationId: null,
+        outcome: "needs_review",
+        headline: "Needs your review",
+        destination: null,
+        insertedContentReferences: [],
+        actions: [],
+        reasonCodes: ["ambiguous_intent", "no_candidate_fit"],
+        createdAt: NOW,
+        undoTargets: []
+      })
+    );
+    crypto.sourcePayloads.set(`review_item:${REVIEW}:1`, {
+      schemaVersion: 2,
+      proposal: {
+        type: "route_capture",
+        plan: {
+          schemaVersion: 1,
+          captureKind: "list_items",
+          decision: "needs_review",
+          destination: { candidateId: null, newNote: null },
+          operations: [],
+          generatedExpansion: null,
+          alternatives: [],
+          reasonCodes: ["ambiguous_intent", "no_candidate_fit"]
+        }
+      },
+      state: "open",
+      resolution: null
+    });
+    const commit = vi.fn(
+      (input: Parameters<EncryptedOwnerInteractionRpcAdapter["commitReviewResolution"]>[0]) => {
+        expect(input.command).toMatchObject({ writes: [{ noteId: NOTE_B }] });
+        return Promise.resolve(
+          commitResult("encrypted_review_resolution", "resolved", crypto.responseCipher(), {
+            reviewItemId: REVIEW,
+            members: Object.freeze([
+              Object.freeze({
+                role: "destination_write" as const,
+                noteId: NOTE_B,
+                currentRevision: 1,
+                revisionId: DESTINATION_REVISION,
+                mutationId: DESTINATION_MUTATION
+              })
+            ]),
+            responseVerificationMac: mac("private_manual")
+          })
+        );
+      }
+    );
+    const adapter = adapterStub({
+      prepareReviewResolution: vi.fn(() => Promise.resolve(preparation)),
+      commitReviewResolution: commit
+    });
+
+    await expect(
+      coordinator(adapter, crypto).resolveReviewItem(
+        REVIEW,
+        ReviewResolveRequestSchema.parse({
+          idempotencyKey: IDEMPOTENCY,
+          resolution: { type: "create", title: "Groceries", noteType: "list", spaceId: null }
+        })
+      )
+    ).resolves.toMatchObject({ reviewItem: { id: REVIEW, noteId: NOTE_B, state: "resolved" } });
+    const sealedContent = JSON.stringify(
+      vi.mocked(crypto.service.sealNoteContent).mock.calls[0]?.[1] ?? {}
+    );
+    // Three separate items, not one paragraph carrying the whole line.
+    expect(sealedContent).toMatch(/"(text|content|label)":"milk"/);
+    expect(sealedContent).toMatch(/"(text|content|label)":"eggs"/);
+    expect(sealedContent).toMatch(/"(text|content|label)":"bread"/);
+    expect(sealedContent).not.toContain("Groceries: milk, eggs, bread");
+  });
+
   it("routes a private Review into an AI note without downgrading Review history", async () => {
     const crypto = cryptoHarness();
     const preparation = privateReviewRoutePreparation();

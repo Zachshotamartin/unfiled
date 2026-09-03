@@ -34,6 +34,7 @@ import {
   applyOwnerAuthorizedMaterializedOrganizationCommand,
   type AppliedOrganizationCommand
 } from "@unfiled/ai-routing/application";
+import { applyDeterministicExtractionOverride } from "@unfiled/ai-routing";
 import {
   OrganizationMaterializationError,
   materializeAuthorizedOrganizationPlan,
@@ -1350,7 +1351,7 @@ export class EncryptedOwnerInteractionCoordinator {
             alternatives: [],
             reasonCodes: []
           });
-    return OrganizationPlanSchema.parse({
+    const shaped = OrganizationPlanSchema.parse({
       ...seed,
       decision: destination.expectedRevision === 0 ? "create_note" : "append_to_note",
       destination:
@@ -1367,6 +1368,27 @@ export class EncryptedOwnerInteractionCoordinator {
       generatedExpansion: null,
       alternatives: []
     });
+    return this.structuredForNoteType(shaped, noteType, rawContent);
+  }
+
+  /**
+   * A review or correction seeds a note with the capture's raw text. A list or log note should
+   * receive it in its own shape, as the organizer's deterministic extractor would have produced:
+   * separate list items, or a log entry, so a grocery line becomes checkable items and an
+   * existing list keeps every item and its checked state.
+   */
+  private structuredForNoteType(
+    plan: OrganizationPlan,
+    noteType: Note["type"],
+    rawContent: string
+  ): OrganizationPlan {
+    const kind = noteType === "list" ? "list_items" : noteType === "log" ? "log_entry" : null;
+    if (kind === null) return plan;
+    return applyDeterministicExtractionOverride({
+      captureText: rawContent,
+      inferredKind: kind,
+      plan
+    }).plan;
   }
 
   private correctionPlanCanSeedMove(plan: OrganizationPlan): boolean {
