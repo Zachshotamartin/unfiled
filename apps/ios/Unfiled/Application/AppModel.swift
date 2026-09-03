@@ -3490,8 +3490,7 @@ final class AppModel: ObservableObject {
         let operationEpoch = searchEpoch
         let normalized = SearchRequest(
             query: request.query,
-            includesArchived: request.includesArchived,
-            scope: request.scope
+            includesArchived: request.includesArchived
         )
         searchPaginationState = nil
         searchHasMore = false
