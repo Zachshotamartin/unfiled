@@ -4,6 +4,7 @@ import UIKit
 /// The app's motion system. Every animation, transition, press effect, and haptic in the app
 /// comes from here, so motion feels like one hand: springs that settle, a card that drops into
 /// the tray, and feedback you can feel. Reduce Motion is honored at the definition.
+@MainActor
 enum UnfiledMotion {
     /// Small state changes: selection, press, chips.
     static let quick = Animation.spring(response: 0.28, dampingFraction: 0.82)
@@ -35,6 +36,14 @@ enum UnfiledMotion {
             : .opacity.combined(with: .offset(y: 24)).combined(with: .scale(scale: 0.98, anchor: .top))
     }
 
+    /// The bubble behind the selected tab: it pops in place under the new tab and fades under the
+    /// old one, so it never travels across the capture button.
+    static var bubble: AnyTransition {
+        UIAccessibility.isReduceMotionEnabled
+            ? .opacity
+            : .scale(scale: 0.82).combined(with: .opacity)
+    }
+
     /// A row arriving in a list.
     static var row: AnyTransition {
         UIAccessibility.isReduceMotionEnabled
@@ -44,6 +53,7 @@ enum UnfiledMotion {
 }
 
 /// Feedback you can feel. One event per meaning; never a raw generator at a call site.
+@MainActor
 enum UnfiledHaptics {
     static func tap() {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()

@@ -294,7 +294,6 @@ private struct BottomLedgerNavigation: View {
     @Binding var selectedTab: MainTab
     let reviewCount: Int
     let onCapture: @MainActor () -> Void
-    @Namespace private var bubble
 
     var body: some View {
         HStack(spacing: 2) {
@@ -355,9 +354,9 @@ private struct BottomLedgerNavigation: View {
                 if selectedTab == tab {
                     Capsule()
                         .fill(UnfiledTheme.raised)
-                        .matchedGeometryEffect(id: "dock.bubble", in: bubble)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
+                        .transition(UnfiledMotion.bubble)
                 }
             }
             .contentShape(Rectangle())
