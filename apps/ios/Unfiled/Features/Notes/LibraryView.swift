@@ -284,7 +284,6 @@ struct NoteLibraryRow: View {
     private var footer: String {
         var parts: [String] = []
         if let spaceName { parts.append(spaceName) }
-        if note.privacy == .privateManual { parts.append("Private") }
         parts.append(note.updatedLabel)
         return parts.joined(separator: "  ·  ")
     }

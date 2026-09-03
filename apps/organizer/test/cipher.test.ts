@@ -1554,3 +1554,75 @@ describe("production organizer cipher", () => {
     ).rejects.toBeInstanceOf(OrganizerUnavailableError);
   });
 });
+
+describe("production organizer cipher with photos", () => {
+  let crypto: TestCrypto;
+
+  beforeEach(() => {
+    const custodian = testCustodian();
+    crypto = testCrypto(custodian);
+    keyManagementMocks.custodianForOrganizerAuthority.mockReset();
+    keyManagementMocks.custodianForOrganizerAuthority.mockReturnValue(custodian);
+  });
+
+  it("opens sealed photos exactly for a leased job and refuses a description that disagrees", async () => {
+    const attachmentId = "att_01ARZ3NDEKTSV4RRFFQ69G5FAZ" as const;
+    const dataBase64 = Buffer.from([255, 216, 255, 224, 0, 16]).toString("base64");
+    const sealed = await crypto.aggregate.sealCaptureAttachment(crypto.access, {
+      attachmentId,
+      captureId: IDS.capture,
+      recordVersion: 1,
+      privacy: "ai_assisted",
+      payload: {
+        schemaVersion: 1,
+        captureId: IDS.capture,
+        kind: "image",
+        mediaType: "image/jpeg",
+        dataBase64,
+        byteLength: 6,
+        width: 4,
+        height: 3
+      }
+    });
+    const source: EncryptedProjection = Object.freeze({
+      ...encryptedProjection(sealed.encrypted),
+      contentMac: Object.freeze({
+        keyClass: sealed.contentMac.keyClass,
+        keyId: sealed.contentMac.keyId,
+        keyPurpose: sealed.contentMac.keyPurpose,
+        keyVersion: sealed.contentMac.keyVersion,
+        value: sealed.contentMac.value
+      }),
+      contentMacKey: CONTENT_MAC_KEY
+    });
+    const description = Object.freeze({
+      attachmentId,
+      kind: "image" as const,
+      mediaType: "image/jpeg" as const,
+      byteLength: 6,
+      width: 4,
+      height: 3,
+      durationMs: null
+    });
+    const cipher = createProductionOrganizerCipher();
+    const leased = job(await captureProjection(crypto, "Whiteboard"));
+
+    await expect(
+      cipher.openCaptureAttachments({
+        authority: AUTHORITY,
+        attachments: [{ ...description, source }],
+        job: leased,
+        signal: SIGNAL
+      })
+    ).resolves.toEqual([{ ...description, dataBase64 }]);
+
+    await expect(
+      cipher.openCaptureAttachments({
+        authority: AUTHORITY,
+        attachments: [{ ...description, byteLength: 7, source }],
+        job: leased,
+        signal: SIGNAL
+      })
+    ).rejects.toBeInstanceOf(OrganizerUnavailableError);
+  });
+});

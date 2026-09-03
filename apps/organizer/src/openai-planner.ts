@@ -101,7 +101,14 @@ export const OPENAI_PROVIDER_ADAPTER: OrganizerProviderAdapter = Object.freeze({
         background: false,
         input: [
           {
-            content: [{ text: input.serializedInput, type: "input_text" }],
+            content: [
+              { text: input.serializedInput, type: "input_text" },
+              ...input.images.map((image) => ({
+                detail: "high",
+                image_url: `data:${image.mediaType};base64,${image.dataBase64}`,
+                type: "input_image"
+              }))
+            ],
             role: "user"
           }
         ],

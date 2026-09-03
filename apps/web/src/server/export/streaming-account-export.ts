@@ -8,7 +8,8 @@ import {
   type AccountExportNote,
   type AccountExportRoutingRule,
   type AccountExportSpace,
-  type AccountExportTag
+  type AccountExportTag,
+  type EntityId
 } from "@unfiled/contracts";
 
 import type {
@@ -136,6 +137,28 @@ function markdownChunks(note: OwnerExportNote): readonly Uint8Array[] {
   return Object.freeze([header, body, ending]);
 }
 
+const ATTACHMENT_REFERENCE =
+  /^\s*(!?)\[(?:Photo|Recording)\]\(unfiled-attachment:(att_[0-9A-HJKMNP-TV-Z]{26})\)\s*$/u;
+
+/// The photos and recordings a note body places, in order, each once.
+export function placedAttachments(
+  bodyMarkdown: string
+): readonly Readonly<{ id: EntityId<"att">; kind: "image" | "audio" }>[] {
+  const seen = new Set<string>();
+  const placed: Readonly<{ id: EntityId<"att">; kind: "image" | "audio" }>[] = [];
+  for (const line of bodyMarkdown.split("\n")) {
+    const match = ATTACHMENT_REFERENCE.exec(line);
+    if (match?.[2] === undefined || seen.has(match[2])) continue;
+    seen.add(match[2]);
+    placed.push({ id: match[2] as EntityId<"att">, kind: match[1] === "!" ? "image" : "audio" });
+  }
+  return placed;
+}
+
+export function attachmentPath(id: EntityId<"att">, kind: "image" | "audio"): string {
+  return `attachments/${id}.${kind === "image" ? "jpg" : "m4a"}`;
+}
+
 function manifestNote(note: OwnerExportNote): AccountExportNote {
   return AccountExportNoteSchema.parse({
     id: note.id,
@@ -149,7 +172,8 @@ function manifestNote(note: OwnerExportNote): AccountExportNote {
     deletedAt: note.deletedAt,
     tagIds: note.tagIds,
     links: note.links,
-    sourceCaptureIds: note.sourceCaptureIds
+    sourceCaptureIds: note.sourceCaptureIds,
+    attachments: placedAttachments(note.bodyMarkdown)
   });
 }
 
@@ -231,6 +255,20 @@ async function* tarArchive(
       }
       const tail = padding(size);
       if (tail !== null) yield tail;
+
+      // The photos and recordings this note places travel beside it, each once per archive.
+      for (const placed of placedAttachments(note.bodyMarkdown)) {
+        throwIfAborted(signal);
+        const attachmentFile = attachmentPath(placed.id, placed.kind);
+        if (paths.has(attachmentFile)) continue;
+        const attachment = await source.attachment(placed.id);
+        if (attachment === null) continue;
+        paths.add(attachmentFile);
+        yield tarHeader(attachmentFile, attachment.bytes.byteLength, note.updatedAt);
+        if (attachment.bytes.byteLength > 0) yield attachment.bytes;
+        const attachmentTail = padding(attachment.bytes.byteLength);
+        if (attachmentTail !== null) yield attachmentTail;
+      }
     }
   }
 

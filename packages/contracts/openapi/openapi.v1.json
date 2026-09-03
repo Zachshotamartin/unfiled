@@ -476,6 +476,210 @@
         }
       }
     },
+    "/captures/attachments": {
+      "post": {
+        "operationId": "uploadCaptureAttachment",
+        "summary": "Upload one photo or recording for a capture as raw bytes",
+        "description": "The body is the file itself (a JPEG at most 1568 px on its long edge, or an AAC recording in an m4a container), at most 700,000 bytes. The attachment is sealed under the capture's key class and waits, unbound, until the capture that names it is created.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "The client-generated attachment id. It must remain byte-identical across retries.",
+            "schema": {
+              "type": "string",
+              "pattern": "^att_[0-9A-HJKMNP-TV-Z]{26}$",
+              "minLength": 30,
+              "maxLength": 30
+            }
+          },
+          {
+            "name": "X-Unfiled-Capture-Id",
+            "in": "header",
+            "required": true,
+            "description": "The clientCaptureId this photo or recording belongs to.",
+            "schema": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          {
+            "name": "X-Unfiled-Privacy",
+            "in": "header",
+            "required": false,
+            "description": "The capture's privacy mode; ai_assisted when omitted.",
+            "schema": { "type": "string", "enum": ["ai_assisted", "private_manual"] }
+          },
+          {
+            "name": "X-Unfiled-Width",
+            "in": "header",
+            "required": false,
+            "description": "Photo width in pixels. Required for image/jpeg uploads.",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 8000 }
+          },
+          {
+            "name": "X-Unfiled-Height",
+            "in": "header",
+            "required": false,
+            "description": "Photo height in pixels. Required for image/jpeg uploads.",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 8000 }
+          },
+          {
+            "name": "X-Unfiled-Duration-Ms",
+            "in": "header",
+            "required": false,
+            "description": "Recording length in milliseconds. Required for audio/mp4 uploads.",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 120000 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "image/jpeg": { "schema": { "type": "string", "contentEncoding": "binary" } },
+            "audio/mp4": { "schema": { "type": "string", "contentEncoding": "binary" } }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Attachment sealed and waiting for its capture",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/CaptureAttachment" } }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            }
+          }
+        }
+      }
+    },
+    "/captures/attachments/{attachmentId}": {
+      "get": {
+        "operationId": "getCaptureAttachment",
+        "summary": "Read the owner's photo or recording bytes",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "attachmentId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^att_[0-9A-HJKMNP-TV-Z]{26}$" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The decrypted bytes with their media type",
+            "content": {
+              "image/jpeg": { "schema": { "type": "string", "contentEncoding": "binary" } },
+              "audio/mp4": { "schema": { "type": "string", "contentEncoding": "binary" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of the owner's decrypted photo or recording.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "401": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "404": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          },
+          "409": {
+            "description": "Stable API error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of owner-authorized private data.",
+                "required": true,
+                "schema": { "type": "string", "const": "private, no-store" }
+              },
+              "Pragma": {
+                "description": "Prevents legacy intermediary caching.",
+                "required": true,
+                "schema": { "type": "string", "const": "no-cache" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/captures/{captureId}/retry": {
       "post": {
         "operationId": "retryCapture",
@@ -5806,6 +6010,19 @@
                   "maxItems": 1000,
                   "type": "array",
                   "items": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" }
+                },
+                "attachments": {
+                  "maxItems": 100,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": { "type": "string", "pattern": "^att_[0-9A-HJKMNP-TV-Z]{26}$" },
+                      "kind": { "type": "string", "enum": ["image", "audio"] }
+                    },
+                    "required": ["id", "kind"],
+                    "additionalProperties": false
+                  }
                 }
               },
               "required": [
@@ -5820,7 +6037,8 @@
                 "deletedAt",
                 "tagIds",
                 "links",
-                "sourceCaptureIds"
+                "sourceCaptureIds",
+                "attachments"
               ],
               "additionalProperties": false
             }
@@ -5966,6 +6184,19 @@
             "maxItems": 1000,
             "type": "array",
             "items": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" }
+          },
+          "attachments": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "pattern": "^att_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "kind": { "type": "string", "enum": ["image", "audio"] }
+              },
+              "required": ["id", "kind"],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -5980,7 +6211,8 @@
           "deletedAt",
           "tagIds",
           "links",
-          "sourceCaptureIds"
+          "sourceCaptureIds",
+          "attachments"
         ],
         "additionalProperties": false
       },
@@ -6270,6 +6502,11 @@
           "expansionDisabled": { "default": false, "type": "boolean" },
           "guidance": {
             "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 500 }, { "type": "null" }]
+          },
+          "attachmentIds": {
+            "maxItems": 5,
+            "type": "array",
+            "items": { "type": "string", "pattern": "^att_[0-9A-HJKMNP-TV-Z]{26}$" }
           }
         },
         "required": [
@@ -6338,6 +6575,40 @@
           "replayed": { "type": "boolean" }
         },
         "required": ["capture", "jobId", "replayed"],
+        "additionalProperties": false
+      },
+      "CaptureAttachment": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^att_[0-9A-HJKMNP-TV-Z]{26}$" },
+          "kind": { "type": "string", "enum": ["image", "audio"] },
+          "mediaType": { "type": "string", "enum": ["image/jpeg", "audio/mp4"] },
+          "byteLength": { "type": "integer", "minimum": 1, "maximum": 700000 },
+          "width": {
+            "anyOf": [{ "type": "integer", "minimum": 1, "maximum": 8000 }, { "type": "null" }]
+          },
+          "height": {
+            "anyOf": [{ "type": "integer", "minimum": 1, "maximum": 8000 }, { "type": "null" }]
+          },
+          "durationMs": {
+            "anyOf": [{ "type": "integer", "minimum": 1, "maximum": 120000 }, { "type": "null" }]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "mediaType",
+          "byteLength",
+          "width",
+          "height",
+          "durationMs",
+          "createdAt"
+        ],
         "additionalProperties": false
       },
       "CaptureContentRemovalMutation": {
@@ -6793,6 +7064,53 @@
                   },
                   { "type": "null" }
                 ]
+              },
+              "attachments": {
+                "maxItems": 5,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string", "pattern": "^att_[0-9A-HJKMNP-TV-Z]{26}$" },
+                    "kind": { "type": "string", "enum": ["image", "audio"] },
+                    "mediaType": { "type": "string", "enum": ["image/jpeg", "audio/mp4"] },
+                    "byteLength": { "type": "integer", "minimum": 1, "maximum": 700000 },
+                    "width": {
+                      "anyOf": [
+                        { "type": "integer", "minimum": 1, "maximum": 8000 },
+                        { "type": "null" }
+                      ]
+                    },
+                    "height": {
+                      "anyOf": [
+                        { "type": "integer", "minimum": 1, "maximum": 8000 },
+                        { "type": "null" }
+                      ]
+                    },
+                    "durationMs": {
+                      "anyOf": [
+                        { "type": "integer", "minimum": 1, "maximum": 120000 },
+                        { "type": "null" }
+                      ]
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "mediaType",
+                    "byteLength",
+                    "width",
+                    "height",
+                    "durationMs",
+                    "createdAt"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [
@@ -6809,7 +7127,8 @@
               "status",
               "lastErrorCode",
               "jobId",
-              "receipt"
+              "receipt",
+              "attachments"
             ],
             "additionalProperties": false
           }

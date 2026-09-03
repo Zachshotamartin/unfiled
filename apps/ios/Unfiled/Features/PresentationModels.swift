@@ -41,6 +41,12 @@ enum ReceiptActionPresentation: Equatable, Identifiable, Sendable {
     }
 }
 
+/// A photo or recording that travels with a capture, enough to show a thumbnail.
+struct ReceiptAttachmentPresentation: Equatable, Identifiable, Sendable {
+    let id: String
+    let kind: LocalAttachmentKind
+}
+
 struct ReceiptPresentation: Equatable, Identifiable, Sendable {
     let id: String
     let category: String
@@ -57,6 +63,7 @@ struct ReceiptPresentation: Equatable, Identifiable, Sendable {
     let retryable: Bool
     /// The organizer's reason codes for the outcome, for the "why it stopped" copy.
     var reasonCodes: [String] = []
+    var attachments: [ReceiptAttachmentPresentation] = []
 
     /// A capture that is waiting on a retry or a review can still have its text changed; the
     /// change becomes a new capture and this one is removed.
@@ -234,6 +241,7 @@ struct ReviewPresentation: Equatable, Identifiable, Sendable {
     let allowedActions: [ReviewActionKind]
     /// Why Unfiled could not file it, in plain language, from the receipt's reason codes.
     var reasons: [String] = []
+    var attachments: [ReceiptAttachmentPresentation] = []
 
     func allows(_ action: ReviewActionKind) -> Bool {
         allowedActions.contains(action)

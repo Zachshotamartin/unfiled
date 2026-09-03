@@ -1,3 +1,4 @@
+import { withAttachmentReferences } from "./attachment-references.js";
 import {
   applyDeterministicExtractionOverride,
   bandRoutingDecision,
@@ -34,6 +35,7 @@ import {
 } from "./provider-credential.js";
 import {
   type DecryptedCandidate,
+  type DecryptedAttachment,
   type DecryptedCapture,
   type OrganizerCaptureControls,
   type OrganizerPlanner,
@@ -101,6 +103,16 @@ export type ClaimedOrganizerJob = Readonly<{
   source: EncryptedProjection;
   expansionStyle: OrganizerExpansionStyle;
   commandProjection: "encrypted_only" | "legacy";
+}>;
+export type EncryptedAttachment = Readonly<{
+  attachmentId: `att_${string}`;
+  kind: "image" | "audio";
+  mediaType: "image/jpeg" | "audio/mp4";
+  byteLength: number;
+  width: number | null;
+  height: number | null;
+  durationMs: number | null;
+  source: EncryptedProjection;
 }>;
 export type EncryptedCandidate = Readonly<{
   archivedAt: string | null;
@@ -295,6 +307,9 @@ export type OrganizerRepository = Readonly<{
   candidates(
     input: Readonly<{ jobId: string; leaseToken: string; limit: number; signal: AbortSignal }>
   ): Promise<OrganizerCandidatePage>;
+  attachments(
+    input: Readonly<{ jobId: string; leaseToken: string; signal: AbortSignal }>
+  ): Promise<readonly EncryptedAttachment[]>;
   ragPage(
     input: Readonly<{
       cursor: string | null;
@@ -360,6 +375,14 @@ export type OrganizerCipher = Readonly<{
       signal: AbortSignal;
     }>
   ): Promise<DecryptedCapture>;
+  openCaptureAttachments(
+    input: Readonly<{
+      authority: OrganizerKeyAuthority;
+      attachments: readonly EncryptedAttachment[];
+      job: ClaimedOrganizerJob;
+      signal: AbortSignal;
+    }>
+  ): Promise<readonly DecryptedAttachment[]>;
   openCandidate(
     input: Readonly<{
       authority: OrganizerKeyAuthority;
@@ -409,6 +432,9 @@ export const unconfiguredDrainPort: OrganizerDrainPort = Object.freeze({
 
 export const unavailableOrganizerCipher: OrganizerCipher = Object.freeze({
   openCapture() {
+    return Promise.reject(new OrganizerUnavailableError());
+  },
+  openCaptureAttachments() {
     return Promise.reject(new OrganizerUnavailableError());
   },
   openCandidate() {
@@ -724,9 +750,26 @@ export function createOrganizerDrain(
             }
           });
     try {
-      const capture = await options.cipher.openCapture({ authority, job, signal });
-      if (!sameOrganizerCaptureControls(capture.controls, job.controls))
+      const openedCapture = await options.cipher.openCapture({ authority, job, signal });
+      if (!sameOrganizerCaptureControls(openedCapture.controls, job.controls))
         throw new OrganizerUnavailableError();
+      const encryptedAttachments = await options.repository.attachments({
+        jobId: job.jobId,
+        leaseToken: job.leaseToken,
+        signal
+      });
+      const capture: DecryptedCapture = Object.freeze({
+        ...openedCapture,
+        attachments:
+          encryptedAttachments.length === 0
+            ? []
+            : await options.cipher.openCaptureAttachments({
+                authority,
+                attachments: encryptedAttachments,
+                job,
+                signal
+              })
+      });
       let replanCount: 0 | 1 = job.replanCount;
       let writeGeneration = 0;
       let plannerCalls = 0;
@@ -846,7 +889,8 @@ export function createOrganizerDrain(
         const currentCapture = Object.freeze({
           controls,
           rawContent: capture.rawContent,
-          guidance: capture.guidance ?? null
+          guidance: capture.guidance ?? null,
+          attachments: capture.attachments ?? []
         });
         const isRoutingRulePath =
           controls.explicitDestinationNoteId === null && controls.ruleMatch !== null;
@@ -1107,11 +1151,14 @@ export function createOrganizerDrain(
         );
         let plan: MaterializedOrganizationCommand;
         try {
-          plan = materializeAuthorizedOrganizationPlan({
-            ...authorized,
-            captureText: currentCapture.rawContent,
-            stableIds
-          });
+          plan = withAttachmentReferences(
+            materializeAuthorizedOrganizationPlan({
+              ...authorized,
+              captureText: currentCapture.rawContent,
+              stableIds
+            }),
+            currentCapture.attachments
+          );
         } catch (error: unknown) {
           if (!(error instanceof OrganizationMaterializationError)) throw error;
           pendingReviewReason = "planner_ambiguity";

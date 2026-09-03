@@ -422,8 +422,8 @@ select is(
         'unfiled_organizer_worker',procedure.oid,'EXECUTE'
       )
   ),
-  11::bigint,
-  'the organizer has exactly eleven public capabilities after E4'
+  12::bigint,
+  'the organizer has exactly twelve public capabilities after E4'
 );
 select ok(
   contract.note_write_advisory > 0

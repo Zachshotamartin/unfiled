@@ -1,4 +1,6 @@
 import type {
+  CaptureAttachment,
+  CaptureAttachmentUpload,
   Capture,
   CaptureCreateResponse,
   CaptureDeleteResponse,
@@ -26,6 +28,15 @@ export type NormalizedCaptureCreateInput = Readonly<{
   explicitDestinationNoteId?: EntityId<"note"> | undefined;
   expansionDisabled: boolean;
   guidance?: string | undefined;
+}>;
+
+export type NormalizedAttachmentUploadInput = Readonly<
+  CaptureAttachmentUpload & { bytes: Uint8Array }
+>;
+
+export type CaptureAttachmentRead = Readonly<{
+  attachment: CaptureAttachment;
+  bytes: Uint8Array;
 }>;
 
 export type NormalizedCaptureDeleteInput = Readonly<{
@@ -64,4 +75,14 @@ export interface CaptureRepository {
     captureId: EntityId<"cap">,
     idempotencyKey: string
   ) => Promise<CaptureRetryResponse>;
+  /** Seals an uploaded photo or recording beside the capture it names. */
+  readonly createAttachment: (
+    context: CaptureRepositoryContext,
+    input: NormalizedAttachmentUploadInput
+  ) => Promise<CaptureAttachment>;
+  /** Opens the owner's attachment back into bytes, or null when they have none by that id. */
+  readonly getAttachment: (
+    context: CaptureRepositoryContext,
+    attachmentId: EntityId<"att">
+  ) => Promise<CaptureAttachmentRead | null>;
 }

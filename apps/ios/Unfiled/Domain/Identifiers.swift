@@ -89,6 +89,7 @@ public typealias SpaceID = EntityID<SpaceIDKind>
 public typealias TagID = EntityID<TagIDKind>
 
 public enum EntityPrefix: String, CaseIterable, Sendable {
+    case attachment = "att"
     case block = "blk"
     case capture = "cap"
     case checklist = "chk"

@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRightIcon, PlusIcon } from "@phosphor-icons/react";
+import { ArrowRightIcon } from "@phosphor-icons/react";
 import type { NoteSummary } from "@unfiled/contracts";
 import Link from "next/link";
 
@@ -70,8 +70,8 @@ export function NoteLibrary({
         title={emptyTitle}
         body={emptyBody}
         action={
-          <Link href="/app/notes/new" className="button-primary">
-            <PlusIcon size={17} weight="bold" aria-hidden="true" /> New note
+          <Link href="/app" className="button-primary">
+            Capture something <ArrowRightIcon size={17} weight="bold" aria-hidden="true" />
           </Link>
         }
       />

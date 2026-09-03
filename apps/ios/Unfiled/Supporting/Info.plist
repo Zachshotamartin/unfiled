@@ -46,6 +46,8 @@
   </array>
   <key>UIUserInterfaceStyle</key>
   <string>Dark</string>
+  <key>NSCameraUsageDescription</key>
+  <string>Unfiled uses the camera to add a photo to a capture. Photos stay sealed with your notes and go only to your own organizer provider.</string>
   <key>UnfiledAPIBaseURL</key>
   <string>$(UNFILED_API_BASE_URL)</string>
   <key>UnfiledManagedAIFallbackAvailable</key>

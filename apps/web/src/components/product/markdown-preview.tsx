@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 type ListItem = Readonly<{ checked?: boolean; text: string }>;
 type Block =
+  | Readonly<{ attachment: "image" | "recording"; kind: "attachment" }>
   | Readonly<{ kind: "code"; lines: readonly string[] }>
   | Readonly<{ kind: "heading"; level: number; text: string }>
   | Readonly<{ items: readonly ListItem[]; kind: "list"; ordered: boolean }>
@@ -60,6 +61,19 @@ function blocks(markdown: string): readonly Block[] {
     }
     if (/^\s*---+\s*$/u.test(line)) {
       output.push({ kind: "rule" });
+      continue;
+    }
+    // A photo or recording the organizer placed here. The bytes are read through the
+    // owner's session on the phone; the web preview names what sits at this spot.
+    const attachment =
+      /^\s*(!?)\[(?:Photo|Recording)\]\(unfiled-attachment:att_[0-9A-HJKMNP-TV-Z]{26}\)\s*$/u.exec(
+        line
+      );
+    if (attachment !== null) {
+      output.push({
+        kind: "attachment",
+        attachment: attachment[1] === "!" ? "image" : "recording"
+      });
       continue;
     }
     if (line.startsWith("> ")) {
@@ -150,6 +164,13 @@ export function MarkdownPreview({ markdown }: Readonly<{ markdown: string }>) {
           );
         }
         if (block.kind === "rule") return <hr key={key} />;
+        if (block.kind === "attachment") {
+          return (
+            <p key={key} className="markdown-attachment">
+              {block.attachment === "image" ? "Photo" : "Recording"}
+            </p>
+          );
+        }
         if (block.kind === "quote") return <blockquote key={key}>{inline(block.text)}</blockquote>;
         if (block.kind === "heading") {
           if (block.level === 1) return <h2 key={key}>{inline(block.text)}</h2>;

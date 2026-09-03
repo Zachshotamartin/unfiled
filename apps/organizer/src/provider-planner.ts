@@ -14,6 +14,7 @@ import {
 import {
   finalizeProviderPlan,
   prepareProviderDisclosure,
+  type DisclosedImage,
   type PreparedProviderDisclosure
 } from "./planner-disclosure.js";
 import {
@@ -37,6 +38,8 @@ import {
 /** Transport and retry policy shared by every provider adapter. */
 export const PROVIDER_ROUTING_PROFILE = Object.freeze({
   deadlineMs: 20_000,
+  /** Photos add provider latency; a capture that carries one gets a longer window. */
+  imageDeadlineMs: 30_000,
   maxRetries: 1,
   promptVersion: ORGANIZER_PROMPT_VERSION,
   registryVersion: ORGANIZER_MODEL_REGISTRY_VERSION,
@@ -57,6 +60,7 @@ export type OrganizerProviderRequest = Readonly<{
 export type OrganizerProviderAdapter = Readonly<{
   buildRequest(
     input: Readonly<{
+      images: readonly DisclosedImage[];
       modelId: OrganizerModelId;
       routingEffort: OrganizerRoutingEffort;
       serializedInput: string;
@@ -110,6 +114,7 @@ async function executeProviderRequest(
     throw new OrganizerProviderError("validation_failed", false);
   }
   const request = adapter.buildRequest({
+    images: disclosure.images,
     modelId: binding.modelId,
     routingEffort: binding.routingEffort,
     serializedInput: disclosure.serialized
@@ -159,7 +164,11 @@ export function createProviderRegistryPlanner(
       });
       const disclosure = prepareProviderDisclosure(input, deterministicDestination);
       const routingEffort = input.routingEffort ?? "standard";
-      const deadline = AbortSignal.timeout(PROVIDER_ROUTING_PROFILE.deadlineMs);
+      const deadline = AbortSignal.timeout(
+        disclosure.images.length > 0
+          ? PROVIDER_ROUTING_PROFILE.imageDeadlineMs
+          : PROVIDER_ROUTING_PROFILE.deadlineMs
+      );
       const signal = AbortSignal.any([input.signal, deadline]);
       const executeWithCredential = (credential: OrganizerProviderCredential): Promise<unknown> => {
         const adapter = adapterFor(adapters, credential.provider);

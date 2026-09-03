@@ -12,6 +12,77 @@ const CaptureContentSchema = z
   .max(10_000)
   .refine((value) => value.trim().length > 0, "Capture cannot contain only whitespace");
 
+/// A photo or recording attached to a capture. The bytes travel as a raw binary upload and
+/// live sealed beside the capture; this is the owner-facing description without them.
+export const CAPTURE_ATTACHMENT_MAX_BYTES = 700_000;
+export const MAX_CAPTURE_ATTACHMENTS = 5;
+export const MAX_CAPTURE_IMAGES = 4;
+export const MAX_CAPTURE_RECORDINGS = 1;
+export const MAX_CAPTURE_IMAGE_EDGE_PIXELS = 8_000;
+export const MAX_CAPTURE_RECORDING_MS = 120_000;
+
+export const CaptureAttachmentKindSchema = z.enum(["image", "audio"]);
+export type CaptureAttachmentKind = z.infer<typeof CaptureAttachmentKindSchema>;
+
+export const CaptureAttachmentMediaTypeSchema = z.enum(["image/jpeg", "audio/mp4"]);
+export type CaptureAttachmentMediaType = z.infer<typeof CaptureAttachmentMediaTypeSchema>;
+
+export const CaptureAttachmentSchema = z.strictObject({
+  id: entityIdSchema("att"),
+  kind: CaptureAttachmentKindSchema,
+  mediaType: CaptureAttachmentMediaTypeSchema,
+  byteLength: z.number().int().min(1).max(CAPTURE_ATTACHMENT_MAX_BYTES),
+  width: z.number().int().min(1).max(MAX_CAPTURE_IMAGE_EDGE_PIXELS).nullable(),
+  height: z.number().int().min(1).max(MAX_CAPTURE_IMAGE_EDGE_PIXELS).nullable(),
+  durationMs: z.number().int().min(1).max(MAX_CAPTURE_RECORDING_MS).nullable(),
+  createdAt: z.iso.datetime({ offset: true })
+});
+export type CaptureAttachment = z.infer<typeof CaptureAttachmentSchema>;
+
+/// What the phone tells the API about an upload, beside the raw bytes: the kind follows the
+/// media type, photos carry dimensions and no duration, recordings the reverse.
+export const CaptureAttachmentUploadSchema = z
+  .strictObject({
+    attachmentId: entityIdSchema("att"),
+    captureId: entityIdSchema("cap"),
+    kind: CaptureAttachmentKindSchema,
+    mediaType: CaptureAttachmentMediaTypeSchema,
+    privacy: PrivacyModeSchema,
+    width: z.number().int().min(1).max(MAX_CAPTURE_IMAGE_EDGE_PIXELS).nullable(),
+    height: z.number().int().min(1).max(MAX_CAPTURE_IMAGE_EDGE_PIXELS).nullable(),
+    durationMs: z.number().int().min(1).max(MAX_CAPTURE_RECORDING_MS).nullable()
+  })
+  .superRefine((value, context) => {
+    const image = value.kind === "image";
+    if (image !== (value.mediaType === "image/jpeg")) {
+      context.addIssue({
+        code: "custom",
+        message: "Media type must match the kind",
+        path: ["mediaType"]
+      });
+    }
+    if (image && (value.width === null || value.height === null || value.durationMs !== null)) {
+      context.addIssue({
+        code: "custom",
+        message: "Photos carry width and height only",
+        path: ["width"]
+      });
+    }
+    if (!image && (value.durationMs === null || value.width !== null || value.height !== null)) {
+      context.addIssue({
+        code: "custom",
+        message: "Recordings carry a duration only",
+        path: ["durationMs"]
+      });
+    }
+  });
+export type CaptureAttachmentUpload = z.infer<typeof CaptureAttachmentUploadSchema>;
+
+const CaptureAttachmentIdsSchema = z
+  .array(entityIdSchema("att"))
+  .max(MAX_CAPTURE_ATTACHMENTS)
+  .refine((ids) => new Set(ids).size === ids.length, "Attachment identifiers must be unique");
+
 const CapturePreviewSchema = z
   .string()
   .min(1)
@@ -58,7 +129,8 @@ export const CaptureCreateRequestSchema = z.strictObject({
   privacy: PrivacyModeSchema.default("ai_assisted"),
   explicitDestinationNoteId: entityIdSchema("note").optional(),
   expansionDisabled: z.boolean().default(false),
-  guidance: CaptureGuidanceSchema.nullable().optional()
+  guidance: CaptureGuidanceSchema.nullable().optional(),
+  attachmentIds: CaptureAttachmentIdsSchema.optional()
 });
 export type CaptureCreateRequest = z.input<typeof CaptureCreateRequestSchema>;
 
@@ -301,7 +373,9 @@ export type CaptureReceipt = z.infer<typeof CaptureReceiptSchema>;
 
 export const CaptureDetailSchema = CaptureSchema.extend({
   jobId: entityIdSchema("job"),
-  receipt: CaptureReceiptSchema.nullable()
+  receipt: CaptureReceiptSchema.nullable(),
+  /// The photos and recordings bound to this capture, in upload order, described without bytes.
+  attachments: z.array(CaptureAttachmentSchema).max(MAX_CAPTURE_ATTACHMENTS)
 }).superRefine((capture, context) => {
   if (
     capture.receipt !== null &&

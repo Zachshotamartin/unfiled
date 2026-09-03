@@ -20,6 +20,8 @@ import {
   captureV1ResponseFixture,
   openApiDocument
 } from "../src/index.js";
+import { CaptureAttachmentSchema } from "../src/index.js";
+import { createEntityId, parseEntityId } from "../src/index.js";
 
 const CAPTURE_ID = "cap_01J6M9Q7G4BMKB33GSG3NJ6D1X";
 const NOTE_ID = "note_01J6M9Q7G4BMKB33GSG3NJ6D1X";
@@ -369,5 +371,53 @@ describe("capture guidance", () => {
     expect(
       CaptureCreateRequestSchema.safeParse({ ...base, guidance: "x".repeat(501) }).success
     ).toBe(false);
+  });
+});
+
+describe("capture attachments", () => {
+  it("issues att identifiers and accepts up to four photos and one recording on a capture", () => {
+    const attachmentId = createEntityId("att");
+    expect(attachmentId.startsWith("att_")).toBe(true);
+    expect(() => parseEntityId(attachmentId, "att")).not.toThrow();
+
+    const base = {
+      clientCaptureId: CAPTURE_ID,
+      rawContent: "whiteboard from the kitchen meeting",
+      source: "mobile",
+      clientCreatedAt: "2026-09-03T18:30:00.000Z",
+      clientTimezone: "America/Los_Angeles"
+    };
+    const images = Array.from({ length: 4 }, () => createEntityId("att"));
+    expect(
+      CaptureCreateRequestSchema.parse({ ...base, attachmentIds: images }).attachmentIds
+    ).toEqual(images);
+    expect(CaptureCreateRequestSchema.parse(base).attachmentIds).toBeUndefined();
+    expect(() =>
+      CaptureCreateRequestSchema.parse({
+        ...base,
+        attachmentIds: [...images, createEntityId("att"), createEntityId("att")]
+      })
+    ).toThrow();
+    expect(() =>
+      CaptureCreateRequestSchema.parse({ ...base, attachmentIds: [images[0], images[0]] })
+    ).toThrow();
+    expect(() =>
+      CaptureCreateRequestSchema.parse({ ...base, attachmentIds: [createEntityId("cap")] })
+    ).toThrow();
+  });
+
+  it("describes an uploaded attachment without its bytes", () => {
+    const uploaded = CaptureAttachmentSchema.parse({
+      id: createEntityId("att"),
+      kind: "image",
+      mediaType: "image/jpeg",
+      byteLength: 412_331,
+      width: 1568,
+      height: 1044,
+      durationMs: null,
+      createdAt: "2026-09-03T10:00:00.000Z"
+    });
+    expect(uploaded.kind).toBe("image");
+    expect(() => CaptureAttachmentSchema.parse({ ...uploaded, dataBase64: "AAAA" })).toThrow();
   });
 });

@@ -10,6 +10,7 @@ import type {
   AtomicOrganizerCommand,
   CandidateRevalidationManifest,
   ClaimedOrganizerJob,
+  EncryptedAttachment,
   EncryptedCandidate,
   EncryptedProjection,
   OrganizerAppendPreparationResult,
@@ -37,6 +38,7 @@ const ENTITY_SUFFIX = "[0-9A-HJKMNP-TV-Z]{26}";
 const JOB = new RegExp(`^job_${ENTITY_SUFFIX}$`, "u");
 const CAPTURE = new RegExp(`^cap_${ENTITY_SUFFIX}$`, "u");
 const NOTE = new RegExp(`^note_${ENTITY_SUFFIX}$`, "u");
+const ATTACHMENT = new RegExp(`^att_${ENTITY_SUFFIX}$`, "u");
 const RULE = new RegExp(`^rule_${ENTITY_SUFFIX}$`, "u");
 const INDEX = new RegExp(`^irw_${ENTITY_SUFFIX}$`, "u");
 const GENERATION = new RegExp(`^igen_${ENTITY_SUFFIX}$`, "u");
@@ -67,7 +69,8 @@ export const ORGANIZER_RPC_NAMES = Object.freeze([
   "recover_stale_encrypted_organizer_jobs",
   "list_encrypted_organizer_rag_page",
   "select_encrypted_organizer_candidates",
-  "get_lease_bound_organizer_provider_credential"
+  "get_lease_bound_organizer_provider_credential",
+  "list_encrypted_organizer_attachments"
 ] as const);
 
 export const ORGANIZER_IDENTITY_SQL =
@@ -79,6 +82,7 @@ export const ORGANIZER_RPC_SQL = Object.freeze({
     "select public.heartbeat_encrypted_organizer_job($1::text, $2::text, $3::integer, $4::jsonb) as result",
   candidates:
     "select public.list_encrypted_organizer_candidates($1::text, $2::text, $3::integer) as result",
+  attachments: "select public.list_encrypted_organizer_attachments($1::text, $2::text) as result",
   ragPage:
     "select public.list_encrypted_organizer_rag_page($1::text, $2::text, $3::jsonb, $4::integer, $5::integer) as result",
   selectCandidates:
@@ -330,12 +334,12 @@ function projection(
     ownerId: string;
     resourceId: string;
     recordVersion: number;
-    kind: "capture" | "note_content" | "note_rag_index";
+    kind: "capture" | "capture_attachment" | "note_content" | "note_rag_index";
   }>
 ): ParsedProjection {
   const row = exact(
     value,
-    expected.kind === "capture"
+    expected.kind === "capture" || expected.kind === "capture_attachment"
       ? [
           "resourceId",
           "recordVersion",
@@ -1511,6 +1515,76 @@ export function createOrganizerRepository(
       jobs.set(input.jobId, Object.freeze({ controls: page.controls, ownerId: context.ownerId }));
       candidatePages.set(input.jobId, page.candidates);
       return page;
+    },
+    async attachments(input) {
+      const context = jobs.get(input.jobId);
+      if (context === undefined) reject();
+      const root = exact(
+        await execute(
+          executor,
+          ORGANIZER_RPC_SQL.attachments,
+          [input.jobId, input.leaseToken],
+          input.signal
+        ),
+        ["jobId", "attachments", "returnedCount"]
+      );
+      if (
+        root.jobId !== input.jobId ||
+        !Array.isArray(root.attachments) ||
+        root.attachments.length > 5 ||
+        root.returnedCount !== root.attachments.length
+      )
+        reject();
+      const ids = new Set<string>();
+      return Object.freeze(
+        root.attachments.map((entry): EncryptedAttachment => {
+          const row = exact(entry, [
+            "attachmentId",
+            "kind",
+            "mediaType",
+            "byteLength",
+            "width",
+            "height",
+            "durationMs",
+            "source"
+          ]);
+          const attachmentId = string(row.attachmentId, ATTACHMENT) as `att_${string}`;
+          if (ids.has(attachmentId)) reject();
+          ids.add(attachmentId);
+          const kind = row.kind === "image" || row.kind === "audio" ? row.kind : reject();
+          const mediaType =
+            row.mediaType === "image/jpeg" || row.mediaType === "audio/mp4"
+              ? row.mediaType
+              : reject();
+          const byteLength = integer(row.byteLength, 1, 700_000);
+          const width = row.width === null ? null : integer(row.width, 1, 8_000);
+          const height = row.height === null ? null : integer(row.height, 1, 8_000);
+          const durationMs = row.durationMs === null ? null : integer(row.durationMs, 1, 120_000);
+          const image = kind === "image";
+          if (
+            image !== (mediaType === "image/jpeg") ||
+            (image && (width === null || height === null || durationMs !== null)) ||
+            (!image && (durationMs === null || width !== null || height !== null))
+          )
+            reject();
+          const source = projection(row.source, parseRecord, {
+            kind: "capture_attachment",
+            ownerId: context.ownerId,
+            recordVersion: 1,
+            resourceId: attachmentId
+          });
+          return Object.freeze({
+            attachmentId,
+            kind,
+            mediaType,
+            byteLength,
+            width,
+            height,
+            durationMs,
+            source
+          });
+        })
+      );
     },
     async ragPage(input) {
       integer(input.limit, 1, 50);

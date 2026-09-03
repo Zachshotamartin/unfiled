@@ -273,6 +273,10 @@ private struct ReceiptLedgerRow: View {
             .accessibilityLabel("\(receipt.headline). Open receipt details")
             .accessibilityIdentifier(ReceiptAccessibilityIdentifier.detail(receipt.id))
 
+            if !receipt.attachments.isEmpty {
+                AttachmentThumbnailRow(attachments: receipt.attachments)
+            }
+
             Text(receipt.headline)
                 .font(UnfiledType.secondary)
                 .foregroundStyle(UnfiledTheme.fog)

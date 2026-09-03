@@ -17,7 +17,9 @@ function repository(): CaptureRepository {
     getCapture: vi.fn<CaptureRepository["getCapture"]>(),
     getReceipt: vi.fn<CaptureRepository["getReceipt"]>(),
     listCaptures: vi.fn<CaptureRepository["listCaptures"]>(),
-    retryCapture: vi.fn<CaptureRepository["retryCapture"]>()
+    retryCapture: vi.fn<CaptureRepository["retryCapture"]>(),
+    createAttachment: vi.fn<CaptureRepository["createAttachment"]>(),
+    getAttachment: vi.fn<CaptureRepository["getAttachment"]>()
   };
 }
 

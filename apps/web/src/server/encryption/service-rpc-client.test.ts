@@ -135,6 +135,7 @@ describe("allowlisted encrypted service RPC client", () => {
     ["stale_maintenance_cursor", ServiceRpcErrorCode.STALE_MAINTENANCE_CURSOR],
     ["stale_scrub_cursor", ServiceRpcErrorCode.STALE_MAINTENANCE_CURSOR],
     ["explicit_destination_not_owned", ServiceRpcErrorCode.FORBIDDEN],
+    ["attachment_not_owned", ServiceRpcErrorCode.FORBIDDEN],
     ["invalid_rollout_state", ServiceRpcErrorCode.PROVIDER_UNAVAILABLE],
     ["invalid_scrub_state", ServiceRpcErrorCode.PROVIDER_UNAVAILABLE],
     ["encrypted_organizer_write_unavailable", ServiceRpcErrorCode.PROVIDER_UNAVAILABLE],

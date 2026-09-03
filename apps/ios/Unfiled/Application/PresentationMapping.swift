@@ -130,7 +130,8 @@ enum PresentationMapping {
                 capture: capture,
                 generatedBlock: generatedBlock
             ),
-            reasons: ReviewReasonCopy.sentences(for: capture?.receipt?.reasonCodes ?? [])
+            reasons: ReviewReasonCopy.sentences(for: capture?.receipt?.reasonCodes ?? []),
+            attachments: attachmentPresentations(capture?.attachments ?? [])
         )
     }
 
@@ -173,8 +174,15 @@ enum PresentationMapping {
             actions: receipt?.actions.map(receiptAction) ?? [],
             pending: value.status == .queued || value.status == .processing,
             retryable: value.status == .failed,
-            reasonCodes: (receipt?.reasonCodes ?? []) + (value.lastErrorCode.map { [$0.rawValue] } ?? [])
+            reasonCodes: (receipt?.reasonCodes ?? []) + (value.lastErrorCode.map { [$0.rawValue] } ?? []),
+            attachments: attachmentPresentations(value.attachments)
         )
+    }
+
+    static func attachmentPresentations(_ attachments: [CaptureAttachment]) -> [ReceiptAttachmentPresentation] {
+        attachments.map {
+            ReceiptAttachmentPresentation(id: $0.id, kind: $0.kind == .image ? .image : .audio)
+        }
     }
 
     static func receipt(_ value: CaptureSummary, now: Date = Date()) -> ReceiptPresentation {

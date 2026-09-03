@@ -1,7 +1,7 @@
 import { ApiErrorCode } from "@unfiled/contracts";
 import { describe, expect, it, vi } from "vitest";
 
-import { errorResponse, HttpError, readJsonObject } from "./errors";
+import { errorResponse, HttpError, readBoundedBinaryBody, readJsonObject } from "./errors";
 
 const MAX_JSON_REQUEST_BYTES = 250_000;
 const encoder = new TextEncoder();
@@ -227,5 +227,50 @@ describe("errorResponse server-side failure log", () => {
     } finally {
       sink.mockRestore();
     }
+  });
+});
+
+describe("readBoundedBinaryBody", () => {
+  const limits = { allowedContentTypes: ["image/jpeg", "audio/mp4"], maximumBytes: 16 } as const;
+
+  function binary(
+    bytes: Uint8Array<ArrayBuffer> | null,
+    headers: Record<string, string> = {}
+  ): Request {
+    return new Request("https://unfiled.test/api/v1/captures/attachments", {
+      method: "POST",
+      headers: { "content-type": "image/jpeg", ...headers },
+      ...(bytes === null ? {} : { body: bytes })
+    });
+  }
+
+  it("returns the exact bytes and the media type it accepted", async () => {
+    const bytes = new Uint8Array([255, 216, 255, 224, 0, 16]);
+    const read = await readBoundedBinaryBody(binary(bytes), limits);
+    expect(read.mediaType).toBe("image/jpeg");
+    expect([...read.bytes]).toEqual([...bytes]);
+  });
+
+  it("refuses a body above the cap, a forged length, an empty body and a foreign media type", async () => {
+    await expect(readBoundedBinaryBody(binary(new Uint8Array(17)), limits)).rejects.toMatchObject({
+      status: 413,
+      code: ApiErrorCode.VALIDATION_FAILED
+    });
+    await expect(
+      readBoundedBinaryBody(binary(new Uint8Array(4), { "content-length": "99" }), limits)
+    ).rejects.toMatchObject({ status: 413 });
+    await expect(readBoundedBinaryBody(binary(null), limits)).rejects.toMatchObject({
+      status: 400,
+      code: ApiErrorCode.VALIDATION_FAILED
+    });
+    await expect(
+      readBoundedBinaryBody(binary(new Uint8Array(4), { "content-type": "image/heic" }), limits)
+    ).rejects.toMatchObject({ status: 400, code: ApiErrorCode.VALIDATION_FAILED });
+    await expect(
+      readBoundedBinaryBody(
+        binary(new Uint8Array(4), { "content-type": "image/jpeg; charset=x" }),
+        limits
+      )
+    ).rejects.toMatchObject({ status: 400 });
   });
 });

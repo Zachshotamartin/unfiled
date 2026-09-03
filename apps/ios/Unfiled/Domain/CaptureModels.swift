@@ -21,19 +21,23 @@ public struct CaptureCreateRequest: Codable, Equatable, Sendable {
     public let expansionDisabled: Bool
     /// The owner's directions for this capture (where it belongs, how to shape it). Never note text.
     public let guidance: String?
+    /// Photos already uploaded for this capture, in the order they were added.
+    public let attachmentIds: [String]?
 
     public static let maximumGuidanceLength = 500
 
     public init(clientCaptureId: CaptureID, rawContent: String, source: CaptureSource,
                 deviceId: String? = nil, clientCreatedAt: Date, clientTimezone: String,
                 privacy: PrivacyMode = .aiAssisted, explicitDestinationNoteId: NoteID? = nil,
-                expansionDisabled: Bool = false, guidance: String? = nil) {
+                expansionDisabled: Bool = false, guidance: String? = nil,
+                attachmentIds: [String]? = nil) {
         self.clientCaptureId = clientCaptureId; self.rawContent = rawContent; self.source = source
         self.deviceId = deviceId; self.clientCreatedAt = clientCreatedAt
         self.clientTimezone = clientTimezone; self.privacy = privacy
         self.explicitDestinationNoteId = explicitDestinationNoteId
         self.expansionDisabled = expansionDisabled
         self.guidance = Self.normalizedGuidance(guidance)
+        self.attachmentIds = attachmentIds
     }
 
     /// Trimmed and bounded; blank directions are the same as none.
@@ -43,6 +47,52 @@ public struct CaptureCreateRequest: Codable, Equatable, Sendable {
         guard !trimmed.isEmpty else { return nil }
         return String(trimmed.prefix(maximumGuidanceLength))
     }
+}
+
+public enum CaptureAttachmentKind: String, Codable, Equatable, Sendable {
+    case image, audio
+}
+
+/// A photo or recording the API holds for a capture, described without its bytes.
+public struct CaptureAttachment: Codable, Equatable, Sendable {
+    public let id: String
+    public let kind: CaptureAttachmentKind
+    public let mediaType: String
+    public let byteLength: Int
+    public let width: Int?
+    public let height: Int?
+    public let durationMs: Int?
+    public let createdAt: Date
+}
+
+/// What the phone sends when it uploads a photo or recording: the bytes as the body, the rest
+/// as headers.
+public struct CaptureAttachmentUpload: Equatable, Sendable {
+    public static let maximumBytes = 700_000
+    public static let mediaTypes: Set<String> = ["image/jpeg", "audio/mp4"]
+
+    public let attachmentId: String
+    public let captureId: String
+    public let kind: CaptureAttachmentKind
+    public let mediaType: String
+    public let privacy: PrivacyMode
+    public let width: Int?
+    public let height: Int?
+    public let durationMs: Int?
+    public let bytes: Data
+
+    public init(attachmentId: String, captureId: String, kind: CaptureAttachmentKind, mediaType: String,
+                privacy: PrivacyMode, width: Int?, height: Int?, durationMs: Int?, bytes: Data) {
+        self.attachmentId = attachmentId; self.captureId = captureId; self.kind = kind
+        self.mediaType = mediaType; self.privacy = privacy; self.width = width; self.height = height
+        self.durationMs = durationMs; self.bytes = bytes
+    }
+}
+
+/// Decrypted attachment bytes read back from the API.
+public struct CaptureAttachmentBytes: Equatable, Sendable {
+    public let bytes: Data
+    public let mediaType: String
 }
 
 public struct Capture: Codable, Equatable, Sendable {
@@ -455,11 +505,13 @@ public struct CaptureDetail: Codable, Equatable, Sendable {
     public let clientCreatedAt: Date; public let clientTimezone: String; public let receivedAt: Date
     public let status: CaptureProcessingState; @RequiredNullable public var lastErrorCode: APIErrorCode?
     public let jobId: JobID; @RequiredNullable public var receipt: CaptureReceipt?
+    /// Photos and recordings bound to this capture, in upload order.
+    public let attachments: [CaptureAttachment]
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case id, rawContent, source, deviceId, privacy, explicitDestinationNoteId
         case expansionDisabled, clientCreatedAt, clientTimezone, receivedAt, status, lastErrorCode
-        case jobId, receipt
+        case jobId, receipt, attachments
     }
 
     public init(from decoder: Decoder) throws {
@@ -485,8 +537,10 @@ public struct CaptureDetail: Codable, Equatable, Sendable {
         )
         jobId = try container.decode(JobID.self, forKey: .jobId)
         _receipt = try container.decode(RequiredNullable<CaptureReceipt>.self, forKey: .receipt)
+        attachments = try container.decode([CaptureAttachment].self, forKey: .attachments)
 
         guard (1 ... 10_000).contains(rawContent.utf16.count),
+              attachments.count <= 5,
               !rawContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               deviceId.utf16.count <= 120,
               (1 ... 100).contains(clientTimezone.utf16.count),
@@ -515,6 +569,7 @@ public struct CaptureDetail: Codable, Equatable, Sendable {
         try container.encode(_lastErrorCode, forKey: .lastErrorCode)
         try container.encode(jobId, forKey: .jobId)
         try container.encode(_receipt, forKey: .receipt)
+        try container.encode(attachments, forKey: .attachments)
     }
 
     private static func receipt(

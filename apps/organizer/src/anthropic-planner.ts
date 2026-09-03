@@ -102,7 +102,13 @@ export const ANTHROPIC_PROVIDER_ADAPTER: OrganizerProviderAdapter = Object.freez
         max_tokens: effort.maxTokens,
         messages: [
           {
-            content: [{ text: input.serializedInput, type: "text" }],
+            content: [
+              { text: input.serializedInput, type: "text" },
+              ...input.images.map((image) => ({
+                source: { data: image.dataBase64, media_type: image.mediaType, type: "base64" },
+                type: "image"
+              }))
+            ],
             role: "user"
           }
         ],

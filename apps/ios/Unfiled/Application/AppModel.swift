@@ -397,27 +397,6 @@ final class AppModel: ObservableObject {
         return try await runtime.unauthenticatedAPI.signUp(email: request.email, password: request.password)
     }
 
-    /// A Private capture is a private note, created directly while online. Returns false when the
-    /// note could not be created (offline, rejected) so the capture path keeps the text safe.
-    private func createPrivateNote(
-        content: String,
-        runtime: Runtime,
-        user: AuthUser,
-        context: AccountContext
-    ) async -> Bool {
-        let request = PrivateNoteDraft.request(content: content, idempotencyKey: UUID().uuidString.lowercased())
-        do {
-            let result = try await runtime.authenticatedAPI.createNote(request)
-            guard isCurrent(context) else { return true }
-            await applyNoteBatch([result.note], user: user, runtime: runtime, context: context)
-            guard isCurrent(context) else { return true }
-            await refreshAll()
-            return true
-        } catch {
-            return false
-        }
-    }
-
     func acceptVerifiedSession(_ session: AuthSession) async {
         guard let runtime else { return }
         do {
@@ -800,7 +779,6 @@ final class AppModel: ObservableObject {
                 source: source,
                 composerGeneration: session.generation,
                 initialContent: session.draft?.rawContent ?? "",
-                initialPrivacy: session.draft?.privacy ?? .aiAssisted,
                 restoredDraft: session.draft != nil
             )
         } catch {
@@ -831,7 +809,6 @@ final class AppModel: ObservableObject {
                 source: .mobile,
                 composerGeneration: session.generation,
                 initialContent: text,
-                initialPrivacy: .aiAssisted,
                 restoredDraft: false,
                 replacingCaptureID: captureID
             )
@@ -843,28 +820,23 @@ final class AppModel: ObservableObject {
 
     func saveCapture(
         content: String,
-        privacy: LocalPrivacyMode,
         source: LocalCaptureSource,
         composerGeneration: Int,
-        guidance: String? = nil
+        guidance: String? = nil,
+        attachments: [CaptureAttachmentDraft] = []
     ) async throws {
         guard let runtime, let user = currentUser else { throw AuthenticationError.signedOut }
         let context = currentAccountContext(for: user)
         let replacingCaptureID = captureSheet?.replacingCaptureID
-        if privacy == .privateManual, await createPrivateNote(content: content, runtime: runtime, user: user, context: context) {
-            if let replacingCaptureID {
-                await removeReplacedCapture(replacingCaptureID, runtime: runtime, context: context)
-            }
-            return
-        }
         let captureID = try await runtime.captureSync.enqueue(
             profileID: user.id,
             rawContent: content,
             source: source,
-            privacy: privacy,
+            privacy: .aiAssisted,
             deviceID: deviceIdentifier(),
             composerGeneration: composerGeneration,
-            guidance: guidance
+            guidance: guidance,
+            attachments: attachments
         )
         guard isCurrent(context) else { throw AuthenticationError.signedOut }
         if let replacingCaptureID {
@@ -954,6 +926,17 @@ final class AppModel: ObservableObject {
         await removeReplacedCapture(captureID, runtime: runtime, context: context)
     }
 
+    private var attachmentBytesCache: [String: Data] = [:]
+
+    /// The decrypted bytes of one of the owner's photos or recordings, fetched once per launch.
+    func attachmentBytes(id: String) async -> Data? {
+        if let cached = attachmentBytesCache[id] { return cached }
+        guard let runtime, currentUser != nil else { return nil }
+        guard let read = try? await runtime.authenticatedAPI.captureAttachment(id: id) else { return nil }
+        attachmentBytesCache[id] = read.bytes
+        return read.bytes
+    }
+
     /// Removes the capture an edit replaced. Its review item or failed job closes with it.
     private func removeReplacedCapture(
         _ captureID: String,
@@ -987,7 +970,6 @@ final class AppModel: ObservableObject {
 
     func saveCaptureDraft(
         content: String,
-        privacy: LocalPrivacyMode,
         source: LocalCaptureSource,
         composerGeneration: Int
     ) async throws {
@@ -996,7 +978,7 @@ final class AppModel: ObservableObject {
             profileID: user.id,
             source: source,
             rawContent: content,
-            privacy: privacy,
+            privacy: .aiAssisted,
             generation: composerGeneration
         )
     }
@@ -2140,7 +2122,7 @@ final class AppModel: ObservableObject {
         }
         guard allowed.contains(.create) else { return }
         let text = reviewCapture(for: item)?.rawContent ?? ""
-        let title = String(PrivateNoteDraft.title(from: text).prefix(60))
+        let title = String(CaptureTitle.from(text).prefix(60))
         await performReviewResolution(
             reviewID: item.id.rawValue,
             resolution: .create(title: title, noteType: Self.noteType(for: plan.captureKind), spaceId: nil)

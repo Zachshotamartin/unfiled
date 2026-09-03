@@ -2,6 +2,7 @@ import { ulid } from "ulid";
 import { z } from "zod";
 
 export const entityPrefixes = {
+  att: "att",
   blk: "blk",
   cap: "cap",
   chk: "chk",

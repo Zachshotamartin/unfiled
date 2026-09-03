@@ -46,7 +46,7 @@ function b64(bytes: number, fill: number): string {
 }
 
 function envelope(
-  kind: "capture" | "note_content" | "note_rag_index",
+  kind: "capture" | "capture_attachment" | "note_content" | "note_rag_index",
   resourceId: string,
   recordVersion: number
 ) {
@@ -87,7 +87,7 @@ function key(purpose: "content_mac" | "object_wrap" = "object_wrap") {
 }
 
 function projection(
-  kind: "capture" | "note_content" | "note_rag_index",
+  kind: "capture" | "capture_attachment" | "note_content" | "note_rag_index",
   resourceId: string,
   recordVersion: number
 ) {
@@ -100,7 +100,7 @@ function projection(
     encryptedByteLength: 16,
     serializedBytes: Buffer.byteLength(JSON.stringify(value))
   };
-  return kind === "capture"
+  return kind === "capture" || kind === "capture_attachment"
     ? {
         ...base,
         contentMac: {
@@ -1318,5 +1318,55 @@ describe("organizer database adapter", () => {
       })
     ).toBe(true);
     expect(isAtomicOrganizerCommand({ ...command, extra: true })).toBe(false);
+  });
+});
+
+describe("organizer database attachments", () => {
+  const ATTACHMENT_ID = "att_01ARZ3NDEKTSV4RRFFQ69G5FAZ" as const;
+
+  it("parses the lease-bound attachment listing and rejects a listing for another job", async () => {
+    const { serializedBytes, ...source } = projection("capture_attachment", ATTACHMENT_ID, 1);
+    void serializedBytes;
+    const entry = {
+      attachmentId: ATTACHMENT_ID,
+      kind: "image",
+      mediaType: "image/jpeg",
+      byteLength: 6,
+      width: 4,
+      height: 3,
+      durationMs: null,
+      source
+    };
+    const db = executor([
+      {
+        rows: [{ sessionUser: "unfiled_organizer_worker", currentUser: "unfiled_organizer_worker" }]
+      },
+      rpc(claim()),
+      rpc({ jobId: JOB_ID, attachments: [entry], returnedCount: 1 }),
+      rpc({ jobId: "job_01ARZ3NDEKTSV4RRFFQ69G5FAQ", attachments: [], returnedCount: 0 })
+    ]);
+    const repository = createOrganizerRepository(db);
+    await repository.preflight(signal);
+    await repository.claim({ leaseSeconds: 120, limit: 1, signal, workerId: "worker-1" });
+
+    const attachments = await repository.attachments({ jobId: JOB_ID, leaseToken: LEASE, signal });
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]).toMatchObject({
+      attachmentId: ATTACHMENT_ID,
+      kind: "image",
+      mediaType: "image/jpeg",
+      byteLength: 6,
+      width: 4,
+      height: 3,
+      durationMs: null
+    });
+    expect(attachments[0]?.source.resourceId).toBe(ATTACHMENT_ID);
+    const query = db.queries.at(-1);
+    expect(query?.text).toContain("list_encrypted_organizer_attachments");
+    expect(query?.values).toEqual([JOB_ID, LEASE]);
+
+    await expect(
+      repository.attachments({ jobId: JOB_ID, leaseToken: LEASE, signal })
+    ).rejects.toBeInstanceOf(OrganizerDatabaseContractError);
   });
 });

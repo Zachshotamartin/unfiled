@@ -12,7 +12,7 @@
 //   UNFILED_GATE_OUTPUT             JSON summary path (default: live-gate-api.json in cwd)
 //   UNFILED_GATE_KEEP_ACCOUNT=1     skip the account deletion at the end (debugging only)
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 
 const WEB = (process.env.UNFILED_GATE_WEB_ORIGIN ?? "https://unfiled-web.vercel.app").replace(
@@ -977,6 +977,182 @@ if (OPENAI_KEY && secondNoteId) {
   }
 }
 
+// ---------------------------------------------------------------- photos (capture D)
+// A photo is uploaded as raw bytes before its capture exists, bound when the capture is
+// created, shown to the organizer's provider, placed into the filed note by reference, and
+// read back only under private, no-store. The fixture is a real 96 by 64 JPEG.
+async function uploadPhoto(captureId, attachmentId, bytes, extra = {}) {
+  const response = await fetch(`${API}/captures/attachments`, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      authorization: `Bearer ${token}`,
+      "content-type": "image/jpeg",
+      "idempotency-key": attachmentId,
+      "x-unfiled-capture-id": captureId,
+      "x-unfiled-privacy": "ai_assisted",
+      "x-unfiled-width": "96",
+      "x-unfiled-height": "64",
+      ...extra
+    },
+    body: bytes
+  });
+  const text = await response.text();
+  let json = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    /* not json */
+  }
+  return { status: response.status, json, headers: response.headers };
+}
+{
+  const photo = readFileSync(new URL("./fixtures/photo.jpg", import.meta.url));
+  const captureId = `cap_${ulid()}`;
+  const attachmentId = `att_${ulid()}`;
+  const uploaded = await uploadPhoto(captureId, attachmentId, photo);
+  record(
+    "photo.upload",
+    uploaded.status === 201 &&
+      uploaded.json?.id === attachmentId &&
+      uploaded.json?.kind === "image" &&
+      uploaded.json?.byteLength === photo.byteLength,
+    { status: uploaded.status, code: code(uploaded), byteLength: uploaded.json?.byteLength ?? null }
+  );
+  const replayed = await uploadPhoto(captureId, attachmentId, photo);
+  record(
+    "photo.upload_replay_is_idempotent",
+    replayed.status === 201 && replayed.json?.id === attachmentId,
+    { status: replayed.status, code: code(replayed) }
+  );
+  const wrongType = await uploadPhoto(captureId, `att_${ulid()}`, photo, {
+    "content-type": "image/png"
+  });
+  record("photo.upload_refuses_other_media_types", wrongType.status === 400, {
+    status: wrongType.status,
+    code: code(wrongType)
+  });
+  const mismatched = await uploadPhoto(captureId, `att_${ulid()}`, photo, {
+    "x-unfiled-duration-ms": "1200"
+  });
+  record("photo.upload_refuses_measurements_of_the_wrong_kind", mismatched.status === 400, {
+    status: mismatched.status,
+    code: code(mismatched)
+  });
+  const created = await api("POST", "/captures", {
+    token,
+    idempotencyKey: captureId,
+    body: {
+      clientCaptureId: captureId,
+      rawContent: `Whiteboard gate-${stamp}`,
+      source: "web",
+      privacy: "ai_assisted",
+      clientCreatedAt: new Date().toISOString(),
+      clientTimezone: "UTC",
+      attachmentIds: [attachmentId]
+    }
+  });
+  record("photo.capture_binds_the_upload", created.status === 201 || created.status === 202, {
+    status: created.status,
+    code: code(created)
+  });
+  const strangerBind = await api("POST", "/captures", {
+    token,
+    idempotencyKey: `cap_${ulid()}`,
+    body: {
+      clientCaptureId: `cap_${ulid()}`,
+      rawContent: "Not my photo",
+      source: "web",
+      privacy: "ai_assisted",
+      clientCreatedAt: new Date().toISOString(),
+      clientTimezone: "UTC",
+      attachmentIds: [attachmentId]
+    }
+  });
+  record(
+    "photo.another_capture_cannot_bind_a_bound_photo",
+    strangerBind.status === 403 || strangerBind.status === 404 || strangerBind.status === 409,
+    { status: strangerBind.status, code: code(strangerBind) }
+  );
+  const read = await fetch(`${API}/captures/attachments/${attachmentId}`, {
+    headers: { authorization: `Bearer ${token}` }
+  });
+  const readBytes = Buffer.from(await read.arrayBuffer());
+  record(
+    "photo.read_returns_the_same_bytes_uncached",
+    read.status === 200 &&
+      read.headers.get("content-type") === "image/jpeg" &&
+      read.headers.get("cache-control") === "private, no-store" &&
+      readBytes.equals(photo),
+    {
+      status: read.status,
+      contentType: read.headers.get("content-type"),
+      cacheControl: read.headers.get("cache-control"),
+      sameBytes: readBytes.equals(photo)
+    }
+  );
+  const drained = await drainQueues();
+  const outcome = await pollUntil("photo.organized", async () => {
+    const detail = await api("GET", `/captures/${captureId}`, { token });
+    const capture = detail.json?.capture ?? {};
+    const done = ["done", "needs_review", "failed", "inbox"].includes(capture.status);
+    if (!done && drained.skipped !== true) await drainQueues();
+    return {
+      done,
+      status: detail.status,
+      captureStatus: capture.status ?? null,
+      lastErrorCode: capture.lastErrorCode ?? null,
+      receipt: capture.receipt ?? null
+    };
+  });
+  if (OPENAI_KEY) {
+    record(
+      "photo.organized_with_key",
+      !outcome.timedOut && ["done", "needs_review"].includes(outcome.captureStatus),
+      {
+        captureStatus: outcome.captureStatus,
+        lastErrorCode: outcome.lastErrorCode,
+        timedOut: outcome.timedOut === true,
+        receiptOutcome: outcome.receipt?.outcome ?? null
+      }
+    );
+    const noteId = outcome.receipt?.destination?.noteId ?? null;
+    if (noteId) {
+      const note = await api("GET", `/notes/${noteId}`, { token });
+      const body = note.json?.note?.bodyMarkdown ?? "";
+      record(
+        "photo.filed_note_references_the_photo",
+        note.status === 200 && body.includes(`unfiled-attachment:${attachmentId}`),
+        { status: note.status, referenced: body.includes(`unfiled-attachment:${attachmentId}`) }
+      );
+    } else {
+      record("photo.filed_note_references_the_photo", outcome.captureStatus === "needs_review", {
+        reason: "no_destination",
+        captureStatus: outcome.captureStatus,
+        note: "a review outcome carries no note yet"
+      });
+    }
+  } else {
+    record(
+      "photo.keyless_fails_with_provider_unavailable",
+      !outcome.timedOut &&
+        outcome.captureStatus === "failed" &&
+        outcome.lastErrorCode === "provider_unavailable",
+      {
+        captureStatus: outcome.captureStatus,
+        lastErrorCode: outcome.lastErrorCode,
+        timedOut: outcome.timedOut === true
+      }
+    );
+  }
+  const strangerRead = await fetch(`${API}/captures/attachments/att_${ulid()}`, {
+    headers: { authorization: `Bearer ${token}` }
+  });
+  record("photo.unknown_attachment_is_not_found", strangerRead.status === 404, {
+    status: strangerRead.status
+  });
+}
+
 // ---------------------------------------------------------------- search and export
 {
   await drainQueues();
@@ -1030,13 +1206,13 @@ if (OPENAI_KEY && secondNoteId) {
       clientCaptureId,
       rawContent: `Gate delete ${stamp}`,
       source: "web",
-      privacy: "private_manual",
+      privacy: "ai_assisted",
       clientCreatedAt: new Date().toISOString(),
       clientTimezone: "UTC"
     }
   });
   const captureId = created.json?.capture?.id ?? clientCaptureId;
-  record("captures.create_private", created.status === 201 || created.status === 202, {
+  record("captures.create_for_delete", created.status === 201 || created.status === 202, {
     status: created.status,
     code: code(created)
   });

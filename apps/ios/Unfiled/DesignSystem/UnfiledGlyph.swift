@@ -9,6 +9,7 @@ enum UnfiledGlyph: CaseIterable {
     case lock, organize, clock, warning, tray, check, archive, trash
     case heading, bullets, checklist, quote, link
     case arrow, down, up, move, undo, info, minus, circle, checkCircle, card
+    case photo, camera, microphone
 }
 
 /// A text label with one of the app's glyphs where a system symbol would otherwise sit.
@@ -247,6 +248,42 @@ struct GlyphStroke: Shape {
             path.move(to: point(8, 12.3)); path.addLine(to: point(11, 15.3)); path.addLine(to: point(16.3, 9.3))
         case .card:
             path.addPath(GlyphGeometry.card(center: point(12, 12), width: 12 * unit, height: 15.5 * unit, radius: 1.6 * unit))
+        case .photo:
+            // A print: an upright frame with one ridge across it and the sun above. No tilt;
+            // the card slants only where a card is the subject.
+            path.addRoundedRect(
+                in: box(4.5, 6, 15, 12),
+                cornerSize: CGSize(width: 1.6 * unit, height: 1.6 * unit),
+                style: .continuous
+            )
+            path.move(to: point(6.6, 15.4))
+            path.addLine(to: point(11.2, 10.4))
+            path.addLine(to: point(17.4, 15.4))
+        case .camera:
+            // The mark's open tray for the body, a lens ring inside it, and a square-capped hood.
+            path.addPath(GlyphGeometry.tray(in: box(3.5, 8, 17, 11.5)))
+            path.move(to: point(8.6, 8))
+            path.addLine(to: point(9.9, 5.2))
+            path.addLine(to: point(14.1, 5.2))
+            path.addLine(to: point(15.4, 8))
+            path.addEllipse(in: box(9, 10.4, 6, 6))
+        case .microphone:
+            // A capsule standing in its cradle, upright and open, with the same square caps.
+            path.addRoundedRect(
+                in: box(9.6, 4, 4.8, 9.6),
+                cornerSize: CGSize(width: 2.4 * unit, height: 2.4 * unit),
+                style: .continuous
+            )
+            path.move(to: point(17, 12))
+            path.addArc(
+                center: point(12, 12),
+                radius: 5 * unit,
+                startAngle: .degrees(0),
+                endAngle: .degrees(180),
+                clockwise: false
+            )
+            path.move(to: point(12, 17))
+            path.addLine(to: point(12, 20))
         case .quote, .more:
             break
         }
@@ -265,6 +302,9 @@ struct GlyphFill: Shape {
         }
         var path = Path()
         switch glyph {
+        case .photo:
+            // The sun in the frame, the same solid dot the day page uses.
+            path.addEllipse(in: CGRect(x: rect.minX + 14.4 * unit, y: rect.minY + 7.6 * unit, width: 2.6 * unit, height: 2.6 * unit))
         case .today:
             path.addEllipse(in: CGRect(x: rect.minX + 10.3 * unit, y: rect.minY + 13.2 * unit, width: 3.4 * unit, height: 3.4 * unit))
         case .notes:

@@ -30,14 +30,13 @@ struct AppShellView: View {
                     source: sheet.source,
                     composerGeneration: sheet.composerGeneration,
                     initialContent: sheet.initialContent,
-                    initialPrivacy: sheet.initialPrivacy,
                     restoredDraft: sheet.restoredDraft,
-                    onSave: { content, privacy, source, generation in
+                    onSave: { content, source, generation, attachments in
                         try await model.saveCapture(
                             content: content,
-                            privacy: privacy,
                             source: source,
-                            composerGeneration: generation
+                            composerGeneration: generation,
+                            attachments: attachments
                         )
                     },
                     onDraftChange: model.saveCaptureDraft,
@@ -49,6 +48,7 @@ struct AppShellView: View {
                 }
             }
         }
+        .environment(\.attachmentLoader, { id in await model.attachmentBytes(id: id) })
         .sheet(item: $model.editorSheet) { sheet in
             ZStack {
                 NavigationStack {
@@ -442,6 +442,7 @@ private struct NoteDestinationView: View {
                     generatedBlocksPaginationNotice: model.generatedBlockPaginationNotices[noteID],
                     submittingInteractionIDs: model.submittingInteractionIDs,
                     interactionErrors: model.interactionErrors,
+                    onLoadAttachment: { await model.attachmentBytes(id: $0) },
                     noteContext: model.noteContext(
                         noteID: noteID,
                         revision: note.currentRevision

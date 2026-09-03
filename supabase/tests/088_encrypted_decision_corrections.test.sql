@@ -457,8 +457,8 @@ select is(
       and grantee = 'unfiled_organizer_worker'
       and privilege_type = 'EXECUTE'
   ),
-  11::bigint,
-  'the organizer worker allowlist is exactly eleven functions after E4'
+  12::bigint,
+  'the organizer worker allowlist is exactly twelve functions after attachments'
 );
 select ok(
   (

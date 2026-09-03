@@ -6,6 +6,7 @@ import {
 } from "@unfiled/contracts";
 
 const MAX_JSON_REQUEST_BYTES = 250_000;
+const MAX_BINARY_REQUEST_BYTES = 1_000_000;
 
 export class HttpError extends Error {
   public readonly code: ApiErrorCodeValue;
@@ -251,4 +252,39 @@ export function requireIdempotencyKey(
     );
   }
   return parsedHeader.data;
+}
+
+function unsupportedMediaType(): HttpError {
+  return new HttpError(
+    400,
+    ApiErrorCode.VALIDATION_FAILED,
+    "Send a JPEG photo or an AAC recording."
+  );
+}
+
+/// Reads a raw binary upload whose media type is one of the allowed types, bounded like JSON
+/// bodies are. The declared media type is matched exactly, with no parameters.
+export async function readBoundedBinaryBody(
+  request: Request,
+  limits: Readonly<{ allowedContentTypes: readonly string[]; maximumBytes: number }>
+): Promise<Readonly<{ bytes: Uint8Array; mediaType: string }>> {
+  if (
+    !Number.isSafeInteger(limits.maximumBytes) ||
+    limits.maximumBytes < 1 ||
+    limits.maximumBytes > MAX_BINARY_REQUEST_BYTES
+  ) {
+    throw new ConfigurationError();
+  }
+  const declaredType = request.headers.get("content-type")?.trim().toLowerCase() ?? "";
+  if (!limits.allowedContentTypes.includes(declaredType)) throw unsupportedMediaType();
+  validateDeclaredContentLength(request, limits.maximumBytes);
+  const bytes = await readBoundedRequestBody(request, limits.maximumBytes);
+  if (bytes.byteLength === 0) {
+    throw new HttpError(
+      400,
+      ApiErrorCode.VALIDATION_FAILED,
+      "Send the file bytes as the request body."
+    );
+  }
+  return Object.freeze({ bytes, mediaType: declaredType });
 }

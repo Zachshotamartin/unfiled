@@ -9,6 +9,7 @@ import {
   encryptedAggregateRuntimeRpcFunctions,
   withOwnerEncryptedAggregateRuntime
 } from "./encrypted-aggregate-runtime";
+import { createEncryptedCaptureRpcAdapter } from "./encrypted-capture-rpc-adapter";
 import { createEncryptedLibraryRpcStore } from "./encrypted-library-rpc-store";
 import {
   createEncryptedNoteReadRpcAdapter,
@@ -42,7 +43,8 @@ export const managedOwnerExportRpcFunctions = Object.freeze([
   ...encryptedAggregateRuntimeRpcFunctions,
   ...encryptedNoteReadRpcFunctions,
   "list_encrypted_library_objects",
-  "list_encrypted_export_note_sources"
+  "list_encrypted_export_note_sources",
+  "get_encrypted_capture_attachment"
 ] as const);
 
 export const managedOwnerDeletionRpcFunctions = Object.freeze([
@@ -177,6 +179,7 @@ export class ManagedOwnerDataService {
               reads: createEncryptedNoteReadRpcAdapter(client),
               library: createEncryptedLibraryRpcStore(client),
               ownerData,
+              captures: createEncryptedCaptureRpcAdapter(client),
               signal: scope.signal
             });
             const archive = createStreamingAccountExport(source, {

@@ -125,6 +125,7 @@ const completePage: PrivateRagPageReadResult<OrganizerRagRecord> = Object.freeze
 function repository(overrides: Partial<OrganizerRepository> = {}): OrganizerRepository {
   return {
     candidates: vi.fn().mockResolvedValue({ candidates: [candidate], controls }),
+    attachments: vi.fn().mockResolvedValue([]),
     claim: vi.fn().mockResolvedValue([]),
     providerRoute: vi.fn().mockRejectedValue(new Error("not used")),
     commit: vi.fn().mockRejectedValue(new Error("not used")),

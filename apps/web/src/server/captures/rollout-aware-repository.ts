@@ -7,13 +7,21 @@ export type CaptureRepositoryMethod = keyof CaptureRepository;
 const WRITE_METHODS = new Set<CaptureRepositoryMethod>([
   "createCapture",
   "deleteCapture",
-  "retryCapture"
+  "retryCapture",
+  "createAttachment"
+]);
+
+/** Photos and recordings have no legacy storage; they always take the encrypted path. */
+const ENCRYPTED_ONLY_METHODS = new Set<CaptureRepositoryMethod>([
+  "createAttachment",
+  "getAttachment"
 ]);
 
 export function captureRepositoryTarget(
   state: Awaited<ReturnType<EncryptionRolloutStateSource["stateForOwner"]>>,
   method: CaptureRepositoryMethod
 ): "encrypted" | "legacy" {
+  if (ENCRYPTED_ONLY_METHODS.has(method)) return "encrypted";
   if (state === "expanded") return "legacy";
   if (state === "dual_write" && !WRITE_METHODS.has(method)) return "legacy";
   return "encrypted";
@@ -61,5 +69,13 @@ export class RolloutAwareCaptureRepository implements CaptureRepository {
 
   public async retryCapture(...parameters: Parameters<CaptureRepository["retryCapture"]>) {
     return (await this.selected(parameters[0], "retryCapture")).retryCapture(...parameters);
+  }
+
+  public async createAttachment(...parameters: Parameters<CaptureRepository["createAttachment"]>) {
+    return (await this.selected(parameters[0], "createAttachment")).createAttachment(...parameters);
+  }
+
+  public async getAttachment(...parameters: Parameters<CaptureRepository["getAttachment"]>) {
+    return (await this.selected(parameters[0], "getAttachment")).getAttachment(...parameters);
   }
 }

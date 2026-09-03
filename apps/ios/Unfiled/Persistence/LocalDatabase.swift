@@ -134,20 +134,28 @@ actor LocalDatabase {
         return LocalDatabase(database: queue, fileURL: fileURL)
     }
 
-    func enqueue(_ draft: CaptureDraft, now: String) throws {
+    func enqueue(
+        _ draft: CaptureDraft,
+        attachments: [CaptureAttachmentDraft] = [],
+        now: String
+    ) throws {
         try Self.validate(draft)
+        try Self.validateAttachments(attachments)
         try database.write { database in
             try Self.insertCapture(draft, now: now, into: database)
+            try Self.insertAttachments(attachments, for: draft, now: now, into: database)
         }
     }
 
     func enqueue(
         _ draft: CaptureDraft,
+        attachments: [CaptureAttachmentDraft] = [],
         removingComposerDraftFor source: LocalCaptureSource,
         composerGeneration: Int,
         now: String
     ) throws {
         try Self.validate(draft)
+        try Self.validateAttachments(attachments)
         guard source == draft.source, composerGeneration > 0 else {
             throw LocalDatabaseError.invalidStateTransition
         }
@@ -160,6 +168,7 @@ actor LocalDatabase {
                 throw LocalDatabaseError.invalidStateTransition
             }
             try Self.insertCapture(draft, now: now, into: database)
+            try Self.insertAttachments(attachments, for: draft, now: now, into: database)
             try database.execute(
                 sql: "DELETE FROM composer_drafts WHERE profile_id = ? AND source = ?",
                 arguments: [draft.profileID, source.rawValue]
@@ -675,9 +684,42 @@ actor LocalDatabase {
         }
     }
 
+    /// The photos and recordings waiting beside one capture, in the order they were added.
+    func attachments(profileID: String, captureID: String) throws -> [StoredCaptureAttachment] {
+        try Self.validateProfile(profileID)
+        return try database.read { database in
+            try Row.fetchAll(
+                database,
+                sql: """
+                SELECT * FROM capture_attachments
+                WHERE profile_id = ? AND capture_id = ?
+                ORDER BY position
+                """,
+                arguments: [profileID, captureID]
+            ).map(Self.storedAttachment(from:))
+        }
+    }
+
+    func markAttachmentUploaded(profileID: String, attachmentID: String, now: String) throws {
+        try Self.validateProfile(profileID)
+        try database.write { database in
+            try database.execute(
+                sql: """
+                UPDATE capture_attachments SET uploaded_at = ?
+                WHERE profile_id = ? AND attachment_id = ? AND uploaded_at IS NULL
+                """,
+                arguments: [now, profileID, attachmentID]
+            )
+        }
+    }
+
     func removeProfile(profileID: String) throws {
         try Self.validateProfile(profileID)
         try database.write { database in
+            try database.execute(
+                sql: "DELETE FROM capture_attachments WHERE profile_id = ?",
+                arguments: [profileID]
+            )
             try database.execute(
                 sql: "DELETE FROM capture_outbox WHERE profile_id = ?",
                 arguments: [profileID]
@@ -742,6 +784,84 @@ actor LocalDatabase {
                 throw LocalDatabaseError.invalidStateTransition
             }
         }
+    }
+
+    static let maximumAttachmentBytes = 700_000
+    static let maximumPhotosPerCapture = 4
+    static let maximumRecordingsPerCapture = 1
+
+    private static let attachmentIDPattern = #"^att_[0-9A-HJKMNP-TV-Z]{26}$"#
+
+    /// At most four photos and one recording, each a JPEG or an AAC recording under the byte cap,
+    /// with the measurements its kind needs and no other.
+    private static func validateAttachments(_ attachments: [CaptureAttachmentDraft]) throws {
+        let photos = attachments.filter { $0.kind == .image }.count
+        let recordings = attachments.count - photos
+        guard photos <= maximumPhotosPerCapture, recordings <= maximumRecordingsPerCapture,
+              Set(attachments.map(\.id)).count == attachments.count else {
+            throw LocalDatabaseError.invalidCapture
+        }
+        for attachment in attachments {
+            guard attachment.id.range(of: attachmentIDPattern, options: .regularExpression) != nil,
+                  (1 ... maximumAttachmentBytes).contains(attachment.bytes.count) else {
+                throw LocalDatabaseError.invalidCapture
+            }
+            switch attachment.kind {
+            case .image:
+                guard attachment.mediaType == "image/jpeg",
+                      let width = attachment.width, let height = attachment.height,
+                      (1 ... 8_000).contains(width), (1 ... 8_000).contains(height),
+                      attachment.durationMs == nil else { throw LocalDatabaseError.invalidCapture }
+            case .audio:
+                guard attachment.mediaType == "audio/mp4",
+                      let duration = attachment.durationMs, (1 ... 120_000).contains(duration),
+                      attachment.width == nil, attachment.height == nil else {
+                    throw LocalDatabaseError.invalidCapture
+                }
+            }
+        }
+    }
+
+    private static func insertAttachments(
+        _ attachments: [CaptureAttachmentDraft],
+        for draft: CaptureDraft,
+        now: String,
+        into database: Database
+    ) throws {
+        for (position, attachment) in attachments.enumerated() {
+            try database.execute(
+                sql: """
+                INSERT INTO capture_attachments (
+                  profile_id, capture_id, attachment_id, position, kind, media_type,
+                  bytes, width, height, duration_ms, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(profile_id, attachment_id) DO NOTHING
+                """,
+                arguments: [
+                    draft.profileID, draft.id, attachment.id, position, attachment.kind.rawValue,
+                    attachment.mediaType, attachment.bytes, attachment.width, attachment.height,
+                    attachment.durationMs, now
+                ]
+            )
+        }
+    }
+
+    private static func storedAttachment(from row: Row) throws -> StoredCaptureAttachment {
+        guard let kind = LocalAttachmentKind(rawValue: row["kind"]) else {
+            throw LocalDatabaseError.unavailable
+        }
+        return StoredCaptureAttachment(
+            draft: CaptureAttachmentDraft(
+                id: row["attachment_id"],
+                kind: kind,
+                mediaType: row["media_type"],
+                bytes: row["bytes"],
+                width: row["width"],
+                height: row["height"],
+                durationMs: row["duration_ms"]
+            ),
+            uploadedAt: row["uploaded_at"]
+        )
     }
 
     private static func insertCapture(
@@ -989,6 +1109,44 @@ actor LocalDatabase {
             try database.alter(table: "capture_outbox") { table in
                 table.add(column: "guidance", .text)
             }
+        }
+        migrator.registerMigration("native-v4-capture-attachments") { database in
+            try database.create(table: "capture_attachments", options: .strict) { table in
+                table.column("profile_id", .text).notNull()
+                table.column("capture_id", .text).notNull()
+                table.column("attachment_id", .text).notNull()
+                table.column("position", .integer).notNull()
+                table.column("kind", .text).notNull()
+                table.column("media_type", .text).notNull()
+                table.column("bytes", .blob).notNull()
+                table.column("width", .integer)
+                table.column("height", .integer)
+                table.column("duration_ms", .integer)
+                table.column("uploaded_at", .text)
+                table.column("created_at", .text).notNull()
+                table.primaryKey(["profile_id", "attachment_id"])
+                table.foreignKey(
+                    ["profile_id", "capture_id"],
+                    references: "capture_outbox",
+                    columns: ["profile_id", "capture_id"],
+                    onDelete: .cascade
+                )
+                table.check(sql: "kind IN ('image', 'audio')")
+                table.check(sql: "media_type IN ('image/jpeg', 'audio/mp4')")
+                table.check(sql: "length(bytes) BETWEEN 1 AND 700000")
+                table.check(sql: "position BETWEEN 0 AND 4")
+                table.check(sql: """
+                (kind = 'image' AND width BETWEEN 1 AND 8000 AND height BETWEEN 1 AND 8000
+                  AND duration_ms IS NULL)
+                OR (kind = 'audio' AND duration_ms BETWEEN 1 AND 120000
+                  AND width IS NULL AND height IS NULL)
+                """)
+            }
+            try database.create(
+                index: "capture_attachments_capture",
+                on: "capture_attachments",
+                columns: ["profile_id", "capture_id", "position"]
+            )
         }
         migrator.registerMigration("native-v2-composer-generations") { database in
             try database.create(table: "composer_draft_generations", options: .strict) { table in

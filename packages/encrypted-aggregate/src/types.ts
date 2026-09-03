@@ -16,11 +16,13 @@ import type {
   ReviewPayload,
   RoutingRulePayload,
   SpaceDisplayPayload,
-  TagDisplayPayload
+  TagDisplayPayload,
+  CaptureAttachmentPayload
 } from "./payloads.js";
 
 export type AggregateContentKind =
   | "capture"
+  | "capture_attachment"
   | "capture_receipt"
   | "generated_block"
   | "idempotency_response"
@@ -138,6 +140,16 @@ export type SealCaptureInput = Readonly<{
 }>;
 
 export type OpenCaptureInput = Omit<SealCaptureInput, "payload">;
+
+export type SealCaptureAttachmentInput = Readonly<{
+  attachmentId: EntityId<"att">;
+  captureId: EntityId<"cap">;
+  recordVersion: number;
+  privacy: PrivacyMode;
+  payload: CaptureAttachmentPayload;
+}>;
+
+export type OpenCaptureAttachmentInput = Omit<SealCaptureAttachmentInput, "payload">;
 
 export type SealNoteContentInput = Readonly<{
   noteId: EntityId<"note">;
@@ -489,6 +501,15 @@ export type EncryptedAggregateService = Readonly<{
     record: unknown,
     expected: OpenCaptureInput
   ): Promise<CapturePayload>;
+  sealCaptureAttachment(
+    access: AuthorizedOwnerAccess,
+    input: SealCaptureAttachmentInput
+  ): Promise<MacProtectedEncryptedAggregateRecord<"capture_attachment">>;
+  openCaptureAttachment(
+    access: AuthorizedOwnerAccess,
+    record: unknown,
+    expected: OpenCaptureAttachmentInput
+  ): Promise<CaptureAttachmentPayload>;
   sealNoteContent(
     access: AuthorizedOwnerAccess,
     input: SealNoteContentInput

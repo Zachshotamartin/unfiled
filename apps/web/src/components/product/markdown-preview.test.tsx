@@ -4,6 +4,22 @@ import { describe, expect, it } from "vitest";
 import { MarkdownPreview } from "./markdown-preview";
 
 describe("MarkdownPreview", () => {
+  it("names a placed photo or recording instead of showing its reference", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownPreview
+        markdown={[
+          "Whiteboard from the kitchen",
+          "",
+          "![Photo](unfiled-attachment:att_01ARZ3NDEKTSV4RRFFQ69G5FAZ)",
+          "[Recording](unfiled-attachment:att_01ARZ3NDEKTSV4RRFFQ69G5FAY)"
+        ].join("\n")}
+      />
+    );
+    expect(html).toContain('<p class="markdown-attachment">Photo</p>');
+    expect(html).toContain('<p class="markdown-attachment">Recording</p>');
+    expect(html).not.toContain("unfiled-attachment:");
+  });
+
   it("renders Markdown as React nodes without executable HTML or unsafe URLs", () => {
     const html = renderToStaticMarkup(
       <MarkdownPreview

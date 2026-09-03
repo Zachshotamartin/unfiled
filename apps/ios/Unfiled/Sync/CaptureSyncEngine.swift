@@ -60,7 +60,8 @@ actor CaptureSyncEngine {
         composerGeneration: Int,
         explicitDestinationNoteID: String? = nil,
         expansionDisabled: Bool = false,
-        guidance: String? = nil
+        guidance: String? = nil,
+        attachments: [CaptureAttachmentDraft] = []
     ) async throws -> String {
         guard await profileAuthorizer.authorizesCaptureProfile(profileID) else {
             throw CaptureSyncEngineError.invalidProfile
@@ -83,6 +84,7 @@ actor CaptureSyncEngine {
         )
         try await database.enqueue(
             draft,
+            attachments: attachments,
             removingComposerDraftFor: source,
             composerGeneration: composerGeneration,
             now: encodedNow
@@ -290,6 +292,33 @@ actor CaptureSyncEngine {
             else { throw CaptureSyncEngineError.invalidCaptureIdentifier }
             let accessToken = try await profileAuthorizer.captureAccessToken(for: profileID)
 
+            // Photos and recordings go up first, each once; the capture then names them.
+            let attachments = try await database.attachments(
+                profileID: normalizedProfileID,
+                captureID: entry.draft.id
+            )
+            for attachment in attachments where attachment.uploadedAt == nil {
+                _ = try await api.uploadCaptureAttachment(
+                    CaptureAttachmentUpload(
+                        attachmentId: attachment.draft.id,
+                        captureId: entry.draft.id,
+                        kind: attachment.draft.kind == .image ? .image : .audio,
+                        mediaType: attachment.draft.mediaType,
+                        privacy: apiPrivacy(entry.draft.privacy),
+                        width: attachment.draft.width,
+                        height: attachment.draft.height,
+                        durationMs: attachment.draft.durationMs,
+                        bytes: attachment.draft.bytes
+                    ),
+                    accessToken: accessToken
+                )
+                try await database.markAttachmentUploaded(
+                    profileID: normalizedProfileID,
+                    attachmentID: attachment.draft.id,
+                    now: APIJSON.dateString(clock())
+                )
+            }
+
             let request = CaptureCreateRequest(
                 clientCaptureId: captureID,
                 rawContent: entry.draft.rawContent,
@@ -300,7 +329,8 @@ actor CaptureSyncEngine {
                 privacy: apiPrivacy(entry.draft.privacy),
                 explicitDestinationNoteId: entry.draft.explicitDestinationNoteID.flatMap(NoteID.init(rawValue:)),
                 expansionDisabled: entry.draft.expansionDisabled,
-                guidance: entry.draft.guidance
+                guidance: entry.draft.guidance,
+                attachmentIds: attachments.isEmpty ? nil : attachments.map(\.draft.id)
             )
             let response: CaptureCreateResponse
             do {

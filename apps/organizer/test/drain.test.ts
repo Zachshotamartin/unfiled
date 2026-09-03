@@ -180,6 +180,7 @@ function repository(overrides: Partial<OrganizerRepository> = {}): OrganizerRepo
       replanCount: 0
     }),
     candidates: vi.fn().mockResolvedValue({ candidates: [candidate], controls }),
+    attachments: vi.fn().mockResolvedValue([]),
     ragPage: vi.fn().mockResolvedValue({ status: "no_active_generation" }),
     selectCandidates: vi.fn().mockRejectedValue(new Error("not used by this test")),
     prepareCreate: vi.fn().mockResolvedValue(prepared("create", null)),
@@ -202,6 +203,7 @@ function repository(overrides: Partial<OrganizerRepository> = {}): OrganizerRepo
 function cipher(): OrganizerCipher {
   return {
     openCapture: vi.fn().mockResolvedValue({ controls, rawContent: "Shopping: milk" }),
+    openCaptureAttachments: vi.fn().mockResolvedValue([]),
     openCandidate: vi
       .fn()
       .mockImplementation(
@@ -1564,4 +1566,123 @@ describe("closed ports and result validation", () => {
   ])("validates result %#", (value, expected) =>
     expect(isOrganizerDrainResult(value)).toBe(expected)
   );
+});
+
+describe("organizer drain with photos", () => {
+  const encryptedPhoto = Object.freeze({
+    attachmentId: "att_01ARZ3NDEKTSV4RRFFQ69G5FAZ" as const,
+    kind: "image" as const,
+    mediaType: "image/jpeg" as const,
+    byteLength: 6,
+    width: 4,
+    height: 3,
+    durationMs: null,
+    source: { resourceId: "att_01ARZ3NDEKTSV4RRFFQ69G5FAZ", recordVersion: 1, cipher: {}, key: {} }
+  });
+  const decryptedPhoto = Object.freeze({
+    attachmentId: "att_01ARZ3NDEKTSV4RRFFQ69G5FAZ" as const,
+    kind: "image" as const,
+    mediaType: "image/jpeg" as const,
+    dataBase64: "/9j/AAAA",
+    byteLength: 6,
+    width: 4,
+    height: 3,
+    durationMs: null
+  });
+
+  it("reads the leased capture's photos, shows them to the planner, and files them by reference", async () => {
+    const crypto = cipher();
+    vi.mocked(crypto.openCapture).mockResolvedValueOnce({ controls, rawContent: "A thought" });
+    vi.mocked(crypto.openCaptureAttachments).mockResolvedValueOnce([decryptedPhoto]);
+    const planner: OrganizerPlanner = { plan: vi.fn().mockResolvedValue(createPlan) };
+    const repo = repository({
+      candidates: vi.fn().mockResolvedValue({ candidates: [], controls }),
+      heartbeat: vi.fn().mockResolvedValue({
+        candidateCount: 0,
+        currentRevision: 1,
+        disclosureAuthorized: true,
+        jobId: job.jobId,
+        leaseExpiresAt: job.leaseExpiresAt,
+        outcome: "authorized",
+        replanCount: 0
+      }),
+      attachments: vi.fn().mockResolvedValue([encryptedPhoto]),
+      commit: vi.fn().mockResolvedValue({
+        jobId: job.jobId,
+        noteId: "note_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        outcome: "created",
+        replayed: false,
+        revision: 1,
+        replanCount: 0
+      })
+    });
+
+    const result = await drain(repo, planner, crypto).drain({
+      authority,
+      requestId: "r",
+      signal,
+      trigger: "schedule"
+    });
+
+    expect(result.completed).toBe(1);
+    expect(repo.attachments).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: job.jobId, leaseToken: job.leaseToken })
+    );
+    expect(crypto.openCaptureAttachments).toHaveBeenCalledWith(
+      expect.objectContaining({ attachments: [encryptedPhoto], job })
+    );
+    const plannerInput = vi.mocked(planner.plan).mock.calls[0]?.[0];
+    expect(plannerInput?.capture.attachments).toEqual([decryptedPhoto]);
+    const sealedPlan = vi.mocked(crypto.sealCommand).mock.calls[0]?.[0].plan;
+    const expectedOperations = [
+      { type: "append_raw", content: "A thought" },
+      {
+        type: "append_paragraphs",
+        paragraphs: ["![Photo](unfiled-attachment:att_01ARZ3NDEKTSV4RRFFQ69G5FAZ)"]
+      }
+    ];
+    expect(sealedPlan?.kind).toBe("create");
+    expect(sealedPlan?.kind === "create" ? sealedPlan.operations : []).toEqual(expectedOperations);
+    expect(sealedPlan?.validatedPlan.operations).toEqual(expectedOperations);
+  });
+
+  it("does not open or reference anything when the capture has no attachments", async () => {
+    const crypto = cipher();
+    vi.mocked(crypto.openCapture).mockResolvedValueOnce({ controls, rawContent: "A thought" });
+    const planner: OrganizerPlanner = { plan: vi.fn().mockResolvedValue(createPlan) };
+    const repo = repository({
+      candidates: vi.fn().mockResolvedValue({ candidates: [], controls }),
+      heartbeat: vi.fn().mockResolvedValue({
+        candidateCount: 0,
+        currentRevision: 1,
+        disclosureAuthorized: true,
+        jobId: job.jobId,
+        leaseExpiresAt: job.leaseExpiresAt,
+        outcome: "authorized",
+        replanCount: 0
+      }),
+      commit: vi.fn().mockResolvedValue({
+        jobId: job.jobId,
+        noteId: "note_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        outcome: "created",
+        replayed: false,
+        revision: 1,
+        replanCount: 0
+      })
+    });
+
+    const result = await drain(repo, planner, crypto).drain({
+      authority,
+      requestId: "r",
+      signal,
+      trigger: "schedule"
+    });
+
+    expect(result.completed).toBe(1);
+    expect(crypto.openCaptureAttachments).not.toHaveBeenCalled();
+    const sealedPlan = vi.mocked(crypto.sealCommand).mock.calls[0]?.[0].plan;
+    expect(sealedPlan?.validatedPlan.operations).toEqual([
+      { type: "append_raw", content: "A thought" }
+    ]);
+  });
 });
