@@ -219,6 +219,11 @@ struct AppShellView: View {
                     model.closeReviewPage(reviewID: reviewID)
                 }
             }
+            .onChange(of: model.isLoadingReview) { _, loading in
+                if !loading, !model.reviewItems.contains(where: { $0.id == reviewID }) {
+                    model.closeReviewPage(reviewID: reviewID)
+                }
+            }
         case .settings:
             SettingsView(
                 email: model.currentUser?.email ?? "",

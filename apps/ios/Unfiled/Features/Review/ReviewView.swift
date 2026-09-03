@@ -180,7 +180,7 @@ struct ReviewLedgerRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Label("Needs your input", systemImage: "tray.and.arrow.down")
+                Label { Text("Needs your input") } icon: { GlyphView(glyph: .tray, size: 16, weight: 1.9) }
                     .font(UnfiledType.label)
                     .textCase(.uppercase)
                     .foregroundStyle(UnfiledTheme.fog)
@@ -202,7 +202,7 @@ struct ReviewLedgerRow: View {
                     .font(UnfiledType.body)
                     .foregroundStyle(UnfiledTheme.fog)
                     .fixedSize(horizontal: false, vertical: true)
-                Label(item.proposedDestination, systemImage: "arrow.turn.down.right")
+                Label { Text(item.proposedDestination) } icon: { GlyphView(glyph: .chevron, size: 16, weight: 1.9) }
                     .font(UnfiledType.title)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -256,14 +256,14 @@ struct ReviewLedgerRow: View {
             actionControls
 
             if let errorMessage {
-                Label(errorMessage, systemImage: "exclamationmark.circle")
+                Label { Text(errorMessage) } icon: { GlyphView(glyph: .warning, size: 16, weight: 1.9) }
                     .font(UnfiledType.secondary)
                     .foregroundStyle(UnfiledTheme.paper)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("review.error.\(item.id)")
             }
 
-            Label("Original preserved", systemImage: "doc.badge.clock")
+            Label { Text("Original preserved") } icon: { GlyphView(glyph: .clock, size: 16, weight: 1.9) }
                 .font(UnfiledType.caption)
                 .foregroundStyle(UnfiledTheme.fog)
                 .accessibilityLabel("Original capture preserved")
@@ -289,9 +289,8 @@ struct ReviewLedgerRow: View {
                                 .foregroundStyle(UnfiledTheme.fog)
                         }
                         Spacer(minLength: 8)
-                        Image(systemName: "arrow.right")
-                            .font(UnfiledType.label)
-                            .accessibilityHidden(true)
+                        GlyphView(glyph: .chevron, size: 16, weight: 1.8)
+                            .foregroundStyle(UnfiledTheme.fog)
                     }
                     .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
                     .contentShape(Rectangle())
@@ -312,10 +311,8 @@ struct ReviewLedgerRow: View {
                     onAction(item.id, .route(noteID: destination.id))
                 } label: {
                     HStack(spacing: 10) {
-                        Image(systemName: "arrow.turn.down.right")
-                            .font(UnfiledType.label)
+                        GlyphView(glyph: .chevron, size: 16, weight: 1.9)
                             .foregroundStyle(UnfiledTheme.persimmon)
-                            .accessibilityHidden(true)
                         Text(destination.title)
                             .font(UnfiledType.heading)
                             .fixedSize(horizontal: false, vertical: true)
@@ -390,7 +387,7 @@ struct ReviewLedgerRow: View {
     private var actionControls: some View {
         VStack(alignment: .leading, spacing: UnfiledTheme.controlGap) {
             if isSubmitting {
-                Label("Saving your choice", systemImage: "clock")
+                Label { Text("Saving your choice") } icon: { GlyphView(glyph: .clock, size: 16, weight: 1.9) }
                     .font(UnfiledType.heading)
                     .foregroundStyle(UnfiledTheme.fog)
                     .frame(minHeight: UnfiledTheme.minimumTouchTarget)
@@ -400,7 +397,7 @@ struct ReviewLedgerRow: View {
             if item.allows(.create) || item.allows(.route) {
                 reviewButton(
                     title: "Let Unfiled decide",
-                    systemImage: "sparkles",
+                    glyph: .organize,
                     prominence: .primary,
                     identifier: "review.decide.\(item.id)",
                     accessibilityHint: "Files it where the organizer suggested, or starts a note of the kind it detected"
@@ -410,7 +407,7 @@ struct ReviewLedgerRow: View {
             if item.allows(.create) {
                 reviewButton(
                     title: item.suggestedNewNote.map { "New note: \($0.title)" } ?? "New note",
-                    systemImage: "plus",
+                    glyph: .plus,
                     prominence: .secondary,
                     identifier: ReviewAccessibilityIdentifier.newNote(item.id)
                 ) { onAction(item.id, .createNote) }
@@ -419,7 +416,7 @@ struct ReviewLedgerRow: View {
             if item.allows(.keepBoth) {
                 reviewButton(
                     title: "Keep both notes",
-                    systemImage: "doc.on.doc",
+                    glyph: .notes,
                     prominence: .primary,
                     identifier: ReviewAccessibilityIdentifier.keepBoth(item.id)
                 ) { onAction(item.id, .keepBoth) }
@@ -428,7 +425,7 @@ struct ReviewLedgerRow: View {
             if item.allows(.acceptExpansion) {
                 reviewButton(
                     title: "Accept generated addition",
-                    systemImage: "checkmark",
+                    glyph: .check,
                     prominence: .primary,
                     identifier: ReviewAccessibilityIdentifier.acceptExpansion(item.id),
                     accessibilityHint: "Keeps it separately without rewriting note text"
@@ -438,7 +435,7 @@ struct ReviewLedgerRow: View {
             if item.allows(.rejectExpansion) {
                 reviewButton(
                     title: "Reject generated addition",
-                    systemImage: "xmark",
+                    glyph: .close,
                     prominence: .secondary,
                     identifier: ReviewAccessibilityIdentifier.rejectExpansion(item.id),
                     accessibilityHint: "Rejects it without changing note text"
@@ -448,7 +445,7 @@ struct ReviewLedgerRow: View {
             if item.captureID != nil {
                 reviewButton(
                     title: "Edit text",
-                    systemImage: "pencil",
+                    glyph: .pen,
                     prominence: .secondary,
                     identifier: "review.editText.\(item.id)",
                     accessibilityHint: "Opens the capture's text to change it before filing"
@@ -458,7 +455,7 @@ struct ReviewLedgerRow: View {
             if item.allows(.dismiss) {
                 reviewButton(
                     title: "Not now",
-                    systemImage: "xmark",
+                    glyph: .close,
                     prominence: .secondary,
                     identifier: ReviewAccessibilityIdentifier.dismiss(item.id),
                     accessibilityHint: "Closes this review; the capture stays in the Inbox"
@@ -471,14 +468,14 @@ struct ReviewLedgerRow: View {
 
     private func reviewButton(
         title: String,
-        systemImage: String,
+        glyph: UnfiledGlyph,
         prominence: Prominence,
         identifier: String,
         accessibilityHint: String = "",
         action: @escaping @MainActor () -> Void
     ) -> some View {
         Button(action: action) {
-            Label(title, systemImage: systemImage)
+            Label { Text(title) } icon: { GlyphView(glyph: glyph, size: 16, weight: 1.9) }
                 .font(UnfiledType.heading)
                 .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
                 .contentShape(Rectangle())

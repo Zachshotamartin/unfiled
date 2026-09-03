@@ -76,7 +76,9 @@ struct NoteEditorView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    editorHeader
+                    if isNewNote || !spaces.isEmpty {
+                        editorHeader
+                    }
                     SectionRule()
 
                     VStack(alignment: .leading, spacing: 9) {
