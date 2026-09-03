@@ -254,6 +254,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var requestedReviewFocusID: String?
     @Published var bannerMessage: String?
     @Published var navigationPath: [AppRoute] = []
+    /// The tail of each note's serial operation chain, keyed by note id.
+    private var noteOperationChains: [String: Task<Void, Never>] = [:]
     @Published var selectedTab: MainTab = .inbox
     @Published var captureSheet: CaptureSheet?
     @Published var editorSheet: EditorSheet?
@@ -2697,7 +2699,29 @@ final class AppModel: ObservableObject {
         notesByID[noteID]?.archivedAt != nil
     }
 
+    /// Checklist toggles on one note run one after another: each carries the revision the
+    /// previous reply returned, so two quick taps both land instead of the second being
+    /// refused as stale and reverted. The reply's note is applied directly; no full refresh.
     func toggleChecklistItem(noteID: String, itemID: String, checked: Bool) async throws {
+        let previous = noteOperationChains[noteID]
+        let operation = Task<Result<Void, Error>, Never> { [weak self] in
+            await previous?.value
+            guard let self else { return .failure(AuthenticationError.signedOut) }
+            do {
+                try await self.performChecklistToggle(noteID: noteID, itemID: itemID, checked: checked)
+                return .success(())
+            } catch {
+                return .failure(error)
+            }
+        }
+        let chain = Task<Void, Never> { _ = await operation.value }
+        noteOperationChains[noteID] = chain
+        let outcome = await operation.value
+        if noteOperationChains[noteID] == chain { noteOperationChains[noteID] = nil }
+        if case let .failure(error) = outcome { throw error }
+    }
+
+    private func performChecklistToggle(noteID: String, itemID: String, checked: Bool) async throws {
         guard let runtime,
               let user = currentUser,
               let noteIDValue = NoteID(rawValue: noteID),
@@ -2715,8 +2739,6 @@ final class AppModel: ObservableObject {
         )
         guard isCurrent(context) else { throw AuthenticationError.signedOut }
         await applyNoteBatch([result.note], user: user, runtime: runtime, context: context)
-        guard isCurrent(context) else { throw AuthenticationError.signedOut }
-        await refreshAll()
     }
 
     func updateLogField(

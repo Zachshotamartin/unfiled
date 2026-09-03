@@ -1,11 +1,9 @@
 import SwiftUI
 
 struct NoteDetailView: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var optimisticChecks: [String: Bool] = [:]
     @State private var updatingItemIDs: Set<String> = []
-    @State private var showsCompleted = false
     @State private var pendingNoteAction: PendingNoteAction?
     @State private var isPerformingNoteAction = false
     @State private var feedbackMessage: String?
@@ -40,14 +38,6 @@ struct NoteDetailView: View {
 
     private var progress: ChecklistProgress {
         ChecklistProgress(items: note.checklistItems, overrides: optimisticChecks)
-    }
-
-    private var openItems: [ChecklistItemPresentation] {
-        note.checklistItems.filter { !resolvedCheck(for: $0) }
-    }
-
-    private var completedItems: [ChecklistItemPresentation] {
-        note.checklistItems.filter { resolvedCheck(for: $0) }
     }
 
     private var readableBody: String {
@@ -172,6 +162,7 @@ struct NoteDetailView: View {
         .overlay(alignment: .bottom) { SectionRule() }
     }
 
+    /// Every item stays where it is; a checked one fills its circle and dims, like Notes.
     private var checklist: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
@@ -182,44 +173,13 @@ struct NoteDetailView: View {
                 Text(progress.shortLabel)
                     .font(UnfiledType.label)
                     .foregroundStyle(UnfiledTheme.fog)
+                    .contentTransition(.numericText())
             }
             .padding(.top, UnfiledTheme.rowVertical)
             .padding(.bottom, UnfiledTheme.labelToRule)
 
-            ForEach(openItems) { item in
+            ForEach(note.checklistItems) { item in
                 checklistRow(item)
-            }
-
-            if !completedItems.isEmpty {
-                Button {
-                    if reduceMotion {
-                        showsCompleted.toggle()
-                    } else {
-                        withAnimation(.easeOut(duration: 0.2)) { showsCompleted.toggle() }
-                    }
-                } label: {
-                    HStack {
-                        Text("Completed")
-                            .font(UnfiledType.heading)
-                        Text("\(completedItems.count)")
-                            .font(UnfiledType.label)
-                            .foregroundStyle(UnfiledTheme.fog)
-                        Spacer()
-                        Image(systemName: showsCompleted ? "chevron.up" : "chevron.down")
-                            .foregroundStyle(UnfiledTheme.fog)
-                    }
-                    .frame(minHeight: 52)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityValue(showsCompleted ? "Expanded" : "Collapsed")
-                .accessibilityIdentifier("noteDetail.completedToggle")
-
-                if showsCompleted {
-                    ForEach(completedItems) { item in
-                        checklistRow(item)
-                    }
-                }
             }
         }
         .padding(.bottom, 14)
@@ -239,19 +199,20 @@ struct NoteDetailView: View {
                     Circle()
                         .stroke(isChecked ? UnfiledTheme.persimmon : UnfiledTheme.fog, lineWidth: 1.5)
                         .frame(width: 30, height: 30)
-                    if isChecked {
-                        Circle()
-                            .fill(UnfiledTheme.persimmon)
-                            .frame(width: 30, height: 30)
-                        Image(systemName: "checkmark")
-                            .font(UnfiledType.label)
-                            .foregroundStyle(UnfiledTheme.ink)
-                    } else if isUpdating {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(UnfiledTheme.fog)
+                    Circle()
+                        .fill(UnfiledTheme.persimmon)
+                        .frame(width: 30, height: 30)
+                        .scaleEffect(isChecked ? 1 : 0.2)
+                        .opacity(isChecked ? 1 : 0)
+                    GlyphView(glyph: .check, size: 14, weight: 2.2)
+                        .foregroundStyle(UnfiledTheme.ink)
+                        .scaleEffect(isChecked ? 1 : 0.4)
+                        .opacity(isChecked ? 1 : 0)
+                    if isUpdating && !isChecked {
+                        UnfiledLoadingView(size: 16, label: "Updating")
                     }
                 }
+                .animation(UnfiledMotion.animation(UnfiledMotion.emphasis), value: isChecked)
                 .frame(width: UnfiledTheme.minimumTouchTarget, height: UnfiledTheme.minimumTouchTarget)
 
                 Text(item.text)
@@ -278,11 +239,14 @@ struct NoteDetailView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        ToolbarItemGroup(placement: .topBarTrailing) {
+        // One item holding both controls, so the toolbar's pill hugs the pair instead of
+        // spacing two items across it.
+        ToolbarItem(placement: .topBarTrailing) {
+            HStack(spacing: 0) {
             Button(action: onEdit) {
                 GlyphView(glyph: .pen, size: 18, weight: 1.9)
                     .foregroundStyle(UnfiledTheme.paper)
-                    .frame(minWidth: UnfiledTheme.minimumTouchTarget, minHeight: UnfiledTheme.minimumTouchTarget)
+                    .frame(width: UnfiledTheme.minimumTouchTarget, height: UnfiledTheme.minimumTouchTarget)
             }
             .accessibilityLabel("Edit")
             .accessibilityIdentifier("noteDetail.edit")
@@ -308,6 +272,7 @@ struct NoteDetailView: View {
             .disabled(isPerformingNoteAction)
             .accessibilityLabel("Note actions")
             .accessibilityIdentifier("noteDetail.actions")
+            }
         }
     }
 
@@ -318,7 +283,10 @@ struct NoteDetailView: View {
     private func toggle(_ item: ChecklistItemPresentation, to checked: Bool) {
         guard !updatingItemIDs.contains(item.id) else { return }
         let previous = resolvedCheck(for: item)
-        optimisticChecks[item.id] = checked
+        UnfiledHaptics.selection()
+        withAnimation(UnfiledMotion.animation(UnfiledMotion.quick)) {
+            optimisticChecks[item.id] = checked
+        }
         updatingItemIDs.insert(item.id)
         feedbackMessage = nil
 
