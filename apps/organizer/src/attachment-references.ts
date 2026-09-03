@@ -1,4 +1,4 @@
-import type { ModelOperation } from "@unfiled/contracts";
+import type { MaterializedOrganizationCommand } from "@unfiled/ai-routing";
 
 /// Where a photo or recording sits inside a note body. The scheme is opaque to
 /// the model, which never sees attachment identifiers; the organizer appends
@@ -13,9 +13,14 @@ export function attachmentReference(attachment: ReferencedAttachment): string {
 }
 
 /// One paragraph per attachment, in upload order, or null when there is nothing to place.
+export type AttachmentReferenceOperation = Readonly<{
+  type: "append_paragraphs";
+  paragraphs: string[];
+}>;
+
 export function attachmentReferenceOperation(
   attachments: readonly ReferencedAttachment[]
-): ModelOperation | null {
+): AttachmentReferenceOperation | null {
   if (attachments.length === 0) return null;
   return Object.freeze({
     type: "append_paragraphs" as const,
@@ -23,29 +28,22 @@ export function attachmentReferenceOperation(
   });
 }
 
-type MaterializedWrite = Readonly<{
-  kind: string;
-  operations: readonly ModelOperation[];
-  validatedPlan: Readonly<{ operations: readonly ModelOperation[] }>;
-}>;
-
 /// Places the attachment references after the owner's own words in a materialized write.
 /// The model's plan is validated for source preservation before this runs, so the
 /// references are the organizer's own placement, never model text. Review decisions
 /// carry no operations and are returned unchanged.
-export function withAttachmentReferences<Command extends MaterializedWrite>(
-  command: Command,
+export function withAttachmentReferences(
+  command: MaterializedOrganizationCommand,
   attachments: readonly ReferencedAttachment[]
-): Command {
+): MaterializedOrganizationCommand {
   const operation = attachmentReferenceOperation(attachments);
-  if (operation === null || (command.kind !== "append" && command.kind !== "create"))
-    return command;
-  return Object.freeze({
-    ...command,
-    operations: Object.freeze([...command.operations, operation]),
-    validatedPlan: Object.freeze({
-      ...command.validatedPlan,
-      operations: Object.freeze([...command.validatedPlan.operations, operation])
-    })
-  });
+  if (operation === null || command.kind === "review") return command;
+  const placed = Object.freeze([...command.operations, operation]);
+  const validatedPlan = {
+    ...command.validatedPlan,
+    operations: [...command.validatedPlan.operations, operation]
+  };
+  return command.kind === "append"
+    ? Object.freeze({ ...command, operations: placed, validatedPlan })
+    : Object.freeze({ ...command, operations: placed, validatedPlan });
 }
