@@ -32,9 +32,9 @@ import {
 import {
   OrganizationApplicationError,
   applyOwnerAuthorizedMaterializedOrganizationCommand,
-  type AppliedOrganizationCommand
+  type AppliedOrganizationCommand,
+  applyDeterministicExtractionOverride
 } from "@unfiled/ai-routing/application";
-import { applyDeterministicExtractionOverride } from "@unfiled/ai-routing";
 import {
   OrganizationMaterializationError,
   materializeAuthorizedOrganizationPlan,

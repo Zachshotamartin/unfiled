@@ -861,3 +861,7 @@ export function applyOwnerAuthorizedMaterializedOrganizationCommand(
     targetPrivacy: input.targetPrivacy
   });
 }
+
+// The web's review resolution shapes a capture for a list or log note with the same
+// extractor the organizer uses, without pulling the evaluation corpus into its bundle.
+export { applyDeterministicExtractionOverride } from "./extraction.js";
