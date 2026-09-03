@@ -22,6 +22,9 @@ struct CaptureReceiptDetailView: View {
     let onUndo: @MainActor (String, String, Int) -> Void
     let onShowReview: @MainActor (String) -> Void
     let onEditCapture: @MainActor (String) -> Void
+    let onOrganizeAgain: @MainActor (String, String?) -> Void
+    let onDeleteCapture: @MainActor (String) -> Void
+    @State private var directions = ""
 
     var body: some View {
         ScrollView {
@@ -127,6 +130,39 @@ struct CaptureReceiptDetailView: View {
             .background(UnfiledTheme.graphite)
             .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
             .accessibilityIdentifier("receipt.edit.\(receipt.id)")
+        }
+
+        if !receipt.reasons.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                EditorialEyebrow(text: "Why it stopped")
+                ForEach(receipt.reasons, id: \.self) { reason in
+                    GlyphLabel(reason, glyph: .info, size: 14, weight: 1.8)
+                        .font(UnfiledType.secondary)
+                        .foregroundStyle(UnfiledTheme.fog)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.top, 18)
+        }
+
+        if receipt.canOrganizeAgain {
+            OrganizeAgainField(
+                directions: $directions,
+                identifier: "receipt.directions.\(receipt.id)",
+                onSubmit: { onOrganizeAgain(receipt.id, directions) }
+            )
+            .padding(.top, 18)
+            Button {
+                UnfiledHaptics.warning()
+                onDeleteCapture(receipt.id)
+            } label: {
+                Label { Text("Delete capture") } icon: { GlyphView(glyph: .trash, size: 16, weight: 1.8) }
+                    .font(UnfiledType.heading)
+                    .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
+            }
+            .buttonStyle(.unfiledPress)
+            .foregroundStyle(UnfiledTheme.fog)
+            .accessibilityIdentifier("receipt.delete.\(receipt.id)")
         }
 
         if let reviewItemID = receipt.reviewItemID, !reviewOpen {
