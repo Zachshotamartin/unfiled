@@ -114,6 +114,9 @@ struct AppShellView: View {
                 onRetryCapture: { captureID in
                     Task { @MainActor in await model.retryCapture(captureID: captureID) }
                 },
+                onEditCapture: { captureID in
+                    Task { @MainActor in await model.editCapture(captureID: captureID) }
+                },
                 onCapture: {
                     Task { @MainActor in await model.prepareCapture(source: .mobile) }
                 },
@@ -305,7 +308,10 @@ private struct CaptureReceiptDestinationView: View {
                     )
                 }
             },
-            onShowReview: { model.showReview(reviewID: $0) }
+            onShowReview: { model.showReview(reviewID: $0) },
+            onEditCapture: { captureID in
+                Task { @MainActor in await model.editCapture(captureID: captureID) }
+            }
         )
         .task { await model.loadCaptureDetail(captureID: captureID) }
     }

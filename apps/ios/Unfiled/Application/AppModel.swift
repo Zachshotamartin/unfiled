@@ -800,6 +800,38 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Opens the composer with a capture's text so the owner can change it. A capture is sealed
+    /// when it is saved, so saving the edit creates a new capture that organizes normally and
+    /// removes the earlier one, which also closes that capture's review item or failed job.
+    func editCapture(captureID: String) async {
+        guard let runtime, let user = currentUser else { return }
+        let text = capturesByID[captureID]?.rawContent
+            ?? receipts.first { $0.id == captureID }?.original
+        guard let text, !text.isEmpty else {
+            bannerMessage = "That capture's text is not available yet. Open it and try again."
+            return
+        }
+        let context = currentAccountContext(for: user)
+        do {
+            let session = try await runtime.captureSync.beginComposerDraftSession(
+                profileID: user.id,
+                source: .mobile
+            )
+            guard isCurrent(context) else { return }
+            captureSheet = CaptureSheet(
+                source: .mobile,
+                composerGeneration: session.generation,
+                initialContent: text,
+                initialPrivacy: .aiAssisted,
+                restoredDraft: false,
+                replacingCaptureID: captureID
+            )
+        } catch {
+            guard isCurrent(context) else { return }
+            bannerMessage = "A protected draft session could not be opened. Try again."
+        }
+    }
+
     func saveCapture(
         content: String,
         privacy: LocalPrivacyMode,
@@ -808,7 +840,11 @@ final class AppModel: ObservableObject {
     ) async throws {
         guard let runtime, let user = currentUser else { throw AuthenticationError.signedOut }
         let context = currentAccountContext(for: user)
+        let replacingCaptureID = captureSheet?.replacingCaptureID
         if privacy == .privateManual, await createPrivateNote(content: content, runtime: runtime, user: user, context: context) {
+            if let replacingCaptureID {
+                await removeReplacedCapture(replacingCaptureID, runtime: runtime, context: context)
+            }
             return
         }
         let captureID = try await runtime.captureSync.enqueue(
@@ -820,6 +856,9 @@ final class AppModel: ObservableObject {
             composerGeneration: composerGeneration
         )
         guard isCurrent(context) else { throw AuthenticationError.signedOut }
+        if let replacingCaptureID {
+            await removeReplacedCapture(replacingCaptureID, runtime: runtime, context: context)
+        }
         receipts.insert(
             ReceiptPresentation(
                 id: captureID,
@@ -843,6 +882,27 @@ final class AppModel: ObservableObject {
             await runtime.captureSync.drain(profileID: user.id)
             guard self.isCurrent(context) else { return }
             await self.refreshAll()
+        }
+    }
+
+    /// Removes the capture an edit replaced. Its review item or failed job closes with it.
+    private func removeReplacedCapture(
+        _ captureID: String,
+        runtime: Runtime,
+        context: AccountContext
+    ) async {
+        guard let remoteID = CaptureID(rawValue: captureID) else { return }
+        do {
+            _ = try await runtime.authenticatedAPI.deleteCapture(
+                remoteID,
+                request: try CaptureDeleteRequest(idempotencyKey: UUID().uuidString.lowercased())
+            )
+            guard isCurrent(context) else { return }
+            receipts.removeAll { $0.id == captureID }
+            reviewItems.removeAll { $0.captureID == captureID }
+        } catch {
+            guard isCurrent(context) else { return }
+            bannerMessage = "The new version is saved, but the earlier one could not be removed."
         }
     }
 
@@ -1944,6 +2004,9 @@ final class AppModel: ObservableObject {
         case .dismiss:
             guard allowed.contains(.dismiss) else { return }
             await performReviewResolution(reviewID: reviewID, resolution: .dismiss)
+        case .editText:
+            guard let captureID = item.captureId?.rawValue else { return }
+            await editCapture(captureID: captureID)
         case .keepBoth:
             guard allowed.contains(.keepBoth) else { return }
             await performReviewResolution(reviewID: reviewID, resolution: .keepBoth)

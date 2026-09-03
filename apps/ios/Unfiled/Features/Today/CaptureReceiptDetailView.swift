@@ -19,6 +19,7 @@ struct CaptureReceiptDetailView: View {
     let onMove: @MainActor (String, String, String) -> Void
     let onUndo: @MainActor (String, String, Int) -> Void
     let onShowReview: @MainActor (String) -> Void
+    let onEditCapture: @MainActor (String) -> Void
 
     var body: some View {
         ScrollView {
@@ -109,6 +110,21 @@ struct CaptureReceiptDetailView: View {
                 onMove: onMove,
                 onUndo: onUndo
             )
+        }
+
+        if !receipt.pending, receipt.retryable || receipt.outcome == .needsReview {
+            Button {
+                onEditCapture(receipt.id)
+            } label: {
+                Label { Text("Edit text") } icon: { GlyphView(glyph: .pen, size: 16, weight: 1.8) }
+                    .font(UnfiledType.heading)
+                    .frame(maxWidth: .infinity, minHeight: UnfiledTheme.controlHeight)
+            }
+            .buttonStyle(.unfiledPress)
+            .foregroundStyle(UnfiledTheme.persimmon)
+            .background(UnfiledTheme.graphite)
+            .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
+            .accessibilityIdentifier("receipt.edit.\(receipt.id)")
         }
 
         if let reviewItemID = receipt.reviewItemID {

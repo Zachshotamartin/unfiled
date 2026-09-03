@@ -17,6 +17,7 @@ struct InboxView: View {
     let onUndo: @MainActor (String, String, Int) -> Void
     let onShowReview: @MainActor (String) -> Void
     let onRetryCapture: @MainActor (String) -> Void
+    let onEditCapture: @MainActor (String) -> Void
     let onCapture: @MainActor () -> Void
     let onReviewAction: @MainActor (String, ReviewUserAction) -> Void
 
@@ -149,7 +150,8 @@ struct InboxView: View {
             onMove: onMove,
             onUndo: onUndo,
             onShowReview: onShowReview,
-            onRetryCapture: onRetryCapture
+            onRetryCapture: onRetryCapture,
+            onEditCapture: onEditCapture
         )
     }
 }
@@ -247,6 +249,12 @@ private struct ReceiptLedgerRow: View {
     let onUndo: @MainActor (String, String, Int) -> Void
     let onShowReview: @MainActor (String) -> Void
     let onRetryCapture: @MainActor (String) -> Void
+    let onEditCapture: @MainActor (String) -> Void
+
+    /// A capture that is waiting on a retry or a review can still have its text changed.
+    private var editable: Bool {
+        !receipt.pending && (receipt.retryable || receipt.outcome == .needsReview)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 15) {
@@ -339,6 +347,19 @@ private struct ReceiptLedgerRow: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier(ReceiptAccessibilityIdentifier.review(receipt.id))
                 }
+            }
+
+            if editable {
+                Button {
+                    onEditCapture(receipt.id)
+                } label: {
+                    Label { Text("Edit text") } icon: { GlyphView(glyph: .pen, size: 16, weight: 1.8) }
+                        .font(UnfiledType.heading)
+                        .frame(minHeight: UnfiledTheme.minimumTouchTarget)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(UnfiledTheme.persimmon)
+                .accessibilityIdentifier("receipt.edit.\(receipt.id)")
             }
 
             if receipt.retryable && retryAvailable {

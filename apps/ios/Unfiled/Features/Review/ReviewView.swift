@@ -444,6 +444,16 @@ struct ReviewLedgerRow: View {
                 ) { onAction(item.id, .rejectExpansion) }
             }
 
+            if item.captureID != nil {
+                reviewButton(
+                    title: "Edit text",
+                    systemImage: "pencil",
+                    prominence: .secondary,
+                    identifier: "review.editText.\(item.id)",
+                    accessibilityHint: "Opens the capture's text to change it before filing"
+                ) { onAction(item.id, .editText) }
+            }
+
             if item.allows(.dismiss) {
                 reviewButton(
                     title: "Dismiss",
