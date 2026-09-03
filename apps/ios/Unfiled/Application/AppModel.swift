@@ -572,6 +572,10 @@ final class AppModel: ObservableObject {
             }
         }
 
+        // The Inbox decides whether to show the key card and Retry from the provider key
+        // metadata, so every refresh loads it rather than waiting for Settings to open.
+        let aiSettingsLoad = Task { await self.loadAISettings() }
+
         async let notesResult = Self.attempt {
             try await Self.fetchAllNotes(api: runtime.authenticatedAPI)
         }
@@ -595,6 +599,7 @@ final class AppModel: ObservableObject {
             reviewsResult,
             outboxResult
         )
+        await aiSettingsLoad.value
         guard isCurrent(context), refreshEpoch == operationEpoch else { return }
 
         if case let .value(values) = spacePage {
