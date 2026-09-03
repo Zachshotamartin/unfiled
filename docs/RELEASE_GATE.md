@@ -8,7 +8,7 @@ what happened.
 ## The two live clients
 
 1. **API gate** (`scripts/operations/live-gate/api-gate.mjs`). A Node script signs up a synthetic
-   account against the target origin and runs the 59 documented operations in realistic order:
+   account against the target origin and runs the 61 documented operations in realistic order:
    auth (sign-up, duplicate sign-up, wrong password, sign-in, session, refresh, sign-out),
    settings and provider key, spaces and tags, the note lifecycle (create, toggle, stale
    revision, update, revisions and restore, tags, links and backlinks, move, archive and

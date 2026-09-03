@@ -246,7 +246,10 @@ function databaseError(status: number, body: unknown): ServiceRpcError {
   ) {
     return new ServiceRpcError(ServiceRpcErrorCode.KEY_UNAVAILABLE);
   }
-  if (message.includes("explicit_destination_not_owned")) {
+  if (
+    message.includes("explicit_destination_not_owned") ||
+    message.includes("attachment_not_owned")
+  ) {
     return new ServiceRpcError(ServiceRpcErrorCode.FORBIDDEN);
   }
   if (
