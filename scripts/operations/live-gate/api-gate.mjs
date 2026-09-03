@@ -89,13 +89,13 @@ async function pollUntil(label, check, { timeoutMs = 240_000, everyMs = 4_000 } 
 }
 async function drainQueues() {
   if (!CRON_SECRET) return { skipped: true };
-  const captures = await fetch(`${WEB}/api/internal/captures/drain`, {
-    headers: { authorization: `Bearer ${CRON_SECRET}` }
-  });
-  const indexing = await fetch(`${WEB}/api/internal/indexing/drain`, {
-    headers: { authorization: `Bearer ${CRON_SECRET}` }
-  });
-  return { captures: captures.status, indexing: indexing.status };
+  const headers = { authorization: `Bearer ${CRON_SECRET}` };
+  const captures = await fetch(`${WEB}/api/internal/captures/drain`, { headers });
+  // Generation maintenance opens a search-index generation for accounts that have notes, so a
+  // fresh account reaches the same indexed state as a long-lived one before the drain runs.
+  const maintenance = await fetch(`${WEB}/api/internal/indexing/maintenance`, { headers });
+  const indexing = await fetch(`${WEB}/api/internal/indexing/drain`, { headers });
+  return { captures: captures.status, maintenance: maintenance.status, indexing: indexing.status };
 }
 
 // ---------------------------------------------------------------- account
@@ -504,26 +504,73 @@ let secondNoteId = null;
 // ---------------------------------------------------------------- indexed note deletion
 // The owner's own failure: a note the search index already holds could not be deleted.
 {
-  const indexed = await write("POST", "/notes", token, { idempotencyKey: key(), title: "Gate indexed", type: "generic", spaceId: null, privacy: "ai_assisted", bodyMarkdown: "Indexed before deletion: saxophone lesson on Tuesday." });
+  const indexed = await write("POST", "/notes", token, {
+    idempotencyKey: key(),
+    title: "Gate indexed",
+    type: "generic",
+    spaceId: null,
+    privacy: "ai_assisted",
+    bodyMarkdown: "Indexed before deletion: saxophone lesson on Tuesday."
+  });
   const indexedId = indexed.json?.note?.id ?? null;
   let indexedRevision = indexed.json?.note?.currentRevision ?? 0;
-  record("notes.create_for_index", indexed.status === 201 && indexedId !== null, { status: indexed.status, code: code(indexed) });
+  record("notes.create_for_index", indexed.status === 201 && indexedId !== null, {
+    status: indexed.status,
+    code: code(indexed)
+  });
   if (indexedId) {
     await drainQueues();
-    const seen = await pollUntil("search.indexed", async () => {
-      await drainQueues();
-      const response = await api("POST", "/search", { token, body: { query: "saxophone", archive: "exclude" } });
-      const hits = response.json?.items ?? [];
-      return { done: response.status === 200 && hits.some((hit) => (hit.noteId ?? hit.id) === indexedId), status: response.status, hits: hits.length };
-    }, { timeoutMs: 120_000, everyMs: 5_000 });
-    record("search.indexes_new_note", seen.done === true, { hits: seen.hits, timedOut: seen.timedOut === true, drained: CRON_SECRET !== null });
-    const deleted = await write("DELETE", `/notes/${indexedId}`, token, { expectedRevision: indexedRevision, idempotencyKey: key() });
-    record("notes.soft_delete_indexed_note", deleted.status === 200 && deleted.json?.note?.deletedAt !== null, { status: deleted.status, code: code(deleted) });
+    const seen = await pollUntil(
+      "search.indexed",
+      async () => {
+        await drainQueues();
+        const response = await api("POST", "/search", {
+          token,
+          body: { query: "saxophone", archive: "exclude" }
+        });
+        const hits = response.json?.items ?? [];
+        return {
+          done: response.status === 200 && hits.some((hit) => (hit.noteId ?? hit.id) === indexedId),
+          status: response.status,
+          hits: hits.length
+        };
+      },
+      { timeoutMs: 120_000, everyMs: 5_000 }
+    );
+    record("search.indexes_new_note", seen.done === true, {
+      hits: seen.hits,
+      timedOut: seen.timedOut === true,
+      drained: CRON_SECRET !== null
+    });
+    const deleted = await write("DELETE", `/notes/${indexedId}`, token, {
+      expectedRevision: indexedRevision,
+      idempotencyKey: key()
+    });
+    record(
+      "notes.soft_delete_indexed_note",
+      deleted.status === 200 && deleted.json?.note?.deletedAt !== null,
+      { status: deleted.status, code: code(deleted) }
+    );
     indexedRevision = deleted.json?.note?.currentRevision ?? indexedRevision;
-    const gone = await api("POST", "/search", { token, body: { query: "saxophone", archive: "exclude" } });
-    record("search.excludes_deleted_note", gone.status === 200 && !(gone.json?.items ?? []).some((hit) => (hit.noteId ?? hit.id) === indexedId), { status: gone.status, hits: (gone.json?.items ?? []).length });
-    const restored = await write("POST", `/notes/${indexedId}/restore-deleted`, token, { expectedRevision: indexedRevision, idempotencyKey: key() });
-    record("notes.restore_indexed_note", restored.status === 200 && restored.json?.note?.deletedAt === null, { status: restored.status, code: code(restored) });
+    const gone = await api("POST", "/search", {
+      token,
+      body: { query: "saxophone", archive: "exclude" }
+    });
+    record(
+      "search.excludes_deleted_note",
+      gone.status === 200 &&
+        !(gone.json?.items ?? []).some((hit) => (hit.noteId ?? hit.id) === indexedId),
+      { status: gone.status, hits: (gone.json?.items ?? []).length }
+    );
+    const restored = await write("POST", `/notes/${indexedId}/restore-deleted`, token, {
+      expectedRevision: indexedRevision,
+      idempotencyKey: key()
+    });
+    record(
+      "notes.restore_indexed_note",
+      restored.status === 200 && restored.json?.note?.deletedAt === null,
+      { status: restored.status, code: code(restored) }
+    );
   }
 }
 
