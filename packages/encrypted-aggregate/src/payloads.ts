@@ -29,9 +29,18 @@ const NonBlankCaptureContentSchema = z
 const JsonObjectSchema = z.record(z.string(), z.json());
 const HeadingSchema = z.string().min(1).max(200);
 
+/// The owner's own directions for one capture ("put this with the plumber note", "expand this
+/// into a checklist"). They steer filing and never become note text.
+export const OwnerGuidanceSchema = z
+  .string()
+  .min(1)
+  .max(500)
+  .refine((value) => value.trim().length > 0, "Guidance cannot contain only whitespace");
+
 export const CapturePayloadSchema = z.strictObject({
   schemaVersion: z.literal(1),
-  rawContent: NonBlankCaptureContentSchema
+  rawContent: NonBlankCaptureContentSchema,
+  guidance: OwnerGuidanceSchema.optional()
 });
 export type CapturePayload = z.infer<typeof CapturePayloadSchema>;
 

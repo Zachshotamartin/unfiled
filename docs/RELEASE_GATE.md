@@ -44,7 +44,7 @@ Or put `UNFILED_GATE_OPENAI_API_KEY=…` in a gitignored `.env.live-gate` at the
 `scripts/operations/deploy-production.sh`:
 
 1. Refuses a dirty tree.
-2. Runs the live gate for HEAD against the current production. Red means no deploy.
+2. Runs the API gate against the current production with the gate that matches the deployed commit (from git), so it asks whether what is live still works; new steps that need the new deployment belong to step 4. Red means no deploy.
 3. Deploys organizer, worker, verifier, search, and web, recording the deployment ids.
 4. Runs the live gate again against the new deployments.
 5. On red, promotes the previous deployments back and exits non-zero. On green, the commit is

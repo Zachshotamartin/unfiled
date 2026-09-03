@@ -182,6 +182,7 @@ struct ReviewLedgerRow: View {
     let actionsDisabled: Bool
     let onOpenRelatedNote: @MainActor (String) -> Void
     let onAction: @MainActor (String, ReviewUserAction) -> Void
+    @State private var directions = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
@@ -212,6 +213,12 @@ struct ReviewLedgerRow: View {
                     .font(UnfiledType.body)
                     .foregroundStyle(UnfiledTheme.fog)
                     .fixedSize(horizontal: false, vertical: true)
+                ForEach(item.reasons, id: \.self) { reason in
+                    GlyphLabel(reason, glyph: .info, size: 14, weight: 1.8)
+                        .font(UnfiledType.secondary)
+                        .foregroundStyle(UnfiledTheme.fog)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Label { Text(item.proposedDestination) } icon: { GlyphView(glyph: .chevron, size: 16, weight: 1.9) }
                     .font(UnfiledType.title)
                     .fixedSize(horizontal: false, vertical: true)
@@ -453,6 +460,11 @@ struct ReviewLedgerRow: View {
             }
 
             if item.captureID != nil {
+                OrganizeAgainField(
+                    directions: $directions,
+                    identifier: "review.directions.\(item.id)",
+                    onSubmit: { onAction(item.id, .organizeAgain(guidance: directions)) }
+                )
                 reviewButton(
                     title: "Edit text",
                     glyph: .pen,
@@ -460,15 +472,20 @@ struct ReviewLedgerRow: View {
                     identifier: "review.editText.\(item.id)",
                     accessibilityHint: "Opens the capture's text to change it before filing"
                 ) { onAction(item.id, .editText) }
-            }
-
-            if item.allows(.dismiss) {
+                reviewButton(
+                    title: "Delete capture",
+                    glyph: .trash,
+                    prominence: .secondary,
+                    identifier: "review.deleteCapture.\(item.id)",
+                    accessibilityHint: "Removes the capture; nothing is filed"
+                ) { onAction(item.id, .deleteCapture) }
+            } else if item.allows(.dismiss) {
                 reviewButton(
                     title: "Not now",
                     glyph: .close,
                     prominence: .secondary,
                     identifier: ReviewAccessibilityIdentifier.dismiss(item.id),
-                    accessibilityHint: "Closes this review; the capture stays in the Inbox"
+                    accessibilityHint: "Closes this review"
                 ) { onAction(item.id, .dismiss) }
             }
         }
@@ -558,7 +575,7 @@ private struct ReviewErrorLedgerView: View {
 
 /// Copy for a review that was already decided or dismissed, on the receipt and on its page.
 enum ReviewClosedCopy {
-    static let receiptLine = "This review was already decided. The capture stays in your Inbox; edit its text to organize it again."
+    static let receiptLine = "This review was closed without filing. Organize it again below, with directions if you like."
     static let pageTitle = "Already decided"
     static let pageMessage = "This review was resolved or dismissed. The capture stays in your Inbox."
 }

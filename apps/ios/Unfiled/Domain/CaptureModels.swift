@@ -19,19 +19,33 @@ public struct CaptureCreateRequest: Codable, Equatable, Sendable {
     public let privacy: PrivacyMode
     public let explicitDestinationNoteId: NoteID?
     public let expansionDisabled: Bool
-    /// Photos and recordings already uploaded for this capture, in the order they were added.
+    /// The owner's directions for this capture (where it belongs, how to shape it). Never note text.
+    public let guidance: String?
+    /// Photos already uploaded for this capture, in the order they were added.
     public let attachmentIds: [String]?
+
+    public static let maximumGuidanceLength = 500
 
     public init(clientCaptureId: CaptureID, rawContent: String, source: CaptureSource,
                 deviceId: String? = nil, clientCreatedAt: Date, clientTimezone: String,
                 privacy: PrivacyMode = .aiAssisted, explicitDestinationNoteId: NoteID? = nil,
-                expansionDisabled: Bool = false, attachmentIds: [String]? = nil) {
+                expansionDisabled: Bool = false, guidance: String? = nil,
+                attachmentIds: [String]? = nil) {
         self.clientCaptureId = clientCaptureId; self.rawContent = rawContent; self.source = source
         self.deviceId = deviceId; self.clientCreatedAt = clientCreatedAt
         self.clientTimezone = clientTimezone; self.privacy = privacy
         self.explicitDestinationNoteId = explicitDestinationNoteId
         self.expansionDisabled = expansionDisabled
+        self.guidance = Self.normalizedGuidance(guidance)
         self.attachmentIds = attachmentIds
+    }
+
+    /// Trimmed and bounded; blank directions are the same as none.
+    public static func normalizedGuidance(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return String(trimmed.prefix(maximumGuidanceLength))
     }
 }
 

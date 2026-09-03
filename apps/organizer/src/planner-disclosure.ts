@@ -54,6 +54,7 @@ type ProviderInput = Readonly<{
   candidates: readonly ProviderCandidate[];
   capture: Readonly<{
     inferredKind: string;
+    ownerInstructions: string | null;
     text: string;
     attachments: Readonly<{
       images: readonly Readonly<{ width: number; height: number }>[];
@@ -256,6 +257,7 @@ export function prepareProviderDisclosure(
     candidates: Object.freeze(candidates),
     capture: Object.freeze({
       inferredKind: inferOrganizerCaptureKind(input.capture.rawContent),
+      ownerInstructions: input.capture.guidance ?? null,
       text: input.capture.rawContent,
       attachments: attachments.summary
     }),

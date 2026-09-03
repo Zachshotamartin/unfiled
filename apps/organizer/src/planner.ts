@@ -54,6 +54,8 @@ export type DecryptedAttachment = Readonly<{
 export type DecryptedCapture = Readonly<{
   controls: OrganizerCaptureControls;
   rawContent: string;
+  /** The owner's directions for this capture, if they gave any. Never note text. */
+  guidance?: string | null;
   attachments?: readonly DecryptedAttachment[];
 }>;
 export type DecryptedCandidate = Readonly<{

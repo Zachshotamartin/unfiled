@@ -808,7 +808,11 @@ export function createOrganizerDrain(
           activeReplanCount: replanCount,
           authority,
           candidates,
-          capture: Object.freeze({ controls, rawContent: capture.rawContent }),
+          capture: Object.freeze({
+            controls,
+            rawContent: capture.rawContent,
+            guidance: capture.guidance ?? null
+          }),
           controls,
           destination: null,
           job,
@@ -885,6 +889,7 @@ export function createOrganizerDrain(
         const currentCapture = Object.freeze({
           controls,
           rawContent: capture.rawContent,
+          guidance: capture.guidance ?? null,
           attachments: capture.attachments ?? []
         });
         const isRoutingRulePath =

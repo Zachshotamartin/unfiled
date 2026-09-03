@@ -822,6 +822,7 @@ final class AppModel: ObservableObject {
         content: String,
         source: LocalCaptureSource,
         composerGeneration: Int,
+        guidance: String? = nil,
         attachments: [CaptureAttachmentDraft] = []
     ) async throws {
         guard let runtime, let user = currentUser else { throw AuthenticationError.signedOut }
@@ -834,6 +835,7 @@ final class AppModel: ObservableObject {
             privacy: .aiAssisted,
             deviceID: deviceIdentifier(),
             composerGeneration: composerGeneration,
+            guidance: guidance,
             attachments: attachments
         )
         guard isCurrent(context) else { throw AuthenticationError.signedOut }
@@ -864,6 +866,64 @@ final class AppModel: ObservableObject {
             guard self.isCurrent(context) else { return }
             await self.refreshAll()
         }
+    }
+
+    /// Organizes a stopped capture again: the same text becomes a new capture carrying the
+    /// owner's directions, and the old capture (with its review or failed job) is removed. The new
+    /// row appears at once; the old one leaves at once.
+    func organizeAgain(captureID: String, guidance: String?) async {
+        guard let runtime, let user = currentUser,
+              let receipt = captureDetails[captureID] ?? receipts.first(where: { $0.id == captureID })
+        else { return }
+        let context = currentAccountContext(for: user)
+        let directions = CaptureCreateRequest.normalizedGuidance(guidance)
+        do {
+            let newID = try await runtime.captureSync.enqueueAgain(
+                profileID: user.id,
+                rawContent: receipt.original,
+                source: .mobile,
+                privacy: .aiAssisted,
+                deviceID: deviceIdentifier(),
+                guidance: directions
+            )
+            guard isCurrent(context) else { return }
+            receipts.insert(
+                ReceiptPresentation(
+                    id: newID,
+                    category: "Organizing",
+                    time: "NOW",
+                    headline: directions == nil ? "Organizing again" : "Organizing again with your directions",
+                    original: receipt.original,
+                    outcome: nil,
+                    destinationNoteID: nil,
+                    destinationTitle: nil,
+                    reviewItemID: nil,
+                    insertedContent: [],
+                    actions: [],
+                    pending: true,
+                    retryable: false
+                ),
+                at: 0
+            )
+            await removeReplacedCapture(captureID, runtime: runtime, context: context)
+            Task { @MainActor [weak self] in
+                guard let self, self.isCurrent(context) else { return }
+                await runtime.captureSync.drain(profileID: user.id)
+                guard self.isCurrent(context) else { return }
+                await self.refreshAll()
+            }
+        } catch {
+            guard isCurrent(context) else { return }
+            bannerMessage = "That capture could not be organized again. Try once more."
+        }
+    }
+
+    /// Removes a capture that never became a note. The row leaves at once and returns only if the
+    /// server keeps it.
+    func deleteCapture(captureID: String) async {
+        guard let runtime, let user = currentUser else { return }
+        let context = currentAccountContext(for: user)
+        await removeReplacedCapture(captureID, runtime: runtime, context: context)
     }
 
     private var attachmentBytesCache: [String: Data] = [:]
@@ -2025,6 +2085,12 @@ final class AppModel: ObservableObject {
         case .editText:
             guard let captureID = item.captureId?.rawValue else { return }
             await editCapture(captureID: captureID)
+        case let .organizeAgain(guidance):
+            guard let captureID = item.captureId?.rawValue else { return }
+            await organizeAgain(captureID: captureID, guidance: guidance)
+        case .deleteCapture:
+            guard let captureID = item.captureId?.rawValue else { return }
+            await deleteCapture(captureID: captureID)
         case .decide:
             await decideReview(item: item, allowed: allowed)
         case .keepBoth:
@@ -3406,8 +3472,7 @@ final class AppModel: ObservableObject {
         let operationEpoch = searchEpoch
         let normalized = SearchRequest(
             query: request.query,
-            includesArchived: request.includesArchived,
-            scope: request.scope
+            includesArchived: request.includesArchived
         )
         searchPaginationState = nil
         searchHasMore = false

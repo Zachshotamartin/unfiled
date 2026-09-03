@@ -25,7 +25,6 @@ enum SearchQueryDebouncer {
 struct SearchView: View {
     @Binding private var query: String
     @State private var includesArchived: Bool
-    @State private var scope: SearchScope
     @State private var submittedRequest: SearchRequest
 
     let results: [SearchResultPresentation]
@@ -64,7 +63,6 @@ struct SearchView: View {
         query: Binding<String>,
         embedded: Bool = false,
         includesArchived: Bool = false,
-        initialScope: SearchScope = .all,
         debounceDuration: Duration = SearchQueryDebouncer.defaultDelay,
         onSearch: @escaping @MainActor (SearchRequest) -> Void,
         onLoadMore: @escaping @MainActor () async -> Void = {},
@@ -91,18 +89,16 @@ struct SearchView: View {
         _query = query
         self.embedded = embedded
         _includesArchived = State(initialValue: includesArchived)
-        _scope = State(initialValue: initialScope)
         _submittedRequest = State(
             initialValue: SearchRequest(
                 query: query.wrappedValue,
-                includesArchived: includesArchived,
-                scope: initialScope
+                includesArchived: includesArchived
             )
         )
     }
 
     private var request: SearchRequest {
-        SearchRequest(query: query, includesArchived: includesArchived, scope: scope)
+        SearchRequest(query: query, includesArchived: includesArchived)
     }
 
     var body: some View {
@@ -115,7 +111,6 @@ struct SearchView: View {
 
     private var embeddedBody: some View {
         LazyVStack(alignment: .leading, spacing: 0) {
-            scopeControl
             archiveControl
             if request.hasQuery {
                 resultsHeader
@@ -149,7 +144,6 @@ struct SearchView: View {
                     .padding(.bottom, UnfiledTheme.sectionTop)
                 }
                 searchField
-                scopeControl
                 archiveControl
                 if request.hasQuery {
                     resultsHeader
@@ -221,27 +215,6 @@ struct SearchView: View {
             RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius)
                 .stroke(UnfiledTheme.border, lineWidth: 1)
         }
-    }
-
-    private var scopeControl: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: UnfiledTheme.controlGap) {
-                ForEach(SearchScope.allCases, id: \.self) { option in
-                    Chip(title: option.title, selected: scope == option) { scope = option }
-                        .accessibilityLabel("\(option.title), \(option.detail)")
-                        .accessibilityValue(scope == option ? "Selected" : "Not selected")
-                        .accessibilityIdentifier("search.scope.\(option.rawValue)")
-                }
-                Spacer()
-            }
-            Text(scope.detail)
-                .font(UnfiledType.caption)
-                .foregroundStyle(UnfiledTheme.fog)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.top, 16)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("search.scope")
     }
 
     private var archiveControl: some View {

@@ -20,12 +20,10 @@ final class MilestoneFNativeSurfaceTests: XCTestCase {
         )
     }
 
-    func testSearchScopeMapsToExactBodyOnlyAPIRequest() throws {
-        let lexical = SearchRequest(
-            query: "  Roosevelt method  ",
-            includesArchived: false,
-            scope: .all
-        )
+    /// One search, no scope: exact text across every note, so the request never carries a
+    /// privacy filter and the query never reaches the semantic search service.
+    func testSearchRequestIsExactTextAcrossEveryNote() throws {
+        let lexical = SearchRequest(query: "  Roosevelt method  ", includesArchived: false)
         let lexicalBody = try jsonObject(lexical.apiRequest())
 
         XCTAssertEqual(Set(lexicalBody.keys), ["query", "archive", "limit"])
@@ -34,27 +32,14 @@ final class MilestoneFNativeSurfaceTests: XCTestCase {
         XCTAssertEqual(lexicalBody["limit"] as? Int, 50)
         XCTAssertNil(lexicalBody["privacy"])
 
-        let assisted = SearchRequest(
-            query: "workout progress",
-            includesArchived: true,
-            scope: .aiAssisted
-        )
-        let assistedBody = try jsonObject(
-            assisted.apiRequest(cursor: "opaque-page-two", limit: 25)
-        )
+        let archived = SearchRequest(query: "workout progress", includesArchived: true)
+        let archivedBody = try jsonObject(archived.apiRequest(cursor: "opaque-page-two", limit: 25))
 
-        XCTAssertEqual(
-            Set(assistedBody.keys),
-            ["query", "archive", "privacy", "cursor", "limit"]
-        )
-        XCTAssertEqual(assistedBody["archive"] as? String, "include")
-        XCTAssertEqual(assistedBody["privacy"] as? String, "ai_assisted")
-        XCTAssertEqual(assistedBody["cursor"] as? String, "opaque-page-two")
-        XCTAssertEqual(assistedBody["limit"] as? Int, 25)
-        XCTAssertEqual(
-            SearchScope.aiAssisted.detail,
-            "Your query is sent to OpenAI through Unfiled’s dedicated search service—not your saved organizer key."
-        )
+        XCTAssertEqual(Set(archivedBody.keys), ["query", "archive", "cursor", "limit"])
+        XCTAssertEqual(archivedBody["archive"] as? String, "include")
+        XCTAssertEqual(archivedBody["cursor"] as? String, "opaque-page-two")
+        XCTAssertEqual(archivedBody["limit"] as? Int, 25)
+        XCTAssertNil(archivedBody["privacy"])
     }
 
     func testSearchPaginationMergesExactCursorPagesWithoutDuplicates() throws {

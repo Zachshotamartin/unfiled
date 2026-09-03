@@ -61,6 +61,8 @@ struct ReceiptPresentation: Equatable, Identifiable, Sendable {
     let actions: [ReceiptActionPresentation]
     let pending: Bool
     let retryable: Bool
+    /// The organizer's reason codes for the outcome, for the "why it stopped" copy.
+    var reasonCodes: [String] = []
     var attachments: [ReceiptAttachmentPresentation] = []
 
     /// A capture that is waiting on a retry or a review can still have its text changed; the
@@ -68,6 +70,12 @@ struct ReceiptPresentation: Equatable, Identifiable, Sendable {
     var canEditText: Bool {
         !pending && (retryable || outcome == .needsReview)
     }
+    /// A capture that stopped short of a note can be organized again, with the owner's directions.
+    var canOrganizeAgain: Bool {
+        !pending && (retryable || outcome == .needsReview)
+    }
+    /// The plain-language reasons the organizer stopped, in the order the codes arrived.
+    var reasons: [String] { ReviewReasonCopy.sentences(for: reasonCodes) }
 
     /// The row as it reads the moment a retry is asked for, before the server replies.
     func retrying() -> ReceiptPresentation {
@@ -231,6 +239,8 @@ struct ReviewPresentation: Equatable, Identifiable, Sendable {
     let suggestedNewNote: ReviewNewNotePresentation?
     let relatedNotes: [ReviewDestinationPresentation]
     let allowedActions: [ReviewActionKind]
+    /// Why Unfiled could not file it, in plain language, from the receipt's reason codes.
+    var reasons: [String] = []
     var attachments: [ReceiptAttachmentPresentation] = []
 
     func allows(_ action: ReviewActionKind) -> Bool {
@@ -249,6 +259,10 @@ enum ReviewUserAction: Sendable {
     case rejectExpansion
     /// Change the capture's text; the edit becomes a new capture and this one is removed.
     case editText
+    /// Organize the capture again, with the owner's directions attached; this review closes.
+    case organizeAgain(guidance: String?)
+    /// Remove the capture entirely; nothing was filed.
+    case deleteCapture
     /// Take the organizer's own suggestion, or start a note of the kind it detected.
     case decide
 }

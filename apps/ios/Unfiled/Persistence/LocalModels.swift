@@ -31,6 +31,7 @@ struct CaptureDraft: Codable, Equatable, Identifiable, Sendable {
     let privacy: LocalPrivacyMode
     let explicitDestinationNoteID: String?
     let expansionDisabled: Bool
+    var guidance: String? = nil
 }
 
 enum LocalAttachmentKind: String, Codable, CaseIterable, Hashable, Sendable {

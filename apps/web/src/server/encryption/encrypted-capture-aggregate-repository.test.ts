@@ -184,7 +184,7 @@ function detail(
   });
 }
 
-function input(privacy: "ai_assisted" | "private_manual" = "private_manual") {
+function input(privacy: "ai_assisted" | "private_manual" = "private_manual", guidance?: string) {
   return Object.freeze({
     clientCaptureId: CAPTURE,
     rawContent: RAW,
@@ -192,7 +192,8 @@ function input(privacy: "ai_assisted" | "private_manual" = "private_manual") {
     clientCreatedAt: CLIENT_AT,
     clientTimezone: "America/Los_Angeles",
     privacy,
-    expansionDisabled: false
+    expansionDisabled: false,
+    ...(guidance === undefined ? {} : { guidance })
   });
 }
 
@@ -391,6 +392,27 @@ async function expectServiceError(promise: Promise<unknown>, code: string): Prom
 }
 
 describe("encrypted capture aggregate repository", () => {
+  it("seals the owner's guidance with the capture and keeps it out of the RPC", async () => {
+    const aggregate = aggregateMocks();
+    const rpc = vi.fn<ServiceRpcClient["rpc"]>((name) => {
+      if (name === "get_encrypted_capture_detail") {
+        return Promise.reject(new ServiceRpcError(ServiceRpcErrorCode.NOT_FOUND));
+      }
+      if (name === "create_encrypted_capture_with_job") {
+        return Promise.resolve({ captureId: CAPTURE, jobId: JOB, replayed: false });
+      }
+      return Promise.reject(new Error("unexpected_rpc"));
+    });
+    const guidance = "file this with the plumber note";
+    await repository(aggregate.aggregate, createEncryptedCaptureRpcAdapter({ rpc })).createCapture(
+      context,
+      input("ai_assisted", guidance)
+    );
+    const sealed = aggregate.sealCapture.mock.calls[0]?.[1] as { payload: { guidance?: string } };
+    expect(sealed.payload.guidance).toBe(guidance);
+    expect(JSON.stringify(rpc.mock.calls)).not.toContain(guidance);
+  });
+
   it("seals, opens, MAC-verifies, and submits a private capture through the strict adapter", async () => {
     const aggregate = aggregateMocks();
     const rpc = vi.fn<ServiceRpcClient["rpc"]>((name) => {

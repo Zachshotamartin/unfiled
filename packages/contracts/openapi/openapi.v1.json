@@ -6500,6 +6500,9 @@
             "pattern": "^note_[0-9A-HJKMNP-TV-Z]{26}$"
           },
           "expansionDisabled": { "default": false, "type": "boolean" },
+          "guidance": {
+            "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 500 }, { "type": "null" }]
+          },
           "attachmentIds": {
             "maxItems": 5,
             "type": "array",

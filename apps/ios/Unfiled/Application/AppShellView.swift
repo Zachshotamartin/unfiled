@@ -125,6 +125,12 @@ struct AppShellView: View {
                 onEditCapture: { captureID in
                     Task { @MainActor in await model.editCapture(captureID: captureID) }
                 },
+                onOrganizeAgain: { captureID, guidance in
+                    Task { @MainActor in await model.organizeAgain(captureID: captureID, guidance: guidance) }
+                },
+                onDeleteCapture: { captureID in
+                    Task { @MainActor in await model.deleteCapture(captureID: captureID) }
+                },
                 onCapture: {
                     Task { @MainActor in await model.prepareCapture(source: .mobile) }
                 },
@@ -326,6 +332,12 @@ private struct CaptureReceiptDestinationView: View {
             onShowReview: { model.showReview(reviewID: $0) },
             onEditCapture: { captureID in
                 Task { @MainActor in await model.editCapture(captureID: captureID) }
+            },
+            onOrganizeAgain: { captureID, guidance in
+                Task { @MainActor in await model.organizeAgain(captureID: captureID, guidance: guidance) }
+            },
+            onDeleteCapture: { captureID in
+                Task { @MainActor in await model.deleteCapture(captureID: captureID) }
             }
         )
         .task { await model.loadCaptureDetail(captureID: captureID) }

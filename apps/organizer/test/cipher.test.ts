@@ -697,7 +697,7 @@ describe("production organizer cipher", () => {
     const cipher = createProductionOrganizerCipher();
     await expect(
       cipher.openCapture({ authority: AUTHORITY, job: job(source), signal: SIGNAL })
-    ).resolves.toEqual({ controls: CONTROLS, rawContent });
+    ).resolves.toEqual({ controls: CONTROLS, rawContent, guidance: null });
 
     const sourceCipher = source.cipher as Readonly<{
       envelope: ContentEnvelopeV1;

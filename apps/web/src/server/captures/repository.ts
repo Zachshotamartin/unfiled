@@ -27,6 +27,7 @@ export type NormalizedCaptureCreateInput = Readonly<{
   privacy: Capture["privacy"];
   explicitDestinationNoteId?: EntityId<"note"> | undefined;
   expansionDisabled: boolean;
+  guidance?: string | undefined;
 }>;
 
 export type NormalizedAttachmentUploadInput = Readonly<

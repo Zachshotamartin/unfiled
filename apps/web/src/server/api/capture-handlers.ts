@@ -129,7 +129,11 @@ export function createCaptureHandlers(dependencies: CaptureHandlerDependencies) 
         const body = await readJsonObject(request);
         const input = parse(CaptureCreateRequestSchema, body);
         requireCaptureIdempotency(request, input.clientCaptureId);
-        const result = await repository.createCapture(context, input);
+        const { guidance, ...rest } = input;
+        const result = await repository.createCapture(context, {
+          ...rest,
+          ...(guidance === undefined || guidance === null ? {} : { guidance })
+        });
         scheduleDrain();
         return noStore(result, 202);
       });

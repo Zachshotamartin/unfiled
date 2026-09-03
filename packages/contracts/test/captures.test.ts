@@ -349,6 +349,31 @@ describe("Milestone C capture contracts", () => {
   });
 });
 
+describe("capture guidance", () => {
+  const base = {
+    clientCaptureId: CAPTURE_ID,
+    rawContent: "milk, eggs",
+    source: "mobile",
+    clientCreatedAt: "2026-09-03T12:00:00.000Z",
+    clientTimezone: "UTC"
+  };
+
+  it("accepts trimmed guidance up to 500 characters and treats null as none", () => {
+    expect(
+      CaptureCreateRequestSchema.parse({ ...base, guidance: "  with the groceries  " }).guidance
+    ).toBe("with the groceries");
+    expect(CaptureCreateRequestSchema.parse({ ...base, guidance: null }).guidance).toBeNull();
+    expect(CaptureCreateRequestSchema.parse(base).guidance).toBeUndefined();
+  });
+
+  it("rejects blank or oversized guidance", () => {
+    expect(CaptureCreateRequestSchema.safeParse({ ...base, guidance: "   " }).success).toBe(false);
+    expect(
+      CaptureCreateRequestSchema.safeParse({ ...base, guidance: "x".repeat(501) }).success
+    ).toBe(false);
+  });
+});
+
 describe("capture attachments", () => {
   it("issues att identifiers and accepts up to four photos and one recording on a capture", () => {
     const attachmentId = createEntityId("att");

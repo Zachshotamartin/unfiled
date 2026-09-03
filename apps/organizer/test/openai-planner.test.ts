@@ -879,6 +879,7 @@ describe("OpenAI Responses organizer planner with photos", () => {
     };
     expect(providerInput.capture).toEqual({
       inferredKind: "freeform",
+      ownerInstructions: null,
       text: "Whiteboard from the kitchen",
       attachments: { images: [{ width: 4, height: 3 }], recordings: 1 }
     });
