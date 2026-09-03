@@ -27,21 +27,21 @@ const oneLine = Object.freeze({
 
 const appendRaw = objectSchema({
   content: { type: "string" },
-  type: { const: "append_raw" }
+  type: { const: "append_raw", type: "string" }
 });
 const appendParagraphs = objectSchema({
   paragraphs: { items: oneLine, maxItems: 20, minItems: 1, type: "array" },
-  type: { const: "append_paragraphs" }
+  type: { const: "append_paragraphs", type: "string" }
 });
 const appendListItems = objectSchema({
   items: { items: oneLine, maxItems: 50, minItems: 1, type: "array" },
   section: nullableString,
-  type: { const: "append_list_items" }
+  type: { const: "append_list_items", type: "string" }
 });
 const addRelation = objectSchema({
   linkType: { enum: ["reference", "related"], type: "string" },
   toCandidateId: { pattern: EPHEMERAL_CANDIDATE_ID_PATTERN, type: "string" },
-  type: { const: "add_relation" }
+  type: { const: "add_relation", type: "string" }
 });
 
 /**
@@ -127,7 +127,7 @@ export const OPENAI_ORGANIZATION_PLAN_SCHEMA: JsonSchema = Object.freeze({
       maxItems: 5,
       type: "array"
     },
-    schemaVersion: { const: 1 }
+    schemaVersion: { const: 1, type: "integer" }
   })
 });
 

@@ -89,6 +89,29 @@ describe("OPENAI_ORGANIZATION_PLAN_SCHEMA", () => {
     expect(problems).toEqual([]);
   });
 
+  it("gives every schema node a type, a union, or a reference", () => {
+    const untyped: string[] = [];
+    const visit = (node: unknown, path: string): void => {
+      if (Array.isArray(node)) {
+        node.forEach((item, index) => visit(item, `${path}[${index}]`));
+        return;
+      }
+      if (node === null || typeof node !== "object") return;
+      const record = node as Record<string, unknown>;
+      if (!("type" in record) && !("anyOf" in record) && !("$ref" in record)) untyped.push(path);
+      for (const [key, value] of Object.entries(record)) {
+        if (SCHEMA_CONTAINERS.has(key) && value !== null && typeof value === "object") {
+          for (const [name, child] of Object.entries(value as Record<string, unknown>))
+            visit(child, `${path}.${key}.${name}`);
+          continue;
+        }
+        if (key === "items" || key === "anyOf") visit(value, `${path}.${key}`);
+      }
+    };
+    visit(OPENAI_ORGANIZATION_PLAN_SCHEMA, "$");
+    expect(untyped).toEqual([]);
+  });
+
   it("does not nest anyOf at the root", () => {
     expect(OPENAI_ORGANIZATION_PLAN_SCHEMA.type).toBe("object");
     expect("anyOf" in OPENAI_ORGANIZATION_PLAN_SCHEMA).toBe(false);
