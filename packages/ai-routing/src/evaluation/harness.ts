@@ -4,6 +4,7 @@ import {
   type OrganizationPlan
 } from "@unfiled/contracts";
 
+import { ownerCaptureText, type RoutedCaptureContent } from "../capture-text.js";
 import {
   applyDeterministicExtractionOverride,
   parseDeterministicExtraction
@@ -14,6 +15,7 @@ import {
 } from "../materialization.js";
 import {
   bandRoutingDecision,
+  failClosedRoutingPolicy,
   type RoutingPolicyInput,
   type RoutingPolicyResult
 } from "../policy.js";
@@ -77,12 +79,22 @@ export type RoutingEvaluationReport = Readonly<{
   passed: boolean;
 }>;
 
-function deterministicOperation(testCase: RoutingEvaluationCase): ModelOperation {
-  const parsed = parseDeterministicExtraction(
-    testCase.capture,
-    testCase.definition.expect.expectedKind
-  );
-  return parsed?.operation ?? { type: "append_raw", content: testCase.capture };
+/** The capture as the organizer reads it: stored text, what it carries, what the model saw. */
+function routedCapture(testCase: RoutingEvaluationCase): RoutedCaptureContent {
+  const attachments = testCase.attachments;
+  return Object.freeze({
+    rawContent: testCase.capture,
+    attachmentCount: (attachments?.images ?? 0) + (attachments?.recordings ?? 0),
+    visualDescriptor: attachments?.visualDescriptor ?? null
+  });
+}
+
+function deterministicOperation(
+  testCase: RoutingEvaluationCase,
+  sourceText: string
+): ModelOperation {
+  const parsed = parseDeterministicExtraction(sourceText, testCase.definition.expect.expectedKind);
+  return parsed?.operation ?? { type: "append_raw", content: sourceText };
 }
 
 function buildMockPlan(testCase: RoutingEvaluationCase): unknown {
@@ -91,11 +103,15 @@ function buildMockPlan(testCase: RoutingEvaluationCase): unknown {
     mockOutput.fault === "invalid_destination"
       ? "note_01J6M9Q7G4BMKB33GSG3NJ6D7Z"
       : mockOutput.destinationCandidateId;
-  const operations: ModelOperation[] = [
+  const sourceText = ownerCaptureText(routedCapture(testCase));
+  // A capture the owner sent without typing anything gives the model nothing to write: the
+  // photo the organizer places is the whole of the note's new content.
+  const operations: ModelOperation[] =
     mockOutput.fault === "rewritten_source"
-      ? { type: "append_raw", content: "replacement output with invented information" }
-      : deterministicOperation(testCase)
-  ];
+      ? [{ type: "append_raw", content: "replacement output with invented information" }]
+      : sourceText.length === 0
+        ? []
+        : [deterministicOperation(testCase, sourceText)];
   const plan = {
     schemaVersion: 1,
     captureKind: testCase.definition.expect.expectedKind,
@@ -126,24 +142,26 @@ function validPlanForCase(testCase: RoutingEvaluationCase): Readonly<{
   preservationPassed: boolean;
 }> {
   const unknownPlan = buildMockPlan(testCase);
+  const sourceText = ownerCaptureText(routedCapture(testCase));
   try {
     const initiallyAuthorized = parseAuthorizedOrganizationPlan({
       unknownPlan,
-      manifest: testCase.definition.manifest
+      manifest: testCase.definition.manifest,
+      captureHasNoOwnerText: sourceText.length === 0
     });
     if (initiallyAuthorized.plan.captureKind !== testCase.definition.expect.expectedKind) {
       return { plan: null, valid: false, preservationPassed: false };
     }
     const overridden = applyDeterministicExtractionOverride({
-      captureText: testCase.capture,
+      captureText: sourceText,
       inferredKind: testCase.definition.expect.expectedKind,
       plan: initiallyAuthorized.plan
     });
-    const preservation = inspectPlanSourcePreservation(testCase.capture, overridden.plan);
+    const preservation = inspectPlanSourcePreservation(sourceText, overridden.plan);
     const authorized = parseAuthorizedOrganizationPlan({
       unknownPlan: overridden.plan,
       manifest: initiallyAuthorized.manifest,
-      captureText: testCase.capture
+      captureText: sourceText
     });
     return { plan: authorized.plan, valid: true, preservationPassed: preservation.preserved };
   } catch (error: unknown) {
@@ -157,26 +175,34 @@ function validPlanForCase(testCase: RoutingEvaluationCase): Readonly<{
   }
 }
 
-function evaluatedPolicyInput(
+/**
+ * A case that never produced a valid plan, or that carries a simulated operational failure, is
+ * banded by the fail-closed path: there is no plan to score, and that is the same path the
+ * organizer takes in production.
+ */
+function evaluatedPolicy(
   testCase: RoutingEvaluationCase,
   plan: OrganizationPlan | null,
   valid: boolean
-): RoutingPolicyInput {
+): RoutingPolicyResult {
   const profile = testCase.definition.policy;
-  return {
+  const failure = valid ? profile.simulatedFailure : "invalid_plan";
+  if (failure !== null) return failClosedRoutingPolicy(failure, profile.features.margin);
+  const input: RoutingPolicyInput = {
     mode: profile.mode,
-    planDecision: valid && plan !== null ? plan.decision : "add_to_inbox",
+    planDecision: plan === null ? "add_to_inbox" : plan.decision,
     captureKind: testCase.definition.expect.expectedKind,
     destinationNoteType: profile.destinationNoteType,
-    captureLength: testCase.capture.length,
+    captureLength: ownerCaptureText(routedCapture(testCase)).length,
     accountCaptureOrdinal: profile.accountCaptureOrdinal,
     retrievalAutoEligible: profile.retrievalAutoEligible,
     deterministicRuleMatch: profile.deterministicRuleMatch,
     duplicateNoteSuspected: profile.duplicateNoteSuspected,
-    failure: valid ? profile.simulatedFailure : "invalid_plan",
+    captureCarriesUploads: routedCapture(testCase).attachmentCount > 0,
     features: profile.features,
     createSignals: profile.createSignals
   };
+  return bandRoutingDecision(input);
 }
 
 function actionForDecision(decision: OrganizationPlan["decision"]): "append" | "create" | "defer" {
@@ -193,9 +219,7 @@ function evaluateCase(testCase: RoutingEvaluationCase): RoutingCaseEvaluation {
     (candidateId) => candidateIds.has(candidateId)
   );
   const validation = validPlanForCase(testCase);
-  const policy = bandRoutingDecision(
-    evaluatedPolicyInput(testCase, validation.plan, validation.valid)
-  );
+  const policy = evaluatedPolicy(testCase, validation.plan, validation.valid);
   const decision =
     validation.valid && validation.plan !== null ? validation.plan.decision : "add_to_inbox";
   const selectedDestination =

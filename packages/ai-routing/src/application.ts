@@ -227,15 +227,20 @@ function fail(code: OrganizationApplicationErrorCodeValue): never {
   throw new OrganizationApplicationError(code);
 }
 
-function captureText(value: unknown): string {
-  if (
-    typeof value !== "string" ||
-    value.length < 1 ||
-    value.length > MAX_CAPTURE_LENGTH ||
-    value.trim().length === 0
-  ) {
+/**
+ * The owner's own words for this capture. The empty string is the one way to say the owner
+ * wrote none — a capture whose only content is an upload — and it is accepted only when the
+ * organizer supplies the paragraphs that will stand in the note instead, so no path can
+ * produce a note with nothing in it.
+ */
+function captureText(value: unknown, hasOrganizerPlacement: boolean): string {
+  if (typeof value !== "string" || value.length > MAX_CAPTURE_LENGTH) {
     return fail(OrganizationApplicationErrorCode.INVALID_COMMAND);
   }
+  if (value.length === 0) {
+    return hasOrganizerPlacement ? value : fail(OrganizationApplicationErrorCode.INVALID_COMMAND);
+  }
+  if (value.trim().length === 0) return fail(OrganizationApplicationErrorCode.INVALID_COMMAND);
   return value;
 }
 
@@ -253,9 +258,12 @@ function ownerId(value: unknown): string {
 }
 
 function materializedOperations(
-  values: readonly MaterializedOrganizationOperation[]
+  values: readonly MaterializedOrganizationOperation[],
+  hasOrganizerPlacement: boolean
 ): readonly MaterializedOrganizationOperation[] {
-  if (values.length < 1 || values.length > 5) {
+  // A model that wrote nothing is only acceptable when the organizer is placing the content
+  // itself, which is the upload-only capture: the photo is the note.
+  if (values.length > 5 || (values.length === 0 && !hasOrganizerPlacement)) {
     return fail(OrganizationApplicationErrorCode.INVALID_COMMAND);
   }
   return Object.freeze(
@@ -572,6 +580,14 @@ function restoreOperation(snapshot: NoteSnapshot): UserOperation {
   });
 }
 
+/**
+ * Whether a note of this type can hold a paragraph at all. A list or log body is a rendering
+ * of its items, so a paragraph placed in one is either refused by the projection or silently
+ * dropped; there is nowhere in such a note for a photo reference to live.
+ */
+export function noteTypeHoldsParagraphs(noteType: NoteSnapshot["type"]): boolean {
+  return noteType !== "list" && noteType !== "log";
+}
 
 /**
  * The organizer's own paragraphs, applied through the same machinery as the model's so the
@@ -579,15 +595,22 @@ function restoreOperation(snapshot: NoteSnapshot): UserOperation {
  */
 function withOrganizerPlacement(
   operations: readonly MaterializedOrganizationOperation[],
-  paragraphs: readonly string[] | undefined
+  paragraphs: readonly string[] | undefined,
+  noteType: NoteSnapshot["type"]
 ): readonly MaterializedOrganizationOperation[] {
   if (paragraphs === undefined || paragraphs.length === 0) return operations;
   if (paragraphs.some((paragraph) => paragraph.length === 0)) {
     return fail(OrganizationApplicationErrorCode.INVALID_COMMAND);
   }
+  if (!noteTypeHoldsParagraphs(noteType)) {
+    return fail(OrganizationApplicationErrorCode.INVALID_OPERATION);
+  }
   return Object.freeze([
     ...operations,
-    Object.freeze({ type: "append_paragraphs" as const, paragraphs: Object.freeze([...paragraphs]) })
+    Object.freeze({
+      type: "append_paragraphs" as const,
+      paragraphs: Object.freeze([...paragraphs])
+    })
   ]) as readonly MaterializedOrganizationOperation[];
 }
 function buildDraft(
@@ -753,14 +776,15 @@ function applyWithAuthority(
     ) {
       return fail(OrganizationApplicationErrorCode.INVALID_COMMAND);
     }
-    const exactCaptureText = captureText(input.captureText);
+    const hasOrganizerPlacement = (input.attachmentParagraphs?.length ?? 0) > 0;
+    const exactCaptureText = captureText(input.captureText, hasOrganizerPlacement);
     const exactOwnerId = ownerId(input.ownerId);
     const parsedOccurredAt = UtcInstantSchema.safeParse(input.occurredAt);
     if (!parsedOccurredAt.success) {
       return fail(OrganizationApplicationErrorCode.INVALID_COMMAND);
     }
     const occurredAt = parsedOccurredAt.data;
-    const operations = materializedOperations(command.operations);
+    const operations = materializedOperations(command.operations, hasOrganizerPlacement);
     try {
       assertPlanSourcePreserved(exactCaptureText, {
         operations: preservationOperations(operations)
@@ -771,14 +795,12 @@ function applyWithAuthority(
       }
       throw error;
     }
-    const placedOperations = withOrganizerPlacement(operations, input.attachmentParagraphs);
-
     if (command.kind === "create") {
       const initial = emptyCreateSnapshot(command, authority.targetPrivacy);
       const idFactory = commandIdFactory(command, input.idFactory, initial);
       const draft = buildDraft(
         command,
-        placedOperations,
+        withOrganizerPlacement(operations, input.attachmentParagraphs, initial.type),
         initial,
         exactCaptureText,
         occurredAt,
@@ -826,7 +848,7 @@ function applyWithAuthority(
     const idFactory = commandIdFactory(command, input.idFactory, beforeSnapshot);
     const draft = buildDraft(
       command,
-      placedOperations,
+      withOrganizerPlacement(operations, input.attachmentParagraphs, beforeSnapshot.type),
       beforeSnapshot,
       exactCaptureText,
       occurredAt,

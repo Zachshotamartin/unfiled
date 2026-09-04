@@ -1,7 +1,5 @@
-import type { MaterializedOrganizationCommand } from "@unfiled/ai-routing";
-
 /// Where a photo or recording sits inside a note body. The scheme is opaque to
-/// the model, which never sees attachment identifiers; the organizer appends
+/// the model, which never sees attachment identifiers; the organizer places
 /// these references itself after the plan is authorized.
 export const ATTACHMENT_REFERENCE_SCHEME = "unfiled-attachment:" as const;
 
@@ -10,22 +8,6 @@ type ReferencedAttachment = Readonly<{ attachmentId: `att_${string}`; kind: "ima
 export function attachmentReference(attachment: ReferencedAttachment): string {
   const target = `${ATTACHMENT_REFERENCE_SCHEME}${attachment.attachmentId}`;
   return attachment.kind === "image" ? `![Photo](${target})` : `[Recording](${target})`;
-}
-
-/// One paragraph per attachment, in upload order, or null when there is nothing to place.
-export type AttachmentReferenceOperation = Readonly<{
-  type: "append_paragraphs";
-  paragraphs: string[];
-}>;
-
-export function attachmentReferenceOperation(
-  attachments: readonly ReferencedAttachment[]
-): AttachmentReferenceOperation | null {
-  if (attachments.length === 0) return null;
-  return Object.freeze({
-    type: "append_paragraphs" as const,
-    paragraphs: attachments.map(attachmentReference)
-  });
 }
 
 /// The paragraphs the organizer places for a capture's uploads, in upload order.

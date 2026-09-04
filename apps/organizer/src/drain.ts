@@ -1,12 +1,16 @@
 import {
   applyDeterministicExtractionOverride,
   bandRoutingDecision,
+  captureKindText,
+  failClosedRoutingPolicy,
   materializeAuthorizedOrganizationPlan,
   OrganizationMaterializationError,
+  ownerCaptureText,
   parseAuthorizedOrganizationPlan,
   type MaterializedOrganizationCommand,
   type OrganizerCandidateManifest,
   type RoutingBehaviorMode,
+  type RoutingFailure,
   type RoutingPolicyResult,
   type RoutingSignalFeatures,
   type StableOrganizationIds
@@ -41,6 +45,7 @@ import {
   buildDeterministicRoutingRulePlan,
   inferOrganizerCaptureKind,
   proposedNoteIdForJob,
+  routedOrganizerCapture,
   sameOrganizerCaptureControls
 } from "./planner.js";
 import {
@@ -48,6 +53,7 @@ import {
   OrganizerProviderError,
   OrganizerUnavailableError
 } from "./errors.js";
+import { OrganizerDatabaseContractError } from "./database.js";
 import { errorOrigin } from "./logging.js";
 
 export type DrainTrigger = "manual" | "recovery" | "schedule";
@@ -275,6 +281,13 @@ export type OrganizerCandidateRetrievalPort = Readonly<{
     OrganizerCandidatePage &
       Readonly<{
         ragGenerationId?: string | null;
+        /**
+         * The candidate page the repository recorded under this lease, which the revalidation
+         * manifest must mirror exactly. It is separate from `candidates` because a verified
+         * complete scan that found no usable destination discloses nothing while the repository
+         * still holds the page it listed to read the current controls.
+         */
+        revalidationCandidates: readonly EncryptedCandidate[];
         routingPolicyContext: OrganizerRoutingPolicyContext;
       }>
   >;
@@ -494,19 +507,30 @@ function preparedStableIds(
   });
 }
 
+/**
+ * What the owner is told, and whether the job may run again. `validation_failed` is permanent
+ * and names the owner's capture, so only a failure actually attributable to that capture may
+ * carry it: a database contract breach or a programming fault inside the job loop is the
+ * organizer's problem, not the capture's, and must be retryable.
+ */
 function safeFailure(error: unknown): Readonly<{ errorCode: string; retryable: boolean }> {
   if (error instanceof OrganizerProviderError)
     return { errorCode: error.safeCode, retryable: error.retryable };
   if (error instanceof OrganizerUnavailableError)
     return { errorCode: "provider_unavailable", retryable: true };
+  if (error instanceof OrganizerDatabaseContractError)
+    return { errorCode: "provider_unavailable", retryable: true };
   if (error instanceof Error && error.name === "AbortError")
     return { errorCode: "provider_unavailable", retryable: true };
-  return { errorCode: "validation_failed", retryable: false };
+  return { errorCode: "provider_unavailable", retryable: true };
 }
 
 function signalActive(signal: AbortSignal): void {
   if (signal.aborted) throw new DOMException("The operation was aborted", "AbortError");
 }
+
+/** Enough to write one transition after the job's own deadline has already fired. */
+const FAIL_TRANSITION_BUDGET_MS = 2_000;
 
 const FAIL_CLOSED_ROUTING_CONTEXT: OrganizerRoutingPolicyContext = Object.freeze({
   accountCaptureOrdinal: 1,
@@ -517,7 +541,6 @@ const FAIL_CLOSED_ROUTING_CONTEXT: OrganizerRoutingPolicyContext = Object.freeze
     explicitDestinationMention: 0,
     margin: 0,
     openSameDayTypeMatch: 0,
-    priorAccepted: 0,
     reasonCodeConsistency: 0,
     ruleOrAliasNearMatch: 0,
     semanticSimilarity: 0,
@@ -530,7 +553,7 @@ const FAIL_CLOSED_ROUTING_CONTEXT: OrganizerRoutingPolicyContext = Object.freeze
 function routingPolicyForPlan(
   plan: ReturnType<typeof parseAuthorizedOrganizationPlan>["plan"],
   manifest: OrganizerCandidateManifest,
-  captureText: string,
+  capture: DecryptedCapture,
   inferredKind: ReturnType<typeof inferOrganizerCaptureKind>,
   context: OrganizerRoutingPolicyContext,
   deterministicRuleMatch = false
@@ -558,8 +581,11 @@ function routingPolicyForPlan(
     : contextualFeatures;
   const decision = bandRoutingDecision({
     accountCaptureOrdinal: context.accountCaptureOrdinal,
+    captureCarriesUploads: (capture.attachments?.length ?? 0) > 0,
     captureKind: inferredKind,
-    captureLength: Array.from(captureText).length,
+    // The owner's own words are what a long capture is long with; the placeholder that stands
+    // in for an upload is not the owner's writing and never lengthens a note.
+    captureLength: Array.from(ownerCaptureText(routedOrganizerCapture(capture))).length,
     createSignals:
       plan.decision === "create_note"
         ? deterministicRuleMatch
@@ -575,7 +601,6 @@ function routingPolicyForPlan(
     destinationNoteType,
     deterministicRuleMatch: deterministicRuleMatch || context.deterministicRuleMatch,
     duplicateNoteSuspected: plan.reasonCodes.includes("duplicate_suspected"),
-    failure: null,
     features,
     mode: context.mode,
     planDecision: plan.decision,
@@ -665,6 +690,18 @@ function reviewReasonForPlan(plan: MaterializedOrganizationCommand): OrganizerRe
   if (plan.kind === "review" && plan.disposition === "needs_review") return "planner_ambiguity";
   if (plan.kind !== "review" && plan.generatedBlock !== null) return "expansion_pending";
   return null;
+}
+
+/**
+ * The decision a Review carries when an already-authorized auto-apply plan could not be
+ * written. The plan's own decision said auto-apply, and the cipher refuses to seal a Review
+ * that still claims one: the honest record is that this failure, not the score, decided it.
+ */
+function reviewRoutingPolicy(
+  decision: RoutingPolicyResult,
+  failure: RoutingFailure
+): RoutingPolicyResult {
+  return decision.autoApply ? failClosedRoutingPolicy(failure, decision.margin) : decision;
 }
 
 function reviewReasonForConflict(
@@ -757,22 +794,53 @@ export function createOrganizerDrain(
         leaseToken: job.leaseToken,
         signal
       });
-      const capture: DecryptedCapture = Object.freeze({
-        ...openedCapture,
-        attachments:
-          encryptedAttachments.length === 0
-            ? []
-            : await options.cipher.openCaptureAttachments({
-                authority,
-                attachments: encryptedAttachments,
-                job,
-                signal
-              })
-      });
+      const attachments =
+        encryptedAttachments.length === 0
+          ? []
+          : await options.cipher.openCaptureAttachments({
+              authority,
+              attachments: encryptedAttachments,
+              job,
+              signal
+            });
       let replanCount: 0 | 1 = job.replanCount;
       let writeGeneration = 0;
       let plannerCalls = 0;
       let pendingReviewReason: OrganizerReviewReason | null = null;
+      // Candidates, the capture kind and every signal derived from them are computed over
+      // capture text, and a capture the owner sent without typing carries only the client's
+      // "Photo" placeholder. Reading the photos first is what gives that capture something to
+      // be matched and classified by; a provider that will not read them sends it to Review
+      // rather than filing it by a word the owner never wrote.
+      let visualDescriptor: string | null = null;
+      if (attachments.some(({ kind }) => kind === "image")) {
+        signalActive(signal);
+        try {
+          visualDescriptor = await options.planner.describe({
+            capture: Object.freeze({ ...openedCapture, attachments }),
+            captureId: job.captureId,
+            promptVersion: job.promptVersion,
+            ...(providerCredential === undefined ? {} : { providerCredential }),
+            routingEffort: job.routingEffort,
+            schemaVersion: job.schemaVersion,
+            signal
+          });
+          signalActive(signal);
+        } catch (error: unknown) {
+          if (error instanceof OrganizerPlannerReviewError) {
+            pendingReviewReason = "planner_ambiguity";
+          } else if (error instanceof OrganizerProviderError) {
+            throw error;
+          } else {
+            throw new OrganizerUnavailableError();
+          }
+        }
+      }
+      const capture: DecryptedCapture = Object.freeze({
+        ...openedCapture,
+        attachments,
+        visualDescriptor
+      });
       let pendingReviewPlan: OrganizationPlan | null = null;
       let pendingRoutingDecision: RoutingPolicyResult | null = null;
 
@@ -800,7 +868,7 @@ export function createOrganizerDrain(
         const review = forcedReview(
           manifest,
           preparation,
-          inferOrganizerCaptureKind(capture.rawContent),
+          inferOrganizerCaptureKind(captureKindText(routedOrganizerCapture(capture))),
           sourcePlan
         );
         const command = await options.cipher.sealCommand({
@@ -859,6 +927,7 @@ export function createOrganizerDrain(
       for (;;) {
         let page: OrganizerCandidatePage;
         let ragGenerationId: string | null = null;
+        let recordedCandidates: readonly EncryptedCandidate[];
         let routingPolicyContext: OrganizerRoutingPolicyContext;
         if (options.retrieval === undefined) {
           page = await options.repository.candidates({
@@ -870,6 +939,7 @@ export function createOrganizerDrain(
             ),
             signal
           });
+          recordedCandidates = page.candidates;
           routingPolicyContext = options.routingPolicyContext ?? FAIL_CLOSED_ROUTING_CONTEXT;
         } else {
           const retrieved = await options.retrieval.retrieve({
@@ -881,22 +951,28 @@ export function createOrganizerDrain(
           });
           page = retrieved;
           ragGenerationId = retrieved.ragGenerationId ?? null;
+          recordedCandidates = retrieved.revalidationCandidates;
           routingPolicyContext = retrieved.routingPolicyContext;
         }
         const encryptedCandidates = page.candidates;
         const controls = page.controls;
-        const currentCapture = Object.freeze({
+        const currentCapture: DecryptedCapture = Object.freeze({
           controls,
           rawContent: capture.rawContent,
           guidance: capture.guidance ?? null,
-          attachments: capture.attachments ?? []
+          attachments: capture.attachments ?? [],
+          visualDescriptor: capture.visualDescriptor ?? null
         });
+        const ownerText = ownerCaptureText(routedOrganizerCapture(currentCapture));
+        const inferredKind = inferOrganizerCaptureKind(
+          captureKindText(routedOrganizerCapture(currentCapture))
+        );
         const isRoutingRulePath =
           controls.explicitDestinationNoteId === null && controls.ruleMatch !== null;
         const deterministicRoutingRulePlan = isRoutingRulePath
           ? buildDeterministicRoutingRulePlan({
               candidates: encryptedCandidates,
-              captureText: capture.rawContent,
+              captureText: ownerText,
               clientTimezone: job.clientTimezone,
               controls,
               occurredAt: job.occurredAt
@@ -931,7 +1007,9 @@ export function createOrganizerDrain(
             return Object.freeze({ decrypted, encrypted });
           })
         );
-        const revalidationManifest = candidateManifest(controls, encryptedCandidates);
+        // Revalidation compares against the page the repository recorded, which is not always
+        // the page the planner may see.
+        const revalidationManifest = candidateManifest(controls, recordedCandidates);
         // This renewal is the external-disclosure authorization linearization point.
         const disclosure = await options.repository.heartbeat({
           candidateManifest: revalidationManifest,
@@ -1032,8 +1110,11 @@ export function createOrganizerDrain(
         }
         let authorized: ReturnType<typeof parseAuthorizedOrganizationPlan>;
         try {
-          const initiallyAuthorized = parseAuthorizedOrganizationPlan({ manifest, unknownPlan });
-          const inferredKind = inferOrganizerCaptureKind(currentCapture.rawContent);
+          const initiallyAuthorized = parseAuthorizedOrganizationPlan({
+            captureHasNoOwnerText: ownerText.length === 0,
+            manifest,
+            unknownPlan
+          });
           if (initiallyAuthorized.plan.captureKind !== inferredKind) {
             pendingReviewReason = "planner_ambiguity";
             continue;
@@ -1041,12 +1122,12 @@ export function createOrganizerDrain(
           const overridden = isRoutingRulePath
             ? Object.freeze({ plan: initiallyAuthorized.plan })
             : applyDeterministicExtractionOverride({
-                captureText: currentCapture.rawContent,
+                captureText: ownerText,
                 inferredKind,
                 plan: initiallyAuthorized.plan
               });
           authorized = parseAuthorizedOrganizationPlan({
-            captureText: currentCapture.rawContent,
+            captureText: ownerText,
             manifest,
             unknownPlan: overridden.plan
           });
@@ -1058,8 +1139,8 @@ export function createOrganizerDrain(
         const routingDecision = routingPolicyForPlan(
           authorized.plan,
           manifest,
-          currentCapture.rawContent,
-          inferOrganizerCaptureKind(currentCapture.rawContent),
+          currentCapture,
+          inferredKind,
           routingPolicyContext,
           isRoutingRulePath
         );
@@ -1135,7 +1216,7 @@ export function createOrganizerDrain(
               pendingReviewReason,
               preparationResult.preparation,
               authorized.plan,
-              routingDecision
+              reviewRoutingPolicy(routingDecision, "revision_conflict")
             );
             if (result === "retry") continue;
             return result;
@@ -1152,7 +1233,7 @@ export function createOrganizerDrain(
         try {
           plan = materializeAuthorizedOrganizationPlan({
             ...authorized,
-            captureText: currentCapture.rawContent,
+            captureText: ownerText,
             stableIds
           });
         } catch (error: unknown) {
@@ -1167,7 +1248,7 @@ export function createOrganizerDrain(
             pendingReviewReason,
             preparation,
             authorized.plan,
-            routingDecision
+            reviewRoutingPolicy(routingDecision, "invalid_plan")
           );
           if (result === "retry") continue;
           return result;
@@ -1218,7 +1299,7 @@ export function createOrganizerDrain(
           }
           pendingReviewReason = reviewReasonForConflict(publication.conflictReason, controls);
           pendingReviewPlan = plan.validatedPlan;
-          pendingRoutingDecision = routingDecision;
+          pendingRoutingDecision = reviewRoutingPolicy(routingDecision, "revision_conflict");
           writeGeneration += 1;
           replanCount = 1;
           continue;
@@ -1236,7 +1317,7 @@ export function createOrganizerDrain(
           replanCount = committed.replanCount;
           pendingReviewReason = reviewReasonForConflict(committed.conflictReason, controls);
           pendingReviewPlan = plan.validatedPlan;
-          pendingRoutingDecision = routingDecision;
+          pendingRoutingDecision = reviewRoutingPolicy(routingDecision, "revision_conflict");
           writeGeneration += 1;
           continue;
         }
@@ -1268,6 +1349,13 @@ export function createOrganizerDrain(
           : { providerSchemaError: identity.schemaError })
       });
       const providerSelection = providerCredential?.lastSelection() ?? null;
+      // The job's own signal is already aborted whenever the deadline is what failed the job,
+      // and the transition would abort before it reached the database — leaving the row
+      // running and the capture processing until a recovery run days later. The transition
+      // gets its own small budget instead.
+      const failSignal = signal.aborted
+        ? AbortSignal.timeout(FAIL_TRANSITION_BUDGET_MS)
+        : AbortSignal.any([signal, AbortSignal.timeout(FAIL_TRANSITION_BUDGET_MS)]);
       try {
         const result = await options.repository.fail({
           errorCode: failure.errorCode,
@@ -1276,10 +1364,20 @@ export function createOrganizerDrain(
           providerCredentialRevision: providerSelection?.credentialRevision ?? null,
           providerSource: providerSelection?.source ?? null,
           retryable: failure.retryable,
-          signal
+          signal: failSignal
         });
         return result.state === "awaiting_retry" ? "retry" : "failed";
-      } catch {
+      } catch (transitionError: unknown) {
+        // Nothing was written: the job row stays running until a recovery run reclaims it, and
+        // that is worth a line of its own rather than being counted as an ordinary failure.
+        const transitionOrigin = errorOrigin(transitionError);
+        options.onJobFailure?.({
+          errorCode: "job_transition_unwritten",
+          retryable: true,
+          errorName:
+            transitionError instanceof Error ? transitionError.name : typeof transitionError,
+          ...(transitionOrigin === undefined ? {} : { origin: transitionOrigin })
+        });
         return "failed";
       }
     } finally {

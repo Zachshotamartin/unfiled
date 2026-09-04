@@ -1,4 +1,6 @@
 import { attachmentParagraphs } from "./attachment-references.js";
+import { ownerCaptureText } from "@unfiled/ai-routing";
+import { routedOrganizerCapture } from "./planner.js";
 import {
   applyMaterializedOrganizationCommand,
   type AppliedOrganizationCommand
@@ -884,10 +886,13 @@ async function sealRoutedCommand(
   ) {
     unavailable();
   }
+  // The owner's own words, which is the empty string for a capture whose only content is an
+  // upload. Source preservation judges the model against these, and nothing else is written.
+  const captureText = ownerCaptureText(routedOrganizerCapture(input.capture));
   const applied = applyMaterializedOrganizationCommand(
     input.plan.kind === "append"
       ? {
-          captureText: input.capture.rawContent,
+          captureText,
           command: input.plan,
           currentNote: currentNote(
             input.job.ownerId,
@@ -900,7 +905,7 @@ async function sealRoutedCommand(
           attachmentParagraphs: attachmentParagraphs(input.capture.attachments ?? [])
         }
       : {
-          captureText: input.capture.rawContent,
+          captureText,
           command: input.plan,
           idFactory: deterministicIdFactory(input.job.jobId, input.preparation.ids.decisionId),
           occurredAt: input.job.occurredAt,

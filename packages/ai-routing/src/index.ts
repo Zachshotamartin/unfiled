@@ -15,6 +15,7 @@ export type {
   OrganizationNoteMutationPayload,
   OrganizationNoteRevisionPayload
 } from "./application.js";
+export * from "./capture-text.js";
 export * from "./extraction.js";
 export * from "./evaluation/corpus.js";
 export * from "./evaluation/harness.js";
