@@ -125,31 +125,52 @@ select pg_temp.rewrite_function(
 );
 
 -- The private-manual path. The public wrapper hands a private capture, payload intact, to the
--- original dual-write implementation -- renamed to _legacy by 20260830000020 and to this name by
--- 20260830000027 -- which carries its own key list and stamps its job as already succeeded.
--- Every private capture went through here, which is why the encrypted fixture alone could not
--- show that the new keys were refused.
-select pg_temp.rewrite_function(
-  'private.create_encrypted_private_capture_with_job_impl(uuid, jsonb)',
-  array[
+-- original dual-write implementation, which carries its own key list and stamps its job as
+-- already succeeded. 20260830000020 renamed it to _legacy and 20260830000027 renames it again to
+-- create_encrypted_private_capture_with_job_impl -- but that rename does not run in every
+-- environment, so the function is looked up by either name and the one that exists is
+-- rewritten. Its body is the same text under both.
+do $$
+declare
+  target regprocedure;
+  found integer;
+begin
+  select count(*), min(p.oid)::regprocedure
+  into found, target
+  from pg_catalog.pg_proc as p
+  join pg_catalog.pg_namespace as n on n.oid = p.pronamespace
+  where n.nspname = 'private'
+    and p.proname in (
+      'create_encrypted_private_capture_with_job_impl',
+      'create_encrypted_capture_with_job_legacy'
+    )
+    and p.proargtypes::oid[] = array['uuid'::regtype::oid, 'jsonb'::regtype::oid];
+  if found <> 1 then
+    raise exception 'expected exactly one private capture implementation, found %', found;
+  end if;
+  perform pg_temp.rewrite_function(
+    target::text,
     array[
-      $f$'explicitDestinationNoteId', 'expansionDisabled',
+      array[
+        $f$'explicitDestinationNoteId', 'expansionDisabled',
       'privateReceiptCipher', 'privateReceiptVerificationMac'
     ] <> '{}'::jsonb$f$,
-      $f$'explicitDestinationNoteId', 'expansionDisabled',
+        $f$'explicitDestinationNoteId', 'expansionDisabled',
       'privateReceiptCipher', 'privateReceiptVerificationMac',
       'promptVersion', 'schemaVersion'
     ] <> '{}'::jsonb$f$
-    ],
-    array[
-      $f$job_id_value, capture_id_value, p_owner_id, 'succeeded', 'routing-v1', 1,
+      ],
+      array[
+        $f$job_id_value, capture_id_value, p_owner_id, 'succeeded', 'routing-v1', 1,
     occurred_value, occurred_value, occurred_value, occurred_value$f$,
-      $f$job_id_value, capture_id_value, p_owner_id, 'succeeded',
+        $f$job_id_value, capture_id_value, p_owner_id, 'succeeded',
     private.capture_prompt_version(p_capture),
     private.capture_schema_version(p_capture),
     occurred_value, occurred_value, occurred_value, occurred_value$f$
+      ]
     ]
-  ]
-);
+  );
+end;
+$$;
 
 drop function pg_temp.rewrite_function(text, text[][]);
