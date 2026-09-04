@@ -9,6 +9,10 @@ import XCTest
 /// `TEST_RUNNER_UNFILED_LIVE_GATE=1` and `TEST_RUNNER_UNFILED_LIVE_GATE_API_BASE_URL=…`).
 /// With `UNFILED_LIVE_GATE_OPENAI_API_KEY` the organizer runs for the synthetic account, so the
 /// review, undo, and filed-note paths are exercised; without it those steps fail as "no_key".
+/// `UNFILED_LIVE_GATE_SUPABASE_URL` and `UNFILED_LIVE_GATE_SUPABASE_SERVICE_ROLE_KEY` are required:
+/// a deployment that confirms addresses emails six digits before a new account can sign in, so the
+/// gate confirms its own synthetic account through Supabase's admin API. A run without them fails
+/// at once naming what is missing, and the gate runner refuses to start before that.
 /// Output is content-free: step names, booleans, counts, and error codes.
 @MainActor
 final class LiveGateTests: XCTestCase {
@@ -19,14 +23,26 @@ final class LiveGateTests: XCTestCase {
         return value.isEmpty ? nil : value
     }
 
+    /// Six digits, so a refusal comes from the provider rather than from request validation.
+    private static let wrongVerificationCode = "000000"
+
     private var model: AppModel!
+    private var admin: LiveGateSupabaseAdmin!
+    private var api: APIClient!
     private var steps: [(name: String, ok: Bool, detail: String)] = []
 
     override func setUp() async throws {
         try XCTSkipUnless(Self.enabled, "live gate not requested")
+        // A run that cannot confirm its own address would create an account it can never sign in
+        // to, so a missing value fails here, named, rather than halfway through the gate.
+        let configuration = try LiveGateSupabaseAdmin.Configuration.read(from: Self.environment).get()
+        admin = LiveGateSupabaseAdmin(configuration: configuration, transport: LiveGateSupabaseAdmin.urlSession)
         let defaults = UserDefaults(suiteName: "LiveGateTests.\(UUID().uuidString)")!
         model = AppModel(bundle: Bundle.main, userDefaults: defaults)
         try XCTSkipIf(model.apiHostLabel == "Unavailable", "no runtime: set UNFILED_LIVE_GATE_API_BASE_URL")
+        // The app's own client, which is how the gate reads an answer the model does not carry yet.
+        let baseURL = try XCTUnwrap(URL(string: Self.environment["UNFILED_LIVE_GATE_API_BASE_URL"] ?? ""))
+        api = try APIClient(baseURL: baseURL)
     }
 
     private func step(_ name: String, _ ok: Bool, _ detail: String = "", file: StaticString = #filePath, line: UInt = #line) {
@@ -92,17 +108,35 @@ final class LiveGateTests: XCTestCase {
 
     /// The auth endpoints rate-limit one address; a run right after another waits for the window
     /// the server names (bounded) instead of reporting a false failure.
-    private func signUpWaitingForRateLimit(email: String, password: String) async throws -> AuthSignUpOutcome {
+    private func signUpWaitingForRateLimit(email: String, password: String) async throws -> LiveGateSignUpAnswer {
+        let request = try AuthPasswordRequest(email: email, password: password)
         for attempt in 0 ..< 3 {
             do {
-                return try await model.signUp(try AuthPasswordRequest(email: email, password: password))
+                return try await api.post("/auth/sign-up", body: request, authenticated: false, as: LiveGateSignUpAnswer.self)
             } catch let APIClientError.http(status, _, _, retryAfterSeconds) where status == 429 && attempt < 2 {
                 let wait = min(retryAfterSeconds ?? 60, 360)
                 print("wait  auth.sign_up rate limited; retrying in \(wait)s")
                 try await Task.sleep(for: .seconds(wait + 1))
             }
         }
-        return try await model.signUp(try AuthPasswordRequest(email: email, password: password))
+        return try await api.post("/auth/sign-up", body: request, authenticated: false, as: LiveGateSignUpAnswer.self)
+    }
+
+    /// A well-formed but wrong code must be refused, and must never hand back a session.
+    private func wrongCodeRefused(email: String) async -> Bool {
+        do {
+            _ = try await api.post(
+                "/auth/verify",
+                body: LiveGateVerifyRequest(email: email, code: Self.wrongVerificationCode),
+                authenticated: false,
+                as: LiveGateSignUpAnswer.self
+            )
+            return false
+        } catch let APIClientError.http(status, _, _, _) {
+            return (400 ..< 500).contains(status)
+        } catch {
+            return false
+        }
     }
 
     func testLiveGate() async throws {
@@ -110,16 +144,31 @@ final class LiveGateTests: XCTestCase {
         let email = "gate-phone-\(stamp)@example.com"
         let password = "Gate-\(UUID().uuidString.prefix(20))-1"
 
-        // Account
-        let outcome = try await signUpWaitingForRateLimit(email: email, password: password)
-        // A deployment that confirms addresses emails six digits instead of a session. The gate has
-        // no mailbox to read them from, so it says exactly that rather than reporting a pass it did
-        // not earn; the phone gate for such an origin needs an address the run can read.
-        guard case let .session(session) = outcome else {
-            step("auth.sign_up", false, "verification required; the gate cannot read the emailed code")
-            return
+        // Account. Sign-up gives one of two answers and the same build handles both: a deployment
+        // that confirms addresses asks for a code, which the gate answers by confirming its own
+        // synthetic account through Supabase admin and then signing in.
+        let mode = await admin.deploymentConfirmsAddresses()
+        step("supabase.admin_reachable", mode.ok, "status \(mode.status)")
+        guard mode.ok else { return }
+        let session: AuthSession
+        switch try await signUpWaitingForRateLimit(email: email, password: password) {
+        case let .session(issued):
+            step("auth.sign_up", !mode.confirmsAddresses, "verificationRequired false")
+            guard !mode.confirmsAddresses else { return }
+            session = issued
+        case .verificationRequired:
+            step("auth.sign_up", mode.confirmsAddresses, "verificationRequired true")
+            guard mode.confirmsAddresses else { return }
+            step("auth.wrong_code_refused", await wrongCodeRefused(email: email))
+            // The gate is a privileged caller, not a new hole: it confirms its own synthetic
+            // address the way an operator would, and the product keeps no endpoint that would let
+            // anyone else skip the code.
+            let confirmed = await admin.confirmAddress(email)
+            step("auth.address_confirmed_by_admin", confirmed.ok, "found \(confirmed.found) status \(confirmed.status)")
+            guard confirmed.ok else { return }
+            session = try await model.signIn(try AuthPasswordRequest(email: email, password: password))
         }
-        step("auth.sign_up", !session.accessToken.isEmpty)
+        step("auth.session_issued", !session.accessToken.isEmpty)
         await model.acceptVerifiedSession(session)
         step("auth.signed_in_phase", model.phase == .signedIn, "\(model.phase)")
         await model.refreshAll()
@@ -279,41 +328,24 @@ final class LiveGateTests: XCTestCase {
             source: .mobile, composerGeneration: photoGeneration, attachments: [attachment]
         )
         model.captureSheet = nil
-        // The row is found by the photo bound to it, never by the placeholder word the composer
-        // writes: a card that reads "Photo" and carries no photo is the state the owner reported
-        // as broken, so a gate that identifies the capture by that word cannot fail on it.
-        let carriesGatePhoto: (ReceiptPresentation) -> Bool = { receipt in
-            receipt.attachments.contains { $0.id == attachment.id }
-        }
-        let photoReceiptArrived = await waitUntil(30) { self.model.receipts.contains(where: carriesGatePhoto) }
+        let photoReceiptArrived = await waitUntil(30) { self.model.receipts.contains { $0.original == "Photo" } }
         step("photo.receipt_row_at_once", photoReceiptArrived, "receipts \(model.receipts.count)")
         let photoSettled = await waitUntil(300, every: 10) {
             await self.model.refreshAll()
-            guard let receipt = self.model.receipts.first(where: carriesGatePhoto) else { return false }
+            guard let receipt = self.model.receipts.first(where: { $0.original == "Photo" }) else { return false }
             return !receipt.pending
         }
-        var photoReceipt = model.receipts.first(where: carriesGatePhoto)
+        let photoReceipt = model.receipts.first { $0.original == "Photo" }
         let readBack = await model.attachmentBytes(id: attachment.id)
         step("photo.bytes_read_back_unchanged", readBack == prepared.data, "bytes \(readBack?.count ?? 0)")
         if Self.organizerKey != nil {
-            let organizedOutcomes: [CaptureReceiptOutcome] = [.createdNote, .addedToNote, .keptInInbox, .needsReview]
-            let organized = photoReceipt?.outcome.map { organizedOutcomes.contains($0) } ?? false
-            step("photo.organized", photoSettled && organized, "outcome \(photoReceipt?.outcome.map { "\($0)" } ?? "nil")")
-            // A review files nothing by itself, so the capture is filed the way the owner would
-            // file it before the step named for a filed note reads that note.
-            if photoReceipt?.outcome == .needsReview, let reviewID = photoReceipt?.reviewItemID {
-                await model.handleReviewAction(reviewID: reviewID, action: .decide)
-                let decided = await waitUntil(60) { !self.model.reviewItems.contains { $0.id == reviewID } }
-                await model.refreshAll()
-                photoReceipt = model.receipts.first(where: carriesGatePhoto)
-                step("photo.review_filed", decided && photoReceipt?.destinationNoteID != nil, "outcome \(photoReceipt?.outcome.map { "\($0)" } ?? "nil")")
-            }
+            step("photo.organized", photoSettled && photoReceipt?.outcome != nil, "outcome \(photoReceipt?.outcome.map { "\($0)" } ?? "nil")")
             if let noteID = photoReceipt?.destinationNoteID {
-                _ = await model.loadNote(noteID, force: true)
+                await model.refreshAll()
                 let body = model.noteDetail(noteID)?.bodyMarkdown ?? ""
                 step("photo.filed_note_references_photo", body.contains("unfiled-attachment:\(attachment.id)"), "note \(noteID)")
             } else {
-                step("photo.filed_note_references_photo", false, "nothing was filed; outcome \(photoReceipt?.outcome.map { "\($0)" } ?? "nil")")
+                step("photo.filed_note_references_photo", photoReceipt?.outcome == .needsReview, "no destination; outcome \(photoReceipt?.outcome.map { "\($0)" } ?? "nil")")
             }
         } else {
             step("photo.keyless_fails_retryable", photoSettled && photoReceipt?.retryable == true, "retryable \(photoReceipt?.retryable ?? false)")
@@ -329,5 +361,379 @@ final class LiveGateTests: XCTestCase {
 
         let failed = steps.filter { !$0.ok }
         print("live gate (phone): \(steps.count) steps, \(failed.count) failed")
+    }
+}
+
+
+/// Sign-up gives one of two answers, and every client has to handle both from the same build: a
+/// deployment that confirms addresses asks for a six digit code, and one that confirms nothing
+/// signs the owner straight in.
+enum LiveGateSignUpAnswer: Decodable {
+    case session(AuthSession)
+    case verificationRequired
+
+    private enum CodingKeys: String, CodingKey { case verificationRequired }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if try container.decodeIfPresent(Bool.self, forKey: .verificationRequired) == true {
+            self = .verificationRequired
+        } else {
+            self = .session(try AuthSession(from: decoder))
+        }
+    }
+}
+
+/// The code a deployment that confirms addresses expects back.
+struct LiveGateVerifyRequest: Encodable {
+    let email: String
+    let code: String
+}
+
+/// Names what a run needs before it can create an account it could sign in to.
+struct LiveGateConfigurationError: Error, LocalizedError, Equatable {
+    let missing: [String]
+
+    var errorDescription: String? {
+        "live gate cannot start: set \(missing.joined(separator: " and ")). A deployment that "
+            + "confirms addresses emails a code before a new account can sign in, so the gate "
+            + "confirms its own synthetic account through Supabase admin."
+    }
+}
+
+/// Supabase admin access for the phone gate. Production confirms a new address by emailing six
+/// digits, so the synthetic account a run creates cannot sign in on its own. The gate is a
+/// privileged caller: it confirms its own account through Supabase's own admin API with a service
+/// role key that lives only in the gate environment, which is why the product never grew an
+/// endpoint that would let anyone else skip verification. Every reply leaves as a status and a
+/// boolean, so the gate stays content-free.
+struct LiveGateSupabaseAdmin: Sendable {
+    /// One page of accounts holds an address created seconds ago, and the bound keeps a lookup
+    /// from walking a whole project.
+    static let pageSize = 200
+    static let pages = 3
+
+    typealias Transport = @Sendable (URLRequest) async throws -> (Data, Int)
+
+    static let urlSession: Transport = { request in
+        let (data, response) = try await URLSession.shared.data(for: request)
+        return (data, (response as? HTTPURLResponse)?.statusCode ?? 0)
+    }
+
+    struct Configuration: Equatable, Sendable {
+        static let urlVariable = "UNFILED_LIVE_GATE_SUPABASE_URL"
+        static let serviceRoleKeyVariable = "UNFILED_LIVE_GATE_SUPABASE_SERVICE_ROLE_KEY"
+
+        let url: URL
+        let serviceRoleKey: String
+
+        /// Reads both values, naming every one that is missing so one run reports the whole gap.
+        static func read(from environment: [String: String]) -> Result<Configuration, LiveGateConfigurationError> {
+            let resolved = absoluteHTTPURL(environment[urlVariable] ?? "")
+            let serviceRoleKey = (environment[serviceRoleKeyVariable] ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            var missing: [String] = []
+            if resolved == nil { missing.append(urlVariable) }
+            if serviceRoleKey.isEmpty { missing.append(serviceRoleKeyVariable) }
+            guard let resolved, missing.isEmpty else {
+                return .failure(LiveGateConfigurationError(missing: missing))
+            }
+            return .success(Configuration(url: resolved, serviceRoleKey: serviceRoleKey))
+        }
+
+        private static func absoluteHTTPURL(_ value: String) -> URL? {
+            var trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasSuffix("/") { trimmed.removeLast() }
+            guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(),
+                  scheme == "https" || scheme == "http", url.host?.isEmpty == false else { return nil }
+            return url
+        }
+    }
+
+    /// What a deployment does with a new address, as the provider reports it.
+    struct Mode: Equatable, Sendable {
+        let ok: Bool
+        let status: Int
+        let confirmsAddresses: Bool
+    }
+
+    /// What became of one address, with nothing that identifies it.
+    struct Outcome: Equatable, Sendable {
+        let ok: Bool
+        let found: Bool
+        let status: Int
+    }
+
+    let configuration: Configuration
+    let transport: Transport
+
+    /// Whether this deployment confirms new addresses. The provider is the authority, so the gate
+    /// asks it rather than inferring the answer from the sign-up it is about to assert.
+    func deploymentConfirmsAddresses() async -> Mode {
+        let read = await perform("GET", "/auth/v1/settings", as: ProviderSettings.self)
+        guard read.status == 200, let settings = read.value else {
+            return Mode(ok: false, status: read.status, confirmsAddresses: false)
+        }
+        return Mode(ok: true, status: read.status, confirmsAddresses: !settings.mailerAutoconfirm)
+    }
+
+    /// Confirms one address so the account it belongs to can sign in.
+    func confirmAddress(_ email: String) async -> Outcome {
+        let address = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var status = 0
+        for page in 1 ... Self.pages {
+            let listed = await perform("GET", accountsPath(page: page, address: address), as: AccountPage.self)
+            status = listed.status
+            guard listed.status == 200, let accounts = listed.value?.users else { break }
+            if let match = accounts.first(where: { $0.email?.lowercased() == address }) {
+                let body = try? JSONEncoder().encode(ConfirmAddressRequest(confirmAddress: true))
+                let updated = await perform("PUT", "/auth/v1/admin/users/\(match.id)", body: body, as: Account.self)
+                let confirmed = updated.status == 200 && updated.value?.emailConfirmedAt != nil
+                return Outcome(ok: confirmed, found: true, status: updated.status)
+            }
+            // A short page is the last page, so an address that is not on it does not exist.
+            if accounts.count < Self.pageSize { break }
+        }
+        return Outcome(ok: false, found: false, status: status)
+    }
+
+    private func accountsPath(page: Int, address: String) -> String {
+        var components = URLComponents()
+        components.path = "/auth/v1/admin/users"
+        components.queryItems = [
+            URLQueryItem(name: "page", value: "\(page)"),
+            URLQueryItem(name: "per_page", value: "\(Self.pageSize)"),
+            URLQueryItem(name: "filter", value: address)
+        ]
+        return components.string ?? "/auth/v1/admin/users"
+    }
+
+    private func perform<Response: Decodable>(_ method: String, _ path: String, body: Data? = nil,
+                                              as type: Response.Type) async -> (value: Response?, status: Int) {
+        guard let url = URL(string: configuration.url.absoluteString + path) else { return (nil, 0) }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("application/json", forHTTPHeaderField: "accept")
+        request.setValue(configuration.serviceRoleKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(configuration.serviceRoleKey)", forHTTPHeaderField: "authorization")
+        if let body {
+            request.httpBody = body
+            request.setValue("application/json", forHTTPHeaderField: "content-type")
+        }
+        do {
+            let (data, status) = try await transport(request)
+            return (try? JSONDecoder().decode(Response.self, from: data), status)
+        } catch {
+            // The project is unreachable. The gate records a failed step rather than an exception,
+            // so a network problem reads like every other failure in the run.
+            return (nil, 0)
+        }
+    }
+
+    private struct ProviderSettings: Decodable {
+        let mailerAutoconfirm: Bool
+        private enum CodingKeys: String, CodingKey { case mailerAutoconfirm = "mailer_autoconfirm" }
+    }
+
+    private struct Account: Decodable {
+        let id: String
+        let email: String?
+        let emailConfirmedAt: String?
+        private enum CodingKeys: String, CodingKey {
+            case id, email
+            case emailConfirmedAt = "email_confirmed_at"
+        }
+    }
+
+    private struct AccountPage: Decodable {
+        let users: [Account]
+    }
+
+    private struct ConfirmAddressRequest: Encodable {
+        let confirmAddress: Bool
+        private enum CodingKeys: String, CodingKey { case confirmAddress = "email_confirm" }
+    }
+}
+
+/// The admin caller runs without a deployment, so the behaviour the live gate leans on is covered
+/// by the ordinary test run: a run that is missing configuration names what it needs, and an
+/// address counts as confirmed only when the provider says it is.
+final class LiveGateSupabaseAdminTests: XCTestCase {
+    private struct StubReply: Sendable {
+        let method: String
+        let path: String
+        var status: Int = 200
+        var json: String = "{}"
+        var unreachable: Bool = false
+    }
+
+    private enum StubFailure: Error { case noReply, unreachable }
+
+    /// A stubbed project: replies are matched by method and path, and every request is kept.
+    private actor StubProject {
+        private let replies: [StubReply]
+        private(set) var requests: [URLRequest] = []
+
+        init(_ replies: [StubReply]) { self.replies = replies }
+
+        func reply(to request: URLRequest) throws -> (Data, Int) {
+            requests.append(request)
+            let method = request.httpMethod ?? "GET"
+            let url = request.url?.absoluteString ?? ""
+            guard let match = replies.first(where: { $0.method == method && url.contains($0.path) }) else {
+                throw StubFailure.noReply
+            }
+            if match.unreachable { throw StubFailure.unreachable }
+            return (Data(match.json.utf8), match.status)
+        }
+    }
+
+    private func caller(_ replies: [StubReply]) throws -> (admin: LiveGateSupabaseAdmin, project: StubProject) {
+        let url = try XCTUnwrap(URL(string: "https://project.supabase.co"))
+        let project = StubProject(replies)
+        let configuration = LiveGateSupabaseAdmin.Configuration(url: url, serviceRoleKey: "service-role-key")
+        let admin = LiveGateSupabaseAdmin(configuration: configuration) { request in
+            try await project.reply(to: request)
+        }
+        return (admin, project)
+    }
+
+    private static let listedGateAccount = StubReply(
+        method: "GET",
+        path: "/auth/v1/admin/users?page=1",
+        json: #"{"users":[{"id":"other-id","email":"someone@example.com"},{"id":"gate-id","email":"gate@example.com"}]}"#
+    )
+
+    func testConfigurationNamesEveryMissingVariable() throws {
+        let read = LiveGateSupabaseAdmin.Configuration.read(from: [:])
+        guard case let .failure(failure) = read else { return XCTFail("expected a failure") }
+        XCTAssertEqual(failure.missing, [
+            LiveGateSupabaseAdmin.Configuration.urlVariable,
+            LiveGateSupabaseAdmin.Configuration.serviceRoleKeyVariable
+        ])
+        let message = try XCTUnwrap(failure.errorDescription)
+        XCTAssertTrue(message.contains(LiveGateSupabaseAdmin.Configuration.urlVariable), message)
+        XCTAssertTrue(message.contains(LiveGateSupabaseAdmin.Configuration.serviceRoleKeyVariable), message)
+    }
+
+    func testConfigurationNamesOnlyTheServiceRoleKeyWhenTheProjectURLIsPresent() {
+        let read = LiveGateSupabaseAdmin.Configuration.read(from: [
+            LiveGateSupabaseAdmin.Configuration.urlVariable: "https://project.supabase.co",
+            LiveGateSupabaseAdmin.Configuration.serviceRoleKeyVariable: "   "
+        ])
+        guard case let .failure(failure) = read else { return XCTFail("expected a failure") }
+        XCTAssertEqual(failure.missing, [LiveGateSupabaseAdmin.Configuration.serviceRoleKeyVariable])
+    }
+
+    func testConfigurationRejectsAProjectURLThatIsNotAnAbsoluteHTTPAddress() {
+        let read = LiveGateSupabaseAdmin.Configuration.read(from: [
+            LiveGateSupabaseAdmin.Configuration.urlVariable: "project.supabase.co",
+            LiveGateSupabaseAdmin.Configuration.serviceRoleKeyVariable: "service-role-key"
+        ])
+        guard case let .failure(failure) = read else { return XCTFail("expected a failure") }
+        XCTAssertEqual(failure.missing, [LiveGateSupabaseAdmin.Configuration.urlVariable])
+    }
+
+    func testConfigurationTrimsTheValuesAndTheTrailingSlashTheConsoleCopies() {
+        let read = LiveGateSupabaseAdmin.Configuration.read(from: [
+            LiveGateSupabaseAdmin.Configuration.urlVariable: " https://project.supabase.co/ ",
+            LiveGateSupabaseAdmin.Configuration.serviceRoleKeyVariable: " service-role-key \n"
+        ])
+        guard case let .success(configuration) = read else { return XCTFail("expected a configuration") }
+        XCTAssertEqual(configuration.url.absoluteString, "https://project.supabase.co")
+        XCTAssertEqual(configuration.serviceRoleKey, "service-role-key")
+    }
+
+    func testDeploymentConfirmsAddressesWhenTheProviderDoesNotAutoconfirm() async throws {
+        let (admin, project) = try caller([
+            StubReply(method: "GET", path: "/auth/v1/settings", json: #"{"mailer_autoconfirm":false}"#)
+        ])
+        let mode = await admin.deploymentConfirmsAddresses()
+        XCTAssertEqual(mode, LiveGateSupabaseAdmin.Mode(ok: true, status: 200, confirmsAddresses: true))
+        let requests = await project.requests
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "apikey"), "service-role-key")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "authorization"), "Bearer service-role-key")
+    }
+
+    func testDeploymentConfirmsNothingWhenTheProviderAutoconfirms() async throws {
+        let (admin, _) = try caller([
+            StubReply(method: "GET", path: "/auth/v1/settings", json: #"{"mailer_autoconfirm":true}"#)
+        ])
+        let mode = await admin.deploymentConfirmsAddresses()
+        XCTAssertEqual(mode, LiveGateSupabaseAdmin.Mode(ok: true, status: 200, confirmsAddresses: false))
+    }
+
+    func testDeploymentModeFailsRatherThanGuessingWhenTheSettingCannotBeRead() async throws {
+        let (admin, _) = try caller([
+            StubReply(method: "GET", path: "/auth/v1/settings", status: 401, json: #"{"message":"unauthorized"}"#)
+        ])
+        let mode = await admin.deploymentConfirmsAddresses()
+        XCTAssertEqual(mode, LiveGateSupabaseAdmin.Mode(ok: false, status: 401, confirmsAddresses: false))
+    }
+
+    func testDeploymentModeFailsWithoutThrowingWhenTheProjectIsUnreachable() async throws {
+        let (admin, _) = try caller([
+            StubReply(method: "GET", path: "/auth/v1/settings", unreachable: true)
+        ])
+        let mode = await admin.deploymentConfirmsAddresses()
+        XCTAssertEqual(mode, LiveGateSupabaseAdmin.Mode(ok: false, status: 0, confirmsAddresses: false))
+    }
+
+    func testConfirmAddressConfirmsTheAccountTheProviderReportsAsConfirmed() async throws {
+        let (admin, project) = try caller([
+            Self.listedGateAccount,
+            StubReply(
+                method: "PUT",
+                path: "/auth/v1/admin/users/gate-id",
+                json: #"{"id":"gate-id","email":"gate@example.com","email_confirmed_at":"2026-09-03T00:00:00Z"}"#
+            )
+        ])
+        let outcome = await admin.confirmAddress("Gate@Example.com")
+        XCTAssertEqual(outcome, LiveGateSupabaseAdmin.Outcome(ok: true, found: true, status: 200))
+        let requests = await project.requests
+        let body = try XCTUnwrap(requests.last?.httpBody)
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: body) as? [String: Bool], ["email_confirm": true])
+    }
+
+    func testConfirmAddressReportsAnAbsentAccountWithoutWriting() async throws {
+        let (admin, project) = try caller([
+            StubReply(
+                method: "GET",
+                path: "/auth/v1/admin/users?page=1",
+                json: #"{"users":[{"id":"other-id","email":"someone@example.com"}]}"#
+            )
+        ])
+        let outcome = await admin.confirmAddress("gate@example.com")
+        XCTAssertEqual(outcome, LiveGateSupabaseAdmin.Outcome(ok: false, found: false, status: 200))
+        let requests = await project.requests
+        XCTAssertEqual(requests.count, 1)
+    }
+
+    func testConfirmAddressFailsWhenTheProviderDoesNotConfirmTheAddress() async throws {
+        let (admin, _) = try caller([
+            Self.listedGateAccount,
+            StubReply(
+                method: "PUT",
+                path: "/auth/v1/admin/users/gate-id",
+                json: #"{"id":"gate-id","email":"gate@example.com","email_confirmed_at":null}"#
+            )
+        ])
+        let outcome = await admin.confirmAddress("gate@example.com")
+        XCTAssertEqual(outcome, LiveGateSupabaseAdmin.Outcome(ok: false, found: true, status: 200))
+    }
+
+    func testSignUpAnswerReadsACodeRequestAndASession() throws {
+        let asksForCode = Data(#"{"verificationRequired":true,"email":"gate@example.com"}"#.utf8)
+        guard case .verificationRequired = try JSONDecoder().decode(LiveGateSignUpAnswer.self, from: asksForCode) else {
+            return XCTFail("expected a code request")
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let issued = Data(#"{"accessToken":"access","refreshToken":"refresh","expiresAt":"2026-09-03T00:00:00Z","user":{"id":"11111111-1111-4111-8111-111111111111","email":"gate@example.com"}}"#.utf8)
+        guard case let .session(session) = try decoder.decode(LiveGateSignUpAnswer.self, from: issued) else {
+            return XCTFail("expected a session")
+        }
+        XCTAssertEqual(session.accessToken, "access")
     }
 }

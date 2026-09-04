@@ -89,7 +89,10 @@ minimum_password_length = 8
 password_requirements = ""
 
 [auth.rate_limit]
-email_sent = 2
+# Confirmations make every sign-up send a message, and the local stack captures all of them in
+# Inbucket rather than delivering them, so the ceiling only has to stay above what a day of local
+# sign-ups and test runs produces.
+email_sent = 100
 sms_sent = 30
 anonymous_users = 30
 token_refresh = 150
@@ -100,9 +103,10 @@ web3 = 30
 [auth.email]
 enable_signup = true
 double_confirm_changes = true
-# Turned on together with the verification flow, not before it: with no /auth/verify endpoint a
-# confirmed-email project would accept sign-ups and then refuse every session.
-enable_confirmations = false
+# Production confirms a new address before it will issue a session, and a client that only handles
+# the other answer looks correct until it ships. The local stack confirms too, which is safe here
+# because local mail is captured in Inbucket instead of being sent.
+enable_confirmations = true
 secure_password_change = false
 max_frequency = "1s"
 otp_length = 6
