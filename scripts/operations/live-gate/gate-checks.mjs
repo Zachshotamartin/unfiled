@@ -34,6 +34,22 @@ function servedNote(response) {
   return note !== null && typeof note === "object" ? note : null;
 }
 
+// ---------------------------------------------------------------- corrections
+
+/**
+ * Whether a correction answer leaves the move's outcome unknown to the caller. The API commits
+ * the move, then waits a bounded time for the rule observation and answers 503
+ * provider_unavailable when that wait runs out (ADR-0011); the move is durable either way, and
+ * the contract's next step is the identical request again -- same key, same body -- which opens
+ * the stored answer instead of moving anything twice. A platform answer with no product behind
+ * it is the same unknown. A definitive refusal (stale revision, validation, forbidden) is not:
+ * a replay of it would only repeat the refusal.
+ */
+export function correctionOutcomeIsAmbiguous(response) {
+  if (response === null || typeof response !== "object") return false;
+  return response.status >= 500 || response.json?.code === "provider_unavailable";
+}
+
 // ---------------------------------------------------------------- captures and receipts
 
 /**

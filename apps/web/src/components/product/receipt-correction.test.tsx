@@ -63,6 +63,16 @@ describe("correcting a filing from the receipt", () => {
     expect(correctionOutcomeMessage("needs_review")).toContain("opened a review in your Inbox");
   });
 
+  it("sends a correction through the replaying helper rather than straight to the API", () => {
+    const source = readFileSync(new URL("./receipt-correction.tsx", import.meta.url), "utf8");
+    // ADR-0011: a 503 after the move commits is answered by replaying the same key, never by a
+    // fresh key that would ask for a second move.
+    expect(source).toContain("submitCorrection(");
+    expect(source).toContain("attemptToReplay(");
+    expect(source).not.toContain("browserApi.correctDecision(");
+    expect(source).not.toContain("createIdempotencyKey");
+  });
+
   it("leaves no product route pointing at the retired Review destination", () => {
     const directory = new URL(".", import.meta.url);
     const offenders = readdirSync(directory)
