@@ -32,3 +32,6 @@ live-gate-api.json
 
 # Transient worktrees created for parallel agents; never part of the repository.
 .claude/worktrees/
+
+# A separate Expo project living in this working copy; never part of this repository.
+apps/mobile/
