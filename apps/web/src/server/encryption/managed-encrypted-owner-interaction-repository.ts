@@ -71,6 +71,7 @@ export const managedEncryptedOwnerInteractionRpcFunctions = Object.freeze([
   ...encryptedOwnerInteractionRpcFunctions,
   "get_encrypted_capture_detail",
   "get_encrypted_generated_blocks",
+  "list_encrypted_capture_attachments",
   "list_encrypted_library_objects",
   ...encryptedRoutingRuleRpcFunctions
 ] as const);
@@ -257,6 +258,12 @@ export class ManagedEncryptedOwnerInteractionRepository implements OwnerInteract
               aggregate: service,
               createPreparedService,
               adapter: createEncryptedOwnerInteractionRpcAdapter(client),
+              listCaptureAttachments: async (captureId) =>
+                Object.freeze(
+                  (await captureAdapter.listAttachments({ ownerId, captureId })).map((row) =>
+                    Object.freeze({ id: row.attachmentId, kind: row.kind })
+                  )
+                ),
               observeRoutingRuleCorrection: async (input) => {
                 let captureText = input.captureText;
                 if (captureText === null) {

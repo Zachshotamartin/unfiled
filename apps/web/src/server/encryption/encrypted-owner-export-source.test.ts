@@ -89,7 +89,11 @@ function dependencies(
       reads: {} as EncryptedNoteReadRpcAdapter,
       library,
       ownerData: {} as EncryptedOwnerDataRpcAdapter,
-      captures: { getAttachment: vi.fn(() => Promise.resolve(null)) }
+      captures: {
+        getAttachment: vi.fn(() => Promise.resolve(null)),
+        listAttachments: vi.fn(() => Promise.resolve([])),
+        listCaptures: vi.fn(() => Promise.resolve({ captures: [], nextCursor: null }))
+      }
     },
     aggregate
   };
@@ -219,5 +223,54 @@ describe("encrypted owner export attachments", () => {
     await expect(
       withAttachment(harness, { ...row, byteLength: 5 }).attachment(ATTACHMENT_ID)
     ).rejects.toMatchObject({ code: ServiceRpcErrorCode.PROVIDER_UNAVAILABLE });
+  });
+
+  it("pages every capture with its own words and the attachments bound to it", async () => {
+    const harness = dependencies({});
+    const rawContent = "the receipt from lunch";
+    Object.assign(harness.aggregate, {
+      openCapture: vi.fn(() => Promise.resolve({ schemaVersion: 1, rawContent }))
+    });
+    const captureRow = {
+      captureId: CAPTURE_ID,
+      recordVersion: 1 as const,
+      jobId: "job_01ARZ3NDEKTSV4RRFFQ69G5FAV" as const,
+      source: "mobile" as const,
+      deviceId: "",
+      contentLength: rawContent.length,
+      privacy: "ai_assisted" as const,
+      explicitDestinationNoteId: null,
+      expansionDisabled: false,
+      clientCreatedAt: CREATED_AT,
+      clientTimezone: "America/Los_Angeles",
+      receivedAt: UPDATED_AT,
+      status: "needs_review" as const,
+      lastErrorCode: null,
+      contentCipher: row.contentCipher,
+      contentMac: row.contentMac,
+      receiptAvailable: true
+    };
+    const source = new EncryptedOwnerExportSource({
+      ...harness.input,
+      captures: {
+        getAttachment: vi.fn(() => Promise.resolve(null)),
+        listAttachments: vi.fn(() => Promise.resolve([row])),
+        listCaptures: vi.fn(() => Promise.resolve({ captures: [captureRow], nextCursor: null }))
+      } as never
+    });
+
+    await expect(collect(source.capturePages())).resolves.toEqual([
+      {
+        id: CAPTURE_ID,
+        rawContent,
+        source: "mobile",
+        privacy: "ai_assisted",
+        status: "needs_review",
+        lastErrorCode: null,
+        clientCreatedAt: CREATED_AT,
+        receivedAt: UPDATED_AT,
+        attachments: [{ id: ATTACHMENT_ID, kind: "image" }]
+      }
+    ]);
   });
 });

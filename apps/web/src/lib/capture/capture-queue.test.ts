@@ -253,7 +253,8 @@ describe("browser capture queue", () => {
           receivedAt: "2026-08-30T18:31:01.000Z",
           status: "done",
           lastErrorCode: null,
-          receiptAvailable: true
+          receiptAvailable: true,
+          attachments: []
         }
       ]
     );
@@ -271,6 +272,7 @@ describe("browser capture queue", () => {
       [status({ state: "synced" })],
       [
         {
+          attachments: [],
           clientCreatedAt: request.clientCreatedAt,
           id: CAPTURE_ID,
           jobId: "job_01J6M9Q7G4BMKB33GSG3NJ6D1Y",

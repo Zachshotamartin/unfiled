@@ -39,6 +39,72 @@ export const CaptureAttachmentSchema = z.strictObject({
 });
 export type CaptureAttachment = z.infer<typeof CaptureAttachmentSchema>;
 
+/// Where a photo or recording sits inside a note body. The scheme is opaque to the model, which
+/// never sees attachment identifiers; whoever authorizes a plan appends these references itself
+/// after the plan is validated for source preservation. The format lives here because it is a
+/// contract: the organizer and the owner-interaction path write it, the export and the note
+/// readers parse it, and all four have to agree byte for byte.
+export const CAPTURE_ATTACHMENT_REFERENCE_SCHEME = "unfiled-attachment:" as const;
+
+/// A note body is capped at 200,000 characters and the shortest reference occupies a line of 59
+/// plus its newline, so no body can place more references than this. The bound exists to keep the
+/// response shape finite; it is never a limit the owner can reach by filing one more photo.
+export const MAX_NOTE_ATTACHMENTS = 3_333;
+
+export const NoteAttachmentSchema = z.strictObject({
+  id: entityIdSchema("att"),
+  kind: CaptureAttachmentKindSchema
+});
+export type NoteAttachment = z.infer<typeof NoteAttachmentSchema>;
+
+const NOTE_ATTACHMENT_REFERENCE_LINE =
+  /^\s*(!?)\[(?:Photo|Recording)\]\(unfiled-attachment:(att_[0-9A-HJKMNP-TV-Z]{26})\)\s*$/u;
+
+/// One reference paragraph for one attachment, in the single form every reader accepts.
+export function captureAttachmentReference(
+  attachment: Readonly<{ id: string; kind: CaptureAttachmentKind }>
+): string {
+  const target = `${CAPTURE_ATTACHMENT_REFERENCE_SCHEME}${attachment.id}`;
+  return attachment.kind === "image" ? `![Photo](${target})` : `[Recording](${target})`;
+}
+
+/// One paragraph per attachment, in upload order, or an empty list when there is nothing to place.
+export function captureAttachmentReferenceParagraphs(
+  attachments: readonly Readonly<{ id: string; kind: CaptureAttachmentKind }>[]
+): readonly string[] {
+  return Object.freeze(attachments.map((attachment) => captureAttachmentReference(attachment)));
+}
+
+/**
+ * True when a line is nothing but a reference to one attachment. The form carries no free text at
+ * all — a fixed label and an opaque identifier — so a reader that has to decide whether a line is
+ * somebody's words can treat it as placement rather than content.
+ */
+export function isCaptureAttachmentReference(value: string): boolean {
+  return NOTE_ATTACHMENT_REFERENCE_LINE.test(value);
+}
+
+/// The photos and recordings a note body places, in body order, each one once. This is the only
+/// reader of the reference syntax: a client renders from what it returns instead of guessing.
+export function noteAttachmentReferences(bodyMarkdown: string): readonly NoteAttachment[] {
+  const seen = new Set<string>();
+  const placed: NoteAttachment[] = [];
+  for (const line of bodyMarkdown.split("\n")) {
+    const match = NOTE_ATTACHMENT_REFERENCE_LINE.exec(line);
+    if (match === null) continue;
+    const id = match[2];
+    if (id === undefined || seen.has(id)) continue;
+    seen.add(id);
+    placed.push(
+      Object.freeze({
+        id: id as NoteAttachment["id"],
+        kind: match[1] === "!" ? "image" : "audio"
+      })
+    );
+  }
+  return Object.freeze(placed);
+}
+
 /// What the phone tells the API about an upload, beside the raw bytes: the kind follows the
 /// media type, photos carry dimensions and no duration, recordings the reverse.
 export const CaptureAttachmentUploadSchema = z
@@ -161,7 +227,11 @@ export const CaptureSummarySchema = z
     receivedAt: z.iso.datetime({ offset: true }),
     status: CaptureProcessingStateSchema,
     lastErrorCode: ApiErrorCodeSchema.nullable(),
-    receiptAvailable: z.boolean()
+    receiptAvailable: z.boolean(),
+    /// The photos and recordings bound to this capture, in upload order, described without bytes.
+    /// The list carries them so a client can render a capture's photo from the list it already
+    /// has, instead of a second request per row.
+    attachments: z.array(CaptureAttachmentSchema).max(MAX_CAPTURE_ATTACHMENTS)
   })
   .superRefine((capture, context) => {
     const isTerminal = capture.status !== "queued" && capture.status !== "processing";

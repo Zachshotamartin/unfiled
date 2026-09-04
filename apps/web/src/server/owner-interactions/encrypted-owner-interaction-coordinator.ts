@@ -5,14 +5,16 @@ import {
   GeneratedBlockResolveResponseSchema,
   MutationBatchUndoResponseSchema,
   MutationUndoRequestSchema,
+  NoteDetailSchema,
   NoteRevisionSchema,
-  NoteSchema,
   OrganizationPlanSchema,
   ReviewItemDtoSchema,
   ReviewResolveRequestSchema,
   ReviewResolveResponseSchema,
+  captureAttachmentReferenceParagraphs,
   createEntityId,
   entityIdSchema,
+  noteAttachmentReferences,
   reviewProposalMatchesType,
   reviewResolutionMatchesSemantics,
   type DecisionCorrectionRequest,
@@ -22,7 +24,7 @@ import {
   type GeneratedBlockResolveResponse,
   type MutationBatchUndoMember,
   type MutationBatchUndoResponse,
-  type NoteDto,
+  type NoteDetail,
   type OrganizationPlan,
   type PrivacyMode,
   type ReviewItemDto,
@@ -38,6 +40,7 @@ import {
 import {
   OrganizationMaterializationError,
   materializeAuthorizedOrganizationPlan,
+  type MaterializedOrganizationCommand,
   type OrganizerCandidateManifest
 } from "@unfiled/ai-routing/materialization";
 import {
@@ -191,6 +194,11 @@ export type EncryptedOwnerInteractionCoordinatorDependencies = Readonly<{
     reservations: readonly ObjectWrapReservation[]
   ): PreparedOwnerEncryptedAggregateService;
   adapter: EncryptedOwnerInteractionRpcAdapter;
+  /// The photos and recordings bound to one capture, in upload order. The owner-interaction path
+  /// places references to them the way the organizer does, so filing from Review keeps the media.
+  listCaptureAttachments(
+    captureId: EntityId<"cap">
+  ): Promise<readonly Readonly<{ id: EntityId<"att">; kind: "image" | "audio" }>[]>;
   observeRoutingRuleCorrection(
     input: Readonly<{
       feedbackEventId: EntityId<"fbk">;
@@ -204,6 +212,10 @@ export type EncryptedOwnerInteractionCoordinatorDependencies = Readonly<{
   routingRuleObservationDeadlineAt?: number;
   signal?: AbortSignal;
 }>;
+
+/// A materialized command that writes a note. A review disposition writes nothing, so it is not
+/// one of these and never carries attachment references.
+type WritingOrganizationCommand = Exclude<MaterializedOrganizationCommand, { kind: "review" }>;
 
 function unavailable(): never {
   throw new ServiceRpcError(ServiceRpcErrorCode.PROVIDER_UNAVAILABLE);
@@ -226,10 +238,13 @@ function parsed<Value>(codec: PayloadCodec<Value>, value: unknown): Value {
   }
 }
 
-function publicNote(note: Note): NoteDto {
+function publicNote(note: Note): NoteDetail {
   const { userId, ...candidate } = note;
   void userId;
-  return NoteSchema.parse(candidate);
+  return NoteDetailSchema.parse({
+    ...candidate,
+    attachments: noteAttachmentReferences(note.bodyMarkdown)
+  });
 }
 
 function publicRevision(
@@ -1402,6 +1417,34 @@ export class EncryptedOwnerInteractionCoordinator {
     );
   }
 
+  /**
+   * Places the capture's photos and recordings after the owner's own words, exactly as the
+   * organizer does once a plan is authorized: one `append_paragraphs` operation of references
+   * the model never saw, added after source preservation has already been checked, and carried
+   * on the validated plan so undo, move and delete replay it with everything else. Without this
+   * the note the owner files from Review would be written without the photo they filed.
+   */
+  private async withCaptureAttachments(
+    command: WritingOrganizationCommand,
+    captureId: EntityId<"cap">
+  ): Promise<WritingOrganizationCommand> {
+    const attachments = await this.dependencies.listCaptureAttachments(captureId);
+    const paragraphs = captureAttachmentReferenceParagraphs(attachments);
+    if (paragraphs.length === 0) return command;
+    const operation = Object.freeze({
+      type: "append_paragraphs" as const,
+      paragraphs: [...paragraphs]
+    });
+    const operations = Object.freeze([...command.operations, operation]);
+    const validatedPlan = OrganizationPlanSchema.parse({
+      ...command.validatedPlan,
+      operations: [...command.validatedPlan.operations, operation]
+    });
+    return command.kind === "append"
+      ? Object.freeze({ ...command, operations, validatedPlan })
+      : Object.freeze({ ...command, operations, validatedPlan });
+  }
+
   private async applyDestination(
     input: Readonly<{
       member: OwnerInteractionPreparedMember;
@@ -1412,6 +1455,7 @@ export class EncryptedOwnerInteractionCoordinator {
       noteType: Note["type"];
       spaceId: EntityId<"spc"> | null;
       occurredAt: string;
+      captureId: EntityId<"cap">;
       decisionId: EntityId<"dec">;
       actor: string;
     }>
@@ -1443,7 +1487,7 @@ export class EncryptedOwnerInteractionCoordinator {
         currentNote,
         input.spaceId
       );
-      const command = materializeAuthorizedOrganizationPlan({
+      const materialized = materializeAuthorizedOrganizationPlan({
         captureText: input.rawContent,
         plan,
         manifest,
@@ -1456,7 +1500,8 @@ export class EncryptedOwnerInteractionCoordinator {
           generatedBlockId: null
         }
       });
-      if (command.kind === "review") return null;
+      if (materialized.kind === "review") return null;
+      const command = await this.withCaptureAttachments(materialized, input.captureId);
       const factory = idFactory(input.member.revisionId, input.member.mutationId);
       let applied: AppliedOrganizationCommand;
       if (command.kind === "create") {
@@ -2084,6 +2129,7 @@ export class EncryptedOwnerInteractionCoordinator {
                   ? destination.spaceId
                   : (destinationMember.currentNote?.spaceId ?? null),
               occurredAt: preparation.occurredAt,
+              captureId: preparation.ids.captureId,
               decisionId,
               actor: "user:correction"
             });
@@ -2306,6 +2352,7 @@ export class EncryptedOwnerInteractionCoordinator {
       const member = preparation.members[0] ?? unavailable();
       const rawContent = await this.openCapture(preparation.source);
       if (rawContent === null) return unavailable();
+      const captureId = preparation.source.capture?.captureId ?? unavailable();
       const decisionId = receipt?.decisionId ?? unavailable();
       const basePlan =
         reviewPayload.proposal.type === "route_capture" ? reviewPayload.proposal.plan : null;
@@ -2324,6 +2371,7 @@ export class EncryptedOwnerInteractionCoordinator {
             ? request.resolution.spaceId
             : (member.currentNote?.spaceId ?? null),
         occurredAt: preparation.occurredAt,
+        captureId,
         decisionId,
         actor: "user:review"
       });

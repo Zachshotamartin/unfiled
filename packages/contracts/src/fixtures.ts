@@ -7,7 +7,7 @@ import type {
   CaptureReceipt
 } from "./captures.js";
 import type { MutationResult } from "./mutations.js";
-import type { NoteDto, NoteSummary } from "./notes.js";
+import type { NoteDetail, NoteSummary } from "./notes.js";
 import type { UserOperation } from "./operations.js";
 import type { NoteRevisionDto } from "./revisions.js";
 import type { SearchNoteResult } from "./search.js";
@@ -110,7 +110,8 @@ export const captureV1ListFixture = Object.freeze({
       receivedAt: captureV1ResponseFixture.capture.receivedAt,
       status: "done",
       lastErrorCode: null,
-      receiptAvailable: true
+      receiptAvailable: true,
+      attachments: []
     })
   ],
   pageInfo: Object.freeze({ hasMore: false, nextCursor: null })
@@ -143,8 +144,9 @@ const note = {
   tagIds: ["tag_01J6M9Q7G4BMKB33GSG3NJ6D1X"],
   links: [],
   createdAt: "2026-08-30T18:30:00.000Z",
-  updatedAt: "2026-08-30T18:30:00.000Z"
-} satisfies NoteDto;
+  updatedAt: "2026-08-30T18:30:00.000Z",
+  attachments: []
+} satisfies NoteDetail;
 
 const summary = {
   id: note.id,

@@ -20,7 +20,13 @@ import {
   captureV1ResponseFixture,
   openApiDocument
 } from "../src/index.js";
-import { CaptureAttachmentSchema } from "../src/index.js";
+import {
+  CaptureAttachmentSchema,
+  captureAttachmentReference,
+  captureAttachmentReferenceParagraphs,
+  isCaptureAttachmentReference,
+  noteAttachmentReferences
+} from "../src/index.js";
 import { createEntityId, parseEntityId } from "../src/index.js";
 
 const CAPTURE_ID = "cap_01J6M9Q7G4BMKB33GSG3NJ6D1X";
@@ -419,5 +425,74 @@ describe("capture attachments", () => {
     });
     expect(uploaded.kind).toBe("image");
     expect(() => CaptureAttachmentSchema.parse({ ...uploaded, dataBase64: "AAAA" })).toThrow();
+  });
+
+  it("carries a capture's attachments in the list so a client renders without a second request", () => {
+    const attachment = {
+      id: createEntityId("att"),
+      kind: "image",
+      mediaType: "image/jpeg",
+      byteLength: 412_331,
+      width: 1568,
+      height: 1044,
+      durationMs: null,
+      createdAt: "2026-09-03T10:00:00.000Z"
+    };
+    const [summary] = captureV1ListFixture.items;
+    if (summary === undefined) throw new Error("The capture list fixture must carry one row");
+    expect(
+      CaptureListResponseSchema.parse({
+        ...captureV1ListFixture,
+        items: [{ ...summary, attachments: [attachment] }]
+      }).items[0]?.attachments
+    ).toEqual([attachment]);
+    const withoutAttachments: Record<string, unknown> = { ...summary };
+    delete withoutAttachments.attachments;
+    expect(
+      CaptureListResponseSchema.safeParse({
+        ...captureV1ListFixture,
+        items: [withoutAttachments]
+      }).success
+    ).toBe(false);
+  });
+
+  it("writes and reads one attachment reference form for every surface", () => {
+    const photo = createEntityId("att");
+    const recording = createEntityId("att");
+    expect(captureAttachmentReference({ id: photo, kind: "image" })).toBe(
+      `![Photo](unfiled-attachment:${photo})`
+    );
+    expect(captureAttachmentReference({ id: recording, kind: "audio" })).toBe(
+      `[Recording](unfiled-attachment:${recording})`
+    );
+    expect(
+      captureAttachmentReferenceParagraphs([
+        { id: photo, kind: "image" },
+        { id: recording, kind: "audio" }
+      ])
+    ).toEqual([
+      `![Photo](unfiled-attachment:${photo})`,
+      `[Recording](unfiled-attachment:${recording})`
+    ]);
+    // Every reference the writer emits has to be readable again, in body order and once each.
+    const body = [
+      "The receipt from lunch",
+      "",
+      captureAttachmentReference({ id: photo, kind: "image" }),
+      "",
+      captureAttachmentReference({ id: recording, kind: "audio" }),
+      "",
+      captureAttachmentReference({ id: photo, kind: "image" })
+    ].join("\n");
+    expect(noteAttachmentReferences(body)).toEqual([
+      { id: photo, kind: "image" },
+      { id: recording, kind: "audio" }
+    ]);
+    expect(noteAttachmentReferences("no attachments here")).toEqual([]);
+    expect(noteAttachmentReferences("![Photo](unfiled-attachment:att_nope)")).toEqual([]);
+    expect(isCaptureAttachmentReference(`![Photo](unfiled-attachment:${photo})`)).toBe(true);
+    expect(
+      isCaptureAttachmentReference(`![Photo](unfiled-attachment:${photo}) and a caption`)
+    ).toBe(false);
   });
 });

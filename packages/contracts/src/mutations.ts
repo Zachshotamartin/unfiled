@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { entityIdSchema } from "./ids.js";
 import { ExpectedRevisionSchema, IdempotencyKeySchema } from "./idempotency.js";
-import { NoteSchema } from "./notes.js";
+import { NoteDetailSchema } from "./notes.js";
 import { NoteRevisionSchema } from "./revisions.js";
 
 export const UndoEligibilitySchema = z.strictObject({
@@ -12,7 +12,7 @@ export const UndoEligibilitySchema = z.strictObject({
 export type UndoEligibility = z.infer<typeof UndoEligibilitySchema>;
 
 export const MutationResultSchema = z.strictObject({
-  note: NoteSchema,
+  note: NoteDetailSchema,
   revision: NoteRevisionSchema,
   mutationId: entityIdSchema("mut"),
   replayed: z.boolean(),

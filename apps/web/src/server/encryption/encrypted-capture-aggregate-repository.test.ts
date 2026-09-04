@@ -1595,4 +1595,117 @@ describe("capture attachments", () => {
     );
     await expect(missing.getAttachment(context, ATTACHMENT)).resolves.toBeNull();
   });
+
+  it("binds the attachments a capture names so an uploaded photo is never abandoned", async () => {
+    const aggregate = aggregateMocks();
+    const createCapture = vi.fn<EncryptedCaptureRpcAdapter["createCapture"]>(() =>
+      Promise.resolve({ captureId: CAPTURE, jobId: JOB, replayed: false })
+    );
+    await repository(aggregate.aggregate, adapter({ createCapture })).createCapture(context, {
+      ...input("ai_assisted"),
+      attachmentIds: [ATTACHMENT]
+    });
+    // The database binds exactly the identifiers this command carries, in the same transaction as
+    // the capture. Dropping them here would commit the words and leave the photo unreferenced.
+    expect(createCapture.mock.calls[0]?.[0].capture.attachmentIds).toEqual([ATTACHMENT]);
+
+    const withoutAttachments = vi.fn<EncryptedCaptureRpcAdapter["createCapture"]>(() =>
+      Promise.resolve({ captureId: CAPTURE, jobId: JOB, replayed: false })
+    );
+    await repository(
+      aggregate.aggregate,
+      adapter({ createCapture: withoutAttachments })
+    ).createCapture(context, input("ai_assisted"));
+    expect(withoutAttachments.mock.calls[0]?.[0].capture.attachmentIds).toEqual([]);
+  });
+
+  it("refuses a replayed create that names a different set of attachments", async () => {
+    const aggregate = aggregateMocks();
+    const attachmentRow = Object.freeze({
+      attachmentId: ATTACHMENT,
+      captureId: CAPTURE,
+      kind: "image" as const,
+      mediaType: "image/jpeg" as const,
+      byteLength: JPEG.byteLength,
+      width: 1568,
+      height: 1044,
+      durationMs: null,
+      privacy: "ai_assisted" as const,
+      boundAt: "2026-08-31T18:00:01.000Z",
+      createdAt: "2026-08-31T18:00:00.000Z",
+      contentCipher: encrypted("capture_attachment", ATTACHMENT, "ai_assisted", 1),
+      contentMac: mac("ai_assisted")
+    });
+    const captureAdapter = adapter({
+      getCaptureDetail: vi.fn(() => Promise.resolve(detail())),
+      listAttachments: vi.fn(() => Promise.resolve([attachmentRow]))
+    });
+    const repo = repository(aggregate.aggregate, captureAdapter);
+
+    await expect(
+      repo.createCapture(context, {
+        ...input("private_manual"),
+        attachmentIds: [ATTACHMENT]
+      })
+    ).resolves.toMatchObject({ capture: { id: CAPTURE }, replayed: true });
+    // A retry that changed the photos is a different capture; answering it with the stored one
+    // would silently discard whatever the retry was carrying.
+    await expectServiceError(
+      repo.createCapture(context, input("private_manual")),
+      ServiceRpcErrorCode.INVALID_IDEMPOTENCY_KEY
+    );
+  });
+
+  it("lists each capture with its attachments so a client renders without a second request", async () => {
+    const aggregate = aggregateMocks();
+    const row = captureRow("ai_assisted", { status: "inbox", receiptAvailable: true });
+    const captureAdapter = adapter({
+      listCaptures: vi.fn(() => Promise.resolve({ captures: [row], nextCursor: null })),
+      listAttachments: vi.fn(() =>
+        Promise.resolve([
+          {
+            attachmentId: ATTACHMENT,
+            captureId: CAPTURE,
+            kind: "image" as const,
+            mediaType: "image/jpeg" as const,
+            byteLength: JPEG.byteLength,
+            width: 1568,
+            height: 1044,
+            durationMs: null,
+            privacy: "ai_assisted" as const,
+            boundAt: "2026-08-31T18:00:01.000Z",
+            createdAt: "2026-08-31T18:00:00.000Z",
+            contentCipher: encrypted("capture_attachment", ATTACHMENT, "ai_assisted", 1),
+            contentMac: mac("ai_assisted")
+          }
+        ])
+      )
+    });
+
+    await expect(
+      repository(aggregate.aggregate, captureAdapter).listCaptures(context, { limit: 30 })
+    ).resolves.toMatchObject({
+      items: [
+        {
+          id: CAPTURE,
+          attachments: [
+            {
+              id: ATTACHMENT,
+              kind: "image",
+              mediaType: "image/jpeg",
+              byteLength: JPEG.byteLength,
+              width: 1568,
+              height: 1044,
+              durationMs: null,
+              createdAt: "2026-08-31T18:00:00.000Z"
+            }
+          ]
+        }
+      ]
+    });
+    expect(captureAdapter.listAttachments).toHaveBeenCalledWith({
+      ownerId: OWNER,
+      captureId: CAPTURE
+    });
+  });
 });

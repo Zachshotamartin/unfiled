@@ -89,11 +89,46 @@ describe("account contracts", () => {
         }
       ],
       notes: [],
-      routingRules: []
+      routingRules: [],
+      captures: []
     };
     expect(AccountExportManifestSchema.safeParse(valid).success).toBe(true);
     const withoutSpaces: Record<string, unknown> = { ...valid };
     delete withoutSpaces.spaces;
     expect(AccountExportManifestSchema.safeParse(withoutSpaces).success).toBe(false);
+  });
+
+  it("requires the captures the library has not absorbed, with their own words", () => {
+    const capture = {
+      id: "cap_00000000000000000000000001",
+      rawContent: "milk and batteries",
+      source: "mobile",
+      privacy: "ai_assisted",
+      status: "needs_review",
+      lastErrorCode: null,
+      clientCreatedAt: NOW,
+      receivedAt: NOW,
+      attachments: [{ id: "att_00000000000000000000000001", kind: "image" }]
+    };
+    const manifest = {
+      schemaVersion: 1,
+      exportedAt: NOW,
+      spaces: [],
+      tags: [],
+      notes: [],
+      routingRules: [],
+      captures: [capture]
+    };
+    expect(AccountExportManifestSchema.safeParse(manifest).success).toBe(true);
+    // An export that drops the captures section drops everything still in the Inbox with it.
+    const withoutCaptures: Record<string, unknown> = { ...manifest };
+    delete withoutCaptures.captures;
+    expect(AccountExportManifestSchema.safeParse(withoutCaptures).success).toBe(false);
+    expect(
+      AccountExportManifestSchema.safeParse({
+        ...manifest,
+        captures: [{ ...capture, rawContent: "" }]
+      }).success
+    ).toBe(false);
   });
 });

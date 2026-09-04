@@ -517,6 +517,72 @@ select is(
   'a capture without attachments still works'
 );
 
+-- The server sends attachmentIds on every capture, an explicit empty array when the owner
+-- attached nothing, so the empty shape has to behave exactly like the absent one.
+
+insert into capture_values(key, value)
+values (
+  'empty',
+  pg_temp.capture(
+    'cap_98000000000000000000000004', 'job_98000000000000000000000004',
+    '98000000-0000-4000-8000-000000000015', '[]'::jsonb
+  )
+);
+
+create function pg_temp.stored_empty_capture(p_attachment_ids jsonb)
+returns jsonb
+language sql
+stable
+as $$
+  select value || jsonb_build_object('attachmentIds', p_attachment_ids)
+  from capture_values where key = 'empty';
+$$;
+
+select is(
+  public.create_encrypted_capture_with_job(
+    '55555555-5555-4555-8555-555555555555', pg_temp.stored_empty_capture('[]'::jsonb)
+  ) ->> 'replayed',
+  'false',
+  'a capture that names an empty attachment set is accepted'
+);
+select is(
+  public.create_encrypted_capture_with_job(
+    '55555555-5555-4555-8555-555555555555', pg_temp.stored_empty_capture('[]'::jsonb)
+  ) ->> 'replayed',
+  'true',
+  'replaying an empty attachment set is idempotent'
+);
+select is(
+  public.create_encrypted_capture_attachment(
+    '55555555-5555-4555-8555-555555555555',
+    pg_temp.attachment(
+      'att_98000000000000000000000004', 'cap_98000000000000000000000004',
+      'image', '98000000-0000-4000-8000-000000000016'
+    )
+  ) ->> 'replayed',
+  'false',
+  'a photo can be uploaded for a capture that already exists without one'
+);
+-- A retry that arrives carrying a photo the first commit never bound is a different capture.
+-- Answering it with the stored one would drop the photo at the moment the owner sent it.
+select throws_ok(
+  $$select public.create_encrypted_capture_with_job(
+    '55555555-5555-4555-8555-555555555555',
+    pg_temp.stored_empty_capture('["att_98000000000000000000000004"]')
+  )$$,
+  'P0001', 'invalid_idempotency_key',
+  'replaying a capture with an attachment it never bound is refused'
+);
+reset role;
+select is(
+  (select bound_at from public.capture_attachments
+   where id = 'att_98000000000000000000000004'),
+  null,
+  'the refused replay leaves the late upload unbound'
+);
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+
 -- Sweeping never-bound uploads
 
 reset role;
@@ -530,8 +596,16 @@ select is(
 );
 select is(
   (select count(*) from public.capture_attachments),
-  2::bigint,
+  3::bigint,
   'bound attachments survive the sweep'
+);
+-- The sweep only takes uploads that have had their day to be claimed, so an upload the owner
+-- has just sent is still there for the capture that is about to name it.
+select is(
+  (select count(*) from public.capture_attachments
+   where bound_at is null and deleted_at is null),
+  1::bigint,
+  'an upload younger than a day survives the sweep'
 );
 
 -- Account deletion

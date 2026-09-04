@@ -197,7 +197,8 @@ function privateCommand(): CreateEncryptedCaptureCommand {
         "private_manual",
         "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
       ),
-      privateReceiptVerificationMac: mac("private_manual")
+      privateReceiptVerificationMac: mac("private_manual"),
+      attachmentIds: []
     })
   });
 }
@@ -261,6 +262,46 @@ describe("encrypted capture RPC adapter", () => {
       "keyVersion",
       "mac"
     ]);
+  });
+
+  it("carries the attachment identifiers the database binds with the capture", async () => {
+    const rpc = vi.fn<ServiceRpcClient["rpc"]>().mockResolvedValue({
+      captureId: CAPTURE,
+      jobId: JOB,
+      replayed: false
+    });
+    const base = privateCommand();
+    const photo = "att_01J6M9Q7G4BMKB33GSG3NJ6D1X" as const;
+    const recording = "att_01J6M9Q7G4BMKB33GSG3NJ6D1Y" as const;
+    await expect(
+      createEncryptedCaptureRpcAdapter(client(rpc)).createCapture({
+        ...base,
+        capture: { ...base.capture, attachmentIds: [photo, recording] }
+      })
+    ).resolves.toMatchObject({ replayed: false });
+    expect((rpc.mock.calls[0]?.[1].p_capture as Record<string, unknown>).attachmentIds).toEqual([
+      photo,
+      recording
+    ]);
+
+    const rejected = createEncryptedCaptureRpcAdapter(client(vi.fn()));
+    await expectFailure(
+      rejected.createCapture({
+        ...base,
+        capture: { ...base.capture, attachmentIds: [photo, photo] }
+      }),
+      ServiceRpcErrorCode.VALIDATION_FAILED
+    );
+    await expectFailure(
+      rejected.createCapture({
+        ...base,
+        capture: {
+          ...base.capture,
+          attachmentIds: [CAPTURE] as unknown as readonly (typeof photo)[]
+        }
+      }),
+      ServiceRpcErrorCode.VALIDATION_FAILED
+    );
   });
 
   it("accepts the AI command shape only with null private receipt fields", async () => {

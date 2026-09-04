@@ -28,6 +28,8 @@ export type NormalizedCaptureCreateInput = Readonly<{
   explicitDestinationNoteId?: EntityId<"note"> | undefined;
   expansionDisabled: boolean;
   guidance?: string | undefined;
+  /// The photos and recordings already uploaded for this capture, bound to it as it is created.
+  attachmentIds?: readonly EntityId<"att">[] | undefined;
 }>;
 
 export type NormalizedAttachmentUploadInput = Readonly<

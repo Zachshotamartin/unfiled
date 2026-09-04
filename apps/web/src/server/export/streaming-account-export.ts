@@ -1,15 +1,19 @@
 import { createHash } from "node:crypto";
 
 import {
+  AccountExportCaptureSchema,
   AccountExportNoteSchema,
   AccountExportRoutingRuleSchema,
   AccountExportSpaceSchema,
   AccountExportTagSchema,
+  noteAttachmentReferences,
+  type AccountExportCapture,
   type AccountExportNote,
   type AccountExportRoutingRule,
   type AccountExportSpace,
   type AccountExportTag,
-  type EntityId
+  type EntityId,
+  type NoteAttachment
 } from "@unfiled/contracts";
 
 import type {
@@ -137,22 +141,10 @@ function markdownChunks(note: OwnerExportNote): readonly Uint8Array[] {
   return Object.freeze([header, body, ending]);
 }
 
-const ATTACHMENT_REFERENCE =
-  /^\s*(!?)\[(?:Photo|Recording)\]\(unfiled-attachment:(att_[0-9A-HJKMNP-TV-Z]{26})\)\s*$/u;
-
-/// The photos and recordings a note body places, in order, each once.
-export function placedAttachments(
-  bodyMarkdown: string
-): readonly Readonly<{ id: EntityId<"att">; kind: "image" | "audio" }>[] {
-  const seen = new Set<string>();
-  const placed: Readonly<{ id: EntityId<"att">; kind: "image" | "audio" }>[] = [];
-  for (const line of bodyMarkdown.split("\n")) {
-    const match = ATTACHMENT_REFERENCE.exec(line);
-    if (match?.[2] === undefined || seen.has(match[2])) continue;
-    seen.add(match[2]);
-    placed.push({ id: match[2] as EntityId<"att">, kind: match[1] === "!" ? "image" : "audio" });
-  }
-  return placed;
+/// The photos and recordings a note body places, in order, each once. The archive reads the same
+/// projection the note detail returns, so what the owner downloads matches what they were shown.
+export function placedAttachments(bodyMarkdown: string): readonly NoteAttachment[] {
+  return noteAttachmentReferences(bodyMarkdown);
 }
 
 export function attachmentPath(id: EntityId<"att">, kind: "image" | "audio"): string {
@@ -184,10 +176,16 @@ function manifestPrefix(exportedAt: string): string {
 const MANIFEST_SPACES_TO_TAGS = `],"tags":[`;
 const MANIFEST_TAGS_TO_NOTES = `],"notes":[`;
 const MANIFEST_NOTES_TO_RULES = `],"routingRules":[`;
+const MANIFEST_RULES_TO_CAPTURES = `],"captures":[`;
 const MANIFEST_SUFFIX = "]}\n";
 
 function fragment(
-  value: AccountExportNote | AccountExportRoutingRule | AccountExportSpace | AccountExportTag,
+  value:
+    | AccountExportCapture
+    | AccountExportNote
+    | AccountExportRoutingRule
+    | AccountExportSpace
+    | AccountExportTag,
   index: number
 ): string {
   return `${index === 0 ? "" : ","}${JSON.stringify(value)}`;
@@ -204,6 +202,7 @@ async function* tarArchive(
     byteLength(MANIFEST_SPACES_TO_TAGS) +
     byteLength(MANIFEST_TAGS_TO_NOTES) +
     byteLength(MANIFEST_NOTES_TO_RULES) +
+    byteLength(MANIFEST_RULES_TO_CAPTURES) +
     byteLength(MANIFEST_SUFFIX);
   const expectedManifestDigest = createHash("sha256");
   expectedManifestDigest.update(prefix);
@@ -284,6 +283,34 @@ async function* tarArchive(
       ruleCount += 1;
     }
   }
+
+  expectedManifestDigest.update(MANIFEST_RULES_TO_CAPTURES);
+  let captureCount = 0;
+  for await (const page of source.capturePages()) {
+    throwIfAborted(signal);
+    for (const captureValue of page) {
+      const capture = AccountExportCaptureSchema.parse(captureValue);
+      const serialized = fragment(capture, captureCount);
+      manifestSize += byteLength(serialized);
+      expectedManifestDigest.update(serialized);
+      captureCount += 1;
+
+      // A capture no note has absorbed holds the only copy of its photos and recordings, so
+      // their bytes travel here rather than only under the notes that place them.
+      for (const held of capture.attachments) {
+        throwIfAborted(signal);
+        const attachmentFile = attachmentPath(held.id, held.kind);
+        if (paths.has(attachmentFile)) continue;
+        const attachment = await source.attachment(held.id);
+        if (attachment === null) continue;
+        paths.add(attachmentFile);
+        yield tarHeader(attachmentFile, attachment.bytes.byteLength, capture.receivedAt);
+        if (attachment.bytes.byteLength > 0) yield attachment.bytes;
+        const attachmentTail = padding(attachment.bytes.byteLength);
+        if (attachmentTail !== null) yield attachmentTail;
+      }
+    }
+  }
   expectedManifestDigest.update(MANIFEST_SUFFIX);
   const expectedDigest = expectedManifestDigest.digest("hex");
 
@@ -294,6 +321,7 @@ async function* tarArchive(
   let actualTags = 0;
   let actualNotes = 0;
   let actualRules = 0;
+  let actualCaptures = 0;
   const emitManifest = (value: string): Uint8Array => {
     const bytes = encoder.encode(value);
     actualSize += bytes.byteLength;
@@ -334,6 +362,14 @@ async function* tarArchive(
       actualRules += 1;
     }
   }
+  yield emitManifest(MANIFEST_RULES_TO_CAPTURES);
+  for await (const page of source.capturePages()) {
+    throwIfAborted(signal);
+    for (const captureValue of page) {
+      yield emitManifest(fragment(AccountExportCaptureSchema.parse(captureValue), actualCaptures));
+      actualCaptures += 1;
+    }
+  }
   yield emitManifest(MANIFEST_SUFFIX);
   const actualDigest = actualManifestDigest.digest("hex");
   if (
@@ -342,6 +378,7 @@ async function* tarArchive(
     actualTags !== tagCount ||
     actualNotes !== noteCount ||
     actualRules !== ruleCount ||
+    actualCaptures !== captureCount ||
     actualDigest !== expectedDigest
   ) {
     throw new TypeError("The library changed while the export was being generated");

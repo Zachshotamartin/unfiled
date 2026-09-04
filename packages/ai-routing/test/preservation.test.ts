@@ -104,6 +104,31 @@ describe("source preservation", () => {
     expect(result).toMatchObject({ preserved: false, method: "none", coverage: 0.9 });
   });
 
+  it("treats an attachment reference paragraph as placement rather than source text", () => {
+    const photo = "![Photo](unfiled-attachment:att_01ARZ3NDEKTSV4RRFFQ69G5FAZ)";
+    const recording = "[Recording](unfiled-attachment:att_01ARZ3NDEKTSV4RRFFQ69G5FAY)";
+    // The organizer and the owner-interaction path both append these after the model's own text
+    // has been checked. Counting their words would fail every capture that carries a photo.
+    expect(
+      inspectSourcePreservation("A thought", [
+        { type: "append_raw", content: "A thought" },
+        { type: "append_paragraphs", paragraphs: [photo, recording] }
+      ])
+    ).toMatchObject({
+      preserved: true,
+      method: "append_raw",
+      novelOperationTokenCount: 0,
+      coverage: 1
+    });
+    // Only the exact reference form is placement; anything the model wrote beside one is source.
+    expect(
+      inspectSourcePreservation("A thought", [
+        { type: "append_raw", content: "A thought" },
+        { type: "append_paragraphs", paragraphs: [`${photo} and a caption`] }
+      ]).preserved
+    ).toBe(false);
+  });
+
   it("accepts byte-exact paragraph splitting only when the separators are preserved", () => {
     expect(
       inspectSourcePreservation("First thought\n\nSecond thought", [

@@ -11,6 +11,8 @@ import { createApiClient } from "../src/index.js";
 
 const CAPTURE_ID = captureV1Fixture.clientCaptureId;
 const NOTE_ID = "note_01J6M9Q7G4BMKB33GSG3NJ6D1X";
+const ATTACHMENT_ID = "att_01J6M9Q7G4BMKB33GSG3NJ6D1X" as const;
+const JPEG = new Uint8Array([255, 216, 255, 224, 0, 16, 74, 70, 73, 70, 0, 1]);
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -160,5 +162,110 @@ describe("Milestone C capture API client", () => {
       })
     ).toThrow();
     expect(fetcher.mock.calls).toHaveLength(0);
+  });
+
+  it("uploads one photo as raw bytes under its own identifier as the idempotency key", async () => {
+    const attachment = {
+      id: ATTACHMENT_ID,
+      kind: "image" as const,
+      mediaType: "image/jpeg" as const,
+      byteLength: JPEG.byteLength,
+      width: 1568,
+      height: 1044,
+      durationMs: null,
+      createdAt: "2026-09-03T10:00:00.000Z"
+    };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(attachment, 201));
+    const client = createApiClient({
+      baseUrl: "https://example.test",
+      fetch: fetcher,
+      getAccessToken: () => Promise.resolve("access-token")
+    });
+
+    await expect(
+      client.uploadCaptureAttachment({
+        attachmentId: attachment.id,
+        captureId: CAPTURE_ID,
+        kind: "image",
+        mediaType: "image/jpeg",
+        privacy: "ai_assisted",
+        width: 1568,
+        height: 1044,
+        durationMs: null,
+        bytes: JPEG
+      })
+    ).resolves.toEqual(attachment);
+    expect(requestUrl(fetcher.mock.calls[0]?.[0] ?? "")).toBe(
+      "https://example.test/api/v1/captures/attachments"
+    );
+    expect(fetcher.mock.calls[0]?.[1]?.method).toBe("POST");
+    expect(fetcher.mock.calls[0]?.[1]?.headers).toMatchObject({
+      "content-type": "image/jpeg",
+      "idempotency-key": attachment.id,
+      "x-unfiled-capture-id": CAPTURE_ID,
+      "x-unfiled-privacy": "ai_assisted",
+      "x-unfiled-width": "1568",
+      "x-unfiled-height": "1044"
+    });
+    expect(fetcher.mock.calls[0]?.[1]?.headers).not.toHaveProperty("x-unfiled-duration-ms");
+    // A photo carries dimensions and no duration; the client refuses the wrong shape before it
+    // puts owner media on the wire.
+    expect(() =>
+      client.uploadCaptureAttachment({
+        attachmentId: attachment.id,
+        captureId: CAPTURE_ID,
+        kind: "image",
+        mediaType: "image/jpeg",
+        privacy: "ai_assisted",
+        width: null,
+        height: null,
+        durationMs: 4_200,
+        bytes: JPEG
+      })
+    ).toThrow();
+    expect(fetcher.mock.calls).toHaveLength(1);
+  });
+
+  it("reads attachment bytes only from an uncacheable private response", async () => {
+    const privateResponse = () =>
+      new Response(JPEG.slice(), {
+        headers: {
+          "cache-control": "private, no-store",
+          "content-type": "image/jpeg",
+          pragma: "no-cache"
+        },
+        status: 200
+      });
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(() => Promise.resolve(privateResponse()));
+    const client = createApiClient({
+      baseUrl: "https://example.test",
+      fetch: fetcher,
+      getAccessToken: () => Promise.resolve("access-token")
+    });
+
+    const read = await client.getCaptureAttachment(ATTACHMENT_ID);
+    expect(read.mediaType).toBe("image/jpeg");
+    expect([...read.bytes]).toEqual([...JPEG]);
+    expect(requestUrl(fetcher.mock.calls[0]?.[0] ?? "")).toBe(
+      `https://example.test/api/v1/captures/attachments/${ATTACHMENT_ID}`
+    );
+
+    const cacheable = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JPEG.slice(), {
+        headers: { "content-type": "image/jpeg" },
+        status: 200
+      })
+    );
+    const permissive = createApiClient({
+      baseUrl: "https://example.test",
+      fetch: cacheable,
+      getAccessToken: () => Promise.resolve("access-token")
+    });
+    await expect(permissive.getCaptureAttachment(ATTACHMENT_ID)).rejects.toMatchObject({
+      name: "ApiClientMalformedResponseError"
+    });
+    expect(() => client.getCaptureAttachment("att_bad")).toThrow();
   });
 });
