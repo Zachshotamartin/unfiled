@@ -203,8 +203,7 @@ export function LogSurface({
     <section className="log-surface" aria-labelledby="log-fields-heading">
       <header>
         <div>
-          <span className="section-label">Structured log</span>
-          <h2 id="log-fields-heading">Edit logged values</h2>
+          <h2 id="log-fields-heading">Log</h2>
         </div>
         <p>{entries.length === 1 ? "1 entry" : `${entries.length} entries`}</p>
       </header>

@@ -289,18 +289,15 @@ export function AiSettings({ managedFallbackAvailable = false }: AiSettingsProps
       <section className="settings-row settings-ai-row" aria-labelledby="ai-settings-heading">
         <header className="ai-settings-header">
           <div>
-            <p className="section-label">Organization behavior</p>
-            <h2 id="ai-settings-heading">AI &amp; filing</h2>
+            <p className="section-label">Organization</p>
+            <h2 id="ai-settings-heading" className="settings-section-title">
+              AI &amp; filing
+            </h2>
             <p>
               Choose the provider, model, and effort that organize what you capture. These profiles
               never weaken routing safety or Review thresholds.
             </p>
           </div>
-          {authoritativeSettings === null ? null : (
-            <span className="ai-settings-revision">
-              Revision {authoritativeSettings.settingsRevision}
-            </span>
-          )}
         </header>
 
         {settingsResource.loading && draft === null ? (
@@ -343,7 +340,9 @@ export function AiSettings({ managedFallbackAvailable = false }: AiSettingsProps
         <header className="ai-settings-header">
           <div>
             <p className="section-label">Vault-held credentials</p>
-            <h2 id="provider-key-heading">Provider keys</h2>
+            <h2 id="provider-key-heading" className="settings-section-title">
+              Provider keys
+            </h2>
             <p>
               OpenAI and Claude keys are saved independently. Each is validated in bounded server
               memory, then stored only in Supabase Vault. Unfiled never returns a key after

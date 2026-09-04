@@ -35,7 +35,7 @@ export function SettingsSections({
     <div className="border-t border-outline">
       <section className="settings-row">
         <div>
-          <h2 className="text-lg font-medium">Account</h2>
+          <h2 className="settings-section-title">Account</h2>
           <p className="mt-2 text-sm text-muted-content">{email}</p>
         </div>
         <button type="button" className="button-secondary" onClick={onSignOut}>
@@ -47,7 +47,7 @@ export function SettingsSections({
       <AccountDataControls />
       <section className="settings-row">
         <div>
-          <h2 className="text-lg font-medium">Sync</h2>
+          <h2 className="settings-section-title">Sync</h2>
           <p className="mt-2 max-w-xl text-sm leading-6 text-muted-content">
             This web app and the iPhone app use the same account and backend. Open views refresh
             when another device changes your library.

@@ -1,9 +1,9 @@
 @import "tailwindcss";
 @import "./paper.css";
+@import "./globals-core.css";
 @import "./product-details.css";
 @import "./capture.css";
 @import "./routing-rules.css";
 @import "./ai-settings.css";
-@import "./globals-core.css";
 @import "./desk.css";
 @import "./globals-responsive.css";

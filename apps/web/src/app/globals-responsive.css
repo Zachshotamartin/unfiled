@@ -9,9 +9,6 @@
   .settings-row {
     flex-direction: row;
   }
-  .editor-meta-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
   .space-create-form {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   }
@@ -35,6 +32,10 @@
   .editor-page,
   .note-editor-page {
     padding-bottom: 0;
+  }
+  /* The rail carries the archive, settings and sign-out rows, so the Library's menu stands down. */
+  .desk-menu {
+    display: none;
   }
 }
 
@@ -70,6 +71,38 @@
     border-top: 0;
     border-left: 1px solid var(--color-border);
   }
+}
+
+/* One left edge for every part of a note's page, the status bar and banners included. */
+.note-editor-main .editor-status,
+.note-editor-main .conflict-banner,
+.note-editor-main .offline-strip {
+  padding-right: var(--space-editor-gutter);
+  padding-left: var(--space-editor-gutter);
+}
+
+/* One disabled treatment for the three button roles. */
+.button-primary:disabled,
+.button-secondary:disabled,
+.quiet-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.library-search:focus-within {
+  border-color: var(--color-accent);
+}
+
+/* Settings section titles, one style: the sans heading role at one size and weight. */
+h2.settings-section-title {
+  font-size: 1.15rem;
+  font-weight: 620;
+  letter-spacing: -0.02em;
+}
+
+/* The note's title sits tighter than a screen title, as it does on the phone. */
+.editor-title {
+  letter-spacing: -0.035em;
 }
 
 details > summary {

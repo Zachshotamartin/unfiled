@@ -7,7 +7,7 @@
     gap: 0.55rem;
     border-top: 1px solid color-mix(in srgb, var(--color-warning) 50%, transparent);
     border-bottom: 1px solid color-mix(in srgb, var(--color-warning) 50%, transparent);
-    padding: 0.8rem 0.15rem;
+    padding: 0.8rem 0;
     color: var(--color-warning);
     font-size: 0.78rem;
     line-height: 1.5;
@@ -200,7 +200,7 @@
 
   .capture-activity-loading,
   .capture-activity-empty {
-    padding: 2.25rem 0.15rem;
+    padding: 2.25rem 0;
   }
 
   .capture-activity-empty {
@@ -214,7 +214,7 @@
     align-items: flex-start;
     gap: 0.85rem;
     border-bottom: 1px solid var(--color-border);
-    padding: 1rem 0.15rem;
+    padding: 1rem 0;
   }
 
   .capture-state-icon {
@@ -399,7 +399,7 @@
 
 @media (min-width: 48rem) {
   .capture-composer {
-    grid-template-columns: minmax(10rem, 0.34fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 22rem) minmax(0, 1fr);
     gap: 2rem;
   }
 
@@ -412,6 +412,7 @@
   }
 
   .capture-detail-page {
-    padding: 2.25rem 2.25rem 5rem;
+    padding-top: 3.5rem;
+    padding-bottom: 6rem;
   }
 }

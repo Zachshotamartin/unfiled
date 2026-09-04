@@ -95,7 +95,7 @@ export function AccountDataControls() {
   return (
     <section className="settings-row account-data-controls" aria-labelledby="account-data-title">
       <div>
-        <h2 id="account-data-title" className="text-lg font-medium">
+        <h2 id="account-data-title" className="settings-section-title">
           Your data
         </h2>
         <p className="mt-2 max-w-xl text-sm leading-6 text-muted-content">

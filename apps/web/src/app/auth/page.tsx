@@ -18,7 +18,7 @@ export default function AuthPage() {
           <p className="eyebrow">A place before a folder</p>
           <h1
             id="auth-title"
-            className="mt-5 text-5xl font-semibold tracking-[-0.055em] sm:text-7xl"
+            className="mt-5 font-serif text-5xl font-semibold tracking-[-0.02em] sm:text-7xl"
           >
             Pick up where your thought left off.
           </h1>
@@ -33,7 +33,7 @@ export default function AuthPage() {
         <div className="w-full max-w-sm">
           <AuthForm />
           <p className="mt-8 border-t border-outline pt-5 text-sm leading-6 text-muted-content">
-            By continuing, you agree to keep your password private.{" "}
+            Write without deciding where it belongs.{" "}
             <Link href="/" className="text-content underline decoration-outline underline-offset-4">
               Back home
             </Link>

@@ -62,12 +62,14 @@ describe("the Desk navigation", () => {
     expect(html).toContain('aria-label="Settings"');
   });
 
-  it("keeps the archive, the recovery window, Settings and sign out in the Library header", () => {
+  it("keeps only the archive and the recovery window in the Library header", () => {
+    // The phone's menu carries two rows. Settings is one tap from the Inbox and sign-out lives
+    // in Settings, so the menu does not repeat what the rail and the dock already reach.
     const html = renderToStaticMarkup(<DeskLibraryMenu />);
 
     expect(html).toContain('href="/app/archive"');
     expect(html).toContain('href="/app/archive#recently-deleted"');
-    expect(html).toContain('href="/app/settings"');
-    expect(html).toContain("Sign out");
+    expect(html).not.toContain('href="/app/settings"');
+    expect(html).not.toContain("Sign out");
   });
 });

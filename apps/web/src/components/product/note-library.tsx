@@ -19,17 +19,13 @@ function formatRelative(value: string): string {
 export function NoteRow({ note }: Readonly<{ note: NoteSummary }>) {
   return (
     <Link href={`/app/notes/${note.id}`} className="note-row group">
-      <div className="flex items-center justify-between gap-5">
-        <span className="eyebrow">{note.type}</span>
-        <time dateTime={note.updatedAt} className="text-[11px] text-muted-content">
-          {formatRelative(note.updatedAt)}
-        </time>
-      </div>
-      <div className="mt-3 flex items-start justify-between gap-5">
+      {/* A row is for reading: the title and when it changed. The phone shows no type or
+          revision label on a note (ADR-0019, decision 6), and neither does a row here. */}
+      <div className="flex items-start justify-between gap-5">
         <div className="min-w-0">
           <h3 className="note-row-title truncate">{note.title}</h3>
           <p className="mt-2 text-sm text-muted-content">
-            Revision {note.currentRevision}
+            <time dateTime={note.updatedAt}>{formatRelative(note.updatedAt)}</time>
             {note.archivedAt === null ? "" : " · Archived"}
             {note.deletedAt === null ? "" : " · Recently deleted"}
           </p>
@@ -77,7 +73,7 @@ export function NoteLibrary({
         body={emptyBody}
         action={
           <Link href="/app" className="button-primary">
-            Capture something <UnfiledGlyph glyph="arrow" size={17} weight={2.2} />
+            Write something <UnfiledGlyph glyph="arrow" size={17} weight={2.2} />
           </Link>
         }
       />

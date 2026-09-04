@@ -305,20 +305,18 @@
   .note-row {
     display: block;
     border-bottom: 1px solid var(--color-border);
-    padding: 1.4rem 0.15rem;
-    transition:
-      padding 170ms var(--motion-standard),
-      color 170ms var(--motion-standard);
+    padding: 1.4rem 0;
+    transition: color 170ms var(--motion-standard);
   }
 
-  .note-row:hover {
-    padding-right: 0.6rem;
-    padding-left: 0.6rem;
+  /* A row answers the pointer with color; its left edge never moves. */
+  .note-row:hover .note-row-title {
+    color: var(--color-accent);
   }
 
   .empty-state {
     border-top: 1px solid var(--color-border);
-    padding: 2.25rem 0.15rem;
+    padding: 2.25rem 0;
   }
 
   /* An empty state is a sentence and, at most, one action, in the reading face. */
@@ -451,8 +449,12 @@
   }
 
   .editor-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: var(--z-sticky);
     display: flex;
     min-height: 4.5rem;
+    background: var(--color-canvas);
     align-items: center;
     gap: 0.75rem;
     border-bottom: 1px solid var(--color-border);
@@ -474,13 +476,6 @@
   .toolbar-button:hover,
   .quiet-button:hover {
     color: var(--color-text-primary);
-  }
-
-  .editor-meta-grid {
-    display: grid;
-    gap: 1rem;
-    border-bottom: 1px solid var(--color-border);
-    padding: 1.25rem var(--space-editor-gutter);
   }
 
   /* The note fills its page; every part of it starts on the same left edge as the toolbar. */

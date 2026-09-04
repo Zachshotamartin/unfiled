@@ -52,7 +52,7 @@ export function SpaceView({ spaceId }: Readonly<{ spaceId: EntityId<"spc"> }>) {
   if (space === null) {
     return (
       <section className="empty-state" role="alert">
-        <h2 className="text-2xl font-semibold">This space is not in your library.</h2>
+        <h2>This space is not in your library.</h2>
         <p className="mt-3 max-w-md leading-7 text-muted-content">
           It may have been removed on another device.
         </p>

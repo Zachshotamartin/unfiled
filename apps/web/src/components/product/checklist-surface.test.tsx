@@ -42,16 +42,19 @@ const note: NoteDto = {
 };
 
 describe("ChecklistSurface", () => {
-  it("keeps remaining items visible and collapses checked items into Completed", () => {
+  it("keeps every item in place, in order, under one heading with a count", () => {
     const html = renderToStaticMarkup(
       <ChecklistSurface note={note} disabled={false} onToggle={vi.fn()} />
     );
 
-    expect(html).toContain('aria-label="Remaining items"');
-    expect(html).toContain('<details class="completed-group">');
-    expect(html).toContain("Completed");
-    expect(html.indexOf("charger")).toBeLessThan(html.indexOf("completed-group"));
-    expect(html.indexOf("passport")).toBeGreaterThan(html.indexOf("completed-group"));
+    // Items check off where they are; nothing moves to a Completed group (ADR-0019, decision 8).
+    expect(html).toContain('aria-label="Checklist items"');
+    expect(html).not.toContain("completed-group");
+    expect(html).not.toContain("Remaining items");
+    expect(html).toContain(">Checklist<");
+    expect(html).toContain("1 of 2");
+    expect(html).toContain("charger");
+    expect(html).toContain("passport");
     expect(html).toContain('role="status"');
     expect(html).toContain('aria-live="polite"');
     expect(html).toContain('aria-label="passport, checked"');
