@@ -64,15 +64,46 @@ const write = (name, value) => fs.writeFileSync(`${staging}/${name}`, value, { m
 })();
 NODE
 
-gate_key="${UNFILED_GATE_OPENAI_API_KEY:-$(keychain unfiled-gate OPENAI_API_KEY)}"
-cron_secret="${UNFILED_GATE_CRON_SECRET:-$(keychain unfiled-beta-web-secret CRON_SECRET)}"
-[ -n "$gate_key" ] && printf '%s' "$gate_key" > "$staging/UNFILED_GATE_OPENAI_API_KEY"
-[ -n "$cron_secret" ] && printf '%s' "$cron_secret" > "$staging/UNFILED_GATE_CRON_SECRET"
-[ -n "${SUPABASE_DB_URL:-}" ] && printf '%s' "$SUPABASE_DB_URL" > "$staging/SUPABASE_DB_URL"
+# Each value comes from the environment first, then the login keychain. `set -e` is why these
+# are written as `if` blocks rather than `[ -n "$x" ] && ...`: a bare test that fails ends the
+# whole script, so a single absent value used to abort the run without a word about which one.
+stage() {
+  if [ -n "$2" ]; then
+    printf '%s' "$2" > "$staging/$1"
+  else
+    echo "  (absent: $1)" >&2
+  fi
+}
+
+stage UNFILED_GATE_OPENAI_API_KEY \
+  "${UNFILED_GATE_OPENAI_API_KEY:-$(keychain unfiled-gate OPENAI_API_KEY)}"
+stage UNFILED_GATE_CRON_SECRET \
+  "${UNFILED_GATE_CRON_SECRET:-$(keychain unfiled-beta-web-secret CRON_SECRET)}"
+# The live gate confirms its own synthetic account through Supabase's admin API, because a
+# deployment that confirms addresses will not let a new account sign in otherwise. Without these
+# two the gate stops at exit 2 -- and it runs after the five deploys, so a release that lacked
+# them put new code in front of every owner and only then discovered it could verify none of it.
+stage UNFILED_GATE_SUPABASE_URL \
+  "${UNFILED_GATE_SUPABASE_URL:-$(keychain unfiled-gate SUPABASE_URL)}"
+stage UNFILED_GATE_SUPABASE_SERVICE_ROLE_KEY \
+  "${UNFILED_GATE_SUPABASE_SERVICE_ROLE_KEY:-$(keychain unfiled-gate SUPABASE_SERVICE_ROLE_KEY)}"
+stage SUPABASE_DB_URL "${SUPABASE_DB_URL:-}"
 
 for path in "$staging"/*; do
   name="$(basename "$path")"
   gh secret set "$name" < "$path" && echo "set $name"
+done
+
+for required in UNFILED_GATE_SUPABASE_URL UNFILED_GATE_SUPABASE_SERVICE_ROLE_KEY; do
+  if [ ! -f "$staging/$required" ]; then
+    echo
+    echo "$required is not set, so the live gate cannot start and a release will refuse."
+    echo "Take it from the Supabase dashboard for the project the deployment uses"
+    echo "(Project settings, API keys) and store it in the login keychain:"
+    echo "  printf 'value: ' && read -rs V && echo && \\"
+    echo "    security add-generic-password -U -s unfiled-gate -a ${required#UNFILED_GATE_} -w \"\$V\" && unset V"
+    echo "then run this script again."
+  fi
 done
 
 if [ ! -f "$staging/SUPABASE_DB_URL" ]; then

@@ -63,7 +63,16 @@ function requirements() {
   if (!SKIP_MIGRATIONS && !process.env.SUPABASE_DB_URL && !linkedProject()) {
     missing.push("SUPABASE_DB_URL");
   }
-  for (const name of ["UNFILED_GATE_OPENAI_API_KEY", "UNFILED_GATE_CRON_SECRET"]) {
+  // Everything the live gate needs, checked here rather than discovered by the gate. The gate
+  // confirms its own synthetic account through Supabase's admin API, so without these two it
+  // stops at once with exit 2 -- and it runs after the five deploys, which meant a release could
+  // put new code in front of every owner and only then find out it could not verify any of it.
+  for (const name of [
+    "UNFILED_GATE_OPENAI_API_KEY",
+    "UNFILED_GATE_CRON_SECRET",
+    "UNFILED_GATE_SUPABASE_URL",
+    "UNFILED_GATE_SUPABASE_SERVICE_ROLE_KEY"
+  ]) {
     if (!process.env[name]) missing.push(name);
   }
   if (missing.length > 0) {

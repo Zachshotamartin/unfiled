@@ -92,6 +92,8 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           UNFILED_GATE_OPENAI_API_KEY: ${{ secrets.UNFILED_GATE_OPENAI_API_KEY }}
           UNFILED_GATE_CRON_SECRET: ${{ secrets.UNFILED_GATE_CRON_SECRET }}
+          UNFILED_GATE_SUPABASE_URL: ${{ secrets.UNFILED_GATE_SUPABASE_URL }}
+          UNFILED_GATE_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.UNFILED_GATE_SUPABASE_SERVICE_ROLE_KEY }}
         run: node scripts/operations/release/release.mjs
 
       - name: Upload gate results

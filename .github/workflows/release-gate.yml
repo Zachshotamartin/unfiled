@@ -36,6 +36,8 @@ jobs:
           UNFILED_GATE_WEB_ORIGIN: ${{ github.event.inputs.origin || 'https://unfiled-web.vercel.app' }}
           UNFILED_GATE_OPENAI_API_KEY: ${{ secrets.UNFILED_GATE_OPENAI_API_KEY }}
           UNFILED_GATE_CRON_SECRET: ${{ secrets.UNFILED_GATE_CRON_SECRET }}
+          UNFILED_GATE_SUPABASE_URL: ${{ secrets.UNFILED_GATE_SUPABASE_URL }}
+          UNFILED_GATE_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.UNFILED_GATE_SUPABASE_SERVICE_ROLE_KEY }}
           UNFILED_GATE_OUTPUT: live-gate-api.json
         run: node scripts/operations/live-gate/api-gate.mjs
       - name: Keep the content-free summary
