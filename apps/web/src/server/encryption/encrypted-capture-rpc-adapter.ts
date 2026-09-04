@@ -376,7 +376,8 @@ export type CreateEncryptedCaptureCommand = Readonly<{
     expansionDisabled: boolean;
     privateReceiptCipher: EncryptedFieldRpcValue<"capture_receipt"> | null;
     privateReceiptVerificationMac: KeyedMacRpcValue | null;
-    /** The uploads this capture claims. The database binds them in the same transaction. */
+    /// The photos and recordings this capture claims. The RPC binds them to the capture in the
+    /// same transaction, so a capture is never committed without the media it names.
     attachmentIds: readonly EntityId<"att">[];
   }>;
 }>;
@@ -1216,6 +1217,7 @@ function parseCreateCommand(input: CreateEncryptedCaptureCommand): CreateEncrypt
   } else if (row.privateReceiptCipher !== null || row.privateReceiptVerificationMac !== null) {
     return inputFailure();
   }
+  const attachmentIds = captureAttachmentIds(row.attachmentIds, inputFailure);
   return Object.freeze({
     ownerId,
     capture: Object.freeze({
@@ -1235,18 +1237,18 @@ function parseCreateCommand(input: CreateEncryptedCaptureCommand): CreateEncrypt
       expansionDisabled: row.expansionDisabled,
       privateReceiptCipher: receiptCipher,
       privateReceiptVerificationMac: receiptMac,
-      attachmentIds: parseAttachmentIds(row.attachmentIds)
+      attachmentIds
     })
   });
 }
 
-/** The uploads a capture claims, bound by the same transaction that stores the capture. */
-function parseAttachmentIds(value: unknown): readonly EntityId<"att">[] {
-  if (value === undefined || value === null) return Object.freeze([]);
-  if (!Array.isArray(value) || value.length > MAX_CAPTURE_ATTACHMENTS) return inputFailure();
-  const ids = value.map((item) => entityId(item, "att", inputFailure));
-  if (new Set(ids).size !== ids.length) return inputFailure();
-  return Object.freeze(ids);
+/// The attachment identifiers a create command carries. The database binds exactly this set, so
+/// the projection is rejected rather than trimmed when it is not a bounded set of distinct ids.
+function captureAttachmentIds(value: unknown, failure: Failure): readonly EntityId<"att">[] {
+  if (!Array.isArray(value) || value.length > MAX_CAPTURE_ATTACHMENTS) return failure();
+  const parsed = Object.freeze(value.map((entry) => entityId(entry, "att", failure)));
+  if (new Set(parsed).size !== parsed.length) return failure();
+  return parsed;
 }
 
 function idempotencyKey(value: unknown, failure: Failure): string {

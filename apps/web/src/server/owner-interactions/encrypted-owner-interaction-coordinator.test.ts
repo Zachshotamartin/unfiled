@@ -5,6 +5,7 @@ import {
   MutationUndoRequestSchema,
   NoteSnapshotSchema,
   ReviewResolveRequestSchema,
+  noteAttachmentReferences,
   type EntityId,
   type NoteSnapshot
 } from "@unfiled/contracts";
@@ -64,6 +65,8 @@ const SOURCE_BEFORE_REVISION = `rev_${"F".repeat(26)}` as const;
 const SOURCE_AFTER_REVISION = `rev_${"G".repeat(26)}` as const;
 const DESTINATION_BEFORE_REVISION = `rev_${"H".repeat(26)}` as const;
 const DESTINATION_AFTER_REVISION = `rev_${"J".repeat(26)}` as const;
+const PHOTO = `att_${"N".repeat(26)}` as const;
+const RECORDING = `att_${"P".repeat(26)}` as const;
 const BATCH_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const IDEMPOTENCY = "owner-interaction-01";
 
@@ -586,7 +589,10 @@ function coordinator(
       typeof EncryptedOwnerInteractionCoordinator
     >[0]["observeRoutingRuleCorrection"]
   > = () => Promise.resolve(),
-  routingRuleObservationDeadlineAt?: number
+  routingRuleObservationDeadlineAt?: number,
+  listCaptureAttachments: NonNullable<
+    ConstructorParameters<typeof EncryptedOwnerInteractionCoordinator>[0]["listCaptureAttachments"]
+  > = () => Promise.resolve([])
 ): EncryptedOwnerInteractionCoordinator {
   return new EncryptedOwnerInteractionCoordinator({
     ownerId: OWNER,
@@ -597,6 +603,7 @@ function coordinator(
     aggregate: crypto.service,
     createPreparedService: (reservations) => crypto.createPreparedService(reservations),
     adapter,
+    listCaptureAttachments,
     observeRoutingRuleCorrection,
     ...(routingRuleObservationDeadlineAt === undefined ? {} : { routingRuleObservationDeadlineAt })
   });
@@ -2081,6 +2088,104 @@ describe("encrypted owner-interaction coordinator", () => {
     expect(JSON.stringify(sealedContent ?? {})).toContain(rawContent);
   });
 
+  it("keeps the photo when the owner files a photo capture from Review", async () => {
+    const crypto = cryptoHarness();
+    const base = privateReviewCreatePreparation();
+    if (base.completed || base.source.receipt === null || base.source.capture === null) {
+      throw new Error("Review create fixture requires a source capture and receipt");
+    }
+    const rawContent = "Photo";
+    const preparation: PrepareReviewResolutionResult = Object.freeze({
+      ...base,
+      source: Object.freeze({
+        ...base.source,
+        capture: Object.freeze({ ...base.source.capture, contentLength: rawContent.length })
+      })
+    });
+    crypto.sourcePayloads.set(`capture:${CAPTURE}:1`, { schemaVersion: 1, rawContent });
+    crypto.sourcePayloads.set(
+      `capture_receipt:${CAPTURE}:1`,
+      CaptureReceiptPayloadSchema.parse({
+        schemaVersion: 2,
+        captureId: CAPTURE,
+        jobId: JOB,
+        decisionId: DECISION,
+        reviewItemId: REVIEW,
+        mutationId: null,
+        outcome: "needs_review",
+        headline: "Needs your review",
+        destination: null,
+        insertedContentReferences: [],
+        actions: [],
+        reasonCodes: ["low_confidence"],
+        createdAt: NOW,
+        undoTargets: []
+      })
+    );
+    crypto.sourcePayloads.set(`review_item:${REVIEW}:1`, {
+      schemaVersion: 2,
+      proposal: {
+        type: "route_capture",
+        plan: {
+          schemaVersion: 1,
+          captureKind: "freeform",
+          decision: "needs_review",
+          destination: { candidateId: null, newNote: null },
+          operations: [],
+          generatedExpansion: null,
+          alternatives: [],
+          reasonCodes: ["ambiguous_intent"]
+        }
+      },
+      state: "open",
+      resolution: null
+    });
+    const adapter = adapterStub({
+      prepareReviewResolution: vi.fn(() => Promise.resolve(preparation)),
+      commitReviewResolution: vi.fn(() =>
+        Promise.resolve(
+          commitResult("encrypted_review_resolution", "resolved", crypto.responseCipher(), {
+            reviewItemId: REVIEW,
+            members: Object.freeze([
+              Object.freeze({
+                role: "destination_write" as const,
+                noteId: NOTE_B,
+                currentRevision: 1,
+                revisionId: DESTINATION_REVISION,
+                mutationId: DESTINATION_MUTATION
+              })
+            ]),
+            responseVerificationMac: mac("private_manual")
+          })
+        )
+      )
+    });
+    const listCaptureAttachments = vi.fn(() =>
+      Promise.resolve([
+        { id: PHOTO, kind: "image" as const },
+        { id: RECORDING, kind: "audio" as const }
+      ])
+    );
+
+    await expect(
+      coordinator(adapter, crypto, undefined, undefined, listCaptureAttachments).resolveReviewItem(
+        REVIEW,
+        ReviewResolveRequestSchema.parse({
+          idempotencyKey: IDEMPOTENCY,
+          resolution: { type: "create", title: "Receipt", noteType: "generic", spaceId: null }
+        })
+      )
+    ).resolves.toMatchObject({ reviewItem: { id: REVIEW, noteId: NOTE_B }, replayed: false });
+    expect(listCaptureAttachments).toHaveBeenCalledWith(CAPTURE);
+    // The photo the owner filed has to survive into the note that files it, placed the way the
+    // organizer places one: its own paragraph of references, after the owner's own words.
+    const sealedContent = JSON.stringify(
+      vi.mocked(crypto.service.sealNoteContent).mock.calls[0]?.[1] ?? {}
+    );
+    expect(sealedContent).toContain(`![Photo](unfiled-attachment:${PHOTO})`);
+    expect(sealedContent).toContain(`[Recording](unfiled-attachment:${RECORDING})`);
+  });
+
   it("creates a list note from a Review with the capture split into items", async () => {
     const crypto = cryptoHarness();
     const base = privateReviewCreatePreparation();
@@ -2668,7 +2773,8 @@ function batchReplayResponse(noteId: EntityId<"note"> = NOTE_A) {
           id: noteId,
           currentRevision: 3,
           createdAt: NOW,
-          updatedAt: NOW
+          updatedAt: NOW,
+          attachments: noteAttachmentReferences(value.bodyMarkdown)
         },
         revision: {
           ...value,

@@ -273,7 +273,10 @@ function parseCreateInput(input: NormalizedCaptureCreateInput): NormalizedCaptur
       : { attachmentIds: parsed.data.attachmentIds }),
     ...(parsed.data.guidance === undefined || parsed.data.guidance === null
       ? {}
-      : { guidance: parsed.data.guidance })
+      : { guidance: parsed.data.guidance }),
+    ...(parsed.data.attachmentIds === undefined
+      ? {}
+      : { attachmentIds: Object.freeze([...parsed.data.attachmentIds]) })
   });
 }
 
@@ -1142,11 +1145,24 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
     return claim;
   }
 
-  private replayResponse(
+  private async replayResponse(
     opened: OpenedCapture,
     input: NormalizedCaptureCreateInput
-  ): CaptureCreateResponse {
+  ): Promise<CaptureCreateResponse> {
     if (!sameCreateIntent(opened, input)) return invalidIdempotency();
+    // A replay must name exactly the media the first attempt bound, which is what the database
+    // enforces when the command reaches it. A retry that changed the photos is a different
+    // capture, not this one again, and answering it with the stored one would lose the new ones.
+    const bound = (
+      await this.dependencies.adapter.listAttachments({
+        ownerId: this.ownerId,
+        captureId: opened.row.captureId
+      })
+    )
+      .map((row): string => row.attachmentId)
+      .sort();
+    const requested = [...(input.attachmentIds ?? [])].sort();
+    if (!sameStringArray(bound, requested)) return invalidIdempotency();
     return contract(CaptureCreateResponseSchema, {
       capture: acceptedCapture(opened),
       jobId: opened.row.jobId,
@@ -1297,7 +1313,7 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
       }
       if (result.replayed) {
         const replay = await this.findExisting(input.clientCaptureId);
-        return replay === null ? unavailable() : this.replayResponse(replay, input);
+        return replay === null ? unavailable() : await this.replayResponse(replay, input);
       }
       const accepted: OpenedCapture = Object.freeze({
         row: Object.freeze({
@@ -1370,7 +1386,13 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
     const hasMore = matching.length > query.limit;
     const visibleRows = matching.slice(0, query.limit);
     const opened = await Promise.all(visibleRows.map((row) => this.openCapture(row)));
-    const items: CaptureSummary[] = opened.map(({ row, rawContent }) => ({
+    // The list carries each capture's media so a client renders the page it already has. The
+    // per-capture read stays on this side of the network, where it is one bounded query beside
+    // the ones this page already runs, instead of one request per row from the phone.
+    const attachmentsByCapture = await Promise.all(
+      opened.map(({ row }) => this.attachmentsForCapture(row.captureId))
+    );
+    const items: CaptureSummary[] = opened.map(({ row, rawContent }, index) => ({
       id: row.captureId,
       jobId: row.jobId,
       rawContentPreview: rawContent.trim().slice(0, 280),
@@ -1380,7 +1402,8 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
       receivedAt: row.receivedAt,
       status: row.status,
       lastErrorCode: row.lastErrorCode,
-      receiptAvailable: row.receiptAvailable
+      receiptAvailable: row.receiptAvailable,
+      attachments: [...(attachmentsByCapture[index] ?? unavailable())]
     }));
     let nextCursor: string | null = null;
     if (hasMore) {
@@ -1563,6 +1586,30 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
     return contract(CaptureReceiptSchema, publicReceipt);
   }
 
+  /// The photos and recordings bound to one capture, in upload order, described without bytes.
+  private async attachmentsForCapture(
+    captureId: EntityId<"cap">
+  ): Promise<readonly CaptureAttachment[]> {
+    const rows = await this.dependencies.adapter.listAttachments({
+      ownerId: this.ownerId,
+      captureId
+    });
+    return Object.freeze(
+      rows.map((row) =>
+        CaptureAttachmentSchema.parse({
+          id: row.attachmentId,
+          kind: row.kind,
+          mediaType: row.mediaType,
+          byteLength: row.byteLength,
+          width: row.width,
+          height: row.height,
+          durationMs: row.durationMs,
+          createdAt: row.createdAt
+        })
+      )
+    );
+  }
+
   public async getCapture(
     context: CaptureRepositoryContext,
     captureId: EntityId<"cap">
@@ -1575,20 +1622,7 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
     });
     const opened = await this.openCapture(detail);
     const receipt = detail.receipt === null ? null : await this.openReceipt(detail.receipt, opened);
-    const attachments = (
-      await this.dependencies.adapter.listAttachments({ ownerId: this.ownerId, captureId })
-    ).map((row) =>
-      CaptureAttachmentSchema.parse({
-        id: row.attachmentId,
-        kind: row.kind,
-        mediaType: row.mediaType,
-        byteLength: row.byteLength,
-        width: row.width,
-        height: row.height,
-        durationMs: row.durationMs,
-        createdAt: row.createdAt
-      })
-    );
+    const attachments = await this.attachmentsForCapture(captureId);
     return contract(CaptureDetailResponseSchema, {
       capture: {
         ...publicCapture(detail, opened.rawContent),

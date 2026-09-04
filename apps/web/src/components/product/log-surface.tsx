@@ -6,6 +6,7 @@ import {
   type EntityId,
   type LogEntry,
   type LogFieldValue,
+  type NoteDetail,
   type NoteDto
 } from "@unfiled/contracts";
 import { renderLogMarkdown } from "@unfiled/domain";
@@ -58,7 +59,7 @@ export function priorLogFieldValue(
   return undefined;
 }
 
-export function noteWithUpdatedLogField(note: NoteDto, update: LogFieldUpdate): NoteDto {
+export function noteWithUpdatedLogField(note: NoteDetail, update: LogFieldUpdate): NoteDetail {
   const parsed = LogStructuredDataSchema.parse(note.structuredData);
   const entries = parsed.entries.map((entry) =>
     entry.id === update.entryId

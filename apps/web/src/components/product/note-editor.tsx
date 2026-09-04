@@ -13,6 +13,7 @@ import {
 import type {
   EntityId,
   MutationResult,
+  NoteDetail,
   NoteDetailResponse,
   NoteDto,
   LogFieldValue,
@@ -54,7 +55,7 @@ function differsFromNote(draft: DraftSnapshot, note: NoteDto | null): boolean {
   );
 }
 
-function replaceItem(note: NoteDto, itemId: EntityId<"itm">, checked: boolean): NoteDto {
+function replaceItem(note: NoteDetail, itemId: EntityId<"itm">, checked: boolean): NoteDetail {
   const key = note.type === "project" ? "checklistItems" : "items";
   const structured = note.structuredData as Readonly<Record<string, unknown>>;
   const values: readonly unknown[] = Array.isArray(structured[key]) ? structured[key] : [];

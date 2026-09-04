@@ -262,6 +262,7 @@ describe("managed encrypted owner-interaction repository", () => {
       ...encryptedOwnerInteractionRpcFunctions,
       "get_encrypted_capture_detail",
       "get_encrypted_generated_blocks",
+      "list_encrypted_capture_attachments",
       "list_encrypted_library_objects",
       ...encryptedRoutingRuleRpcFunctions
     ]);
@@ -311,6 +312,7 @@ describe("managed encrypted owner-interaction repository", () => {
         "adapter",
         "aggregate",
         "createPreparedService",
+        "listCaptureAttachments",
         "observeRoutingRuleCorrection",
         "ownerId",
         "routingRuleObservationDeadlineAt",

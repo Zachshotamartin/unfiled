@@ -386,6 +386,32 @@ describe("manual note route handlers", () => {
     expect((detailBody as { note: { title: string } }).note.title).toBe("Shopping");
   });
 
+  it("returns the photos a note places so a client renders them without parsing the body", async () => {
+    const repository = new InMemoryManualNotesRepository(false);
+    const handlers = createManualNotesHandlers({ authenticate: () => authenticated(), repository });
+    const photo = "att_00000000000000000000000001";
+    const created = await handlers.createNote(
+      request("/api/v1/notes", "POST", {
+        idempotencyKey: "attachment-note-create",
+        title: "Kitchen receipt",
+        type: "generic",
+        bodyMarkdown: `Lunch\n\n![Photo](unfiled-attachment:${photo})`
+      })
+    );
+    const createdBody = (await created.json()) as { note: { id: string } };
+    const detail = await handlers.getNote(request(`/api/v1/notes/${createdBody.note.id}`), {
+      noteId: createdBody.note.id
+    });
+    const detailBody: unknown = await detail.json();
+
+    expect(created.status).toBe(201);
+    expect(MutationResultSchema.safeParse(createdBody).success).toBe(true);
+    expect(NoteDetailResponseSchema.safeParse(detailBody).success).toBe(true);
+    expect((detailBody as { note: { attachments: unknown } }).note.attachments).toEqual([
+      { id: photo, kind: "image" }
+    ]);
+  });
+
   it("keeps an ambiguous structured edit unchanged and exposes its durable review item", async () => {
     const repository = new InMemoryManualNotesRepository(false);
     const handlers = createManualNotesHandlers({ authenticate: () => authenticated(), repository });

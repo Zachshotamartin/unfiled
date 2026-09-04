@@ -100,11 +100,25 @@ web3 = 30
 [auth.email]
 enable_signup = true
 double_confirm_changes = true
+# Turned on together with the verification flow, not before it: with no /auth/verify endpoint a
+# confirmed-email project would accept sign-ups and then refuse every session.
 enable_confirmations = false
 secure_password_change = false
 max_frequency = "1s"
 otp_length = 6
 otp_expiry = 3600
+
+# The local stack mirrors production's sender so a code that arrives on a laptop arrives the same
+# way for an owner. Credentials come from the environment; none of them belong in this file.
+# Production's own SMTP settings live in the Supabase project, not here.
+[auth.email.smtp]
+enabled = false
+host = "env(UNFILED_SMTP_HOST)"
+port = 587
+user = "env(UNFILED_SMTP_USER)"
+pass = "env(UNFILED_SMTP_PASSWORD)"
+admin_email = "env(UNFILED_SMTP_SENDER)"
+sender_name = "Unfiled"
 
 [auth.sms]
 enable_signup = false

@@ -6,6 +6,8 @@ import {
   AuthPasswordSignInRequestSchema,
   AuthPasswordSignUpRequestSchema,
   AuthRefreshRequestSchema,
+  captureAttachmentReference,
+  createEntityId,
   IdempotencyKeySchema,
   InteractiveOperationsRequestSchema,
   ListReviewItemsResponseSchema,
@@ -168,6 +170,52 @@ describe("Milestone B manual-note contracts", () => {
       })
     ).toHaveProperty("items.0.revision", 1);
     expect(NoteDetailResponseSchema.safeParse({ note, unexpected: true }).success).toBe(false);
+  });
+
+  it("returns the photos a note places and refuses a list that drifts from its body", () => {
+    const { note } = manualNoteFixtures;
+    const photo = createEntityId("att");
+    const recording = createEntityId("att");
+    const bodyMarkdown = [
+      "- [ ] milk",
+      "",
+      captureAttachmentReference({ id: photo, kind: "image" }),
+      "",
+      captureAttachmentReference({ id: recording, kind: "audio" })
+    ].join("\n");
+    const placed = [
+      { id: photo, kind: "image" },
+      { id: recording, kind: "audio" }
+    ];
+    expect(
+      NoteDetailResponseSchema.parse({ note: { ...note, bodyMarkdown, attachments: placed } }).note
+        .attachments
+    ).toEqual(placed);
+    // The array is a projection of the body, so a client can render from it without parsing and
+    // without the two ever disagreeing about what the note holds.
+    expect(
+      NoteDetailResponseSchema.safeParse({ note: { ...note, bodyMarkdown, attachments: [] } })
+        .success
+    ).toBe(false);
+    expect(
+      NoteDetailResponseSchema.safeParse({
+        note: { ...note, bodyMarkdown, attachments: [...placed].reverse() }
+      }).success
+    ).toBe(false);
+    expect(
+      NoteDetailResponseSchema.safeParse({
+        note: { ...note, bodyMarkdown, attachments: [{ id: photo, kind: "audio" }, placed[1]] }
+      }).success
+    ).toBe(false);
+    expect(
+      MutationResultSchema.safeParse({
+        note: { ...note, bodyMarkdown, attachments: [] },
+        revision: manualNoteFixtures.revision,
+        mutationId: manualNoteFixtures.mutationResult.mutationId,
+        replayed: false,
+        undo: { eligible: true, expiresAt: null }
+      }).success
+    ).toBe(false);
   });
 
   it("supports archived/deleted filters without exposing deleted notes by default", () => {

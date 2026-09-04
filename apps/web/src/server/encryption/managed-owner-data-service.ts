@@ -44,7 +44,9 @@ export const managedOwnerExportRpcFunctions = Object.freeze([
   ...encryptedNoteReadRpcFunctions,
   "list_encrypted_library_objects",
   "list_encrypted_export_note_sources",
-  "get_encrypted_capture_attachment"
+  "get_encrypted_capture_attachment",
+  "list_encrypted_capture_attachments",
+  "list_encrypted_captures"
 ] as const);
 
 export const managedOwnerDeletionRpcFunctions = Object.freeze([

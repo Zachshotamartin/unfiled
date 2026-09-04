@@ -113,6 +113,24 @@ describe("Supabase capture HTTP repository", () => {
     expect(JSON.stringify(result)).not.toContain("ciphertext-only");
   });
 
+  it("refuses a capture that names attachments the legacy table cannot bind", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const repository = new SupabaseHttpCaptureRepository(protector());
+
+    // Accepting here would commit the owner's words and abandon the photo they uploaded, which
+    // only the encrypted library can hold. Refusing keeps the capture retryable instead.
+    await expect(
+      repository.createCapture(context, {
+        ...captureV1Fixture,
+        privacy: "ai_assisted",
+        expansionDisabled: false,
+        attachmentIds: ["att_01J6M9Q7G4BMKB33GSG3NJ6D1X"]
+      })
+    ).rejects.toMatchObject({ status: 503, code: "provider_unavailable" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("decrypts owner-scoped list and detail envelopes and strips internal fields", async () => {
     const contentProtector = protector("   shopping: milk and batteries   ");
     const fetchMock = vi

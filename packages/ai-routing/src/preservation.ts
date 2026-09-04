@@ -1,4 +1,4 @@
-import type { ModelOperation } from "@unfiled/contracts";
+import { isCaptureAttachmentReference, type ModelOperation } from "@unfiled/contracts";
 
 const NON_INFORMATIONAL_CONNECTORS = new Set(["and", "or"]);
 const ROUTING_PREFIX =
@@ -64,7 +64,11 @@ function operationSourceText(operation: ModelOperation): readonly string[] {
     case "append_raw":
       return [operation.content];
     case "append_paragraphs":
-      return operation.paragraphs;
+      // A paragraph that is only an attachment reference is placement, not words: a fixed label
+      // and an opaque identifier that whoever authorized the plan appended after the model's
+      // text was already checked. Counting it as source would make every capture that carries a
+      // photo fail preservation and lose the photo at the moment it is filed.
+      return operation.paragraphs.filter((paragraph) => !isCaptureAttachmentReference(paragraph));
     case "append_list_items":
       return operation.items;
     case "append_log_entry": {

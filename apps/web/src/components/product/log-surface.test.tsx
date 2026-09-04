@@ -1,4 +1,4 @@
-import { LogStructuredDataSchema, type LogEntry, type NoteDto } from "@unfiled/contracts";
+import { LogStructuredDataSchema, type LogEntry, type NoteDetail } from "@unfiled/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -26,7 +26,7 @@ const entries: LogEntry[] = [
   }
 ];
 
-const note: NoteDto = {
+const note: NoteDetail = {
   id: "note_01J6M9Q7G4BMKB33GSG3NJ6D1X",
   spaceId: null,
   type: "log",
@@ -42,7 +42,8 @@ const note: NoteDto = {
   tagIds: [],
   links: [],
   createdAt: "2026-08-30T18:00:00.000Z",
-  updatedAt: "2026-09-01T18:00:00.000Z"
+  updatedAt: "2026-09-01T18:00:00.000Z",
+  attachments: []
 };
 
 describe("LogSurface", () => {

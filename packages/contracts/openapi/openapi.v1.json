@@ -5859,6 +5859,85 @@
         "required": ["idempotencyKey"],
         "additionalProperties": false
       },
+      "AccountExportCapture": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" },
+          "rawContent": { "type": "string", "minLength": 1, "maxLength": 10000 },
+          "source": {
+            "type": "string",
+            "enum": ["mobile", "web", "ios_lock_screen_widget", "share_sheet", "import"]
+          },
+          "privacy": { "type": "string", "enum": ["ai_assisted", "private_manual"] },
+          "status": {
+            "type": "string",
+            "enum": ["queued", "processing", "done", "needs_review", "failed", "inbox"]
+          },
+          "lastErrorCode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "account_deletion_failed",
+                  "account_exists",
+                  "budget_exhausted",
+                  "capture_too_long",
+                  "conflict_requires_review",
+                  "forbidden",
+                  "invalid_capture",
+                  "invalid_idempotency_key",
+                  "invalid_plan",
+                  "not_found",
+                  "offline",
+                  "provider_key_invalid",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "stale_revision",
+                  "structure_conflict",
+                  "unauthorized",
+                  "validation_failed"
+                ]
+              },
+              { "type": "null" }
+            ]
+          },
+          "clientCreatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "attachments": {
+            "maxItems": 5,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "pattern": "^att_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "kind": { "type": "string", "enum": ["image", "audio"] }
+              },
+              "required": ["id", "kind"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "id",
+          "rawContent",
+          "source",
+          "privacy",
+          "status",
+          "lastErrorCode",
+          "clientCreatedAt",
+          "receivedAt",
+          "attachments"
+        ],
+        "additionalProperties": false
+      },
       "AccountExportManifest": {
         "type": "object",
         "properties": {
@@ -6012,7 +6091,7 @@
                   "items": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" }
                 },
                 "attachments": {
-                  "maxItems": 100,
+                  "maxItems": 3333,
                   "type": "array",
                   "items": {
                     "type": "object",
@@ -6114,9 +6193,100 @@
               ],
               "additionalProperties": false
             }
+          },
+          "captures": {
+            "maxItems": 100000,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "rawContent": { "type": "string", "minLength": 1, "maxLength": 10000 },
+                "source": {
+                  "type": "string",
+                  "enum": ["mobile", "web", "ios_lock_screen_widget", "share_sheet", "import"]
+                },
+                "privacy": { "type": "string", "enum": ["ai_assisted", "private_manual"] },
+                "status": {
+                  "type": "string",
+                  "enum": ["queued", "processing", "done", "needs_review", "failed", "inbox"]
+                },
+                "lastErrorCode": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "account_deletion_failed",
+                        "account_exists",
+                        "budget_exhausted",
+                        "capture_too_long",
+                        "conflict_requires_review",
+                        "forbidden",
+                        "invalid_capture",
+                        "invalid_idempotency_key",
+                        "invalid_plan",
+                        "not_found",
+                        "offline",
+                        "provider_key_invalid",
+                        "provider_unavailable",
+                        "rate_limited",
+                        "stale_revision",
+                        "structure_conflict",
+                        "unauthorized",
+                        "validation_failed"
+                      ]
+                    },
+                    { "type": "null" }
+                  ]
+                },
+                "clientCreatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                },
+                "receivedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                },
+                "attachments": {
+                  "maxItems": 5,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": { "type": "string", "pattern": "^att_[0-9A-HJKMNP-TV-Z]{26}$" },
+                      "kind": { "type": "string", "enum": ["image", "audio"] }
+                    },
+                    "required": ["id", "kind"],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "rawContent",
+                "source",
+                "privacy",
+                "status",
+                "lastErrorCode",
+                "clientCreatedAt",
+                "receivedAt",
+                "attachments"
+              ],
+              "additionalProperties": false
+            }
           }
         },
-        "required": ["schemaVersion", "exportedAt", "spaces", "tags", "notes", "routingRules"],
+        "required": [
+          "schemaVersion",
+          "exportedAt",
+          "spaces",
+          "tags",
+          "notes",
+          "routingRules",
+          "captures"
+        ],
         "additionalProperties": false
       },
       "AccountExportNote": {
@@ -6186,7 +6356,7 @@
             "items": { "type": "string", "pattern": "^cap_[0-9A-HJKMNP-TV-Z]{26}$" }
           },
           "attachments": {
-            "maxItems": 100,
+            "maxItems": 3333,
             "type": "array",
             "items": {
               "type": "object",
@@ -6678,7 +6848,54 @@
               { "type": "null" }
             ]
           },
-          "receiptAvailable": { "type": "boolean" }
+          "receiptAvailable": { "type": "boolean" },
+          "attachments": {
+            "maxItems": 5,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "pattern": "^att_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "kind": { "type": "string", "enum": ["image", "audio"] },
+                "mediaType": { "type": "string", "enum": ["image/jpeg", "audio/mp4"] },
+                "byteLength": { "type": "integer", "minimum": 1, "maximum": 700000 },
+                "width": {
+                  "anyOf": [
+                    { "type": "integer", "minimum": 1, "maximum": 8000 },
+                    { "type": "null" }
+                  ]
+                },
+                "height": {
+                  "anyOf": [
+                    { "type": "integer", "minimum": 1, "maximum": 8000 },
+                    { "type": "null" }
+                  ]
+                },
+                "durationMs": {
+                  "anyOf": [
+                    { "type": "integer", "minimum": 1, "maximum": 120000 },
+                    { "type": "null" }
+                  ]
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "mediaType",
+                "byteLength",
+                "width",
+                "height",
+                "durationMs",
+                "createdAt"
+              ],
+              "additionalProperties": false
+            }
+          }
         },
         "required": [
           "id",
@@ -6690,7 +6907,8 @@
           "receivedAt",
           "status",
           "lastErrorCode",
-          "receiptAvailable"
+          "receiptAvailable",
+          "attachments"
         ],
         "additionalProperties": false
       },
@@ -6775,7 +6993,54 @@
                     { "type": "null" }
                   ]
                 },
-                "receiptAvailable": { "type": "boolean" }
+                "receiptAvailable": { "type": "boolean" },
+                "attachments": {
+                  "maxItems": 5,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": { "type": "string", "pattern": "^att_[0-9A-HJKMNP-TV-Z]{26}$" },
+                      "kind": { "type": "string", "enum": ["image", "audio"] },
+                      "mediaType": { "type": "string", "enum": ["image/jpeg", "audio/mp4"] },
+                      "byteLength": { "type": "integer", "minimum": 1, "maximum": 700000 },
+                      "width": {
+                        "anyOf": [
+                          { "type": "integer", "minimum": 1, "maximum": 8000 },
+                          { "type": "null" }
+                        ]
+                      },
+                      "height": {
+                        "anyOf": [
+                          { "type": "integer", "minimum": 1, "maximum": 8000 },
+                          { "type": "null" }
+                        ]
+                      },
+                      "durationMs": {
+                        "anyOf": [
+                          { "type": "integer", "minimum": 1, "maximum": 120000 },
+                          { "type": "null" }
+                        ]
+                      },
+                      "createdAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "kind",
+                      "mediaType",
+                      "byteLength",
+                      "width",
+                      "height",
+                      "durationMs",
+                      "createdAt"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
               },
               "required": [
                 "id",
@@ -6787,7 +7052,8 @@
                 "receivedAt",
                 "status",
                 "lastErrorCode",
-                "receiptAvailable"
+                "receiptAvailable",
+                "attachments"
               ],
               "additionalProperties": false
             }
@@ -8143,6 +8409,19 @@
                 "type": "string",
                 "format": "date-time",
                 "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              "attachments": {
+                "maxItems": 3333,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string", "pattern": "^att_[0-9A-HJKMNP-TV-Z]{26}$" },
+                    "kind": { "type": "string", "enum": ["image", "audio"] }
+                  },
+                  "required": ["id", "kind"],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [
@@ -8161,7 +8440,8 @@
               "id",
               "currentRevision",
               "createdAt",
-              "updatedAt"
+              "updatedAt",
+              "attachments"
             ],
             "additionalProperties": false
           }
@@ -8622,6 +8902,19 @@
                 "type": "string",
                 "format": "date-time",
                 "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              "attachments": {
+                "maxItems": 3333,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string", "pattern": "^att_[0-9A-HJKMNP-TV-Z]{26}$" },
+                    "kind": { "type": "string", "enum": ["image", "audio"] }
+                  },
+                  "required": ["id", "kind"],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [
@@ -8640,7 +8933,8 @@
               "id",
               "currentRevision",
               "createdAt",
-              "updatedAt"
+              "updatedAt",
+              "attachments"
             ],
             "additionalProperties": false
           },
@@ -9544,6 +9838,19 @@
                 "type": "string",
                 "format": "date-time",
                 "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              "attachments": {
+                "maxItems": 3333,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string", "pattern": "^att_[0-9A-HJKMNP-TV-Z]{26}$" },
+                    "kind": { "type": "string", "enum": ["image", "audio"] }
+                  },
+                  "required": ["id", "kind"],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [
@@ -9562,7 +9869,8 @@
               "id",
               "currentRevision",
               "createdAt",
-              "updatedAt"
+              "updatedAt",
+              "attachments"
             ],
             "additionalProperties": false
           },
@@ -10015,6 +10323,19 @@
                       "type": "string",
                       "format": "date-time",
                       "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                    },
+                    "attachments": {
+                      "maxItems": 3333,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string", "pattern": "^att_[0-9A-HJKMNP-TV-Z]{26}$" },
+                          "kind": { "type": "string", "enum": ["image", "audio"] }
+                        },
+                        "required": ["id", "kind"],
+                        "additionalProperties": false
+                      }
                     }
                   },
                   "required": [
@@ -10033,7 +10354,8 @@
                     "id",
                     "currentRevision",
                     "createdAt",
-                    "updatedAt"
+                    "updatedAt",
+                    "attachments"
                   ],
                   "additionalProperties": false
                 },
@@ -10489,6 +10811,19 @@
                 "type": "string",
                 "format": "date-time",
                 "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              "attachments": {
+                "maxItems": 3333,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string", "pattern": "^att_[0-9A-HJKMNP-TV-Z]{26}$" },
+                    "kind": { "type": "string", "enum": ["image", "audio"] }
+                  },
+                  "required": ["id", "kind"],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [
@@ -10507,7 +10842,8 @@
               "id",
               "currentRevision",
               "createdAt",
-              "updatedAt"
+              "updatedAt",
+              "attachments"
             ],
             "additionalProperties": false
           },

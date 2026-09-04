@@ -6,6 +6,7 @@ import {
   UserOperationSchema,
   createEntityId,
   entityIdSchema,
+  noteAttachmentReferences,
   type EntityId,
   type EntityKind,
   type NoteDto,
@@ -241,7 +242,9 @@ function publicMutationResult(
   replayed: boolean
 ): NoteMutationResult {
   const parsed = MutationResultSchema.parse({
-    note: stored.note,
+    // The sealed response stores the note itself; the placed photos and recordings are read back
+    // out of its body here, so a response sealed before this projection existed still opens.
+    note: { ...stored.note, attachments: noteAttachmentReferences(stored.note.bodyMarkdown) },
     revision: stored.revision,
     mutationId: stored.mutationId,
     undo: stored.undo,
