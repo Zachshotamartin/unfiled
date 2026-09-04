@@ -839,7 +839,7 @@ export function RoutingRulesSettings() {
     <section className="settings-row settings-routing-row" aria-labelledby="routing-rules-heading">
       <div className="routing-rules-header">
         <div>
-          <h2 id="routing-rules-heading" className="text-lg font-medium">
+          <h2 id="routing-rules-heading" className="settings-section-title">
             Routing rules
           </h2>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-content">

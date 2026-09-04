@@ -87,6 +87,10 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
   const [draftRevision, setDraftRevision] = useState(0);
   const [dirty, setDirty] = useState(false);
   const [preview, setPreview] = useState(false);
+  // A list note is its checklist. The Markdown behind it is reachable, not the first thing shown.
+  const structuredList = note?.type === "list";
+  const [editingText, setEditingText] = useState(false);
+  const showsBody = !structuredList || editingText;
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -369,7 +373,7 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
   return (
     <main id="main-content" className="note-editor-page">
       <div className="note-editor-main">
-        <div className="editor-toolbar sticky top-0 z-10 bg-page/95 backdrop-blur-sm">
+        <div className="editor-toolbar">
           <Link
             href={note.deletedAt === null ? "/app/library" : "/app/archive"}
             className="toolbar-button"
@@ -397,14 +401,25 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
             >
               <UnfiledGlyph glyph="undo" size={17} weight={1.9} />
             </button>
-            <button
-              type="button"
-              className="toolbar-button"
-              aria-pressed={preview}
-              onClick={() => setPreview((value) => !value)}
-            >
-              {preview ? "Write" : "Preview"}
-            </button>
+            {structuredList ? (
+              <button
+                type="button"
+                className="toolbar-button"
+                aria-pressed={editingText}
+                onClick={() => setEditingText((value) => !value)}
+              >
+                {editingText ? "Done" : "Edit text"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="toolbar-button"
+                aria-pressed={preview}
+                onClick={() => setPreview((value) => !value)}
+              >
+                {preview ? "Write" : "Preview"}
+              </button>
+            )}
             <button
               type="button"
               className="button-primary"
@@ -446,11 +461,7 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
         )}
 
         <div className="editor-document">
-          <div className="mb-8 flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-outline pb-4">
-            <span className="eyebrow">{note.type}</span>
-            <span className="text-[11px] text-muted-content">revision {note.currentRevision}</span>
-          </div>
-          {preview ? (
+          {preview && !structuredList ? (
             <section aria-label="Markdown preview" className="editor-preview">
               <MarkdownPreview markdown={body} />
             </section>
@@ -471,7 +482,7 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
                   Edit this note’s structured values below. Each saved field creates a revision you
                   can undo.
                 </p>
-              ) : (
+              ) : showsBody ? (
                 <>
                   <label htmlFor="note-body" className="sr-only">
                     Note body in Markdown
@@ -484,7 +495,7 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
                     onChange={(event) => updateDraft({ title, body: event.target.value })}
                   />
                 </>
-              )}
+              ) : null}
             </>
           )}
         </div>
@@ -508,11 +519,7 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
             {error ?? (changed ? "Unsaved changes · ⌘S to save" : (message ?? "Up to date"))}
           </span>
           {undo === null ? null : (
-            <button
-              type="button"
-              onClick={() => void undoLast()}
-              className="ml-auto inline-flex min-h-10 items-center gap-2 text-sm text-content"
-            >
+            <button type="button" onClick={() => void undoLast()} className="quiet-button ml-auto">
               <UnfiledGlyph glyph="close" size={14} weight={1.9} /> Undo last change
             </button>
           )}

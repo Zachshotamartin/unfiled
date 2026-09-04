@@ -91,7 +91,7 @@ export function LibraryView() {
             <NoteLibrary
               grouped
               emptyTitle="Nothing filed yet."
-              emptyBody="Write something in the Inbox. Organized thoughts land here."
+              emptyBody="Write something in the Inbox. Organized thoughts land here; private ones are kept as written."
             />
           </section>
         </>

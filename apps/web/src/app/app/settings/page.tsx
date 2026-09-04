@@ -8,7 +8,7 @@ export default function SettingsPage() {
   return (
     <main id="main-content" className="product-page">
       <div className="content-column">
-        <PageHeading eyebrow="Account and privacy" title="Settings" />
+        <PageHeading title="Settings" />
         <section className="mt-12">
           <SettingsView managedFallbackAvailable={managedFallbackAvailable} />
         </section>

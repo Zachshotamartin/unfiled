@@ -59,7 +59,6 @@ export function AuthCodeStep({
         pattern="[0-9]{6}"
         value={code}
         onChange={(event) => onCodeChange(event.target.value)}
-        placeholder="000000"
         aria-describedby="auth-code-note auth-feedback"
         className="editor-control auth-code mt-2"
       />
@@ -78,7 +77,7 @@ export function AuthCodeStep({
           disabled={pending || !verificationCodeComplete(code)}
           className="button-primary w-full disabled:cursor-wait disabled:opacity-55"
         >
-          {pending ? "Checking…" : "Confirm and continue"}
+          {pending ? "Checking…" : "Confirm email"}
           {pending ? null : <UnfiledGlyph glyph="arrow" size={17} weight={2.2} />}
         </button>
         <button
@@ -93,7 +92,7 @@ export function AuthCodeStep({
           type="button"
           disabled={pending || resending}
           onClick={onStartOver}
-          className="min-h-11 w-full text-sm text-muted-content hover:text-content disabled:opacity-50"
+          className="quiet-button w-full justify-center"
         >
           Use a different email address
         </button>

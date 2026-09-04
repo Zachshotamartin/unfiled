@@ -49,7 +49,6 @@ export function CaptureComposer({
   acknowledgement,
   disabled,
   error,
-  notes,
   onAddPhotos,
   onChange,
   onRemovePhoto,
@@ -73,11 +72,11 @@ export function CaptureComposer({
   return (
     <section className="capture-composer" aria-labelledby="capture-heading">
       <div className="capture-composer-intro">
-        <h2 id="capture-heading">Write it down.</h2>
-        <p>Save first. Unfiled works out where it belongs after.</p>
+        <h2 id="capture-heading">What’s on your mind?</h2>
+        <p>Write it down. Unfiled files it.</p>
       </div>
       <form onSubmit={onSubmit} className="capture-form">
-        <label className="field-label" htmlFor="capture-text">
+        <label className="sr-only" htmlFor="capture-text">
           Capture
         </label>
         <textarea
@@ -86,15 +85,14 @@ export function CaptureComposer({
           className="capture-input"
           disabled={disabled}
           maxLength={MAX_CAPTURE_CHARACTERS}
-          placeholder="Add bananas, bench 135 x 8, remember the Roosevelt method..."
+          placeholder="What’s on your mind?"
           rows={4}
           value={value.rawContent}
-          aria-describedby="capture-help capture-count capture-error"
+          aria-describedby="capture-count capture-error"
           aria-invalid={error === null ? undefined : true}
           onChange={(event) => onChange({ ...value, rawContent: event.target.value })}
         />
         <div className="capture-form-meta">
-          <p id="capture-help">No title or folder needed.</p>
           <span id="capture-count" aria-live="polite">
             {length >= 9_000
               ? `${length.toLocaleString()} / ${MAX_CAPTURE_CHARACTERS.toLocaleString()}`
@@ -140,7 +138,7 @@ export function CaptureComposer({
           >
             <UnfiledGlyph glyph="camera" size={17} weight={1.9} />{" "}
             {preparingPhotos
-              ? "Preparing photo..."
+              ? "Preparing photo…"
               : photos.length === 0
                 ? "Add a photo"
                 : "Add another photo"}
@@ -165,51 +163,6 @@ export function CaptureComposer({
             {photoError}
           </p>
         </div>
-
-        <details className="capture-options">
-          <summary>
-            <UnfiledGlyph glyph="sliders" size={17} weight={1.9} /> Options
-          </summary>
-          <div className="capture-options-grid">
-            <label className="capture-option-field" htmlFor="capture-destination">
-              <span>Send directly to</span>
-              <select
-                id="capture-destination"
-                className="editor-select"
-                disabled={disabled}
-                value={value.explicitDestinationNoteId ?? ""}
-                onChange={(event) =>
-                  onChange({
-                    ...value,
-                    explicitDestinationNoteId:
-                      event.target.value === "" ? null : (event.target.value as EntityId<"note">)
-                  })
-                }
-              >
-                <option value="">Let Unfiled decide</option>
-                {notes.map((note) => (
-                  <option key={note.id} value={note.id}>
-                    {note.title}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="capture-toggle">
-              <input
-                type="checkbox"
-                checked={!value.expansionDisabled}
-                disabled={disabled}
-                onChange={(event) =>
-                  onChange({ ...value, expansionDisabled: !event.target.checked })
-                }
-              />
-              <span>
-                <strong>Add a short expansion</strong>
-                Allow a clearly labeled AI-generated block when it helps.
-              </span>
-            </label>
-          </div>
-        </details>
 
         <div className="capture-submit-row">
           <div className="capture-feedback">

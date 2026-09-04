@@ -2,7 +2,7 @@
   .settings-ai-row,
   .settings-provider-row {
     display: block;
-    padding: 2.25rem 0.15rem;
+    padding: 2.25rem 0;
   }
 
   .ai-settings-header {
@@ -91,24 +91,30 @@
   }
 
   .ai-choice-grid {
-    display: grid;
-    gap: 0.65rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-control-gap);
     margin-top: 1rem;
   }
 
+  /* A choice is a chip: every option visible and one click away, never a menu or a card. */
   .ai-choice {
     position: relative;
-    display: flex;
-    min-height: 7.25rem;
-    align-items: flex-start;
-    gap: 0.8rem;
+    display: inline-flex;
+    min-height: var(--size-touch-target);
+    align-items: center;
+    gap: 0.5rem;
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-card);
-    padding: 1rem;
-    background: transparent;
+    border-radius: var(--radius-circular);
+    padding: 0 1rem;
+    background: var(--color-surface);
+    color: var(--color-text-primary);
+    font-size: 0.875rem;
+    cursor: pointer;
     transition:
-      border-color 160ms var(--motion-standard),
-      background-color 160ms var(--motion-standard);
+      border-color var(--motion-duration-press) var(--motion-standard),
+      background-color var(--motion-duration-press) var(--motion-standard),
+      color var(--motion-duration-press) var(--motion-standard);
   }
 
   .ai-choice:hover {
@@ -116,8 +122,19 @@
   }
 
   .ai-choice[data-selected="true"] {
-    border-color: color-mix(in srgb, var(--color-accent) 70%, transparent);
-    background: color-mix(in srgb, var(--color-accent) 7%, transparent);
+    border-color: var(--color-accent);
+    background: var(--color-accent);
+    color: var(--color-accent-contrast);
+  }
+
+  .ai-choice small,
+  .ai-choice input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 
   .ai-choice[data-disabled="true"] {
@@ -235,7 +252,7 @@
 
   .provider-key-invalid p {
     margin-top: 0.3rem;
-    color: #d6b68e;
+    color: var(--color-warning);
   }
 
   .ai-settings-actions {
@@ -477,7 +494,7 @@
   }
 }
 
-@media (min-width: 56rem) {
+@media (min-width: 64rem) {
   .ai-choice-grid-four {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }

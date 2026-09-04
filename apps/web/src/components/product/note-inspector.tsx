@@ -1,24 +1,13 @@
 "use client";
 
-import type {
-  EntityId,
-  MutationResult,
-  NoteDto,
-  NoteSummary,
-  NoteRevisionDto,
-  Space,
-  Tag
-} from "@unfiled/contracts";
-import { type SyntheticEvent, useState } from "react";
+import type { EntityId, MutationResult, NoteDto, NoteRevisionDto, Space } from "@unfiled/contracts";
+import { useState } from "react";
 
 import { browserApi, isStaleRevision, productErrorMessage } from "@/lib/product/browser-api";
 import { announceProductChange, createIdempotencyKey } from "@/lib/product/client";
-import type { NoteLinkRecord } from "@/lib/product/types";
-import { useLiveResource } from "@/lib/product/use-live-resource";
 import { usePagedResource } from "@/lib/product/use-paged-resource";
 
 import { MarkdownPreview } from "./markdown-preview";
-import { NoteContextSections } from "./note-context-sections";
 import { UnfiledGlyph } from "./unfiled-glyph";
 
 type InspectorProps = Readonly<{
@@ -48,17 +37,10 @@ function revisionSource(source: NoteRevisionDto["source"]): string {
 
 export function NoteInspector({ note, onConflict, onMutation }: InspectorProps) {
   const spaces = usePagedResource<Space>("/api/v1/spaces?limit=100", entityKey);
-  const tags = usePagedResource<Tag>("/api/v1/tags?limit=100", entityKey);
-  const links = useLiveResource<{ items: readonly NoteLinkRecord[] }>(
-    `/api/v1/notes/${note.id}/links`
-  );
   const revisions = usePagedResource<NoteRevisionDto>(
     `/api/v1/notes/${note.id}/revisions?limit=30`,
     entityKey
   );
-  const notes = usePagedResource<NoteSummary>("/api/v1/notes?limit=100", entityKey);
-  const [tagName, setTagName] = useState("");
-  const [linkTarget, setLinkTarget] = useState("");
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<NoteRevisionDto | null>(null);
@@ -90,56 +72,6 @@ export function NoteInspector({ note, onConflict, onMutation }: InspectorProps) 
         spaceId: spaceId.length === 0 ? null : (spaceId as EntityId<"spc">)
       })
     );
-  }
-
-  async function setTag(tagId: EntityId<"tag">, linked: boolean): Promise<void> {
-    await mutate(linked ? "Tag added" : "Tag removed", () =>
-      linked
-        ? browserApi.linkNoteTag(note.id, { ...write(), tagId })
-        : browserApi.unlinkNoteTag(note.id, tagId, write())
-    );
-  }
-
-  async function createAndLinkTag(event: SyntheticEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    if (tagName.trim().length === 0) return;
-    setPending("Creating tag");
-    setError(null);
-    try {
-      const created = await browserApi.createTag({
-        idempotencyKey: createIdempotencyKey(),
-        name: tagName
-      });
-      setTagName("");
-      await tags.refresh();
-      await setTag(created.tag.id, true);
-    } catch (reason) {
-      setError(productErrorMessage(reason, "The tag could not be created."));
-      setPending(null);
-    }
-  }
-
-  async function addLink(event: SyntheticEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    if (linkTarget.length === 0) return;
-    const input = {
-      ...write(),
-      linkType: "related" as const,
-      toNoteId: linkTarget as EntityId<"note">
-    };
-    await mutate("Link added", () => browserApi.createNoteLink(note.id, input));
-    setLinkTarget("");
-    await links.refresh();
-  }
-
-  async function removeLink(link: NoteLinkRecord): Promise<void> {
-    const input = {
-      ...write(),
-      linkType: link.linkType,
-      toNoteId: link.toNoteId
-    };
-    await mutate("Link removed", () => browserApi.deleteNoteLink(note.id, link.id, input));
-    await links.refresh();
   }
 
   return (
@@ -174,126 +106,9 @@ export function NoteInspector({ note, onConflict, onMutation }: InspectorProps) 
         ) : null}
       </section>
 
-      <details open className="inspector-section">
-        <summary className="inspector-summary">
-          <UnfiledGlyph glyph="card" size={16} weight={1.9} /> Tags{" "}
-          <span>{note.tagIds.length}</span>
-        </summary>
-        <div className="mt-4 grid gap-1">
-          {tags.data?.items.map((tag) => {
-            const linked = note.tagIds.includes(tag.id);
-            return (
-              <label key={tag.id} className="tag-option">
-                <input
-                  type="checkbox"
-                  checked={linked}
-                  disabled={pending !== null}
-                  onChange={(event) => void setTag(tag.id, event.target.checked)}
-                />{" "}
-                <span>#{tag.name}</span>
-              </label>
-            );
-          })}
-          {tags.data?.items.length === 0 ? (
-            <p className="text-sm text-muted-content">No tags yet.</p>
-          ) : null}
-          {tags.data?.pageInfo.hasMore ? (
-            <button
-              type="button"
-              className="quiet-button"
-              disabled={tags.loadingMore}
-              onClick={() => void tags.loadMore()}
-            >
-              Load more tags
-            </button>
-          ) : null}
-        </div>
-        <form onSubmit={(event) => void createAndLinkTag(event)} className="mt-4 flex gap-2">
-          <label htmlFor="new-tag" className="sr-only">
-            New tag
-          </label>
-          <input
-            id="new-tag"
-            className="editor-control min-w-0"
-            value={tagName}
-            onChange={(event) => setTagName(event.target.value)}
-            placeholder="new tag"
-            maxLength={40}
-          />
-          <button
-            type="submit"
-            className="icon-button"
-            aria-label="Create and add tag"
-            disabled={pending !== null}
-          >
-            <UnfiledGlyph glyph="plus" size={17} weight={1.9} />
-          </button>
-        </form>
-      </details>
-
       <details className="inspector-section">
         <summary className="inspector-summary">
-          <UnfiledGlyph glyph="link" size={16} weight={1.9} /> Links{" "}
-          <span>{links.data?.items.length ?? note.links.length}</span>
-        </summary>
-        <div className="mt-4 border-t border-outline">
-          {links.data?.items.map((link) => (
-            <div key={link.id} className="mini-row">
-              <span className="truncate">{link.targetTitle}</span>
-              <button type="button" className="quiet-button" onClick={() => void removeLink(link)}>
-                Remove
-              </button>
-            </div>
-          ))}
-          {links.data?.items.length === 0 ? (
-            <p className="py-4 text-sm text-muted-content">No linked notes.</p>
-          ) : null}
-        </div>
-        <form onSubmit={(event) => void addLink(event)} className="mt-4 flex gap-2">
-          <label htmlFor="link-target" className="sr-only">
-            Note to link
-          </label>
-          <select
-            id="link-target"
-            className="editor-select min-w-0"
-            value={linkTarget}
-            onChange={(event) => setLinkTarget(event.target.value)}
-          >
-            <option value="">Choose a note…</option>
-            {notes.data?.items
-              .filter((candidate) => candidate.id !== note.id)
-              .map((candidate) => (
-                <option key={candidate.id} value={candidate.id}>
-                  {candidate.title}
-                </option>
-              ))}
-          </select>
-          <button
-            type="submit"
-            className="icon-button"
-            aria-label="Link note"
-            disabled={pending !== null || linkTarget.length === 0}
-          >
-            <UnfiledGlyph glyph="plus" size={17} weight={1.9} />
-          </button>
-        </form>
-        {notes.data?.pageInfo.hasMore ? (
-          <button
-            type="button"
-            className="quiet-button mt-2"
-            disabled={notes.loadingMore}
-            onClick={() => void notes.loadMore()}
-          >
-            Load more notes
-          </button>
-        ) : null}
-      </details>
-
-      <NoteContextSections noteId={note.id} />
-
-      <details open className="inspector-section">
-        <summary className="inspector-summary">
-          <UnfiledGlyph glyph="undo" size={16} weight={1.9} /> Revisions{" "}
+          <UnfiledGlyph glyph="undo" size={16} weight={1.9} /> History{" "}
           <span>{revisions.data?.items.length ?? "…"}</span>
         </summary>
         <div className="mt-4 border-t border-outline">

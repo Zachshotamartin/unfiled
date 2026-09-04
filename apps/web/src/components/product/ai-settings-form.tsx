@@ -55,6 +55,9 @@ function ProviderModeGroup({
   onChange: AiSettingsFormProps["onChange"];
 }>) {
   const managedSelectable = managedFallbackAvailable || draft.providerMode === "app_default";
+  // No managed-access option when the deployment cannot fund it (ADR-0019, decision 6): the
+  // choice appears only where it can be taken, or where it already was.
+  if (!managedSelectable) return null;
   return (
     <fieldset className="ai-settings-group" disabled={locked}>
       <legend>AI access</legend>
@@ -266,7 +269,7 @@ function RegionalGroup({
 }>) {
   return (
     <fieldset className="ai-settings-group" disabled={locked}>
-      <legend>Regional defaults</legend>
+      <legend>Timezone</legend>
       <p className="ai-settings-help">Used for daily-note dates and language-aware organization.</p>
       <div className="ai-regional-grid">
         <div>
@@ -366,7 +369,7 @@ export function AiSettingsForm(props: AiSettingsFormProps) {
   return (
     <form className="ai-settings-form" onSubmit={submit} data-locked={locked}>
       <fieldset className="ai-settings-group" disabled={locked}>
-        <legend>Organization behavior</legend>
+        <legend>Behavior</legend>
         <p className="ai-settings-help">How readily Unfiled files clear matches for you.</p>
         <div className="ai-choice-grid">
           {ORGANIZATION_MODE_OPTIONS.map((option) => (

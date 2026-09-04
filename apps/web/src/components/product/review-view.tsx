@@ -382,7 +382,7 @@ export function ReviewView({
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-baseline justify-between gap-3">
-                  <h2 className="text-lg font-medium">{reviewLabel(item.type)}</h2>
+                  <h2 className="settings-section-title">{reviewLabel(item.type)}</h2>
                   <time className="text-[11px] text-muted-content" dateTime={item.createdAt}>
                     {new Date(item.createdAt).toLocaleString()}
                   </time>

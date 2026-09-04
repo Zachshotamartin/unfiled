@@ -181,12 +181,13 @@ describe("AiSettingsForm provider keys and managed fallback", () => {
   });
 
   it("hides managed fallback unless the deployment provides app-funded access", () => {
+    // A deployment that cannot fund managed access shows no AI access choice at all, as the
+    // phone does (ADR-0019, decision 6).
     const withoutFallback = render();
     expect(withoutFallback).not.toContain("Allow managed fallback");
     expect(withoutFallback).not.toContain('type="checkbox"');
-    expect(withoutFallback).toContain("Not offered on this deployment");
-    expect(radio(withoutFallback, "provider-mode", "app_default")).toMatch(/\bdisabled=""/u);
-    expect(radio(withoutFallback, "provider-mode", "byok")).not.toMatch(/\bdisabled=""/u);
+    expect(withoutFallback).not.toContain("Not offered on this deployment");
+    expect(radioValues(withoutFallback, "provider-mode")).toEqual([]);
 
     const withFallback = render({ managedFallbackAvailable: true });
     expect(withFallback).toContain("Allow managed fallback");

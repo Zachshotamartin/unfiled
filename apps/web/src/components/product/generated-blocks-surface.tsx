@@ -187,13 +187,13 @@ export function GeneratedBlocksSurface({ noteId }: Readonly<{ noteId: EntityId<"
   if (resource.loading && resource.data === null) {
     return (
       <p className="generated-block-loading" role="status">
-        Checking for AI-generated blocks…
+        Checking for generated additions…
       </p>
     );
   }
   if (resource.error !== null && resource.data === null) {
     return (
-      <section className="generated-blocks-section" aria-label="AI-generated blocks">
+      <section className="generated-blocks-section" aria-label="Generated additions">
         <p className="text-sm text-critical" role="alert">
           {resource.error}
         </p>
@@ -216,9 +216,9 @@ export function GeneratedBlocksSurface({ noteId }: Readonly<{ noteId: EntityId<"
     <section className="generated-blocks-section" aria-labelledby="generated-blocks-title">
       <div className="generated-blocks-heading">
         <div>
-          <p className="eyebrow">Separate from your note</p>
+          <p className="eyebrow">Shown separately from your note text</p>
           <h2 id="generated-blocks-title" ref={heading} tabIndex={-1}>
-            AI-generated blocks
+            Generated additions
           </h2>
         </div>
         <p>{blocks.length} visible</p>
@@ -250,7 +250,7 @@ export function GeneratedBlocksSurface({ noteId }: Readonly<{ noteId: EntityId<"
             disabled={resource.loadingMore}
             onClick={() => void resource.loadMore()}
           >
-            {resource.loadingMore ? "Loading…" : "Load more AI-generated blocks"}
+            {resource.loadingMore ? "Loading…" : "Load more generated additions"}
           </button>
         </div>
       ) : null}

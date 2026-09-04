@@ -108,12 +108,12 @@ export function AuthForm({ initialMode = "sign-in" }: Readonly<{ initialMode?: A
         <div className="auth-code-glyph">
           <UnfiledGlyph glyph="tray" size={22} weight={2.2} />
         </div>
-        <p className="eyebrow mt-5">Confirm your address</p>
+        <p className="eyebrow mt-5">One more step</p>
         <h2 id="auth-panel-title" className="auth-panel-title">
-          Enter the six digits we emailed
+          Enter your code
         </h2>
         <p className="auth-panel-lede">
-          Your account is created. We sent a code to {awaitingCode}; entering it opens your library.
+          We emailed six digits to {awaitingCode}. Enter them to finish creating your account.
         </p>
         <AuthCodeStep
           code={code}
@@ -132,12 +132,14 @@ export function AuthForm({ initialMode = "sign-in" }: Readonly<{ initialMode?: A
 
   return (
     <>
-      <p className="eyebrow">{mode === "sign-up" ? "Create an account" : "Sign in"}</p>
+      <p className="eyebrow">Capture first</p>
       <h2 id="auth-panel-title" className="auth-panel-title">
-        Continue to your notes
+        {mode === "sign-up" ? "Create your account" : "Sign in to Unfiled"}
       </h2>
       <p className="auth-panel-lede">
-        Use your email address and password. New here? Create an account in a few seconds.
+        {mode === "sign-up"
+          ? "Choose the email address and password you will use on every device."
+          : "Enter the email address and password for your account."}
       </p>
       <form onSubmit={(event) => void submit(event)} className="mt-10" noValidate>
         <div>
@@ -188,7 +190,7 @@ export function AuthForm({ initialMode = "sign-in" }: Readonly<{ initialMode?: A
             type="button"
             disabled={pending}
             onClick={switchMode}
-            className="min-h-11 w-full text-sm text-muted-content hover:text-content disabled:opacity-50"
+            className="quiet-button w-full justify-center"
           >
             {mode === "sign-up" ? "Have an account? Sign in" : "New here? Create an account"}
           </button>

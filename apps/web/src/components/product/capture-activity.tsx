@@ -86,7 +86,6 @@ export function CaptureActivity({
     <section className="capture-activity" aria-labelledby="capture-activity-heading">
       <div className="capture-section-heading">
         <h2 id="capture-activity-heading">Needs you</h2>
-        <span aria-live="polite">Updates every 4 seconds</span>
       </div>
       {providerUnavailable ? (
         <p className="capture-outage-banner" role="status">

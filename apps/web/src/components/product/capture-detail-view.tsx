@@ -488,7 +488,6 @@ export function CaptureDetailView({ captureId }: Readonly<{ captureId: EntityId<
               <h2>
                 {capture.status === "processing" ? "Finding its place." : "Waiting to begin."}
               </h2>
-              <p className="mt-4 text-muted-content">This page updates every 4 seconds.</p>
             </>
           )}
         </section>

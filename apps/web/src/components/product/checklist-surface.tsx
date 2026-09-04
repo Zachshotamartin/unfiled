@@ -75,29 +75,19 @@ export function ChecklistSurface({
     <section aria-labelledby="checklist-heading" className="checklist-surface">
       <div className="flex items-baseline justify-between gap-4">
         <h2 id="checklist-heading" className="eyebrow">
-          Interactive checklist
+          Checklist
         </h2>
-        <span className="font-mono text-[11px] text-disabled-content">
-          {completed.length}/{checklist.length}
+        <span className="text-[11px] text-disabled-content">
+          {completed.length} of {checklist.length}
         </span>
       </div>
-      <div className="mt-4 border-t border-outline" role="list" aria-label="Remaining items">
-        {rows(remaining)}
+      {/* Items check off in place; nothing moves to a Completed group (ADR-0019, decision 8). */}
+      <div className="mt-4 border-t border-outline" role="list" aria-label="Checklist items">
+        {rows(checklist)}
         {remaining.length === 0 ? (
           <p className="checklist-complete-copy">Everything is complete.</p>
         ) : null}
       </div>
-      {completed.length === 0 ? null : (
-        <details className="completed-group">
-          <summary>
-            <span>Completed</span>
-            <span>{completed.length}</span>
-          </summary>
-          <div role="list" aria-label="Completed items">
-            {rows(completed)}
-          </div>
-        </details>
-      )}
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {announcement}
       </p>

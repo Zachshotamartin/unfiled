@@ -98,7 +98,7 @@ describe("CaptureComposer", () => {
     expect(html).not.toContain("private_manual");
   });
 
-  it("maps each control to the canonical capture value", () => {
+  it("maps the one control there is to the canonical capture value", () => {
     const onChange = vi.fn<(value: CaptureComposerValue) => void>();
     const tree = CaptureComposer(props({ onChange }));
     const elements = inspectElements(tree);
@@ -107,24 +107,15 @@ describe("CaptureComposer", () => {
     const toggles = elements.filter((element) => element.props.type === "checkbox");
 
     textarea?.props.onChange?.({ target: { checked: false, value: "remember this" } });
-    destination?.props.onChange?.({
-      target: { checked: false, value: "note_01J6M9Q7G4BMKB33GSG3NJ6D1X" }
-    });
-    toggles[0]?.props.onChange?.({ target: { checked: false, value: "on" } });
 
-    // Expansion is the only remaining toggle: there is no mode control left to map.
-    expect(toggles).toHaveLength(1);
+    // The phone's composer is the words, a photo, and Save. The destination picker and the
+    // expansion toggle it never had are gone here too (ADR-0019, decision 6; ADR-0021).
+    expect(destination).toBeUndefined();
+    expect(toggles).toHaveLength(0);
+    expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange).toHaveBeenNthCalledWith(1, {
       ...emptyValue,
       rawContent: "remember this"
-    });
-    expect(onChange).toHaveBeenNthCalledWith(2, {
-      ...emptyValue,
-      explicitDestinationNoteId: "note_01J6M9Q7G4BMKB33GSG3NJ6D1X"
-    });
-    expect(onChange).toHaveBeenNthCalledWith(3, {
-      ...emptyValue,
-      expansionDisabled: true
     });
     const emitted: CaptureComposerValue | undefined = onChange.mock.calls[0]?.[0];
     expect(emitted).toBeDefined();
