@@ -14,7 +14,12 @@ export function captureAttachmentUrl(attachmentId: string): string {
 /** The longest edge a thumbnail is drawn at, so a portrait photo keeps its shape. */
 const THUMBNAIL_EDGE = 168;
 
-function thumbnailSize(
+/**
+ * The box one photo is drawn in, keeping its own shape. The composer draws the photos an owner is
+ * about to send at the same size as the ones already on a capture, so adding a photo does not
+ * change how it sits on the page.
+ */
+export function attachmentThumbnailSize(
   width: number | null,
   height: number | null
 ): Readonly<{ height: number; width: number }> {
@@ -49,7 +54,7 @@ export function CaptureAttachment({
       </span>
     );
   }
-  const size = thumbnailSize(width, height);
+  const size = attachmentThumbnailSize(width, height);
   return (
     <figure className="attachment-figure">
       {/*

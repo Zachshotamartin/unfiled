@@ -51,6 +51,12 @@ export type DurableCaptureRequest = Readonly<{
   privacy: Capture["privacy"];
   explicitDestinationNoteId?: EntityId<"note"> | undefined;
   expansionDisabled: boolean;
+  /**
+   * The photos this capture names. Their bytes are already on the server before the capture is
+   * queued, so a capture that waits for a connection still arrives carrying them. The array is
+   * the contract's own shape, so a queued capture is exactly the request that will be sent.
+   */
+  attachmentIds?: EntityId<"att">[] | undefined;
 }>;
 
 export type CaptureOutboxState = "waiting" | "sending" | "retrying" | "permanent" | "synced";
