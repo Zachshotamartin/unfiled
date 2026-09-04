@@ -268,6 +268,9 @@ function parseCreateInput(input: NormalizedCaptureCreateInput): NormalizedCaptur
       ? {}
       : { explicitDestinationNoteId: parsed.data.explicitDestinationNoteId }),
     expansionDisabled: parsed.data.expansionDisabled,
+    ...(parsed.data.attachmentIds === undefined
+      ? {}
+      : { attachmentIds: parsed.data.attachmentIds }),
     ...(parsed.data.guidance === undefined || parsed.data.guidance === null
       ? {}
       : { guidance: parsed.data.guidance })
@@ -1275,7 +1278,8 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
               routingRuleMatch,
               expansionDisabled: input.expansionDisabled,
               privateReceiptCipher,
-              privateReceiptVerificationMac
+              privateReceiptVerificationMac,
+              attachmentIds: input.attachmentIds ?? []
             }
           });
           break;

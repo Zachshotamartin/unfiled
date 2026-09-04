@@ -1052,10 +1052,19 @@ async function uploadPhoto(captureId, attachmentId, bytes, extra = {}) {
       attachmentIds: [attachmentId]
     }
   });
-  record("photo.capture_binds_the_upload", created.status === 201 || created.status === 202, {
-    status: created.status,
-    code: code(created)
-  });
+  const boundDetail = await api("GET", `/captures/${captureId}`, { token });
+  const boundIds = (boundDetail.json?.capture?.attachments ?? []).map((item) => item.id);
+  record(
+    "photo.capture_binds_the_upload",
+    (created.status === 201 || created.status === 202) &&
+      boundIds.length === 1 &&
+      boundIds[0] === attachmentId,
+    {
+      status: created.status,
+      code: code(created),
+      boundAttachments: boundIds.length
+    }
+  );
   const strangerBind = await api("POST", "/captures", {
     token,
     idempotencyKey: `cap_${ulid()}`,

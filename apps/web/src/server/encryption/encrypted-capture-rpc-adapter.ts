@@ -17,6 +17,7 @@ import {
   type PrivacyMode,
   type RoutingRuleMatchSnapshot,
   CAPTURE_ATTACHMENT_MAX_BYTES,
+  MAX_CAPTURE_ATTACHMENTS,
   MAX_CAPTURE_IMAGE_EDGE_PIXELS,
   MAX_CAPTURE_RECORDING_MS,
   type CaptureAttachmentKind,
@@ -165,7 +166,8 @@ const CREATE_CAPTURE_KEYS = [
   "routingRuleMatch",
   "expansionDisabled",
   "privateReceiptCipher",
-  "privateReceiptVerificationMac"
+  "privateReceiptVerificationMac",
+  "attachmentIds"
 ] as const;
 
 export const encryptedCaptureRpcFunctions = Object.freeze([
@@ -374,6 +376,8 @@ export type CreateEncryptedCaptureCommand = Readonly<{
     expansionDisabled: boolean;
     privateReceiptCipher: EncryptedFieldRpcValue<"capture_receipt"> | null;
     privateReceiptVerificationMac: KeyedMacRpcValue | null;
+    /** The uploads this capture claims. The database binds them in the same transaction. */
+    attachmentIds: readonly EntityId<"att">[];
   }>;
 }>;
 
@@ -1230,9 +1234,19 @@ function parseCreateCommand(input: CreateEncryptedCaptureCommand): CreateEncrypt
       routingRuleMatch,
       expansionDisabled: row.expansionDisabled,
       privateReceiptCipher: receiptCipher,
-      privateReceiptVerificationMac: receiptMac
+      privateReceiptVerificationMac: receiptMac,
+      attachmentIds: parseAttachmentIds(row.attachmentIds)
     })
   });
+}
+
+/** The uploads a capture claims, bound by the same transaction that stores the capture. */
+function parseAttachmentIds(value: unknown): readonly EntityId<"att">[] {
+  if (value === undefined || value === null) return Object.freeze([]);
+  if (!Array.isArray(value) || value.length > MAX_CAPTURE_ATTACHMENTS) return inputFailure();
+  const ids = value.map((item) => entityId(item, "att", inputFailure));
+  if (new Set(ids).size !== ids.length) return inputFailure();
+  return Object.freeze(ids);
 }
 
 function idempotencyKey(value: unknown, failure: Failure): string {

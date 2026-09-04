@@ -197,7 +197,8 @@ function privateCommand(): CreateEncryptedCaptureCommand {
         "private_manual",
         "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
       ),
-      privateReceiptVerificationMac: mac("private_manual")
+      privateReceiptVerificationMac: mac("private_manual"),
+      attachmentIds: []
     })
   });
 }

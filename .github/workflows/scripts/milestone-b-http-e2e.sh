@@ -3965,6 +3965,28 @@ e2e_attachment_capture_body="$({
 e2e_encrypted_request_json POST /captures "$e2e_attachment_capture_body" \
   "$e2e_attachment_capture_id" >/dev/null
 
+# The capture must actually carry the photo. Asserting only the 202 let a server that discards
+# attachmentIds entirely look healthy: the upload succeeded, the capture succeeded, and the
+# photo belonged to nothing.
+e2e_attachment_bound="$(
+  e2e_encrypted_request_json GET "/captures/$e2e_attachment_capture_id" | \
+    E2E_ATTACHMENT_ID="$e2e_attachment_id" node -e '
+      let input = "";
+      process.stdin.on("data", (chunk) => (input += chunk));
+      process.stdin.on("end", () => {
+        const attachments = JSON.parse(input).capture?.attachments ?? [];
+        const ids = attachments.map((attachment) => attachment.id);
+        process.stdout.write(
+          ids.length === 1 && ids[0] === process.env.E2E_ATTACHMENT_ID ? "bound" : `ids=${ids.length}`
+        );
+      });
+    '
+)"
+if [[ "$e2e_attachment_bound" != "bound" ]]; then
+  echo "The capture does not carry the photo that was uploaded for it ($e2e_attachment_bound)." >&2
+  exit 1
+fi
+
 # Leave the shared local database reusable for a subsequent test pass. The API
 # deliberately soft-deletes notes, which removes their searchable plaintext
 # projections without bypassing the same revision/idempotency contracts used by
