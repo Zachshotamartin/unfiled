@@ -35,7 +35,9 @@ jobs:
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Long enough to wait for the phone workflow (ci-ios.yml) still running for this commit; when
+    # the commit touched nothing under apps/ios that workflow reports in seconds.
+    timeout-minutes: 40
     outputs:
       sha: ${{ steps.commit.outputs.sha }}
     steps:
@@ -51,7 +53,7 @@ jobs:
           printf 'sha=%s\n' "${UNFILED_RELEASE_SHA}" >> "${GITHUB_OUTPUT}"
           printf 'Releasing %s\n' "${UNFILED_RELEASE_SHA}"
 
-      - name: Require a green CI run for this exact commit
+      - name: Require green CI and CI iOS runs for this exact commit
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ steps.commit.outputs.sha }}

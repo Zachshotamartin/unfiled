@@ -23,11 +23,14 @@
 | Built-local HTTP E2E                         | pending |             |
 | Deterministic routing and capacity           | pending |             |
 | Terraform policy tests                       | pending |             |
-| Unsigned iOS generation/build/tests          | pending |             |
+| Unsigned iOS generation and build (CI iOS)   | pending |             |
+| Unsigned iOS Release archive (CI iOS, main)  | pending |             |
 | Secret scan                                  | pending |             |
 | Production dependency audit                  | pending |             |
 
 Record test counts, durations, and public run links. Do not copy raw job logs into this repository.
+
+The server lanes run in the `CI` workflow and the phone lanes in `CI iOS`; both are required checks on `main`, and a release requires both green for the commit it ships. A lane a commit did not call for (a server-only commit skips the phone lanes, a phone-only commit skips the server lanes) is recorded as skipped, and the packaging evidence for such a commit is the archive of the last commit that touched `apps/ios`.
 
 ## Migration gate
 

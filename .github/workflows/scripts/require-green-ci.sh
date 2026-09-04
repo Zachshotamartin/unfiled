@@ -1,21 +1,28 @@
 #!/usr/bin/env bash
 
-# A release may only ship a commit whose tests have already passed. This asks GitHub which CI runs
-# exist for the exact commit under release and requires one of them to have concluded successfully.
-# Nothing is inferred from a branch name or from a run that is still going: a merge that arrives
-# while CI is running is not releasable yet, and a merge whose CI went red never becomes releasable.
+# A release may only ship a commit whose tests have already passed. This asks GitHub which runs of
+# each required CI workflow exist for the exact commit under release and requires every one of them
+# to have concluded successfully. Nothing is inferred from a branch name: a merge whose CI went red
+# never becomes releasable, and a merge whose CI is still running is waited for, not skipped.
+#
+# The release is started by the server workflow finishing; the phone workflow (ci-ios.yml) may
+# still be running for the same commit, so a run in progress is polled until it concludes or the
+# wait runs out. When the commit touched nothing under apps/ios that workflow reports in seconds.
 #
 # Environment:
-#   GH_TOKEN             a token with actions: read on this repository
-#   GITHUB_REPOSITORY    owner/name, set by Actions
-#   RELEASE_SHA          the forty-character commit being released
-#   UNFILED_CI_WORKFLOW  the CI workflow file to require (default ci.yml)
+#   GH_TOKEN                 a token with actions: read on this repository
+#   GITHUB_REPOSITORY        owner/name, set by Actions
+#   RELEASE_SHA              the forty-character commit being released
+#   UNFILED_CI_WORKFLOWS     space-separated workflow files to require (default "ci.yml ci-ios.yml")
+#   UNFILED_CI_WAIT_MINUTES  how long to wait for a run still in progress (default 30)
 
 set -euo pipefail
 
-readonly CI_WORKFLOW="${UNFILED_CI_WORKFLOW:-ci.yml}"
-readonly ATTEMPTS=5
-readonly ATTEMPT_PAUSE_SECONDS=6
+readonly CI_WORKFLOWS="${UNFILED_CI_WORKFLOWS:-ci.yml ci-ios.yml}"
+readonly WAIT_MINUTES="${UNFILED_CI_WAIT_MINUTES:-30}"
+readonly POLL_SECONDS=30
+readonly LISTING_ATTEMPTS=5
+readonly LISTING_PAUSE_SECONDS=6
 
 fail() {
   printf 'Release refused: %s\n' "$1" >&2
@@ -25,30 +32,59 @@ fail() {
 [[ -n "${GITHUB_REPOSITORY:-}" ]] || fail 'GITHUB_REPOSITORY is not set.'
 [[ "${RELEASE_SHA:-}" =~ ^[0-9a-f]{40}$ ]] ||
   fail "RELEASE_SHA is not a commit: ${RELEASE_SHA:-<unset>}"
+[[ "${WAIT_MINUTES}" =~ ^[0-9]+$ ]] || fail "UNFILED_CI_WAIT_MINUTES is not a number: ${WAIT_MINUTES}"
 
-# The runs listing can lag a run that has only just finished, so this asks a few times before it
-# concludes there is no green run. It concludes nothing else: an absent, failed, cancelled or
-# still-running CI run all leave the commit unreleasable, and so does an unreadable API.
-attempt=1
-while ((attempt <= ATTEMPTS)); do
-  conclusions="$(
-    gh api \
-      "repos/${GITHUB_REPOSITORY}/actions/workflows/${CI_WORKFLOW}/runs?head_sha=${RELEASE_SHA}&per_page=100" \
-      --jq '.workflow_runs[] | .conclusion // "in_progress"'
-  )" || fail "Could not read the ${CI_WORKFLOW} runs for ${RELEASE_SHA} from GitHub."
+# Every conclusion of every run of one workflow for the commit, one per line; a run that has not
+# concluded reads "in_progress". An unreadable API leaves the commit unreleasable.
+conclusions_of() {
+  gh api \
+    "repos/${GITHUB_REPOSITORY}/actions/workflows/$1/runs?head_sha=${RELEASE_SHA}&per_page=100" \
+    --jq '.workflow_runs[] | .conclusion // "in_progress"'
+}
 
-  if printf '%s\n' "${conclusions}" | grep -qx 'success'; then
-    printf 'CI is green for %s.\n' "${RELEASE_SHA}"
-    exit 0
-  fi
+require_green() {
+  local workflow="$1"
+  local deadline=$((SECONDS + WAIT_MINUTES * 60))
+  local listing_attempt=1
+  local conclusions
 
-  printf 'Attempt %d of %d found no green %s run for %s (conclusions: %s).\n' \
-    "${attempt}" "${ATTEMPTS}" "${CI_WORKFLOW}" "${RELEASE_SHA}" \
-    "$(printf '%s' "${conclusions:-none}" | tr '\n' ' ')" >&2
-  if ((attempt < ATTEMPTS)); then
-    sleep "${ATTEMPT_PAUSE_SECONDS}"
-  fi
-  attempt=$((attempt + 1))
+  while :; do
+    conclusions="$(conclusions_of "${workflow}")" ||
+      fail "Could not read the ${workflow} runs for ${RELEASE_SHA} from GitHub."
+
+    if printf '%s\n' "${conclusions}" | grep -qx 'success'; then
+      printf '%s is green for %s.\n' "${workflow}" "${RELEASE_SHA}"
+      return 0
+    fi
+
+    # The runs listing can lag a run that was only just created, so an empty listing is asked
+    # again a few times before it means the run does not exist.
+    if [[ -z "${conclusions}" ]]; then
+      if ((listing_attempt < LISTING_ATTEMPTS)); then
+        printf 'Attempt %d of %d found no %s run for %s yet.\n' \
+          "${listing_attempt}" "${LISTING_ATTEMPTS}" "${workflow}" "${RELEASE_SHA}" >&2
+        listing_attempt=$((listing_attempt + 1))
+        sleep "${LISTING_PAUSE_SECONDS}"
+        continue
+      fi
+      fail "No ${workflow} run exists for ${RELEASE_SHA}. Nothing was deployed."
+    fi
+
+    if printf '%s\n' "${conclusions}" | grep -qx 'in_progress'; then
+      if ((SECONDS < deadline)); then
+        printf '%s is still running for %s; waiting (%d s left).\n' \
+          "${workflow}" "${RELEASE_SHA}" "$((deadline - SECONDS))" >&2
+        sleep "${POLL_SECONDS}"
+        continue
+      fi
+      fail "${workflow} was still running for ${RELEASE_SHA} after ${WAIT_MINUTES} minutes. Nothing was deployed."
+    fi
+
+    fail "No successful ${workflow} run exists for ${RELEASE_SHA} (conclusions: $(printf '%s' "${conclusions}" | tr '\n' ' ')). Nothing was deployed."
+  done
+}
+
+for workflow in ${CI_WORKFLOWS}; do
+  require_green "${workflow}"
 done
-
-fail "No successful ${CI_WORKFLOW} run exists for ${RELEASE_SHA}. Nothing was deployed."
+printf 'CI is green for %s.\n' "${RELEASE_SHA}"
