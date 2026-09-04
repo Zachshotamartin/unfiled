@@ -1,7 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
   <title id="title">Unfiled</title>
-  <desc id="desc">An open lowercase u shaped like an intake tray with a coral paper slip entering.</desc>
-  <rect width="64" height="64" rx="14" fill="#0B0C0E"/>
-  <path fill="#F2EFE8" d="M8 20h12v15c0 7 5.4 12 12 12s12-5 12-12V20h12v15c0 13.255-10.745 24-24 24S8 48.255 8 35V20Z"/>
-  <rect width="10" height="20" x="35" y="4" rx="1.5" fill="#EE6F55" transform="rotate(16 40 14)"/>
+  <desc id="desc">An intake tray in ink with a green card dropping into it, on a light paper ground.</desc>
+  <rect width="64" height="64" rx="14" fill="#f3f4f6"/>
+  <g transform="translate(8 8) scale(0.48)">
+    <path d="M13 34V74.6Q13 92 50 92Q87 92 87 74.6V34" fill="none" stroke="#14171b" stroke-width="16" stroke-linecap="square" stroke-linejoin="round"/>
+    <rect x="50.5" y="9" width="19" height="42" rx="2.5" fill="#1e6b57" transform="rotate(14 60 30)"/>
+  </g>
 </svg>

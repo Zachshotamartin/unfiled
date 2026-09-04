@@ -129,8 +129,9 @@
   }
 
   .log-surface {
-    width: min(100% - 2rem, 47rem);
-    margin: 0 auto 2.5rem;
+    width: 100%;
+    margin: 0 0 2.5rem;
+    padding: 0 var(--space-editor-gutter);
     border-top: 1px solid var(--color-border);
   }
 

@@ -38,6 +38,8 @@
    */
   --font-paper-serif: ui-serif, "New York", Georgia, "Iowan Old Style", "Times New Roman", serif;
 
+  /* Small inline shapes: code, check boxes. */
+  --radius-small: 6px;
   --radius-input: 13px;
   --radius-button: 13px;
   --radius-card: 16px;
@@ -72,6 +74,14 @@
   --space-field-padding: 1rem;
   --size-control-height: 3.25rem;
   --size-touch-target: 2.75rem;
+
+  /*
+   * The desk's side gutter, and the one left edge every part of a note's page shares: the
+   * toolbar, the title and body, the checklist, the log, the generated blocks. It grows with
+   * the viewport so a wide screen keeps a reading margin without capping the content.
+   */
+  --space-desk-gutter: clamp(1rem, 4vw, 5rem);
+  --space-editor-gutter: clamp(1rem, 7vw, 8rem);
 }
 
 @media (prefers-reduced-motion: reduce) {

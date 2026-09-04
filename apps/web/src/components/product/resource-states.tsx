@@ -22,11 +22,9 @@ export function EmptyState({
   title
 }: Readonly<{ action?: ReactNode; body: string; title: string }>) {
   return (
+    // An empty state is a sentence and, at most, one action. Never an illustration or a logo.
     <section className="empty-state" aria-labelledby="empty-title">
-      <UnfiledGlyph glyph="card" size={29} weight={1.9} className="text-action" />
-      <h2 id="empty-title" className="mt-5 text-2xl font-semibold tracking-[-0.035em]">
-        {title}
-      </h2>
+      <h2 id="empty-title">{title}</h2>
       <p className="mt-3 max-w-md leading-7 text-muted-content">{body}</p>
       {action === undefined ? null : <div className="mt-6">{action}</div>}
     </section>
@@ -46,9 +44,7 @@ export function ResourceError({
         weight={1.9}
         className="text-action"
       />
-      <h2 className="mt-5 text-2xl font-semibold tracking-[-0.035em]">
-        {offline ? "You’re offline." : "This view didn’t load."}
-      </h2>
+      <h2 className="mt-5">{offline ? "You’re offline." : "This view didn’t load."}</h2>
       <p className="mt-3 max-w-md leading-7 text-muted-content">{message}</p>
       <button type="button" className="button-secondary mt-6" onClick={retry}>
         <UnfiledGlyph glyph="undo" size={17} weight={1.9} /> Try again

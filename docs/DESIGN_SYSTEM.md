@@ -2,27 +2,29 @@
 
 Status: **working v1 skeleton.** The visual tokens now follow the selected [Unfiled brand direction](./BRAND_SYSTEM_UNFILED.md); Milestone 0 completes this document with measured contrast evidence, component specs from the high-fidelity screens, and prototype learnings. Sections marked `M0` are filled then.
 
-Design dials: `DESIGN_VARIANCE: 5`, `MOTION_INTENSITY: 3`, `VISUAL_DENSITY: 5`. Read: calm personal utility, dark-first, mobile-first; editor hierarchy, not dashboard density. No AI-purple gradients, glowing avatars, chat-bubble primary UI, or decorative graphs.
+Design dials: `DESIGN_VARIANCE: 5`, `MOTION_INTENSITY: 3`, `VISUAL_DENSITY: 5`. Read: calm personal utility on a light paper ground ([ADR-0019](./decisions/ADR-0019-paper-design-direction.md)), mobile-first; editor hierarchy, not dashboard density. No black grounds, no stock symbols, no AI-purple gradients, glowing avatars, chat-bubble primary UI, or decorative graphs.
 
-## 1. Color tokens (semantic, dark-first)
+## 1. Color tokens (semantic, Paper)
 
-Semantic names only in components; raw hex lives here. All pairs require recorded contrast ratios at M0; targets: AA minimum everywhere, AAA (≥7:1) for primary reading text.
+Semantic names only in components; raw hex lives in `apps/web/src/app/paper.css` and `apps/ios/Unfiled/DesignSystem/UnfiledTheme.swift`, which are the same set. There is no black ground anywhere: the screens sit on a cool light paper, and one deep green is the only accent.
 
-| Token                   | Draft value                              | Role                                   | Contrast vs canvas (approx, verify M0) |
-| ----------------------- | ---------------------------------------- | -------------------------------------- | -------------------------------------- |
-| `color.canvas`          | `#0B0C0E` (Ink)                          | app background                         | —                                      |
-| `color.surface`         | `#181B1F` (Graphite)                     | panes, composer                        | —                                      |
-| `color.surface.raised`  | `#22262A`                                | sheets, menus                          | —                                      |
-| `color.border`          | `rgba(242, 239, 232, 0.14)`              | hairlines, dividers                    | non-text                               |
-| `color.text.primary`    | `#F2EFE8` (Warm Paper)                   | body text                              | verify M0; target AAA                  |
-| `color.text.secondary`  | `#9DA3A6` (Fog)                          | metadata, timestamps                   | verify M0; target AA                   |
-| `color.accent`          | `#EE6F55` (Persimmon)                    | capture actions, selection, provenance | verify M0; target AA                   |
-| `color.accent.contrast` | `#0B0C0E`                                | text on accent fills                   | verify ≥4.5:1                          |
-| `color.danger`          | M0: muted coral, chosen by contrast test | destructive, failed states             | ≥4.5:1 required                        |
-| `color.warning`         | M0                                       | pending/attention                      | ≥4.5:1                                 |
-| `color.state.generated` | M0: accent-tinted surface                | generated-block background + badge     | non-color indicator also required      |
+| Token                     | Value     | Role                                                  |
+| ------------------------- | --------- | ----------------------------------------------------- |
+| `color.canvas`            | `#f3f4f6` | screen ground                                         |
+| `color.surface`           | `#ffffff` | fields, cards, the dock                               |
+| `color.surface.raised`    | `#e6e8ec` | pressed and secondary controls                        |
+| `color.border`            | `#dde1e6` | hairlines                                             |
+| `color.text.primary`      | `#14171b` | primary text (ink)                                    |
+| `color.text.secondary`    | `#626b76` | metadata, descriptions, section labels                |
+| `color.text.disabled`     | `#9aa1ab` | disabled controls and placeholders                    |
+| `color.accent`            | `#1e6b57` | the one accent: state dots, links, the primary action |
+| `color.accent.pressed`    | `#17543f` | the accent under press                                |
+| `color.accent.contrast`   | `#f3f4f6` | text and glyphs on the accent                         |
+| `color.danger`            | `#a03a28` | destructive, failed states                            |
+| `color.warning`           | `#8a5a12` | pending, attention                                    |
+| `color.generated.surface` | `#eaf1ee` | the tinted surface a labelled generated block sits on |
 
-One accent across the product. No pure black/white. A future light theme re-maps tokens only; components never reference hex. Theme delivery: CSS variables (web), token object via NativeWind/StyleSheet (native), single source in `packages/design-tokens`.
+Contrast is asserted in `apps/web/src/components/product/paper-design.test.ts`. The mark follows the ground: an ink tray with a green card, drawn once in `apps/ios/Shared/BrandMark.swift` and `apps/web/src/components/brand-mark.tsx` from the same geometry; the served favicon and `public/brand/unfiled-mark.svg` are the same drawing on the paper ground.
 
 ## 2. Typography
 
@@ -64,7 +66,7 @@ Each component ships with all applicable states: default, hover (web), focus-vis
 
 ## 7. Screen inventory and responsive rules
 
-Mobile (design smallest supported viewport first, keyboard open): Today, Capture sheet, Notes (library), Note (per type surface), Review, Search, Settings (+ rules, + BYOK), Archive, onboarding trio. Web: same set with left rail + center pane + optional inspector (backlinks, routing history, source captures); rail collapses ≤1024 px; inspector never required for editing. Breakpoints: 640 / 1024 / 1440.
+Mobile (design smallest supported viewport first, keyboard open): Today, Capture sheet, Notes (library), Note (per type surface), Review, Search, Settings (+ rules, + BYOK), Archive, onboarding trio. Web: the Desk (Inbox, capture, Library) with a left rail, a content column that fills the width beside it, and on a note's page an optional inspector; the inspector is never required for editing. The content column has no maximum width: measures belong to the prose inside it, and the side gutter (`--space-desk-gutter`) grows with the viewport. Every part of a note's page (toolbar, meta, title and body, checklist, log, generated blocks) shares one left edge, `--space-editor-gutter`. Breakpoints as implemented: 640 (desk gutters and editor meta grid), 768 (the rail appears and the dock stands down), 1024 (the auth split), 1280 (the rail gains labels; the note inspector docks beside the note).
 
 ## 8. Accessibility requirements (tested, per OPERATIONS_TEST_PLAN §7)
 
