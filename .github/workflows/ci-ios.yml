@@ -1,0 +1,217 @@
+# The phone app's checks, in their own workflow so a server change never waits for, or pays for, a
+# macOS runner, and a phone change never rebuilds the servers. `changes` reads the diff first; when
+# a commit touches nothing under apps/ios the two lanes are skipped and the `CI iOS` check at the
+# bottom still reports, so a pull request is never left waiting on a check that will not run.
+#
+# `CI iOS` is the second required check on main next to `CI` (.github/workflows/ci.yml), and the
+# release (.github/workflows/release.yml) requires both to be green for the exact commit it ships.
+name: CI iOS
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # A superseded pull-request run is wasted work, but a superseded main run is the only evidence
+  # that its commit is releasable, so main runs are never cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22.18.0"
+  PNPM_VERSION: "10.14.0"
+
+jobs:
+  changes:
+    name: What changed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ios: ${{ steps.lanes.outputs.ios }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Name the lanes this change can affect
+        id: lanes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: bash .github/workflows/scripts/changed-lanes.sh "${BASE_SHA}" "${HEAD_SHA}" | tee -a "${GITHUB_OUTPUT}"
+
+  native-ios:
+    name: iOS app and widget (unsigned build)
+    needs: changes
+    if: ${{ needs.changes.outputs.ios == 'true' }}
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install XcodeGen
+        env:
+          XCODEGEN_VERSION: 2.46.0
+          XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
+        run: |
+          XCODEGEN_ARCHIVE="${RUNNER_TEMP}/xcodegen.zip"
+          XCODEGEN_INSTALL_ROOT="${RUNNER_TEMP}/xcodegen-${XCODEGEN_VERSION}"
+          curl --fail --location --retry 3 \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip" \
+            --output "${XCODEGEN_ARCHIVE}"
+          printf '%s  %s\n' "${XCODEGEN_SHA256}" "${XCODEGEN_ARCHIVE}" | shasum -a 256 --check -
+          unzip -q "${XCODEGEN_ARCHIVE}" -d "${XCODEGEN_INSTALL_ROOT}"
+          printf '%s\n' "${XCODEGEN_INSTALL_ROOT}/xcodegen/bin" >> "${GITHUB_PATH}"
+
+      - name: Report native toolchain
+        run: |
+          xcodebuild -version
+          xcodegen --version
+          swift --version
+
+      - name: Declare credential and signing boundary
+        run: >-
+          echo "::notice::This lane validates an unsigned iOS Simulator build only.
+          It does not use Apple credentials, validate provisioning or App Groups on-device,
+          create a signed archive, or deploy to TestFlight or the App Store."
+
+      - name: Generate the Xcode project twice from the canonical manifest
+        run: |
+          pnpm ios:generate
+          pnpm ios:generate
+
+      - name: Inspect generated targets and capability wiring
+        run: pnpm ios:inspect
+
+      - name: Resolve the SQLCipher GRDB package graph
+        run: pnpm ios:resolve
+
+      - name: Require every generated project file to be current
+        run: |
+          UNFILED_GENERATED_STATUS="$(git status --porcelain --untracked-files=all -- apps/ios/Unfiled.xcodeproj)"
+          if [[ -n "${UNFILED_GENERATED_STATUS}" ]]; then
+            printf '%s\n' "${UNFILED_GENERATED_STATUS}"
+            exit 1
+          fi
+
+      # This lane compiles against a generic destination, which boots no simulator, and does not
+      # run the XCTest bundle. GitHub-hosted macOS runners hang on simulator boot often enough to
+      # matter -- actions/runner-images#12725 (macos-15 only, hang correlates with which image
+      # provisioner the job lands on), #13143 and #13264 -- and this repository hit it: the same
+      # content took 223s on a pull-request runner and was still stuck after 26 minutes on the
+      # push runner minutes later, twice, both cancelled by hand.
+      #
+      # Nothing is deleted. The XCTest cases and their target are untouched in
+      # apps/ios/UnfiledTests, and `pnpm ios:test` still runs them on a simulator locally -- with
+      # an explicit boot, a wall-clock deadline and a heartbeat, all kept working for that use.
+      #
+      # To run them here again, set the repository variable RUN_IOS_SIMULATOR_TESTS to "true"
+      # (Settings, Secrets and variables, Actions, Variables). That is the whole switch: no code
+      # change, and the step below is kept in place so it cannot rot into something that no longer
+      # runs. Compiling for the simulator SDK still catches every compile error the tests would.
+      - name: Build the iOS app for the simulator SDK
+        run: pnpm ios:build
+
+      - name: Run iOS unit tests in a simulator
+        if: ${{ vars.RUN_IOS_SIMULATOR_TESTS == 'true' }}
+        run: pnpm ios:test
+
+  # Packaging evidence for the commit a release can ship: the Release configuration archives,
+  # names the production origin, carries its privacy manifest, and stays iPhone-only with no
+  # embedded extension. It is unsigned, so per ADR-0010 it is packaging evidence only and no
+  # release statement may infer signing or device correctness from it. Pull requests skip it;
+  # only a commit on main can be released. A commit on main that touches nothing under apps/ios
+  # skips it too: its packaging evidence is the archive of the last commit that did.
+  #
+  # It is a job rather than a step of the lane above because it shares nothing with it: a Release
+  # archive for a generic iOS device, into its own fresh DerivedData, is a second complete compile
+  # of the app and of SQLCipher and GRDB, so the two compile at the same time.
+  native-ios-archive:
+    name: iOS Release archive packaging (unsigned)
+    needs: changes
+    if: ${{ github.event_name == 'push' && needs.changes.outputs.ios == 'true' }}
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install XcodeGen
+        env:
+          XCODEGEN_VERSION: 2.46.0
+          XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
+        run: |
+          XCODEGEN_ARCHIVE="${RUNNER_TEMP}/xcodegen.zip"
+          XCODEGEN_INSTALL_ROOT="${RUNNER_TEMP}/xcodegen-${XCODEGEN_VERSION}"
+          curl --fail --location --retry 3 \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip" \
+            --output "${XCODEGEN_ARCHIVE}"
+          printf '%s  %s\n' "${XCODEGEN_SHA256}" "${XCODEGEN_ARCHIVE}" | shasum -a 256 --check -
+          unzip -q "${XCODEGEN_ARCHIVE}" -d "${XCODEGEN_INSTALL_ROOT}"
+          printf '%s\n' "${XCODEGEN_INSTALL_ROOT}/xcodegen/bin" >> "${GITHUB_PATH}"
+
+      - name: Generate the Xcode project from the canonical manifest
+        run: pnpm ios:generate
+
+      - name: Verify the Release archive packaging
+        run: pnpm ios:archive-preflight
+
+  ci-ios:
+    name: CI iOS
+    if: always()
+    needs: [changes, native-ios, native-ios-archive]
+    runs-on: ubuntu-latest
+    steps:
+      # Each lane is compared against what this change called for: a lane the diff asked for must
+      # have succeeded, and a lane it did not ask for must have been skipped. Accepting "skipped"
+      # only where the diff explains it is what keeps a cancelled or failed lane from passing.
+      - name: Require every iOS lane the change called for
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          BUILD_RESULT: ${{ needs.native-ios.result }}
+          BUILD_EXPECTED: ${{ needs.changes.outputs.ios == 'true' && 'success' || 'skipped' }}
+          ARCHIVE_RESULT: ${{ needs.native-ios-archive.result }}
+          ARCHIVE_EXPECTED: ${{ (github.event_name == 'push' && needs.changes.outputs.ios == 'true') && 'success' || 'skipped' }}
+        run: |
+          failed=""
+          expect() {
+            printf '%s=%s (expected %s)\n' "$1" "$2" "$3"
+            if [[ "$2" != "$3" ]]; then
+              failed="${failed} $1"
+            fi
+          }
+          expect changes "${CHANGES_RESULT}" success
+          expect native-ios "${BUILD_RESULT}" "${BUILD_EXPECTED}"
+          expect native-ios-archive "${ARCHIVE_RESULT}" "${ARCHIVE_EXPECTED}"
+          if [[ -n "${failed}" ]]; then
+            printf 'CI iOS is red. Lanes that did not pass:%s\n' "${failed}" >&2
+            exit 1
+          fi
