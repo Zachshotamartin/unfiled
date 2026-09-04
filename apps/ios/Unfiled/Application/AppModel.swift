@@ -192,6 +192,9 @@ final class AppModel: ObservableObject {
 
     @Published private(set) var phase: AppPhase = .booting
     @Published var authMode: AuthMode = .signIn
+    /// Set while an account exists but its address has not been confirmed. It is restored at launch,
+    /// so backgrounding the app during the code step returns the owner to the same step.
+    @Published private(set) var pendingVerification: PendingVerification?
     @Published private(set) var currentUser: AuthUser?
     @Published private(set) var notes: [NotePresentation] = []
     @Published private(set) var noteDetails: [String: NoteDetailPresentation] = [:]
@@ -209,7 +212,22 @@ final class AppModel: ObservableObject {
     @Published private(set) var noteContextByNoteID: [String: NoteContextViewState] = [:]
     @Published private(set) var routingRules: [RoutingRule] = []
     @Published private(set) var aiSettings: UserSettings?
+    /// Why a note's revision history could not be read, so the screen can say so and offer a
+    /// retry instead of showing its loading state until the app is relaunched.
+    @Published private(set) var revisionsError: [String: String] = [:]
     @Published private(set) var providerKeyMetadataByProvider: [AIProvider: ProviderKeyMetadata] = [:]
+    /// Whether the account's key status has actually been read. An empty record is not evidence
+    /// that the owner has no key; on a cold launch with no connection it means nothing is known.
+    @Published private(set) var hasLoadedProviderKeyMetadata = false
+
+    /// True only when the app knows the account's keys and none of them can organize a capture.
+    /// Presence was the wrong question in both directions: a failed status read nagged an owner
+    /// who already had a key, and a key the provider rejected or that was revoked hid the card
+    /// that would let them fix it.
+    var needsProviderKey: Bool {
+        guard hasLoadedProviderKeyMetadata else { return false }
+        return !providerKeyMetadataByProvider.values.contains { $0.status == .active }
+    }
     @Published private(set) var isLoadingAISettings = false
     @Published private(set) var hasLoadedAISettings = false
     @Published private(set) var isSavingAISettings = false
@@ -304,14 +322,19 @@ final class AppModel: ObservableObject {
     private var didBootstrap = false
     private var accountEpoch: UInt64 = 0
     private var refreshEpoch: UInt64 = 0
+    /// The refresh currently running, owned by the model rather than by whichever view asked
+    /// for it, so a pull-to-refresh that ends does not cancel the work it started.
+    private var refreshAllTask: Task<Void, Never>?
     private var searchEpoch: UInt64 = 0
     private var searchTask: Task<Void, Never>?
     private var searchPaginationState: SearchPaginationState?
     private let explicitSignOutBarrier: ExplicitSignOutBarrier
+    private let pendingVerificationStore: PendingVerificationStore
 
     init(bundle: Bundle = .main, userDefaults: UserDefaults = .standard) {
         SecureAccountExportWriter.removeStaleArtifacts()
         explicitSignOutBarrier = ExplicitSignOutBarrier(defaults: userDefaults)
+        pendingVerificationStore = PendingVerificationStore(defaults: userDefaults)
         do {
             let configuration = try AppConfiguration.load(bundle: bundle)
             let unauthenticatedAPI = try APIClient(baseURL: configuration.apiBaseURL)
@@ -374,6 +397,7 @@ final class AppModel: ObservableObject {
         if await reconcilePendingAccountDeletion(runtime: runtime) { return }
         if explicitSignOutBarrier.isActive {
             try? await runtime.auth.clearLocalSession()
+            restorePendingVerification()
             phase = .signedOut
             return
         }
@@ -383,6 +407,7 @@ final class AppModel: ObservableObject {
             await runtime.captureSync.activate(profileID: user.id)
             await refreshAll()
         } else {
+            restorePendingVerification()
             phase = .signedOut
         }
     }
@@ -392,9 +417,56 @@ final class AppModel: ObservableObject {
         return try await runtime.unauthenticatedAPI.signIn(email: request.email, password: request.password)
     }
 
-    func signUp(_ request: AuthPasswordRequest) async throws -> AuthSession {
+    func signUp(_ request: AuthPasswordRequest) async throws -> AuthSignUpOutcome {
         guard let runtime else { throw APIClientError.invalidConfiguration }
-        return try await runtime.unauthenticatedAPI.signUp(email: request.email, password: request.password)
+        let outcome = try await runtime.unauthenticatedAPI.signUp(
+            email: request.email,
+            password: request.password
+        )
+        if case let .verificationRequired(email) = outcome {
+            // The account exists from this moment. Remembering which address is waiting is what lets
+            // the owner leave the app mid-code and come back to the same step instead of starting
+            // over against an address that would now be refused as taken.
+            recordVerification(PendingVerification(email: email, codeSentAt: Date()))
+        }
+        return outcome
+    }
+
+    /// Exchanges the emailed code for a session. The address comes from the pending entry rather than
+    /// from the screen, so the code is always checked against the account that was just created.
+    func verifyEmail(code: String) async throws -> AuthSession {
+        guard let runtime, let pending = pendingVerification else {
+            throw APIClientError.invalidConfiguration
+        }
+        return try await runtime.unauthenticatedAPI.verifyEmail(email: pending.email, code: code)
+    }
+
+    func resendVerificationCode() async throws {
+        guard let runtime, let pending = pendingVerification else {
+            throw APIClientError.invalidConfiguration
+        }
+        try await runtime.unauthenticatedAPI.resendVerification(email: pending.email)
+        recordVerification(pending.sending(at: Date()))
+    }
+
+    /// Leaves the confirmation step for the sign-in screen. The account is already created, so this
+    /// discards nothing the owner cannot get back: they sign in once the address is confirmed, and
+    /// creating it again tells them it exists.
+    func leaveVerification() {
+        pendingVerification = nil
+        pendingVerificationStore.clear()
+        authMode = .signIn
+    }
+
+    private func recordVerification(_ value: PendingVerification) {
+        pendingVerification = value
+        // A refused defaults write costs only resumption after a relaunch; this launch already holds
+        // the value the screen needs, so there is nothing to tell the owner about.
+        pendingVerificationStore.save(value)
+    }
+
+    private func restorePendingVerification() {
+        pendingVerification = pendingVerificationStore.load(now: Date())
     }
 
     func acceptVerifiedSession(_ session: AuthSession) async {
@@ -410,6 +482,10 @@ final class AppModel: ObservableObject {
             }
             activate(session.user)
             authMode = .signIn
+            // The address is confirmed the moment a session exists for it, so the pending entry has
+            // nothing left to resume and must not outlive this launch.
+            pendingVerification = nil
+            pendingVerificationStore.clear()
             await refreshAll()
             await runtime.captureSync.activate(profileID: session.user.id)
             await refreshAll()
@@ -544,7 +620,22 @@ final class AppModel: ObservableObject {
         accountDeletionReceipt = nil
     }
 
+    /// SwiftUI cancels the task behind pull-to-refresh as soon as the gesture ends or the view
+    /// rebuilds, and this refresh mutates state that same view renders, so it used to cancel
+    /// itself: every request failed at once, the app called that an outage, and the screen fell
+    /// back to its stored copy. The work now belongs to the model; callers only wait for it.
     func refreshAll() async {
+        if let inFlight = refreshAllTask {
+            await inFlight.value
+            return
+        }
+        let task = Task { await self.performRefreshAll() }
+        refreshAllTask = task
+        await task.value
+        refreshAllTask = nil
+    }
+
+    private func performRefreshAll() async {
         guard let runtime, let user = currentUser else { return }
         let context = currentAccountContext(for: user)
         refreshEpoch &+= 1
@@ -644,7 +735,7 @@ final class AppModel: ObservableObject {
                 }
             )
             rebuildActiveNotes(additionalFallbacks: summaryFallbacks)
-        } else {
+        } else if case .unavailable = notePage {
             let decoded = await cachedNotes(profileID: user.id, database: runtime.database)
             guard isCurrent(context), refreshEpoch == operationEpoch else { return }
             for note in decoded where notesByID[note.id.rawValue].map({
@@ -722,8 +813,14 @@ final class AppModel: ObservableObject {
             receipts = (localReceipts.filter { !serverIDs.contains($0.id) } + serverReceipts)
                 .prefix(50)
                 .map { $0 }
-        } else {
-            receipts = localReceipts
+        } else if case .unavailable = capturePage {
+            // A failed captures page must not empty the Inbox. Falling back to the outbox alone
+            // made every waiting row vanish until the app was relaunched, while the banner said
+            // the phone was showing its own copy. Keep what is already on screen instead.
+            let localReceiptIDs = Set(localReceipts.map(\.id))
+            receipts = (localReceipts + receipts.filter { !localReceiptIDs.contains($0.id) })
+                .prefix(50)
+                .map { $0 }
         }
 
         if reviewQueueGeneration.accepts(reviewOperationGeneration) {
@@ -757,7 +854,7 @@ final class AppModel: ObservableObject {
                     _ = applyCaptureDetail(detail)
                 }
                 publishReviewItems(items, captureDetails: currentDetails)
-            } else {
+            } else if case .unavailable = reviewPage {
                 reviewError = "The review queue is unavailable. Pull to try again."
             }
         }
@@ -878,13 +975,19 @@ final class AppModel: ObservableObject {
         let context = currentAccountContext(for: user)
         let directions = CaptureCreateRequest.normalizedGuidance(guidance)
         do {
+            // A capture is sealed, so organizing again makes a new one. Its photos have to come
+            // with it: an attachment belongs to exactly one capture, so the bytes are carried
+            // over as fresh uploads rather than rebound. Without this the owner's photo was
+            // destroyed by the act of asking for a better filing.
+            let carried = await carriedAttachments(for: captureID)
             let newID = try await runtime.captureSync.enqueueAgain(
                 profileID: user.id,
                 rawContent: receipt.original,
                 source: .mobile,
                 privacy: .aiAssisted,
                 deviceID: deviceIdentifier(),
-                guidance: directions
+                guidance: directions,
+                attachments: carried
             )
             guard isCurrent(context) else { return }
             receipts.insert(
@@ -926,14 +1029,68 @@ final class AppModel: ObservableObject {
         await removeReplacedCapture(captureID, runtime: runtime, context: context)
     }
 
+    /// Mints the identifiers a replacement capture's photos need.
+    private let attachmentIDGenerator = PrefixedULIDGenerator()
+
+    /// The photos of a capture the owner is replacing, as drafts for the capture that replaces it.
+    ///
+    /// Each one takes a new identifier because the server binds an attachment to exactly one
+    /// capture and refuses to rebind it, and each keeps the measurements the server already
+    /// recorded. A photo whose bytes this phone can no longer produce is left behind rather than
+    /// sent as something the owner never attached.
+    private func carriedAttachments(for captureID: String) async -> [CaptureAttachmentDraft] {
+        guard let attachments = capturesByID[captureID]?.attachments else { return [] }
+        var drafts: [CaptureAttachmentDraft] = []
+        for attachment in attachments {
+            guard let bytes = await attachmentBytes(id: attachment.id),
+                  let identifier = try? await attachmentIDGenerator.next(.attachment)
+            else { continue }
+            drafts.append(
+                CaptureAttachmentDraft(
+                    id: identifier,
+                    kind: attachment.kind == .image ? .image : .audio,
+                    mediaType: attachment.mediaType,
+                    bytes: bytes,
+                    width: attachment.width,
+                    height: attachment.height,
+                    durationMs: attachment.durationMs
+                )
+            )
+        }
+        return drafts
+    }
+
     private var attachmentBytesCache: [String: Data] = [:]
 
-    /// The decrypted bytes of one of the owner's photos or recordings, fetched once per launch.
+    /// The decrypted bytes of one of the owner's photos or recordings.
+    ///
+    /// The phone answers before the network does: a photo the owner just took is already in the
+    /// encrypted store beside its capture, and anything fetched is kept there too, so a photo
+    /// the owner has seen keeps showing after a relaunch and with no connection. Only a photo
+    /// this phone has never held costs a request.
     func attachmentBytes(id: String) async -> Data? {
         if let cached = attachmentBytesCache[id] { return cached }
-        guard let runtime, currentUser != nil else { return nil }
+        guard let runtime, let user = currentUser else { return nil }
+        let profileID = user.id.uuidString.lowercased()
+        let now = APIJSON.dateString(Date())
+        if let stored = try? await runtime.database.storedAttachmentBytes(
+            profileID: profileID,
+            attachmentID: id,
+            now: now
+        ) {
+            attachmentBytesCache[id] = stored
+            return stored
+        }
         guard let read = try? await runtime.authenticatedAPI.captureAttachment(id: id) else { return nil }
         attachmentBytesCache[id] = read.bytes
+        try? await runtime.database.storeAttachmentBytes(
+            profileID: profileID,
+            attachmentID: id,
+            kind: read.mediaType == "image/jpeg" ? .image : .audio,
+            mediaType: read.mediaType,
+            bytes: read.bytes,
+            now: now
+        )
         return read.bytes
     }
 
@@ -1171,6 +1328,8 @@ final class AppModel: ObservableObject {
             applyAISettings(response.settings)
         case .unavailable:
             aiSettingsError = "AI settings could not be loaded. Pull down to try again."
+        case .cancelled:
+            break
         }
         for (provider, result) in [
             (AIProvider.openai, openAIKey),
@@ -1179,6 +1338,7 @@ final class AppModel: ObservableObject {
             switch result {
             case let .value(response):
                 providerKeyMetadataByProvider[provider] = response.providerKey
+                hasLoadedProviderKeyMetadata = true
                 if hasPendingProviderKeyRetry, providerKeyPutAttempt?.provider == provider {
                     providerKeyErrors[provider] = "The storage result is unknown. Paste the exact same key to retry this request, or start over."
                 } else {
@@ -1193,6 +1353,8 @@ final class AppModel: ObservableObject {
                 }
             case .unavailable:
                 providerKeyErrors[provider] = "\(provider.displayName) key status could not be loaded. Pull down to try again."
+            case .cancelled:
+                break
             }
         }
     }
@@ -3036,6 +3198,7 @@ final class AppModel: ObservableObject {
         do {
             let items = try await Self.fetchAllRevisions(id: id, api: runtime.authenticatedAPI)
             guard isCurrent(context) else { return }
+            revisionsError.removeValue(forKey: noteID)
             revisions[noteID] = items.map { PresentationMapping.revision($0) }
             let rawSpaces = Array(spacesByID.values)
             for revision in items {
@@ -3046,7 +3209,9 @@ final class AppModel: ObservableObject {
             }
         } catch {
             guard isCurrent(context) else { return }
-            bannerMessage = "Revision history could not be loaded."
+            // A request the app abandoned leaves the screen as it is.
+            if error is CancellationError || (error as? APIClientError) == .cancelled { return }
+            revisionsError[noteID] = "Revision history could not be loaded. Pull to try again."
         }
     }
 
@@ -3611,7 +3776,7 @@ final class AppModel: ObservableObject {
         guard let user = currentUser else { return }
         let context = currentAccountContext(for: user)
         let loaded = await loadNoteSubset(archive: .only, deleted: .exclude)
-        guard isCurrent(context) else { return }
+        guard isCurrent(context), let loaded else { return }
         archiveNotes = loaded
     }
 
@@ -3619,7 +3784,7 @@ final class AppModel: ObservableObject {
         guard let user = currentUser else { return }
         let context = currentAccountContext(for: user)
         let loaded = await loadNoteSubset(archive: .include, deleted: .only)
-        guard isCurrent(context) else { return }
+        guard isCurrent(context), let loaded else { return }
         deletedNotes = loaded
     }
 
@@ -4166,7 +4331,8 @@ final class AppModel: ObservableObject {
     private static func isAmbiguousInteractionFailure(_ error: Error) -> Bool {
         guard let error = error as? APIClientError else { return false }
         return switch error {
-        case .transportFailure,
+        case .cancelled,
+             .transportFailure,
              .invalidHTTPResponse,
              .authenticationRequired,
              .responseBodyTooLarge,
@@ -4239,7 +4405,7 @@ final class AppModel: ObservableObject {
             return "AI settings were not saved. Review them and try again."
         }
         return switch error {
-        case .transportFailure, .invalidHTTPResponse:
+        case .cancelled, .transportFailure, .invalidHTTPResponse:
             "Unfiled could not confirm the change. Try Save again to safely retry it."
         case .authenticationRequired:
             "Sign in again before changing AI settings."
@@ -4271,7 +4437,7 @@ final class AppModel: ObservableObject {
             : "The \(name) key was not deleted. Refresh its status and try again."
         guard let error = error as? APIClientError else { return fallback }
         return switch error {
-        case .transportFailure, .invalidHTTPResponse, .malformedResponse, .responseBodyTooLarge:
+        case .cancelled, .transportFailure, .invalidHTTPResponse, .malformedResponse, .responseBodyTooLarge:
             action == .save
                 ? "The save could not be confirmed. Key status was refreshed; paste the key again only if needed."
                 : "The deletion could not be confirmed. Refresh key status and retry the same action."
@@ -4330,7 +4496,7 @@ final class AppModel: ObservableObject {
     nonisolated static func interactionFailureMessage(_ error: Error, fallback: String) -> String {
         guard let error = error as? APIClientError else { return fallback }
         switch error {
-        case .transportFailure, .invalidHTTPResponse:
+        case .cancelled, .transportFailure, .invalidHTTPResponse:
             return "Unfiled could not confirm the change. Try the same action again."
         case .authenticationRequired:
             return "Sign in again before changing this capture."
@@ -4400,11 +4566,13 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Returns nil when the subset could not be read, so a screen keeps what it is showing.
+    /// Publishing an empty list on failure told the owner their archive was empty.
     private func loadNoteSubset(
         archive: ArchiveFilter,
         deleted: DeletedFilter
-    ) async -> [NotePresentation] {
-        guard let runtime, let user = currentUser else { return [] }
+    ) async -> [NotePresentation]? {
+        guard let runtime, let user = currentUser else { return nil }
         let context = currentAccountContext(for: user)
         do {
             let summaries = try await Self.fetchAllNotes(
@@ -4413,7 +4581,7 @@ final class AppModel: ObservableObject {
                 deleted: deleted
             )
             let details = await Self.fetchNoteDetails(summaries, api: runtime.authenticatedAPI)
-            guard isCurrent(context) else { return [] }
+            guard isCurrent(context) else { return nil }
             for note in details {
                 discardNoteContextIfChanged(
                     noteID: note.id.rawValue,
@@ -4428,9 +4596,12 @@ final class AppModel: ObservableObject {
                     ?? PresentationMapping.note(summary)
             }
         } catch {
-            guard isCurrent(context) else { return [] }
-            bannerMessage = "This part of the library could not be loaded."
-            return []
+            guard isCurrent(context) else { return nil }
+            // A refresh the app abandoned is not a failure the owner needs to hear about.
+            if !(error is CancellationError || (error as? APIClientError) == .cancelled) {
+                bannerMessage = "This part of the library could not be loaded."
+            }
+            return nil
         }
     }
 
@@ -4588,6 +4759,9 @@ final class AppModel: ObservableObject {
         searchTask?.cancel()
         searchTask = nil
         currentUser = nil
+        revisionsError = [:]
+        hasLoadedProviderKeyMetadata = false
+        attachmentBytesCache = [:]
         notes = []
         spaces = []
         receipts = []
@@ -4729,7 +4903,12 @@ final class AppModel: ObservableObject {
     ) async -> AsyncLoadResult<Value> {
         do { return .value(try await operation()) }
         catch {
-            // Content-free: the request's name, the error's type, and its class of failure.
+            // A request the app itself abandoned says nothing about the account or the network,
+            // so it is neither logged as a failure nor allowed to change what a screen shows.
+            if error is CancellationError || (error as? APIClientError) == .cancelled {
+                return .cancelled
+            }
+            // Content-free: the request name, the error type, and its class of failure.
             refreshLog.error("\(label, privacy: .public) failed: \(String(describing: error).prefix(200), privacy: .public)")
             return .unavailable
         }

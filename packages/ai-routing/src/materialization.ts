@@ -352,7 +352,11 @@ function assertOperationCompatible(operation: ModelOperation, noteType: NoteType
   }
 }
 
-function assertAuthorizedPlan(plan: OrganizationPlan, manifest: OrganizerCandidateManifest): void {
+function assertAuthorizedPlan(
+  plan: OrganizationPlan,
+  manifest: OrganizerCandidateManifest,
+  ownerWroteNothing: boolean
+): void {
   assertPlanShape(plan);
   const candidates = candidateMap(manifest);
   const spaces = new Set(manifest.authorizedSpaceIds);
@@ -465,8 +469,12 @@ function assertAuthorizedPlan(plan: OrganizationPlan, manifest: OrganizerCandida
     if (routedNoteType !== undefined) assertOperationCompatible(operation, routedNoteType);
   }
 
+  // A routed plan must carry the capture forward. The one capture with nothing for the model
+  // to carry is the upload-only one, where the organizer places the photo itself: there the
+  // content operation would have to be invented text, which preservation refuses anyway.
   if (
     (plan.decision === "append_to_note" || plan.decision === "create_note") &&
+    !ownerWroteNothing &&
     !plan.operations.some(requiresCapturedContent)
   ) {
     fail(
@@ -540,16 +548,31 @@ function deepFreeze<Value>(value: Value): Value {
   return Object.isFrozen(value) ? value : Object.freeze(value);
 }
 
+/**
+ * True when this capture has no owner text for the plan to carry forward — an upload-only
+ * capture, whose note content is the photo the organizer places. Source preservation says the
+ * same thing wherever `captureText` is supplied, but the shape check runs ahead of it, before a
+ * deterministic extraction override has had its chance, and has to be told.
+ */
+type CaptureSourceInput = Readonly<{
+  captureText?: string;
+  captureHasNoOwnerText?: boolean;
+}>;
+
+function hasNoOwnerText(input: CaptureSourceInput): boolean {
+  return input.captureText === "" || input.captureHasNoOwnerText === true;
+}
+
 export function parseAuthorizedOrganizationPlan(
-  input: Readonly<{
-    unknownPlan: unknown;
-    manifest: unknown;
-    captureText?: string;
-  }>
+  input: CaptureSourceInput &
+    Readonly<{
+      unknownPlan: unknown;
+      manifest: unknown;
+    }>
 ): Readonly<{ plan: OrganizationPlan; manifest: OrganizerCandidateManifest }> {
   const plan = parsePlan(input.unknownPlan);
   const manifest = parseManifest(input.manifest);
-  assertAuthorizedPlan(plan, manifest);
+  assertAuthorizedPlan(plan, manifest, hasNoOwnerText(input));
   if (input.captureText !== undefined) {
     try {
       assertPlanSourcePreserved(input.captureText, plan);
@@ -564,17 +587,17 @@ export function parseAuthorizedOrganizationPlan(
 }
 
 export function materializeAuthorizedOrganizationPlan(
-  input: Readonly<{
-    plan: unknown;
-    manifest: unknown;
-    stableIds: unknown;
-    captureText?: string;
-  }>
+  input: CaptureSourceInput &
+    Readonly<{
+      plan: unknown;
+      manifest: unknown;
+      stableIds: unknown;
+    }>
 ): MaterializedOrganizationCommand {
   const plan = parsePlan(input.plan);
   const manifest = parseManifest(input.manifest);
   const stableIds = parseStableIds(input.stableIds);
-  assertAuthorizedPlan(plan, manifest);
+  assertAuthorizedPlan(plan, manifest, hasNoOwnerText(input));
   if (input.captureText !== undefined) {
     try {
       assertPlanSourcePreserved(input.captureText, plan);
@@ -685,17 +708,20 @@ export function materializeAuthorizedOrganizationPlan(
 }
 
 export function validateAndMaterializeOrganizationPlan(
-  input: Readonly<{
-    unknownPlan: unknown;
-    manifest: unknown;
-    stableIds: unknown;
-    captureText?: string;
-  }>
+  input: CaptureSourceInput &
+    Readonly<{
+      unknownPlan: unknown;
+      manifest: unknown;
+      stableIds: unknown;
+    }>
 ): MaterializedOrganizationCommand {
   const authorized = parseAuthorizedOrganizationPlan(input);
   return materializeAuthorizedOrganizationPlan({
     ...authorized,
     stableIds: input.stableIds,
-    ...(input.captureText === undefined ? {} : { captureText: input.captureText })
+    ...(input.captureText === undefined ? {} : { captureText: input.captureText }),
+    ...(input.captureHasNoOwnerText === undefined
+      ? {}
+      : { captureHasNoOwnerText: input.captureHasNoOwnerText })
   });
 }

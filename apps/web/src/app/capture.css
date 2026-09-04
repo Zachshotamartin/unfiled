@@ -25,10 +25,11 @@
   }
 
   .capture-composer-intro h2 {
-    font-size: clamp(1.6rem, 4vw, 2.3rem);
-    font-weight: 610;
-    letter-spacing: -0.045em;
-    line-height: 1;
+    font-family: var(--font-paper-serif);
+    font-size: clamp(1.5rem, 3.5vw, 1.9rem);
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    line-height: 1.15;
   }
 
   .capture-composer-intro p {
@@ -44,7 +45,6 @@
     border: 1px solid var(--color-border);
     border-radius: var(--radius-container);
     background: var(--color-surface);
-    box-shadow: inset 0 1px 0 rgb(242 239 232 / 4%);
     padding: 1rem;
   }
 
@@ -57,8 +57,9 @@
     background: transparent;
     margin-top: 0.6rem;
     color: var(--color-text-primary);
-    font-size: 1.05rem;
-    line-height: 1.65;
+    font-family: var(--font-paper-serif);
+    font-size: 1.15rem;
+    line-height: 1.6;
     outline: 0;
   }
 
@@ -71,8 +72,7 @@
     min-height: 1.4rem;
     justify-content: space-between;
     gap: 1rem;
-    color: var(--color-text-disabled);
-    font-family: var(--font-geist-mono), monospace;
+    color: var(--color-text-secondary);
     font-size: 0.68rem;
   }
 
@@ -162,7 +162,6 @@
     align-items: center;
     gap: 0.35rem;
     color: var(--color-accent);
-    font-family: var(--font-geist-mono), monospace;
   }
 
   .capture-activity {
@@ -186,8 +185,7 @@
   }
 
   .capture-section-heading span {
-    color: var(--color-text-disabled);
-    font-family: var(--font-geist-mono), monospace;
+    color: var(--color-text-secondary);
     font-size: 0.65rem;
   }
 
@@ -242,8 +240,7 @@
   }
 
   .capture-activity-meta time {
-    color: var(--color-text-disabled);
-    font-family: var(--font-geist-mono), monospace;
+    color: var(--color-text-secondary);
     font-size: 0.65rem;
   }
 
@@ -251,7 +248,8 @@
     overflow: hidden;
     margin-top: 0.35rem;
     color: var(--color-text-secondary);
-    font-size: 0.82rem;
+    font-family: var(--font-paper-serif);
+    font-size: 0.9rem;
     line-height: 1.45;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -284,10 +282,11 @@
 
   .capture-detail-header h1 {
     margin-top: 0.7rem;
-    font-size: clamp(2.4rem, 7vw, 4.8rem);
-    font-weight: 610;
-    letter-spacing: -0.06em;
-    line-height: 0.92;
+    font-family: var(--font-paper-serif);
+    font-size: clamp(2.1rem, 5.5vw, 2.9rem);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.05;
   }
 
   .capture-original {
@@ -297,7 +296,8 @@
 
   .capture-original p {
     margin-top: 0.9rem;
-    font-size: 1rem;
+    font-family: var(--font-paper-serif);
+    font-size: 1.05rem;
     line-height: 1.75;
     white-space: pre-wrap;
   }
@@ -308,10 +308,11 @@
 
   .capture-receipt h2 {
     max-width: 34rem;
-    font-size: clamp(1.8rem, 5vw, 3.1rem);
-    font-weight: 610;
-    letter-spacing: -0.045em;
-    line-height: 1.03;
+    font-family: var(--font-paper-serif);
+    font-size: clamp(1.5rem, 4vw, 2.1rem);
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    line-height: 1.15;
   }
 
   .receipt-content-list {
@@ -332,7 +333,6 @@
     display: block;
     margin-bottom: 0.3rem;
     color: var(--color-accent);
-    font-family: var(--font-geist-mono), monospace;
     font-size: 0.65rem;
     font-weight: 650;
     letter-spacing: 0.08em;
@@ -391,9 +391,11 @@
 
   .capture-deleted-state h1 {
     margin-bottom: 1rem;
-    font-size: clamp(2.3rem, 7vw, 4.5rem);
-    font-weight: 610;
-    letter-spacing: -0.055em;
+    font-family: var(--font-paper-serif);
+    font-size: clamp(2rem, 5.5vw, 2.7rem);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
   }
 }
 

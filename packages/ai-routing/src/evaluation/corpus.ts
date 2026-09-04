@@ -36,7 +36,9 @@ export const RoutingEvaluationCategorySchema = z.enum([
   "private_note_exclusion",
   "encrypted_index_race",
   "cross_tenant_retrieval",
-  "multilingual"
+  "multilingual",
+  "photo_capture",
+  "account_warmup"
 ]);
 export type RoutingEvaluationCategory = z.infer<typeof RoutingEvaluationCategorySchema>;
 
@@ -56,7 +58,9 @@ export const ROUTING_CATEGORY_MINIMUMS = Object.freeze({
   private_note_exclusion: 5,
   encrypted_index_race: 10,
   cross_tenant_retrieval: 5,
-  multilingual: 10
+  multilingual: 10,
+  photo_capture: 6,
+  account_warmup: 4
 } satisfies Readonly<Record<RoutingEvaluationCategory, number>>);
 
 export const ROUTING_CORPUS_MINIMUM_CASES = Object.values(ROUTING_CATEGORY_MINIMUMS).reduce(
@@ -117,11 +121,23 @@ const StoredRoutingProfileSchema = z.strictObject({
   expect: z.string().min(1).max(80)
 });
 
+/**
+ * What a capture carries besides its text. A capture the owner sent without typing anything
+ * stores the client's placeholder as its text, so a corpus case can only mean "a photo files
+ * itself" if it can say that the photo is there and what the model read out of it.
+ */
+const StoredRoutingAttachmentsSchema = z.strictObject({
+  images: z.number().int().min(0).max(4),
+  recordings: z.number().int().min(0).max(1),
+  visualDescriptor: z.string().min(1).max(280).nullable()
+});
+
 const StoredRoutingCaseSchema = z.strictObject({
   id: z.string().regex(/^[a-z0-9][a-z0-9-]{2,79}$/u),
   category: RoutingEvaluationCategorySchema,
   profile: z.string().regex(/^[a-z0-9][a-z0-9_]{2,79}$/u),
   capture: z.string().min(1).max(10_000),
+  attachments: StoredRoutingAttachmentsSchema.optional(),
   timezone: z.string().min(1).max(100)
 });
 

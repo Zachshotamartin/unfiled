@@ -1,7 +1,5 @@
-import type { MaterializedOrganizationCommand } from "@unfiled/ai-routing";
-
 /// Where a photo or recording sits inside a note body. The scheme is opaque to
-/// the model, which never sees attachment identifiers; the organizer appends
+/// the model, which never sees attachment identifiers; the organizer places
 /// these references itself after the plan is authorized.
 export const ATTACHMENT_REFERENCE_SCHEME = "unfiled-attachment:" as const;
 
@@ -12,38 +10,14 @@ export function attachmentReference(attachment: ReferencedAttachment): string {
   return attachment.kind === "image" ? `![Photo](${target})` : `[Recording](${target})`;
 }
 
-/// One paragraph per attachment, in upload order, or null when there is nothing to place.
-export type AttachmentReferenceOperation = Readonly<{
-  type: "append_paragraphs";
-  paragraphs: string[];
-}>;
-
-export function attachmentReferenceOperation(
+/// The paragraphs the organizer places for a capture's uploads, in upload order.
+///
+/// These are the organizer's own words, never the model's. They are handed to the application
+/// layer separately so the model's plan is still validated as the model's plan: appending them
+/// to a validated plan made every capture with a photo fail source preservation, and pushed a
+/// five-operation plan past the operation cap.
+export function attachmentParagraphs(
   attachments: readonly ReferencedAttachment[]
-): AttachmentReferenceOperation | null {
-  if (attachments.length === 0) return null;
-  return Object.freeze({
-    type: "append_paragraphs" as const,
-    paragraphs: attachments.map(attachmentReference)
-  });
-}
-
-/// Places the attachment references after the owner's own words in a materialized write.
-/// The model's plan is validated for source preservation before this runs, so the
-/// references are the organizer's own placement, never model text. Review decisions
-/// carry no operations and are returned unchanged.
-export function withAttachmentReferences(
-  command: MaterializedOrganizationCommand,
-  attachments: readonly ReferencedAttachment[]
-): MaterializedOrganizationCommand {
-  const operation = attachmentReferenceOperation(attachments);
-  if (operation === null || command.kind === "review") return command;
-  const placed = Object.freeze([...command.operations, operation]);
-  const validatedPlan = {
-    ...command.validatedPlan,
-    operations: [...command.validatedPlan.operations, operation]
-  };
-  return command.kind === "append"
-    ? Object.freeze({ ...command, operations: placed, validatedPlan })
-    : Object.freeze({ ...command, operations: placed, validatedPlan });
+): readonly string[] {
+  return Object.freeze(attachments.map(attachmentReference));
 }

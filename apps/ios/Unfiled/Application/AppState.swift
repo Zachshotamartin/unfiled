@@ -84,4 +84,7 @@ enum DestinationChoice: Sendable {
 enum AsyncLoadResult<Value: Sendable>: Sendable {
     case value(Value)
     case unavailable
+    /// The caller went away before the reply did. A screen keeps what it is already showing:
+    /// this is not evidence that the account is offline or that anything changed.
+    case cancelled
 }

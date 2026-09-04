@@ -1,3 +1,6 @@
+# Gates a running origin on request, without deploying anything. Releases run this same gate
+# themselves (.github/workflows/release.yml), so this no longer fires on push: a gate that runs
+# after an uncontrolled deploy can only report damage it had no chance to prevent.
 name: Release gate
 
 on:
@@ -7,12 +10,16 @@ on:
         description: "Web origin to gate"
         required: false
         default: "https://unfiled-web.vercel.app"
-  push:
-    branches: [main]
 
 concurrency:
   group: release-gate
   cancel-in-progress: false
+
+# The gate reads a running origin and writes nothing back to the repository. Naming that here keeps
+# the workflow that runs against production with real secrets on the same narrow token as the two
+# workflows around it, instead of whatever the repository default happens to be.
+permissions:
+  contents: read
 
 jobs:
   api-gate:
@@ -23,7 +30,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.18.0
       - name: Run the live API gate
         env:
           UNFILED_GATE_WEB_ORIGIN: ${{ github.event.inputs.origin || 'https://unfiled-web.vercel.app' }}

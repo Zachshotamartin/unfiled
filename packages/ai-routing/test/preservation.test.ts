@@ -104,6 +104,55 @@ describe("source preservation", () => {
     expect(result).toMatchObject({ preserved: false, method: "none", coverage: 0.9 });
   });
 
+  it("treats an attachment reference paragraph as placement rather than source text", () => {
+    const photo = "![Photo](unfiled-attachment:att_01ARZ3NDEKTSV4RRFFQ69G5FAZ)";
+    const recording = "[Recording](unfiled-attachment:att_01ARZ3NDEKTSV4RRFFQ69G5FAY)";
+    // The organizer and the owner-interaction path both append these after the model's own text
+    // has been checked. Counting their words would fail every capture that carries a photo.
+    expect(
+      inspectSourcePreservation("A thought", [
+        { type: "append_raw", content: "A thought" },
+        { type: "append_paragraphs", paragraphs: [photo, recording] }
+      ])
+    ).toMatchObject({
+      preserved: true,
+      method: "append_raw",
+      novelOperationTokenCount: 0,
+      coverage: 1
+    });
+    // Only the exact reference form is placement; anything the model wrote beside one is source.
+    expect(
+      inspectSourcePreservation("A thought", [
+        { type: "append_raw", content: "A thought" },
+        { type: "append_paragraphs", paragraphs: [`${photo} and a caption`] }
+      ]).preserved
+    ).toBe(false);
+  });
+
+  it("holds a capture with no owner words to writing nothing at all", () => {
+    // A capture whose only content is an upload has no source to keep. Requiring the usual
+    // content operation forced the client's "Photo" placeholder into the note; allowing any
+    // operation would let the model supply words the owner never wrote.
+    expect(inspectSourcePreservation("", [])).toEqual({
+      preserved: true,
+      method: "no_source",
+      captureTokenCount: 0,
+      operationTokenCount: 0,
+      matchedCaptureTokenCount: 0,
+      novelOperationTokenCount: 0,
+      coverage: 1
+    });
+    expect(
+      inspectSourcePreservation("", [{ type: "append_raw", content: "A tidy caption." }])
+    ).toMatchObject({ preserved: false, method: "none", novelOperationTokenCount: 3, coverage: 0 });
+    expect(() => assertPlanSourcePreserved("", { operations: [] })).not.toThrow();
+    expect(() =>
+      assertPlanSourcePreserved("", {
+        operations: [{ type: "append_paragraphs", paragraphs: ["Invented."] }]
+      })
+    ).toThrow(SourcePreservationError);
+  });
+
   it("accepts byte-exact paragraph splitting only when the separators are preserved", () => {
     expect(
       inspectSourcePreservation("First thought\n\nSecond thought", [

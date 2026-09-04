@@ -200,6 +200,123 @@ function expectCode(callback: () => unknown, code: OrganizationApplicationErrorC
 }
 
 describe("deterministic organization application", () => {
+  it("places the organizer's own photo reference without holding the model to it", () => {
+    // The reference is the organizer's text, not the model's. It must reach the note body,
+    // while source preservation still judges only what the model wrote. Appending it to the
+    // model's operations instead failed preservation for every capture carrying a photo.
+    const capture = "Tile sample for the kitchen.";
+    const reference = "![Photo](unfiled-attachment:att_01ARZ3NDEKTSV4RRFFQ69G5FAZ)";
+    const command = createCommand(
+      "generic",
+      [{ type: "append_raw", content: capture }],
+      "Kitchen renovation",
+      "freeform"
+    );
+
+    const result = applyMaterializedOrganizationCommand({
+      command,
+      ownerId: OWNER_ID,
+      captureText: capture,
+      occurredAt: OCCURRED_AT,
+      idFactory: deterministicFactory(),
+      attachmentParagraphs: [reference]
+    });
+
+    expect(result.kind).toBe("create");
+    expect(result.note.bodyMarkdown).toBe(`${capture}\n\n${reference}`);
+  });
+
+  it("files a capture the owner sent without typing as the photo alone", () => {
+    // The client sends "Photo" so the capture API's non-empty rule is satisfied. That word is
+    // not the owner's writing, so the note it creates holds the photo and nothing else.
+    const reference = "![Photo](unfiled-attachment:att_01ARZ3NDEKTSV4RRFFQ69G5FAZ)";
+    const command = validateAndMaterializeOrganizationPlan({
+      captureHasNoOwnerText: true,
+      manifest: candidateManifest(),
+      stableIds: stableIds(IDS.createdNote),
+      unknownPlan: {
+        schemaVersion: 1,
+        captureKind: "freeform",
+        decision: "create_note",
+        destination: {
+          candidateId: null,
+          newNote: { title: "Kitchen tiles", noteType: "generic", spaceCandidateId: IDS.space }
+        },
+        operations: [],
+        generatedExpansion: null,
+        alternatives: [],
+        reasonCodes: ["no_candidate_fit"]
+      }
+    });
+    if (command.kind !== "create") throw new Error("Fixture did not materialize create");
+
+    const result = applyMaterializedOrganizationCommand({
+      attachmentParagraphs: [reference],
+      captureText: "",
+      command,
+      idFactory: deterministicFactory(),
+      occurredAt: OCCURRED_AT,
+      ownerId: OWNER_ID
+    });
+
+    expect(result.note.bodyMarkdown).toBe(reference);
+    expect(result.note.title).toBe("Kitchen tiles");
+  });
+
+  it("refuses an empty command and an unplaceable photo rather than writing a hollow note", () => {
+    const reference = "![Photo](unfiled-attachment:att_01ARZ3NDEKTSV4RRFFQ69G5FAZ)";
+    const emptyCreate = validateAndMaterializeOrganizationPlan({
+      captureHasNoOwnerText: true,
+      manifest: candidateManifest(),
+      stableIds: stableIds(IDS.createdNote),
+      unknownPlan: {
+        schemaVersion: 1,
+        captureKind: "freeform",
+        decision: "create_note",
+        destination: {
+          candidateId: null,
+          newNote: { title: "Kitchen tiles", noteType: "generic", spaceCandidateId: IDS.space }
+        },
+        operations: [],
+        generatedExpansion: null,
+        alternatives: [],
+        reasonCodes: ["no_candidate_fit"]
+      }
+    });
+    // Without the organizer's own paragraphs there would be nothing at all to write.
+    expectCode(
+      () =>
+        applyMaterializedOrganizationCommand({
+          captureText: "",
+          command: emptyCreate as MaterializedCreateOrganizationCommand,
+          idFactory: deterministicFactory(),
+          occurredAt: OCCURRED_AT,
+          ownerId: OWNER_ID
+        }),
+      OrganizationApplicationErrorCode.INVALID_COMMAND
+    );
+
+    // A list note's body is a rendering of its items, so a paragraph cannot live in one.
+    const listCreate = createCommand(
+      "list",
+      [{ type: "append_list_items", section: null, items: ["olive oil"] }],
+      "Shopping",
+      "list_items"
+    );
+    expectCode(
+      () =>
+        applyMaterializedOrganizationCommand({
+          attachmentParagraphs: [reference],
+          captureText: "olive oil",
+          command: listCreate,
+          idFactory: deterministicFactory(),
+          occurredAt: OCCURRED_AT,
+          ownerId: OWNER_ID
+        }),
+      OrganizationApplicationErrorCode.INVALID_OPERATION
+    );
+  });
+
   it("creates an authoritative AI-assisted note and preserves append_raw bytes exactly", () => {
     const capture = "  Keep\nthis exact source.  ";
     const command = createCommand(

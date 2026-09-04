@@ -3,7 +3,7 @@ export default function AppLoading() {
     <main
       id="main-content"
       aria-busy="true"
-      aria-label="Loading Today"
+      aria-label="Loading your Inbox"
       className="min-h-[100dvh] bg-page px-4 py-10 sm:px-8 lg:px-12"
     >
       <div className="mx-auto max-w-[760px]">

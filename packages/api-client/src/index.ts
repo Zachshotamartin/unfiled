@@ -7,9 +7,17 @@ import {
   AuthPasswordSignInRequestSchema,
   AuthPasswordSignUpRequestSchema,
   AuthRefreshRequestSchema,
+  AuthResendRequestSchema,
+  AuthResendResponseSchema,
   AuthSessionResponseSchema,
   AuthSessionSchema,
   AuthSignOutResponseSchema,
+  AuthSignUpResponseSchema,
+  AuthVerifyRequestSchema,
+  CAPTURE_ATTACHMENT_MAX_BYTES,
+  CaptureAttachmentMediaTypeSchema,
+  CaptureAttachmentSchema,
+  CaptureAttachmentUploadSchema,
   CaptureCreateRequestSchema,
   CaptureCreateResponseSchema,
   CaptureDeleteRequestSchema,
@@ -102,6 +110,12 @@ import {
   type AuthPasswordSignInRequest,
   type AuthPasswordSignUpRequest,
   type AuthRefreshRequest,
+  type AuthResendRequest,
+  type AuthSignUpResponse,
+  type AuthVerifyRequest,
+  type CaptureAttachment,
+  type CaptureAttachmentMediaType,
+  type CaptureAttachmentUpload,
   type CaptureCreateRequest,
   type CaptureDeleteRequest,
   type CaptureListQuery,
@@ -152,6 +166,20 @@ import type { ZodType } from "zod";
 
 const BASE64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
+/** An upload acknowledgement is one small description; nothing legitimate approaches this. */
+const MAX_ATTACHMENT_JSON_BYTES = 4_096;
+
+/** One upload: the description the API needs in headers, with the bytes it belongs to. */
+export type CaptureAttachmentUploadInput = Readonly<
+  CaptureAttachmentUpload & { bytes: Uint8Array }
+>;
+
+/** The owner's decrypted photo or recording, as the API returned it. */
+export type CaptureAttachmentBytes = Readonly<{
+  mediaType: CaptureAttachmentMediaType;
+  bytes: Uint8Array;
+}>;
+
 /** Creates the 256-bit bearer capability used for deletion and receipt replay. */
 export function createAccountDeletionToken(random: Crypto = globalThis.crypto): string {
   const bytes = new Uint8Array(32);
@@ -189,6 +217,17 @@ export class ApiClientMalformedResponseError extends Error {
     super("The service returned malformed data.");
     this.name = "ApiClientMalformedResponseError";
   }
+}
+
+/**
+ * Creating an account answers with a session or with a request for the code just emailed to the
+ * owner, depending on whether the deployment confirms addresses. Every caller must branch on this
+ * rather than assume a session, because the same build talks to both kinds of deployment.
+ */
+export function authVerificationRequired(
+  response: AuthSignUpResponse
+): response is Extract<AuthSignUpResponse, { verificationRequired: true }> {
+  return "verificationRequired" in response;
 }
 
 export type ApiClientOptions = Readonly<{
@@ -332,6 +371,111 @@ export function createApiClient(options: ApiClientOptions) {
     return decode(response, responseSchema, init.maximumResponseBytes);
   }
 
+  /**
+   * Sends one photo or recording as raw bytes. The attachment id is the idempotency key, so a
+   * retry after a lost response re-sends the same bytes under the same id and the server replays
+   * the first result instead of sealing a second copy.
+   */
+  function uploadAttachment(input: CaptureAttachmentUploadInput): Promise<CaptureAttachment> {
+    const description = CaptureAttachmentUploadSchema.parse({
+      attachmentId: input.attachmentId,
+      captureId: input.captureId,
+      kind: input.kind,
+      mediaType: input.mediaType,
+      privacy: input.privacy,
+      width: input.width,
+      height: input.height,
+      durationMs: input.durationMs
+    });
+    if (input.bytes.byteLength < 1 || input.bytes.byteLength > CAPTURE_ATTACHMENT_MAX_BYTES) {
+      throw new TypeError("Attachment bytes exceed the contract limit");
+    }
+    return sendAttachment(description, input.bytes);
+  }
+
+  async function sendAttachment(
+    description: CaptureAttachmentUpload,
+    bytes: Uint8Array
+  ): Promise<CaptureAttachment> {
+    const token = await options.getAccessToken();
+    const response = await fetcher(`${baseUrl}/api/v1/captures/attachments`, {
+      cache: "no-store",
+      method: "POST",
+      headers: {
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        "cache-control": "no-store",
+        "content-type": description.mediaType,
+        "idempotency-key": description.attachmentId,
+        pragma: "no-cache",
+        "x-unfiled-capture-id": description.captureId,
+        "x-unfiled-privacy": description.privacy,
+        ...(description.width === null ? {} : { "x-unfiled-width": String(description.width) }),
+        ...(description.height === null ? {} : { "x-unfiled-height": String(description.height) }),
+        ...(description.durationMs === null
+          ? {}
+          : { "x-unfiled-duration-ms": String(description.durationMs) })
+      },
+      body: bytes.slice() as BodyInit
+    });
+    const attachment = await decode(response, CaptureAttachmentSchema, MAX_ATTACHMENT_JSON_BYTES);
+    if (attachment.id !== description.attachmentId) {
+      throw new ApiClientMalformedResponseError(response.status);
+    }
+    return attachment;
+  }
+
+  /**
+   * Reads the owner's decrypted photo or recording. The response is private and uncacheable, so a
+   * body that arrives without those headers is treated as a transport failure and discarded.
+   */
+  function getAttachment(attachmentId: string): Promise<CaptureAttachmentBytes> {
+    return readAttachment(entityIdSchema("att").parse(attachmentId));
+  }
+
+  async function readAttachment(id: string): Promise<CaptureAttachmentBytes> {
+    const token = await options.getAccessToken();
+    const response = await fetcher(`${baseUrl}/api/v1/captures/attachments/${id}`, {
+      cache: "no-store",
+      method: "GET",
+      headers: {
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        "cache-control": "no-store",
+        pragma: "no-cache"
+      }
+    });
+    if (!response.ok) {
+      let body: unknown;
+      try {
+        body = JSON.parse(await response.text()) as unknown;
+      } catch {
+        throw new ApiClientMalformedResponseError(response.status);
+      }
+      const parsed = ApiErrorSchema.safeParse(body);
+      if (!parsed.success) throw new ApiClientMalformedResponseError(response.status);
+      throw new ApiClientError(response.status, parsed.data);
+    }
+    const mediaType = CaptureAttachmentMediaTypeSchema.safeParse(
+      response.headers.get("content-type")?.split(";", 1)[0]?.trim()
+    );
+    if (
+      !mediaType.success ||
+      response.headers.get("cache-control") !== "private, no-store" ||
+      response.headers.get("pragma") !== "no-cache"
+    ) {
+      try {
+        await response.body?.cancel();
+      } catch {
+        // The sanitized transport failure remains authoritative if cancellation races.
+      }
+      throw new ApiClientMalformedResponseError(response.status);
+    }
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength < 1 || bytes.byteLength > CAPTURE_ATTACHMENT_MAX_BYTES) {
+      throw new ApiClientMalformedResponseError(response.status);
+    }
+    return Object.freeze({ mediaType: mediaType.data, bytes });
+  }
+
   async function authenticatedRawRequest(path: string): Promise<Response> {
     const token = await options.getAccessToken();
     const response = await fetcher(`${baseUrl}/api/v1${path}`, {
@@ -405,7 +549,30 @@ export function createApiClient(options: ApiClientOptions) {
       return request(
         "/auth/sign-up",
         { authenticated: false, body, method: "POST" },
+        AuthSignUpResponseSchema
+      );
+    },
+
+    /** Exchanges the emailed code for a session. */
+    verifyEmail(input: AuthVerifyRequest) {
+      const body = AuthVerifyRequestSchema.parse(input);
+      return request(
+        "/auth/verify",
+        { authenticated: false, body, method: "POST" },
         AuthSessionSchema
+      );
+    },
+
+    /**
+     * Asks for another code. The reply is the same whether or not the address has an account
+     * awaiting confirmation, so nothing here discloses who has one.
+     */
+    resendVerification(input: AuthResendRequest) {
+      const body = AuthResendRequestSchema.parse(input);
+      return request(
+        "/auth/resend",
+        { authenticated: false, body, method: "POST" },
+        AuthResendResponseSchema
       );
     },
 
@@ -459,6 +626,14 @@ export function createApiClient(options: ApiClientOptions) {
     getCapture(captureId: string) {
       const id = entityIdSchema("cap").parse(captureId);
       return request(`/captures/${id}`, {}, CaptureDetailResponseSchema);
+    },
+
+    uploadCaptureAttachment(input: CaptureAttachmentUploadInput) {
+      return uploadAttachment(input);
+    },
+
+    getCaptureAttachment(attachmentId: string) {
+      return getAttachment(attachmentId);
     },
 
     getCaptureReceipt(captureId: string) {

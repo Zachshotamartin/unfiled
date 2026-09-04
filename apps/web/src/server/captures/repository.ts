@@ -27,6 +27,8 @@ export type NormalizedCaptureCreateInput = Readonly<{
   privacy: Capture["privacy"];
   explicitDestinationNoteId?: EntityId<"note"> | undefined;
   expansionDisabled: boolean;
+  /// The photos and recordings already uploaded for this capture, bound to it as it is created.
+  attachmentIds?: readonly EntityId<"att">[] | undefined;
   guidance?: string | undefined;
 }>;
 

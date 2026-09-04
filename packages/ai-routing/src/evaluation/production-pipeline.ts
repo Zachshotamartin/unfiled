@@ -21,6 +21,12 @@ import {
 
 import { applyMaterializedOrganizationCommand } from "../application.js";
 import {
+  captureKindText,
+  captureRetrievalText,
+  ownerCaptureText,
+  type RoutedCaptureContent
+} from "../capture-text.js";
+import {
   applyDeterministicExtractionOverride,
   parseDeterministicListCapture,
   parseDeterministicLogCapture
@@ -110,8 +116,11 @@ export type ProductionPipelineModelCandidate = Readonly<{
 }>;
 
 export type ProductionPipelineModelInput = Readonly<{
+  /** What the owner attached, exactly as the production disclosure summarizes it. */
+  attachments: Readonly<{ images: number; recordings: number }>;
   candidates: readonly ProductionPipelineModelCandidate[];
   captureId: EntityId<"cap">;
+  /** The owner's own words, and the empty string when the capture is only an upload. */
   captureText: string;
   controls: Readonly<{
     expansionDisabled: boolean;
@@ -200,7 +209,18 @@ export type ProductionPipelineCaseExpectation = Readonly<{
 export type ProductionPipelineCase = Readonly<{
   id: string;
   input: Readonly<{
+    /**
+     * What the owner attached, and what the model read out of the photos in the descriptor
+     * pass. Without this the pipeline cannot represent the capture the prompt is explicitly
+     * written for: a photo the owner sent without typing a word.
+     */
+    attachments?: Readonly<{
+      images: number;
+      recordings: number;
+      visualDescriptor: string | null;
+    }>;
     captureId: EntityId<"cap">;
+    /** Exactly what the capture API stored, client placeholder included. */
     captureText: string;
     controls: Readonly<{
       expansionDisabled: boolean;
@@ -686,6 +706,95 @@ export const PRODUCTION_PIPELINE_CASES: readonly ProductionPipelineCase[] = Obje
       retrievedMustInclude: []
     },
     liveEligible: false
+  },
+  {
+    // The owner photographed a shopping list and typed nothing. The stored text is the client's
+    // placeholder, which matches no note in any library, so retrieving the Shopping note at all
+    // proves the model's reading of the photo is what the candidates were chosen by. Filing
+    // waits for the owner: a list note's body is a rendering of its items, with nowhere to put
+    // the photo.
+    id: "pipeline-photo-only-list-review",
+    input: {
+      attachments: {
+        images: 1,
+        recordings: 0,
+        visualDescriptor: "shopping: oat milk and spinach"
+      },
+      captureId: captureId(13),
+      captureText: "Photo",
+      controls: DEFAULT_CONTROLS,
+      job: DEFAULT_JOB_CONTEXT,
+      library: CORE_LIBRARY,
+      fixtureScenario: "normal",
+      routingMode: "automatic",
+      retrievalState: "complete"
+    },
+    expected: {
+      allowedBands: ["review"],
+      allowedDecisions: ["append_to_note"],
+      applied: false,
+      destinationNoteId: NOTE_IDS.shopping,
+      planValid: true,
+      retrievedMustInclude: [NOTE_IDS.shopping]
+    },
+    liveEligible: false
+  },
+  {
+    // A photo that matches nothing still files itself: the note it creates holds the photo and
+    // no invented sentence, because the owner wrote none.
+    id: "pipeline-photo-only-create",
+    input: {
+      attachments: {
+        images: 1,
+        recordings: 0,
+        visualDescriptor: "A handwritten quote copied from the museum wall"
+      },
+      captureId: captureId(14),
+      captureText: "Photo",
+      controls: DEFAULT_CONTROLS,
+      job: DEFAULT_JOB_CONTEXT,
+      library: [],
+      fixtureScenario: "normal",
+      routingMode: "automatic",
+      retrievalState: "complete"
+    },
+    expected: {
+      allowedBands: ["auto"],
+      allowedDecisions: ["create_note"],
+      applied: true,
+      destinationNoteId: null,
+      planValid: true,
+      retrievedMustInclude: []
+    },
+    liveEligible: false
+  },
+  {
+    // A capture with no owner words is exactly where a model is most tempted to supply some.
+    id: "pipeline-photo-only-invented-text",
+    input: {
+      attachments: {
+        images: 1,
+        recordings: 0,
+        visualDescriptor: "shopping: oat milk and spinach"
+      },
+      captureId: captureId(15),
+      captureText: "Photo",
+      controls: DEFAULT_CONTROLS,
+      job: DEFAULT_JOB_CONTEXT,
+      library: CORE_LIBRARY,
+      fixtureScenario: "rewritten_source",
+      routingMode: "automatic",
+      retrievalState: "complete"
+    },
+    expected: {
+      allowedBands: ["inbox"],
+      allowedDecisions: ["add_to_inbox"],
+      applied: false,
+      destinationNoteId: null,
+      planValid: false,
+      retrievedMustInclude: []
+    },
+    liveEligible: false
   }
 ]);
 
@@ -743,6 +852,15 @@ function currentControls(
   input: ProductionPipelineCase["input"]
 ): ProductionPipelineCase["input"]["controls"] {
   return input.currentControls ?? input.controls;
+}
+
+/** The capture as the organizer reads it: stored text, what it carries, what the model saw. */
+function routedCapture(input: ProductionPipelineCase["input"]): RoutedCaptureContent {
+  return Object.freeze({
+    rawContent: input.captureText,
+    attachmentCount: (input.attachments?.images ?? 0) + (input.attachments?.recordings ?? 0),
+    visualDescriptor: input.attachments?.visualDescriptor ?? null
+  });
 }
 
 function boundedFallback(
@@ -886,14 +1004,17 @@ async function retrieve(
     },
     topK: CANDIDATE_LIMIT
   });
-  const queryEmbedding = productionPipelineFixtureEmbedding(input.captureText);
+  // Candidates are matched against what the capture is about, which for a photo the owner sent
+  // without typing is only ever the model's reading of it.
+  const retrievalText = captureRetrievalText(routedCapture(input));
+  const queryEmbedding = productionPipelineFixtureEmbedding(retrievalText);
   try {
     const result = await retriever.retrieve({
       ownerId: OWNER_ID,
       query: {
         embedding: queryEmbedding,
         modelId: EMBEDDING_MODEL_ID,
-        text: input.captureText
+        text: retrievalText
       }
     });
     if (result.status !== "complete") {
@@ -1004,7 +1125,9 @@ function plan(
     decision,
     destination: { candidateId: destinationCandidateId, newNote },
     generatedExpansion: null,
-    operations: [{ content, type: "append_raw" }],
+    // A capture the owner sent without typing anything gives the model nothing to carry
+    // forward: the organizer places the photo, and inventing a sentence is refused downstream.
+    operations: content.length === 0 ? [] : [{ content, type: "append_raw" }],
     reasonCodes:
       (reasonCodes ?? decision === "create_note")
         ? ["no_candidate_fit"]
@@ -1158,7 +1281,6 @@ function zeroSignals(): RoutingSignalFeatures {
     explicitDestinationMention: 0,
     margin: 0,
     openSameDayTypeMatch: 0,
-    priorAccepted: 0,
     reasonCodeConsistency: 0,
     ruleOrAliasNearMatch: 0,
     semanticSimilarity: 0,
@@ -1229,7 +1351,6 @@ function routingFeatures(
       explicitDestinationMention: 1,
       margin: 1,
       openSameDayTypeMatch: candidate.isOpen && sameDay && typeCompatibility === 1 ? 1 : 0,
-      priorAccepted: 0,
       reasonCodeConsistency: 1,
       ruleOrAliasNearMatch: 1,
       semanticSimilarity: 0,
@@ -1252,7 +1373,6 @@ function routingFeatures(
         ? Math.max(0, Math.min(1, best.retrievalScore - (runnerUp?.retrievalScore ?? 0)))
         : 0,
     openSameDayTypeMatch: candidate.isOpen && sameDay && typeCompatibility === 1 ? 1 : 0,
-    priorAccepted: 0,
     reasonCodeConsistency: deterministicDestination ? 1 : 0,
     ruleOrAliasNearMatch: deterministicDestination
       ? 1
@@ -1412,7 +1532,11 @@ export async function evaluateProductionPipelineCase(
 ): Promise<ProductionPipelineCaseEvaluation> {
   const retrieved = await retrieve(testCase.input);
   const candidates = modelCandidates(testCase.input, retrieved);
-  const inferredKind = inferProductionPipelineCaptureKind(testCase.input.captureText);
+  const capture = routedCapture(testCase.input);
+  // The owner's words are what a note must preserve; the model's reading of the photos is what
+  // the capture is classified and matched by when the owner wrote none.
+  const ownerText = ownerCaptureText(capture);
+  const inferredKind = inferProductionPipelineCaptureKind(captureKindText(capture));
   const activeModelAdapter =
     testCase.input.fixtureScenario === "normal" && modelAdapter !== undefined
       ? modelAdapter
@@ -1434,9 +1558,13 @@ export async function evaluateProductionPipelineCase(
   let modelOutput: unknown;
   try {
     modelOutput = await activeModelAdapter.plan({
+      attachments: {
+        images: testCase.input.attachments?.images ?? 0,
+        recordings: testCase.input.attachments?.recordings ?? 0
+      },
       candidates,
       captureId: testCase.input.captureId,
-      captureText: testCase.input.captureText,
+      captureText: ownerText,
       controls: retrieved.controls,
       inferredKind,
       retrievalComplete: retrieved.autoEligible
@@ -1476,7 +1604,11 @@ export async function evaluateProductionPipelineCase(
   let materialized: MaterializedOrganizationCommand | null = null;
   let preservation: SourcePreservationResult | null = null;
   try {
-    const initial = parseAuthorizedOrganizationPlan({ manifest, unknownPlan: modelOutput });
+    const initial = parseAuthorizedOrganizationPlan({
+      captureHasNoOwnerText: ownerText.length === 0,
+      manifest,
+      unknownPlan: modelOutput
+    });
     if (initial.plan.captureKind !== inferredKind) {
       throw new OrganizationMaterializationError(
         "invalid_plan",
@@ -1484,19 +1616,19 @@ export async function evaluateProductionPipelineCase(
       );
     }
     const overridden = applyDeterministicExtractionOverride({
-      captureText: testCase.input.captureText,
+      captureText: ownerText,
       inferredKind,
       plan: initial.plan
     });
-    preservation = inspectPlanSourcePreservation(testCase.input.captureText, overridden.plan);
+    preservation = inspectPlanSourcePreservation(ownerText, overridden.plan);
     const authorized = parseAuthorizedOrganizationPlan({
-      captureText: testCase.input.captureText,
+      captureText: ownerText,
       manifest: initial.manifest,
       unknownPlan: overridden.plan
     });
     validatedPlan = authorized.plan;
     materialized = materializeAuthorizedOrganizationPlan({
-      captureText: testCase.input.captureText,
+      captureText: ownerText,
       manifest: authorized.manifest,
       plan: authorized.plan,
       stableIds: stableIds(authorized.plan)
@@ -1512,7 +1644,7 @@ export async function evaluateProductionPipelineCase(
     retrieved.path === "verified_index" || retrieved.controls.explicitDestinationNoteId !== null
       ? resolveProductionPipelineDeterministicDestination({
           candidates,
-          captureText: testCase.input.captureText,
+          captureText: ownerText,
           controls: retrieved.controls
         })
       : null;
@@ -1521,7 +1653,7 @@ export async function evaluateProductionPipelineCase(
     featureCandidate,
     candidates,
     retrieved.controls,
-    testCase.input.captureText,
+    captureRetrievalText(capture),
     testCase.input.job,
     retrieved,
     deterministicDestinationCandidateId
@@ -1535,7 +1667,7 @@ export async function evaluateProductionPipelineCase(
       : bandRoutingDecision({
           accountCaptureOrdinal: testCase.input.job.accountCaptureOrdinal,
           captureKind: inferredKind,
-          captureLength: Array.from(testCase.input.captureText).length,
+          captureLength: Array.from(ownerText).length,
           createSignals:
             decision === "create_note"
               ? {
@@ -1551,13 +1683,21 @@ export async function evaluateProductionPipelineCase(
             destinationCandidate?.noteType ?? validatedPlan.destination.newNote?.noteType ?? null,
           deterministicRuleMatch: deterministicDestinationCandidateId !== null,
           duplicateNoteSuspected,
-          failure: null,
+          captureCarriesUploads: (testCase.input.attachments?.images ?? 0) > 0,
           features,
           mode: testCase.input.routingMode,
           planDecision: decision,
           retrievalAutoEligible: retrieved.autoEligible
         });
 
+  // The organizer's own placement, standing in for the reference paragraph it writes in
+  // production; the ids themselves never reach this evaluation.
+  const placedParagraphs = Object.freeze(
+    Array.from(
+      { length: testCase.input.attachments?.images ?? 0 },
+      (_unused, index) => `![Photo](unfiled-attachment:att_fixture${index})`
+    )
+  );
   let applied = false;
   if (policy.autoApply && materialized !== null && materialized.kind !== "review") {
     const destination = testCase.input.library.find(
@@ -1566,7 +1706,8 @@ export async function evaluateProductionPipelineCase(
     try {
       if (materialized.kind === "create") {
         applyMaterializedOrganizationCommand({
-          captureText: testCase.input.captureText,
+          attachmentParagraphs: placedParagraphs,
+          captureText: ownerText,
           command: materialized,
           idFactory: structuralIdFactory(),
           occurredAt: testCase.input.job.occurredAt,
@@ -1575,7 +1716,8 @@ export async function evaluateProductionPipelineCase(
       } else {
         if (destination === undefined) throw new Error("missing_destination_fixture");
         applyMaterializedOrganizationCommand({
-          captureText: testCase.input.captureText,
+          attachmentParagraphs: placedParagraphs,
+          captureText: ownerText,
           command: materialized,
           currentNote: currentNote(destination),
           idFactory: structuralIdFactory(),

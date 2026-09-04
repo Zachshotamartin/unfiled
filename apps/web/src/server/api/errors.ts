@@ -78,7 +78,7 @@ function reportServerFailure(
     cause instanceof Error &&
     "reason" in cause &&
     typeof cause.reason === "string" &&
-    /^[a-z_]{1,40}$/u.test(cause.reason)
+    /^[a-z0-9_]{1,60}$/u.test(cause.reason)
       ? cause.reason
       : undefined;
   const causeCode =

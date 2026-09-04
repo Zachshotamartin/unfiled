@@ -155,6 +155,15 @@ final class MilestoneFNativeSurfaceTests: XCTestCase {
         XCTAssertEqual(draft.placeholder, "Previous: 12.5")
         XCTAssertNil(draft.proposedValue)
 
+        // Saving a text field without typing must propose nothing. It used to propose an empty
+        // string, which the server accepted, wiping whatever the field held.
+        var textDraft = LogFieldEditDraft(priorValue: .string("kept"))
+        XCTAssertNil(textDraft.proposedValue)
+        textDraft.updateInput("   ")
+        XCTAssertNil(textDraft.proposedValue)
+        textDraft.updateInput("written")
+        XCTAssertEqual(textDraft.proposedValue, .string("written"))
+
         let separator = Locale.current.decimalSeparator ?? "."
         draft.input = "12\(separator)5"
         XCTAssertEqual(draft.proposedValue, .number(12.5))

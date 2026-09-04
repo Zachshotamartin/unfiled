@@ -1,4 +1,5 @@
 import type {
+  AccountExportCapture,
   AccountExportRoutingRule,
   AccountExportSpace,
   AccountExportTag,
@@ -79,7 +80,8 @@ const rules: readonly AccountExportRoutingRule[] = [
 function source(
   notes: readonly OwnerExportNote[],
   pageSize = 137,
-  attachments: Readonly<Record<string, Uint8Array>> = {}
+  attachments: Readonly<Record<string, Uint8Array>> = {},
+  captures: readonly AccountExportCapture[] = []
 ): OwnerExportSource {
   return {
     attachment(id) {
@@ -105,6 +107,10 @@ function source(
     async *routingRulePages() {
       await Promise.resolve();
       yield rules;
+    },
+    async *capturePages() {
+      await Promise.resolve();
+      if (captures.length > 0) yield captures;
     }
   };
 }
@@ -176,6 +182,35 @@ describe("streaming account export", () => {
       { id: gone, kind: "audio" }
     ]);
     expect(manifest.notes[1]?.attachments).toEqual([{ id: photo, kind: "image" }]);
+  });
+
+  it("carries the captures no note has absorbed, with the photos only they hold", async () => {
+    const photo = "att_01ARZ3NDEKTSV4RRFFQ69G5FAX";
+    const bytes = new Uint8Array([255, 216, 255, 224, 0, 16, 74, 71]);
+    const waiting: AccountExportCapture = {
+      id: "cap_01ARZ3NDEKTSV4RRFFQ69G5FAZ",
+      rawContent: "the receipt from lunch",
+      source: "mobile",
+      privacy: "ai_assisted",
+      status: "needs_review",
+      lastErrorCode: null,
+      clientCreatedAt: EXPORTED_AT,
+      receivedAt: EXPORTED_AT,
+      attachments: [{ id: photo, kind: "image" }]
+    };
+    const archive = createStreamingAccountExport(source([], 137, { [photo]: bytes }, [waiting]), {
+      exportedAt: EXPORTED_AT,
+      signal: new AbortController().signal
+    });
+    const files = tarFiles(await decompress(archive));
+
+    // A capture waiting in Review lives in no note, so the archive is the only place its words
+    // and its photo can be; an export without them loses everything the Inbox is holding.
+    const manifest = JSON.parse(new TextDecoder().decode(files.get("manifest.json"))) as {
+      captures: readonly AccountExportCapture[];
+    };
+    expect(manifest.captures).toEqual([waiting]);
+    expect([...(files.get(`attachments/${photo}.jpg`) ?? [])]).toEqual([...bytes]);
   });
 
   it("streams exactly 1,000 notes with collision-safe paths and human-readable taxonomy", async () => {

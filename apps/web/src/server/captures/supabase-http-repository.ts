@@ -299,6 +299,9 @@ export class SupabaseHttpCaptureRepository implements CaptureRepository {
     context: CaptureRepositoryContext,
     input: NormalizedCaptureCreateInput
   ): Promise<CaptureCreateResponse> {
+    // The legacy capture table has no attachment binding, so accepting a capture that names
+    // photos here would commit the words and abandon the media. Refuse instead of losing them.
+    if ((input.attachmentIds?.length ?? 0) > 0) throw attachmentsNeedEncryptedLibrary();
     const protectedContent = await this.protector.protectCapture(
       input.rawContent,
       context.userId,
@@ -361,7 +364,8 @@ export class SupabaseHttpCaptureRepository implements CaptureRepository {
           receivedAt: requiredString(row, "receivedAt"),
           status: row.status as CaptureSummary["status"],
           lastErrorCode: (row.lastErrorCode ?? null) as CaptureSummary["lastErrorCode"],
-          receiptAvailable: row.receiptAvailable === true
+          receiptAvailable: row.receiptAvailable === true,
+          attachments: []
         };
       })
     );

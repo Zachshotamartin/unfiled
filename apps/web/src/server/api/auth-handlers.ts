@@ -2,7 +2,11 @@ import {
   ApiErrorCode,
   AuthPasswordSignInRequestSchema,
   AuthPasswordSignUpRequestSchema,
-  AuthRefreshRequestSchema
+  AuthRefreshRequestSchema,
+  AuthResendRequestSchema,
+  AuthVerifyRequestSchema,
+  type AuthResendResponse,
+  type AuthSignUpResponse
 } from "@unfiled/contracts";
 
 import { authenticateRequest, clearedSessionCookies, sessionCookies } from "@/server/auth/session";
@@ -60,7 +64,47 @@ export function createAuthHandlers(dependencies: AuthHandlerDependencies = {}) {
         if (!parsed.success) throw invalidAuthBody();
         await quota(parsed.data.email, clientIp(request));
         const session = await provider.signUp(parsed.data.email, parsed.data.password);
+        // A deployment that confirms addresses emails a code instead of a session. The account
+        // exists either way; the owner finishes at /auth/verify.
+        if (session === null) {
+          return jsonResponse(
+            { verificationRequired: true, email: parsed.data.email } satisfies AuthSignUpResponse,
+            200
+          );
+        }
         return sessionResponse(session);
+      } catch (error) {
+        return errorResponse(error, request);
+      }
+    },
+
+    /**
+     * Exchanges the emailed code for a session. Every attempt consumes the hourly quota, so a
+     * six-digit code cannot be guessed by volume.
+     */
+    async verify(request: Request): Promise<Response> {
+      try {
+        const parsed = AuthVerifyRequestSchema.safeParse(await readJsonObject(request));
+        if (!parsed.success) throw invalidAuthBody();
+        await quota(parsed.data.email, clientIp(request));
+        const session = await provider.verifyEmail(parsed.data.email, parsed.data.code);
+        return sessionResponse(session);
+      } catch (error) {
+        return errorResponse(error, request);
+      }
+    },
+
+    /**
+     * Sends another code. The reply is the same whether or not the address has an account
+     * awaiting confirmation, so this cannot be used to discover who has one.
+     */
+    async resendVerification(request: Request): Promise<Response> {
+      try {
+        const parsed = AuthResendRequestSchema.safeParse(await readJsonObject(request));
+        if (!parsed.success) throw invalidAuthBody();
+        await quota(parsed.data.email, clientIp(request));
+        await provider.resendVerification(parsed.data.email);
+        return jsonResponse({ sent: true } satisfies AuthResendResponse, 200);
       } catch (error) {
         return errorResponse(error, request);
       }

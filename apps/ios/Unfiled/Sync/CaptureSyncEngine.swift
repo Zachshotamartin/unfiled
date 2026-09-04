@@ -101,7 +101,8 @@ actor CaptureSyncEngine {
         source: LocalCaptureSource,
         privacy: LocalPrivacyMode,
         deviceID: String,
-        guidance: String?
+        guidance: String?,
+        attachments: [CaptureAttachmentDraft] = []
     ) async throws -> String {
         guard await profileAuthorizer.authorizesCaptureProfile(profileID) else {
             throw CaptureSyncEngineError.invalidProfile
@@ -121,7 +122,7 @@ actor CaptureSyncEngine {
             expansionDisabled: false,
             guidance: CaptureCreateRequest.normalizedGuidance(guidance)
         )
-        try await database.enqueue(draft, now: encodedNow)
+        try await database.enqueue(draft, attachments: attachments, now: encodedNow)
         return captureID
     }
 
@@ -248,13 +249,11 @@ actor CaptureSyncEngine {
 
     func beginComposerDraftSession(
         profileID: UUID,
-        source: LocalCaptureSource,
-        maximumAge: TimeInterval = 30 * 60
+        source: LocalCaptureSource
     ) async throws -> ComposerDraftSession {
         try await database.beginComposerDraftSession(
             profileID: profileID.uuidString.lowercased(),
-            source: source,
-            updatedAfter: APIJSON.dateString(clock().addingTimeInterval(-maximumAge))
+            source: source
         )
     }
 
@@ -394,12 +393,27 @@ actor CaptureSyncEngine {
                 leaseToken: leaseToken,
                 errorCode: safeErrorCode(error),
                 nextAttemptAt: APIJSON.dateString(now.addingTimeInterval(delay)),
-                now: APIJSON.dateString(now)
+                now: APIJSON.dateString(now),
+                countsAsAttempt: Self.countsAsCaptureAttempt(error)
             )
             return true
         }
     }
 
+
+    /// Whether a failed send says anything about the capture itself.
+    ///
+    /// A server that rejected the capture has told us something, and five of those retire it. An
+    /// unreachable service or an abandoned request has told us nothing, and counting those meant
+    /// a phone offline for about a minute burned every attempt and parked the capture in failed,
+    /// where only a manual Retry could reach it.
+    static func countsAsCaptureAttempt(_ error: Error) -> Bool {
+        switch error as? APIClientError {
+        case .transportFailure, .cancelled: false
+        case .none: !(error is CancellationError)
+        default: true
+        }
+    }
 
     private func apiSource(_ source: LocalCaptureSource) -> CaptureSource {
         switch source {

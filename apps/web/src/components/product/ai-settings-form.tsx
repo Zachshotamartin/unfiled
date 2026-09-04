@@ -1,6 +1,5 @@
 "use client";
 
-import { ArrowClockwiseIcon, FloppyDiskIcon } from "@phosphor-icons/react";
 import type {
   AiModelSelection,
   ProviderKeyMetadata,
@@ -26,6 +25,7 @@ import {
 } from "@/lib/product/ai-settings";
 
 import { SettingsChoice, SettingsNotice } from "./ai-settings-controls";
+import { UnfiledGlyph } from "./unfiled-glyph";
 
 export type AiSettingsFormProps = Readonly<{
   attempt: UserSettingsUpdateRequest | null;
@@ -141,8 +141,9 @@ function ProviderGroup({
       </div>
       {provider !== null && !keyReady ? (
         <p className="ai-settings-inline-note" data-role="missing-key-note">
-          Add an active {aiProviderLabel(provider)} key in Provider keys below. Until then, new jots
-          remain safely queued.
+          Add an active {aiProviderLabel(provider)} key in Provider keys below. Until then a new
+          capture is saved and readable but is marked failed with provider_unavailable in your
+          Inbox; retry it once a key is saved.
         </p>
       ) : null}
       {managedFallbackAvailable ? (
@@ -329,13 +330,13 @@ function SettingsActions({
           className="button-primary"
           disabled={!dirty || pending || !isSettingsDraftSubmittable(draft)}
         >
-          <FloppyDiskIcon size={17} weight="bold" aria-hidden="true" />
+          <UnfiledGlyph glyph="check" size={17} weight={2.2} />
           {pending ? "Saving…" : "Save preferences"}
         </button>
       ) : (
         <div className="ai-settings-retry-actions">
           <button type="button" className="button-secondary" disabled={pending} onClick={onRetry}>
-            <ArrowClockwiseIcon size={17} aria-hidden="true" /> Retry exact save
+            <UnfiledGlyph glyph="undo" size={17} weight={1.9} /> Retry exact save
           </button>
           <button
             type="button"

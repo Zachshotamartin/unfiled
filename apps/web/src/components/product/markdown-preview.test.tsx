@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { MarkdownPreview } from "./markdown-preview";
 
 describe("MarkdownPreview", () => {
-  it("names a placed photo or recording instead of showing its reference", () => {
+  it("shows a placed photo instead of the word Photo", () => {
     const html = renderToStaticMarkup(
       <MarkdownPreview
         markdown={[
@@ -15,8 +15,14 @@ describe("MarkdownPreview", () => {
         ].join("\n")}
       />
     );
-    expect(html).toContain('<p class="markdown-attachment">Photo</p>');
-    expect(html).toContain('<p class="markdown-attachment">Recording</p>');
+
+    // The server serves the decrypted bytes with their real content type under the owner's own
+    // session, so the web can show the picture rather than a placeholder word.
+    expect(html).toContain('src="/api/v1/captures/attachments/att_01ARZ3NDEKTSV4RRFFQ69G5FAZ"');
+    expect(html).toContain('alt="Photo on this capture"');
+    // A recording is not an image, so it stays a labelled row rather than a broken picture.
+    expect(html).toContain('class="attachment-recording"');
+    expect(html).not.toContain('src="/api/v1/captures/attachments/att_01ARZ3NDEKTSV4RRFFQ69G5FAY"');
     expect(html).not.toContain("unfiled-attachment:");
   });
 

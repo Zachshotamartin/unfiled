@@ -1,14 +1,17 @@
-import type {
-  AccountExportRoutingRule,
-  AccountExportSpace,
-  AccountExportTag,
-  EntityId,
-  NoteType,
-  PrivacyMode
+import {
+  AccountExportCaptureSchema,
+  type AccountExportCapture,
+  type AccountExportRoutingRule,
+  type AccountExportSpace,
+  type AccountExportTag,
+  type EntityId,
+  type NoteType,
+  type PrivacyMode
 } from "@unfiled/contracts";
-import type {
-  AuthorizedOwnerAccess,
-  EncryptedAggregateService
+import {
+  CapturePayloadSchema,
+  type AuthorizedOwnerAccess,
+  type EncryptedAggregateService
 } from "@unfiled/encrypted-aggregate";
 
 import type { NoteRecord } from "@/lib/product/types";
@@ -28,9 +31,11 @@ import { ServiceRpcError, ServiceRpcErrorCode } from "./service-rpc-client";
 const NOTE_PAGE_SIZE = 25;
 const TAXONOMY_PAGE_SIZE = 50;
 const ROUTING_RULE_PAGE_SIZE = 50;
+const CAPTURE_PAGE_SIZE = 25;
 const MAX_EXPORT_NOTES = 100_000;
 const MAX_EXPORT_TAXONOMY_RECORDS = 1_000;
 const MAX_EXPORT_ROUTING_RULES = 10_000;
+const MAX_EXPORT_CAPTURES = 100_000;
 
 export type OwnerExportNote = Readonly<{
   id: EntityId<"note">;
@@ -63,6 +68,8 @@ export type OwnerExportSource = Readonly<{
   tagPages(): AsyncIterable<readonly AccountExportTag[]>;
   notePages(): AsyncIterable<readonly OwnerExportNote[]>;
   routingRulePages(): AsyncIterable<readonly AccountExportRoutingRule[]>;
+  /** Every capture the owner has, including the ones no note has absorbed yet. */
+  capturePages(): AsyncIterable<readonly AccountExportCapture[]>;
   /** The decrypted bytes of one attachment the owner's notes place, or null when it is gone. */
   attachment(id: EntityId<"att">): Promise<OwnerExportAttachment | null>;
 }>;
@@ -74,7 +81,7 @@ type Dependencies = Readonly<{
   reads: EncryptedNoteReadRpcAdapter;
   library: EncryptedLibraryRpcStore;
   ownerData: EncryptedOwnerDataRpcAdapter;
-  captures: Pick<EncryptedCaptureRpcAdapter, "getAttachment">;
+  captures: Pick<EncryptedCaptureRpcAdapter, "getAttachment" | "listAttachments" | "listCaptures">;
   signal?: AbortSignal;
 }>;
 
@@ -164,6 +171,71 @@ export class EncryptedOwnerExportSource implements OwnerExportSource {
     )
       unavailable();
     return Object.freeze({ kind: row.kind, mediaType: row.mediaType, bytes });
+  }
+
+  /**
+   * Every capture the owner has, oldest page first. A capture that is still queued, still being
+   * organized, waiting in Review, kept in the Inbox, or failed exists nowhere else in the
+   * archive, and the owner's words are not allowed to be the one thing an export leaves behind.
+   */
+  public async *capturePages(): AsyncIterable<readonly AccountExportCapture[]> {
+    let cursor: Parameters<EncryptedCaptureRpcAdapter["listCaptures"]>[0]["cursor"] = null;
+    let total = 0;
+    const seenCursors = new Set<string>();
+    for (;;) {
+      throwIfAborted(this.dependencies.signal);
+      const page = await this.dependencies.captures.listCaptures({
+        ownerId: this.dependencies.ownerId,
+        cursor,
+        limit: CAPTURE_PAGE_SIZE
+      });
+      if (page.captures.length === 0) {
+        if (page.nextCursor !== null) unavailable();
+        return;
+      }
+      total += page.captures.length;
+      if (total > MAX_EXPORT_CAPTURES) unavailable();
+      const captures = await Promise.all(
+        page.captures.map(async (row): Promise<AccountExportCapture> => {
+          throwIfAborted(this.dependencies.signal);
+          const payload = CapturePayloadSchema.parse(
+            await this.dependencies.aggregate.openCapture(
+              this.dependencies.access,
+              Object.freeze({ encrypted: row.contentCipher, contentMac: row.contentMac }),
+              {
+                captureId: row.captureId,
+                recordVersion: row.recordVersion,
+                privacy: row.privacy
+              }
+            )
+          );
+          if (payload.rawContent.length !== row.contentLength) unavailable();
+          const attachments = await this.dependencies.captures.listAttachments({
+            ownerId: this.dependencies.ownerId,
+            captureId: row.captureId
+          });
+          return AccountExportCaptureSchema.parse({
+            id: row.captureId,
+            rawContent: payload.rawContent,
+            source: row.source,
+            privacy: row.privacy,
+            status: row.status,
+            lastErrorCode: row.lastErrorCode,
+            clientCreatedAt: row.clientCreatedAt,
+            receivedAt: row.receivedAt,
+            attachments: attachments.map(({ attachmentId, kind }) => ({ id: attachmentId, kind }))
+          });
+        })
+      );
+      yield Object.freeze(captures);
+
+      const next = page.nextCursor;
+      if (next === null) return;
+      const serialized = `${next.receivedAt}:${next.captureId}`;
+      if (seenCursors.has(serialized)) unavailable();
+      seenCursors.add(serialized);
+      cursor = next;
+    }
   }
 
   public async *notePages(): AsyncIterable<readonly OwnerExportNote[]> {

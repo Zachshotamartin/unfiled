@@ -176,7 +176,6 @@
               "destinationRecency": 1,
               "semanticSimilarity": 0.8,
               "margin": 0.4,
-              "priorAccepted": 0.5,
               "reasonCodeConsistency": 1,
               "duplicateTitleSuspicion": 0
             },
@@ -200,7 +199,6 @@
               "destinationRecency": 1,
               "semanticSimilarity": 0.8,
               "margin": 0.4,
-              "priorAccepted": 0.5,
               "reasonCodeConsistency": 1,
               "duplicateTitleSuspicion": 0
             },
@@ -224,7 +222,6 @@
               "destinationRecency": 1,
               "semanticSimilarity": 0.8,
               "margin": 0.4,
-              "priorAccepted": 0.5,
               "reasonCodeConsistency": 1,
               "duplicateTitleSuspicion": 0
             },
@@ -248,7 +245,6 @@
               "destinationRecency": 1,
               "semanticSimilarity": 0.8,
               "margin": 0.4,
-              "priorAccepted": 0.5,
               "reasonCodeConsistency": 1,
               "duplicateTitleSuspicion": 0
             },
@@ -272,7 +268,6 @@
               "destinationRecency": 1,
               "semanticSimilarity": 0.8,
               "margin": 0.4,
-              "priorAccepted": 0.5,
               "reasonCodeConsistency": 1,
               "duplicateTitleSuspicion": 0
             },
@@ -296,7 +291,6 @@
               "destinationRecency": 0,
               "semanticSimilarity": 0,
               "margin": 0,
-              "priorAccepted": 0,
               "reasonCodeConsistency": 0,
               "duplicateTitleSuspicion": 0
             },
@@ -320,7 +314,6 @@
               "destinationRecency": 1,
               "semanticSimilarity": 1,
               "margin": 0.05,
-              "priorAccepted": 0.5,
               "reasonCodeConsistency": 1,
               "duplicateTitleSuspicion": 0
             },
@@ -344,7 +337,6 @@
               "destinationRecency": 1,
               "semanticSimilarity": 1,
               "margin": 0.05,
-              "priorAccepted": 0.5,
               "reasonCodeConsistency": 1,
               "duplicateTitleSuspicion": 0
             },
@@ -368,7 +360,6 @@
               "destinationRecency": 1,
               "semanticSimilarity": 0.8,
               "margin": 0.4,
-              "priorAccepted": 0.5,
               "reasonCodeConsistency": 1,
               "duplicateTitleSuspicion": 0.7
             },
@@ -392,7 +383,6 @@
               "destinationRecency": 0,
               "semanticSimilarity": 0,
               "margin": 0,
-              "priorAccepted": 0,
               "reasonCodeConsistency": 0,
               "duplicateTitleSuspicion": 0
             },
@@ -416,7 +406,6 @@
               "destinationRecency": 1,
               "semanticSimilarity": 0.8,
               "margin": 0.4,
-              "priorAccepted": 0.5,
               "reasonCodeConsistency": 1,
               "duplicateTitleSuspicion": 0
             },
@@ -440,7 +429,98 @@
               "destinationRecency": 1,
               "semanticSimilarity": 0.8,
               "margin": 0.4,
-              "priorAccepted": 0.5,
+              "reasonCodeConsistency": 1,
+              "duplicateTitleSuspicion": 0
+            },
+          "createSignals": null
+        },
+      "warmup_first":
+        {
+          "mode": "balanced",
+          "destinationNoteType": "generic",
+          "accountCaptureOrdinal": 1,
+          "retrievalAutoEligible": true,
+          "deterministicRuleMatch": false,
+          "duplicateNoteSuspected": false,
+          "simulatedFailure": null,
+          "features":
+            {
+              "ruleOrAliasNearMatch": 1,
+              "explicitDestinationMention": 0.5,
+              "openSameDayTypeMatch": 1,
+              "typeCompatibility": 1,
+              "destinationRecency": 1,
+              "semanticSimilarity": 0.8,
+              "margin": 0.4,
+              "reasonCodeConsistency": 1,
+              "duplicateTitleSuspicion": 0
+            },
+          "createSignals": null
+        },
+      "warmup_last":
+        {
+          "mode": "balanced",
+          "destinationNoteType": "generic",
+          "accountCaptureOrdinal": 5,
+          "retrievalAutoEligible": true,
+          "deterministicRuleMatch": false,
+          "duplicateNoteSuspected": false,
+          "simulatedFailure": null,
+          "features":
+            {
+              "ruleOrAliasNearMatch": 1,
+              "explicitDestinationMention": 0.5,
+              "openSameDayTypeMatch": 1,
+              "typeCompatibility": 1,
+              "destinationRecency": 1,
+              "semanticSimilarity": 0.8,
+              "margin": 0.4,
+              "reasonCodeConsistency": 1,
+              "duplicateTitleSuspicion": 0
+            },
+          "createSignals": null
+        },
+      "warmup_automatic":
+        {
+          "mode": "automatic",
+          "destinationNoteType": "generic",
+          "accountCaptureOrdinal": 1,
+          "retrievalAutoEligible": true,
+          "deterministicRuleMatch": false,
+          "duplicateNoteSuspected": false,
+          "simulatedFailure": null,
+          "features":
+            {
+              "ruleOrAliasNearMatch": 1,
+              "explicitDestinationMention": 0.5,
+              "openSameDayTypeMatch": 1,
+              "typeCompatibility": 1,
+              "destinationRecency": 1,
+              "semanticSimilarity": 0.8,
+              "margin": 0.4,
+              "reasonCodeConsistency": 1,
+              "duplicateTitleSuspicion": 0
+            },
+          "createSignals": null
+        },
+      "warmup_rule_match":
+        {
+          "mode": "balanced",
+          "destinationNoteType": "generic",
+          "accountCaptureOrdinal": 1,
+          "retrievalAutoEligible": true,
+          "deterministicRuleMatch": true,
+          "duplicateNoteSuspected": false,
+          "simulatedFailure": null,
+          "features":
+            {
+              "ruleOrAliasNearMatch": 1,
+              "explicitDestinationMention": 0.5,
+              "openSameDayTypeMatch": 1,
+              "typeCompatibility": 1,
+              "destinationRecency": 1,
+              "semanticSimilarity": 0.8,
+              "margin": 0.4,
               "reasonCodeConsistency": 1,
               "duplicateTitleSuspicion": 0
             },
@@ -672,6 +752,34 @@
           "expectedBand": "review",
           "expectedInvalidPlan": false,
           "injectionCase": false
+        },
+      "photo_principle_mismatch_review":
+        {
+          "candidateMustInclude": ["note_01J6M9Q7G4BMKB33GSG3NJ6D21"],
+          "allowedDecisions": ["append_to_note"],
+          "forbiddenDestinations": [],
+          "requiredPreservation": true,
+          "autoApplyAllowed": false,
+          "expectedKind": "freeform",
+          "expectedDestination": "note_01J6M9Q7G4BMKB33GSG3NJ6D21",
+          "expectedAction": "append",
+          "expectedBand": "review",
+          "expectedInvalidPlan": false,
+          "injectionCase": false
+        },
+      "warmup_review":
+        {
+          "candidateMustInclude": ["note_01J6M9Q7G4BMKB33GSG3NJ6D20"],
+          "allowedDecisions": ["append_to_note"],
+          "forbiddenDestinations": [],
+          "requiredPreservation": true,
+          "autoApplyAllowed": false,
+          "expectedKind": "freeform",
+          "expectedDestination": "note_01J6M9Q7G4BMKB33GSG3NJ6D20",
+          "expectedAction": "append",
+          "expectedBand": "review",
+          "expectedInvalidPlan": false,
+          "injectionCase": false
         }
     },
   "profiles":
@@ -801,6 +909,69 @@
           "mockOutput": "review",
           "policy": "medium_generic",
           "expect": "multilingual_review"
+        },
+      "photo_generic_append":
+        {
+          "manifest": "public",
+          "mockOutput": "append_generic",
+          "policy": "high_generic",
+          "expect": "generic_auto"
+        },
+      "photo_list_unplaceable":
+        {
+          "manifest": "public",
+          "mockOutput": "append_list",
+          "policy": "high_list",
+          "expect": "list_review"
+        },
+      "photo_principle_append":
+        {
+          "manifest": "public",
+          "mockOutput": "append_principle",
+          "policy": "high_principle",
+          "expect": "principle_auto"
+        },
+      "photo_principle_mismatch":
+        {
+          "manifest": "public",
+          "mockOutput": "append_principle",
+          "policy": "high_principle",
+          "expect": "photo_principle_mismatch_review"
+        },
+      "photo_invented_text":
+        {
+          "manifest": "public",
+          "mockOutput": "rewritten_source",
+          "policy": "high_generic",
+          "expect": "invalid_inbox"
+        },
+      "warmup_first_capture":
+        {
+          "manifest": "public",
+          "mockOutput": "append_generic",
+          "policy": "warmup_first",
+          "expect": "warmup_review"
+        },
+      "warmup_last_capture":
+        {
+          "manifest": "public",
+          "mockOutput": "append_generic",
+          "policy": "warmup_last",
+          "expect": "warmup_review"
+        },
+      "warmup_owner_chose_automatic":
+        {
+          "manifest": "public",
+          "mockOutput": "append_generic",
+          "policy": "warmup_automatic",
+          "expect": "generic_auto"
+        },
+      "warmup_rule_escape":
+        {
+          "manifest": "public",
+          "mockOutput": "append_generic",
+          "policy": "warmup_rule_match",
+          "expect": "generic_auto"
         }
     },
   "cases":
@@ -2029,6 +2200,112 @@
         "profile": "multilingual",
         "capture": "इस विचार को नोट्स में जोड़ें।",
         "timezone": "America/Los_Angeles"
+      },
+      {
+        "id": "photo-capture-001",
+        "category": "photo_capture",
+        "profile": "photo_generic_append",
+        "capture": "Photo",
+        "attachments":
+          {
+            "images": 1,
+            "recordings": 0,
+            "visualDescriptor": "A whiteboard sketch of the kitchen renovation layout."
+          },
+        "timezone": "America/Los_Angeles"
+      },
+      {
+        "id": "photo-capture-002",
+        "category": "photo_capture",
+        "profile": "photo_list_unplaceable",
+        "capture": "Photos",
+        "attachments":
+          {
+            "images": 3,
+            "recordings": 0,
+            "visualDescriptor": "Three shelf photos showing the groceries still to buy."
+          },
+        "timezone": "Europe/London"
+      },
+      {
+        "id": "photo-capture-003",
+        "category": "photo_capture",
+        "profile": "photo_principle_append",
+        "capture": "Photo",
+        "attachments":
+          {
+            "images": 1,
+            "recordings": 0,
+            "visualDescriptor": "Principle: rest is part of the work, not a reward for it."
+          },
+        "timezone": "UTC"
+      },
+      {
+        "id": "photo-capture-004",
+        "category": "photo_capture",
+        "profile": "photo_principle_mismatch",
+        "capture": "Photo",
+        "attachments":
+          {
+            "images": 1,
+            "recordings": 0,
+            "visualDescriptor": "A parking receipt from the airport garage."
+          },
+        "timezone": "America/Los_Angeles"
+      },
+      {
+        "id": "photo-capture-005",
+        "category": "photo_capture",
+        "profile": "photo_invented_text",
+        "capture": "Photo",
+        "attachments":
+          {
+            "images": 1,
+            "recordings": 0,
+            "visualDescriptor": "A whiteboard covered in architecture boxes and arrows."
+          },
+        "timezone": "Europe/London"
+      },
+      {
+        "id": "photo-capture-006",
+        "category": "photo_capture",
+        "profile": "photo_generic_append",
+        "capture": "The grout colour we settled on.",
+        "attachments":
+          {
+            "images": 1,
+            "recordings": 0,
+            "visualDescriptor": "A close photo of grey tile grout between white tiles."
+          },
+        "timezone": "America/Los_Angeles"
+      },
+      {
+        "id": "account-warmup-001",
+        "category": "account_warmup",
+        "profile": "warmup_first_capture",
+        "capture": "The hallway light switch is wired to the wrong breaker.",
+        "timezone": "America/Los_Angeles"
+      },
+      {
+        "id": "account-warmup-002",
+        "category": "account_warmup",
+        "profile": "warmup_last_capture",
+        "capture": "Call the letting agent back about the meter reading.",
+        "timezone": "Europe/London"
+      },
+      {
+        "id": "account-warmup-003",
+        "category": "account_warmup",
+        "profile": "warmup_owner_chose_automatic",
+        "capture": "The hallway light switch is wired to the wrong breaker.",
+        "timezone": "America/Los_Angeles"
+      },
+      {
+        "id": "account-warmup-004",
+        "category": "account_warmup",
+        "profile": "warmup_rule_escape",
+        "capture": "Call the letting agent back about the meter reading.",
+        "timezone": "Europe/London"
       }
     ]
 }

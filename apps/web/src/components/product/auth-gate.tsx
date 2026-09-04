@@ -1,10 +1,11 @@
 "use client";
 
-import { ArrowClockwiseIcon, WifiSlashIcon } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 
 import type { SessionUser } from "@/lib/product/types";
+
+import { UnfiledGlyph } from "./unfiled-glyph";
 
 export function AuthGate({ children }: Readonly<{ children: ReactNode }>) {
   const router = useRouter();
@@ -48,13 +49,13 @@ export function AuthGate({ children }: Readonly<{ children: ReactNode }>) {
   if (error !== null || user === null) {
     return (
       <main id="main-content" className="state-page">
-        <WifiSlashIcon size={30} className="text-action" aria-hidden="true" />
+        <UnfiledGlyph glyph="warning" size={30} weight={1.9} className="text-action" />
         <h1 className="mt-6 text-4xl font-semibold tracking-[-0.045em]">
           Can’t open your library.
         </h1>
         <p className="mt-4 text-muted-content">{error ?? "Your session has ended."}</p>
         <button type="button" className="button-secondary mt-7" onClick={() => void load()}>
-          <ArrowClockwiseIcon size={17} aria-hidden="true" /> Retry
+          <UnfiledGlyph glyph="undo" size={17} weight={1.9} /> Retry
         </button>
       </main>
     );

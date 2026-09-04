@@ -26,7 +26,7 @@ describe("production-component-seam deterministic routing evaluation", () => {
     const report = await evaluateProductionRoutingPipeline();
 
     expect(report).toMatchObject({
-      cases: 15,
+      cases: 18,
       evidenceKind: "production-component-seam deterministic evaluation",
       liveProviderEvidence: false,
       modelAdapter: "deterministic-semantic-fixture.v2",
@@ -152,6 +152,7 @@ describe("production-component-seam deterministic routing evaluation", () => {
     expect(seen[0]).not.toHaveProperty("policy");
     expect(seen[0]).not.toHaveProperty("fixtureScenario");
     expect(Object.keys(seen[0] ?? {}).sort()).toEqual([
+      "attachments",
       "candidates",
       "captureId",
       "captureText",

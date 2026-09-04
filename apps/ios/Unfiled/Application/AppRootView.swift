@@ -25,6 +25,14 @@ struct AppRootView: View {
                 .padding(.top, 8)
                 .transition(.move(edge: .top).combined(with: .opacity))
                 .zIndex(10)
+                // A notice the owner has read should not need dismissing. It leaves on its own,
+                // and a new message restarts the wait rather than inheriting the old one, because
+                // the task is keyed on the message itself.
+                .task(id: message) {
+                    try? await Task.sleep(for: .seconds(5))
+                    guard !Task.isCancelled, model.bannerMessage == message else { return }
+                    model.bannerMessage = nil
+                }
             }
 
             if scenePhase != .active {
@@ -89,15 +97,31 @@ private struct AuthenticationFlowView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        PasswordSignInView(
-            mode: $model.authMode,
-            onSubmit: { request, mode in
-                mode == .signUp ? try await model.signUp(request) : try await model.signIn(request)
-            },
-            onSignedIn: { session in
-                Task { @MainActor in await model.acceptVerifiedSession(session) }
-            }
-        )
+        // A pending confirmation replaces the credentials form until it is finished or left behind,
+        // so a relaunch during the code step reopens on the code step.
+        if let pending = model.pendingVerification {
+            VerifyEmailView(
+                pending: pending,
+                onVerify: { code in try await model.verifyEmail(code: code) },
+                onResend: { try await model.resendVerificationCode() },
+                onLeave: model.leaveVerification,
+                onSignedIn: { session in
+                    Task { @MainActor in await model.acceptVerifiedSession(session) }
+                }
+            )
+        } else {
+            PasswordSignInView(
+                mode: $model.authMode,
+                onSubmit: { request, mode in
+                    mode == .signUp
+                        ? try await model.signUp(request)
+                        : .session(try await model.signIn(request))
+                },
+                onSignedIn: { session in
+                    Task { @MainActor in await model.acceptVerifiedSession(session) }
+                }
+            )
+        }
     }
 }
 

@@ -1,6 +1,5 @@
 "use client";
 
-import { DownloadSimpleIcon, TrashIcon, XIcon } from "@phosphor-icons/react";
 import { createAccountDeletionToken } from "@unfiled/api-client";
 import type { AccountDeletionReceipt, AccountDeletionToken } from "@unfiled/contracts";
 import Link from "next/link";
@@ -11,6 +10,8 @@ import {
   isAmbiguousProductMutationFailure,
   productErrorMessage
 } from "@/lib/product/browser-api";
+
+import { UnfiledGlyph } from "./unfiled-glyph";
 
 type DeletionClient = Readonly<{
   deleteAccount(input: {
@@ -102,13 +103,13 @@ export function AccountDataControls() {
           relationships, source captures, and a JSON manifest directly to your device.
         </p>
         <a className="button-secondary account-export-action" href="/api/v1/me/export">
-          <DownloadSimpleIcon size={17} aria-hidden="true" /> Download archive
+          <UnfiledGlyph glyph="down" size={17} weight={1.9} /> Download archive
         </a>
       </div>
 
       {!confirming ? (
         <button type="button" className="account-delete-action" onClick={() => setConfirming(true)}>
-          <TrashIcon size={17} aria-hidden="true" /> Delete account
+          <UnfiledGlyph glyph="trash" size={17} weight={1.9} /> Delete account
         </button>
       ) : (
         <div className="account-deletion-confirmation" role="group" aria-labelledby="delete-title">
@@ -132,7 +133,7 @@ export function AccountDataControls() {
                 setError(null);
               }}
             >
-              <XIcon size={16} aria-hidden="true" />
+              <UnfiledGlyph glyph="close" size={16} weight={1.9} />
             </button>
           </div>
           <div className="account-deletion-field">

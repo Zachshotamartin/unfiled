@@ -55,7 +55,8 @@ export function PrivateSearchNavigationProvider({ children }: Readonly<{ childre
       if (query.length === 0) return;
       sequence.current += 1;
       setPending({ query, sequence: sequence.current });
-      router.push("/app/search");
+      // Search is the Library's own field rather than a destination (ADR-0019, decision 6).
+      router.push("/app/library");
     },
     [router]
   );

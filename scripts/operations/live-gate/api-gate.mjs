@@ -9,11 +9,34 @@
 //                                   (else it waits for the scheduled drains, up to 4 minutes)
 //   UNFILED_GATE_OPENAI_API_KEY     saved on the synthetic account so the organizer can run; without
 //                                   it every organizer-dependent step is a hard failure ("no_key")
+//   UNFILED_GATE_SUPABASE_URL       required: the deployment's Supabase project URL, as
+//                                   https://<project-ref>.supabase.co
+//   UNFILED_GATE_SUPABASE_SERVICE_ROLE_KEY
+//                                   required: a service role key for that project. A deployment
+//                                   that confirms addresses emails six digits before a new account
+//                                   can sign in, so the gate confirms its own synthetic account
+//                                   through Supabase's admin API rather than through any product
+//                                   endpoint. A run missing either variable stops at once with
+//                                   exit 2 and names what it needs.
 //   UNFILED_GATE_OUTPUT             JSON summary path (default: live-gate-api.json in cwd)
 //   UNFILED_GATE_KEEP_ACCOUNT=1     skip the account deletion at the end (debugging only)
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
+
+import {
+  createSupabaseAdmin,
+  missingConfigurationMessage,
+  readSignUpAnswer,
+  readSupabaseAdminConfiguration,
+  signUpAnswerMatchesDeployment
+} from "./account-verification.mjs";
+import {
+  captureBindsAttachments,
+  filedNoteId,
+  noteKeepsTextWithoutDirections,
+  noteReferencesAttachment
+} from "./gate-checks.mjs";
 
 const WEB = (process.env.UNFILED_GATE_WEB_ORIGIN ?? "https://unfiled-web.vercel.app").replace(
   /\/$/u,
@@ -23,9 +46,17 @@ const API = `${WEB}/api/v1`;
 const CRON_SECRET = process.env.UNFILED_GATE_CRON_SECRET ?? null;
 const OPENAI_KEY = process.env.UNFILED_GATE_OPENAI_API_KEY ?? null;
 const OUTPUT = process.env.UNFILED_GATE_OUTPUT ?? "live-gate-api.json";
+// Read with the rest of the environment; the run stops on a missing value below, before it creates
+// an account it could never sign in to.
+const supabaseAdminConfiguration = readSupabaseAdminConfiguration(process.env);
+// Six digits, so a refusal comes from the provider rather than from request validation.
+const WRONG_VERIFICATION_CODE = "000000";
 const startedAt = new Date().toISOString();
 const results = [];
 let failures = 0;
+// Null until the provider says which of its two modes this deployment runs in, which is also what
+// the summary reports for a run that stopped before it could ask.
+let confirmsAddresses = null;
 
 function record(step, ok, detail = {}) {
   results.push({ step, ok, ...detail });
@@ -114,6 +145,15 @@ async function drainQueues() {
   return { captures: captures.status, maintenance: maintenance.status, indexing: indexing.status };
 }
 
+// ---------------------------------------------------------------- configuration
+if (!supabaseAdminConfiguration.ok) {
+  record("gate.configuration", false, { missing: supabaseAdminConfiguration.missing });
+  console.error(missingConfigurationMessage(supabaseAdminConfiguration.missing));
+  finish();
+  process.exit(2);
+}
+const admin = createSupabaseAdmin(supabaseAdminConfiguration);
+
 // ---------------------------------------------------------------- account
 const stamp = Date.now().toString(36);
 const email = `gate-${stamp}-${randomBytes(3).toString("hex")}@example.com`;
@@ -128,21 +168,71 @@ let refreshToken = null;
   });
   const unauth = await api("GET", "/notes");
   record("auth.unauthenticated_rejected", unauth.status === 401, { status: unauth.status });
+  // Whether this deployment confirms addresses is the provider's own answer rather than a guess,
+  // so the gate can hold sign-up to the right one of its two answers.
+  const mode = await admin.deploymentConfirmsAddresses();
+  if (
+    !record("supabase.admin_reachable", mode.ok, {
+      status: mode.status,
+      confirmsAddresses: mode.confirmsAddresses
+    })
+  ) {
+    finish();
+    process.exit(2);
+  }
+  confirmsAddresses = mode.confirmsAddresses;
+
   const up = await api("POST", "/auth/sign-up", { body: { email, password } });
-  token = up.json?.accessToken ?? null;
-  refreshToken = up.json?.refreshToken ?? null;
-  record("auth.sign_up", up.status === 200 && typeof token === "string", {
+  const answer = readSignUpAnswer(up);
+  const answered = signUpAnswerMatchesDeployment(answer, confirmsAddresses);
+  record("auth.sign_up", answered, {
     status: up.status,
-    code: code(up)
+    code: code(up),
+    verificationRequired: answer.verificationRequired,
+    confirmsAddresses
   });
-  if (!token) {
+  if (!answered) {
     finish();
     process.exit(1);
   }
+  if (confirmsAddresses) {
+    const wrongCode = await api("POST", "/auth/verify", {
+      body: { email, code: WRONG_VERIFICATION_CODE }
+    });
+    record(
+      "auth.wrong_code_refused",
+      wrongCode.status >= 400 &&
+        wrongCode.status < 500 &&
+        typeof wrongCode.json?.accessToken !== "string",
+      { status: wrongCode.status, code: code(wrongCode) }
+    );
+    // The gate is a privileged caller, not a new hole: it confirms its own synthetic address the
+    // way an operator would, through Supabase's admin API, and the product keeps no endpoint that
+    // would let anyone else skip the code.
+    const confirmed = await admin.confirmAddress(email);
+    if (
+      !record("auth.address_confirmed_by_admin", confirmed.ok, {
+        status: confirmed.status,
+        found: confirmed.found
+      })
+    ) {
+      finish();
+      process.exit(1);
+    }
+  } else {
+    token = up.json.accessToken;
+    refreshToken = up.json.refreshToken;
+  }
   const again = await api("POST", "/auth/sign-up", { body: { email, password } });
+  // A repeated sign-up must never hand back a session for an address that already exists. A
+  // deployment that confirms addresses may answer with a code request instead of naming the
+  // account, which is how the provider avoids telling a stranger who has one.
   record(
     "auth.repeated_sign_up_is_account_exists",
-    again.status === 409 && code(again) === "account_exists",
+    typeof again.json?.accessToken !== "string" &&
+      (confirmsAddresses
+        ? again.status === 409 || again.json?.verificationRequired === true
+        : again.status === 409 && code(again) === "account_exists"),
     { status: again.status, code: code(again) }
   );
   const wrong = await api("POST", "/auth/sign-in", { body: { email, password: `${password}x` } });
@@ -159,6 +249,11 @@ let refreshToken = null;
   if (signedIn.json?.accessToken) {
     token = signedIn.json.accessToken;
     refreshToken = signedIn.json.refreshToken ?? refreshToken;
+  }
+  if (!token) {
+    // A confirmed account that cannot sign in leaves nothing below this line to run.
+    finish();
+    process.exit(1);
   }
   const session = await api("GET", "/auth/session", { token });
   record("auth.session", session.status === 200, { status: session.status });
@@ -741,6 +836,45 @@ async function undoReceipt(captureId, receipt, label) {
   });
 }
 
+/**
+ * Files a capture the organizer stopped on, the way the owner would. A review files nothing by
+ * itself, so a step named for a filed note has nothing to read until someone resolves it; driving
+ * the review here is what lets that step fail honestly instead of passing on the review outcome.
+ * Returns the receipt as it reads afterwards.
+ */
+async function fileThroughReview(captureId, receipt, label, title, noteType) {
+  const reviewItemId = receipt?.reviewItemId ?? null;
+  if (receipt?.outcome !== "needs_review" || reviewItemId === null) {
+    record(`${label}.review_filed`, false, {
+      reason: receipt === null ? "no_receipt" : "no_open_review",
+      outcome: receipt?.outcome ?? null
+    });
+    return receipt;
+  }
+  const resolved = await write("POST", `/review-items/${reviewItemId}/resolve`, token, {
+    idempotencyKey: key(),
+    resolution: { type: "create", title, noteType, spaceId: null }
+  });
+  const after = (await receiptOf(captureId)) ?? receipt;
+  record(`${label}.review_filed`, resolved.status === 200 && filedNoteId(after) !== null, {
+    status: resolved.status,
+    code: code(resolved),
+    outcome: after?.outcome ?? null
+  });
+  return after;
+}
+
+/** The note a capture reached, filing it out of review first when that is where it stopped. */
+async function filedNote(captureId, receipt, label, title, noteType) {
+  const settled =
+    filedNoteId(receipt) === null
+      ? await fileThroughReview(captureId, receipt, label, title, noteType)
+      : receipt;
+  const noteId = filedNoteId(settled);
+  if (noteId === null) return { noteId: null, note: null };
+  return { noteId, note: await api("GET", `/notes/${noteId}`, { token }) };
+}
+
 let organizedCaptureId = null;
 let receipt = null;
 {
@@ -959,22 +1093,26 @@ if (OPENAI_KEY && secondNoteId) {
       lastErrorCode: outcome.lastErrorCode
     }
   );
-  const destinationId = outcome.receipt?.destination?.noteId ?? null;
-  if (destinationId) {
-    const note = await api("GET", `/notes/${destinationId}`, { token });
-    const body = String(note.json?.note?.bodyMarkdown ?? "");
-    record(
-      "capture_c.directions_never_enter_the_note",
-      note.status === 200 && !body.includes(directions) && body.includes("plumber comes Thursday"),
-      { status: note.status, destinationIsSecond: destinationId === secondNoteId }
-    );
-  } else {
-    record(
-      "capture_c.directions_never_enter_the_note",
-      outcome.receipt?.outcome === "needs_review",
-      { reason: "no_destination", outcome: outcome.receipt?.outcome ?? null }
-    );
-  }
+  const { noteId, note } = await filedNote(
+    captureId,
+    outcome.receipt,
+    "capture_c",
+    "Gate directions",
+    "generic"
+  );
+  record(
+    "capture_c.directions_never_enter_the_note",
+    noteId !== null &&
+      noteKeepsTextWithoutDirections(note, {
+        captureText: "plumber comes Thursday",
+        directions
+      }),
+    {
+      status: note?.status ?? null,
+      filed: noteId !== null,
+      destinationIsSecond: noteId === secondNoteId
+    }
+  );
 }
 
 // ---------------------------------------------------------------- photos (capture D)
@@ -1052,15 +1190,26 @@ async function uploadPhoto(captureId, attachmentId, bytes, extra = {}) {
       attachmentIds: [attachmentId]
     }
   });
-  record("photo.capture_binds_the_upload", created.status === 201 || created.status === 202, {
-    status: created.status,
-    code: code(created)
-  });
+  const boundDetail = await api("GET", `/captures/${captureId}`, { token });
+  record(
+    "photo.capture_binds_the_upload",
+    (created.status === 201 || created.status === 202) &&
+      captureBindsAttachments(boundDetail, [attachmentId]),
+    {
+      status: created.status,
+      code: code(created),
+      boundAttachments: (boundDetail.json?.capture?.attachments ?? []).length
+    }
+  );
+  // The idempotency key has to match the client capture id or the request is refused for that
+  // alone, before any attachment is looked at; the refusal this step is named for is the binding
+  // one, so the create must be allowed to reach it.
+  const strangerCaptureId = `cap_${ulid()}`;
   const strangerBind = await api("POST", "/captures", {
     token,
-    idempotencyKey: `cap_${ulid()}`,
+    idempotencyKey: strangerCaptureId,
     body: {
-      clientCaptureId: `cap_${ulid()}`,
+      clientCaptureId: strangerCaptureId,
       rawContent: "Not my photo",
       source: "web",
       privacy: "ai_assisted",
@@ -1071,7 +1220,7 @@ async function uploadPhoto(captureId, attachmentId, bytes, extra = {}) {
   });
   record(
     "photo.another_capture_cannot_bind_a_bound_photo",
-    strangerBind.status === 403 || strangerBind.status === 404 || strangerBind.status === 409,
+    strangerBind.status === 403 && code(strangerBind) === "forbidden",
     { status: strangerBind.status, code: code(strangerBind) }
   );
   const read = await fetch(`${API}/captures/attachments/${attachmentId}`, {
@@ -1108,7 +1257,11 @@ async function uploadPhoto(captureId, attachmentId, bytes, extra = {}) {
   if (OPENAI_KEY) {
     record(
       "photo.organized_with_key",
-      !outcome.timedOut && ["done", "needs_review"].includes(outcome.captureStatus),
+      !outcome.timedOut &&
+        ["done", "needs_review"].includes(outcome.captureStatus) &&
+        ["created_note", "added_to_note", "kept_in_inbox", "needs_review"].includes(
+          outcome.receipt?.outcome
+        ),
       {
         captureStatus: outcome.captureStatus,
         lastErrorCode: outcome.lastErrorCode,
@@ -1116,22 +1269,18 @@ async function uploadPhoto(captureId, attachmentId, bytes, extra = {}) {
         receiptOutcome: outcome.receipt?.outcome ?? null
       }
     );
-    const noteId = outcome.receipt?.destination?.noteId ?? null;
-    if (noteId) {
-      const note = await api("GET", `/notes/${noteId}`, { token });
-      const body = note.json?.note?.bodyMarkdown ?? "";
-      record(
-        "photo.filed_note_references_the_photo",
-        note.status === 200 && body.includes(`unfiled-attachment:${attachmentId}`),
-        { status: note.status, referenced: body.includes(`unfiled-attachment:${attachmentId}`) }
-      );
-    } else {
-      record("photo.filed_note_references_the_photo", outcome.captureStatus === "needs_review", {
-        reason: "no_destination",
-        captureStatus: outcome.captureStatus,
-        note: "a review outcome carries no note yet"
-      });
-    }
+    const { noteId, note } = await filedNote(
+      captureId,
+      outcome.receipt,
+      "photo",
+      "Gate photo",
+      "generic"
+    );
+    record(
+      "photo.filed_note_references_the_photo",
+      noteId !== null && noteReferencesAttachment(note, attachmentId),
+      { status: note?.status ?? null, filed: noteId !== null }
+    );
   } else {
     record(
       "photo.keyless_fails_with_provider_unavailable",
@@ -1287,6 +1436,7 @@ function finish() {
     finishedAt: new Date().toISOString(),
     organizerKey: OPENAI_KEY !== null,
     cronDrain: CRON_SECRET !== null,
+    confirmsAddresses,
     totals: { steps: results.length, failed: failures },
     results
   };

@@ -1,0 +1,49 @@
+# The supply-chain check for what ships: a high or critical advisory in the production dependency
+# graph turns this red.
+#
+# It never runs on a pull request or a push, and so can never block a change. `pnpm audit` asks
+# npm's advisory service over the network, and that service answers when it feels like it: it hung
+# for minutes at a time while the registry itself served in a tenth of a second. A check that can
+# fail for reasons unrelated to the commit does not belong in front of a commit.
+#
+# It still swallows nothing. A registry it cannot reach means this graph is not known to be clean,
+# and that is red until it can be checked, rather than a green run that quietly audited nothing.
+# Nobody is blocked while it is red, so the honest answer costs nothing.
+name: Dependency audit
+
+on:
+  schedule:
+    # Daily, a few minutes off the hour so it does not land in the busiest scheduling window.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: dependency-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Production dependency advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.14.0
+          run_install: false
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: pnpm
+
+      - name: Audit the production dependency graph
+        run: pnpm audit:production

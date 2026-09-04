@@ -24,12 +24,30 @@ describe("versioned deterministic routing corpus", () => {
     expect(new Set(corpus.cases.map(({ id }) => id)).size).toBe(corpus.cases.length);
   });
 
+  it("can express a capture that carries a photo the owner never described", async () => {
+    // Before this, the corpus could not say "the owner sent a photo and typed nothing", so the
+    // whole photo path sat outside the gate that decides whether routing may auto-apply.
+    const corpus = await loadRoutingEvaluationCorpus();
+    const photoCases = corpus.cases.filter(({ category }) => category === "photo_capture");
+    const uploadOnly = photoCases.filter(
+      (testCase) => (testCase.attachments?.images ?? 0) > 0 && testCase.capture === "Photo"
+    );
+    expect(uploadOnly.length).toBeGreaterThanOrEqual(3);
+    for (const testCase of uploadOnly) {
+      expect(testCase.attachments?.visualDescriptor).toEqual(expect.any(String));
+    }
+    const autoFiling = photoCases.filter(
+      ({ definition }) => definition.expect.expectedBand === "auto"
+    );
+    expect(autoFiling.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("computes every release metric and passes only the deterministic safety baseline", async () => {
     const report = evaluateRoutingCorpus(await loadRoutingEvaluationCorpus());
 
     expect(report).toMatchObject({
-      cases: 175,
-      expectedHostileReplays: 10,
+      cases: 185,
+      expectedHostileReplays: 11,
       unsupportedCategories: ["multilingual"],
       baseline: {
         promptVersion: "routing-v1",

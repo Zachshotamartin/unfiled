@@ -3,6 +3,11 @@ import {
   ANTHROPIC_ORGANIZATION_TOOL_DESCRIPTION,
   ANTHROPIC_ORGANIZATION_TOOL_NAME
 } from "./anthropic-schema.js";
+import {
+  ORGANIZER_DESCRIPTOR_PROMPT,
+  ORGANIZER_DESCRIPTOR_SCHEMA,
+  ORGANIZER_DESCRIPTOR_SCHEMA_NAME
+} from "./descriptor.js";
 import { OrganizerPlannerReviewError, OrganizerProviderError } from "./errors.js";
 import {
   ANTHROPIC_MODEL_IDS,
@@ -27,6 +32,11 @@ import { isRecord } from "./provider-transport.js";
 export const ANTHROPIC_MESSAGES_ENDPOINT = "https://api.anthropic.com/v1/messages" as const;
 /** Reviewed stable Messages API version; effort and strict tools need no beta header. */
 export const ANTHROPIC_API_VERSION = "2023-06-01" as const;
+
+/** One bounded sentence, plus room for the tool-call envelope around it. */
+const ANTHROPIC_DESCRIPTOR_MAX_TOKENS = 1_024;
+const ANTHROPIC_DESCRIPTOR_TOOL_DESCRIPTION =
+  "Describes what the photos attached to one untrusted capture show, in a single factual sentence used only to find the note the capture belongs in." as const;
 
 /**
  * Code-pinned Claude routing profile. The exact model comes from the immutable
@@ -84,7 +94,8 @@ function parseMessagesResponse(value: unknown): unknown {
   if (
     !isRecord(block) ||
     block.type !== "tool_use" ||
-    block.name !== ANTHROPIC_ORGANIZATION_TOOL_NAME ||
+    (block.name !== ANTHROPIC_ORGANIZATION_TOOL_NAME &&
+      block.name !== ORGANIZER_DESCRIPTOR_SCHEMA_NAME) ||
     typeof block.id !== "string" ||
     !isRecord(block.input)
   ) {
@@ -97,9 +108,14 @@ export const ANTHROPIC_PROVIDER_ADAPTER: OrganizerProviderAdapter = Object.freez
   provider: "anthropic",
   buildRequest(input) {
     const effort = effortProfile(input.routingEffort);
+    const describing = input.task === "describe";
+    const toolName = describing
+      ? ORGANIZER_DESCRIPTOR_SCHEMA_NAME
+      : ANTHROPIC_ORGANIZATION_TOOL_NAME;
     return Object.freeze({
       body: JSON.stringify({
-        max_tokens: effort.maxTokens,
+        // One sentence needs no room to reason; the routing call still gets the full budget.
+        max_tokens: describing ? ANTHROPIC_DESCRIPTOR_MAX_TOKENS : effort.maxTokens,
         messages: [
           {
             content: [
@@ -113,19 +129,23 @@ export const ANTHROPIC_PROVIDER_ADAPTER: OrganizerProviderAdapter = Object.freez
           }
         ],
         model: input.modelId,
-        output_config: { effort: effort.effort },
+        output_config: { effort: describing ? "low" : effort.effort },
         stream: false,
-        system: ORGANIZER_ROUTING_PROMPT,
+        system: describing ? ORGANIZER_DESCRIPTOR_PROMPT : ORGANIZER_ROUTING_PROMPT,
         tool_choice: {
           disable_parallel_tool_use: true,
-          name: ANTHROPIC_ORGANIZATION_TOOL_NAME,
+          name: toolName,
           type: "tool"
         },
         tools: [
           {
-            description: ANTHROPIC_ORGANIZATION_TOOL_DESCRIPTION,
-            input_schema: ANTHROPIC_ORGANIZATION_PLAN_SCHEMA,
-            name: ANTHROPIC_ORGANIZATION_TOOL_NAME,
+            description: describing
+              ? ANTHROPIC_DESCRIPTOR_TOOL_DESCRIPTION
+              : ANTHROPIC_ORGANIZATION_TOOL_DESCRIPTION,
+            input_schema: describing
+              ? ORGANIZER_DESCRIPTOR_SCHEMA
+              : ANTHROPIC_ORGANIZATION_PLAN_SCHEMA,
+            name: toolName,
             strict: true
           }
         ]

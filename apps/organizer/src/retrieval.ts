@@ -1,6 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
-import type { RoutingSignalFeatures } from "@unfiled/ai-routing";
+import {
+  captureKindText,
+  captureRetrievalText,
+  type RoutingSignalFeatures
+} from "@unfiled/ai-routing";
 import {
   createPrivateRagRetriever,
   DEFAULT_PRIVATE_RAG_CACHE_BYTE_BUDGET,
@@ -17,7 +21,6 @@ import {
 import type {
   ClaimedOrganizerJob,
   EncryptedCandidate,
-  OrganizerCandidatePage,
   OrganizerCandidateRetrievalPort,
   OrganizerRagRecord,
   OrganizerRepository,
@@ -30,7 +33,9 @@ import { organizerLocalDate } from "./local-date.js";
 import {
   inferOrganizerCaptureKind,
   resolveDeterministicDestination,
-  type DecryptedCapture
+  routedOrganizerCapture,
+  type DecryptedCapture,
+  type OrganizerCaptureControls
 } from "./planner.js";
 import { createOrganizerRagPayloadOpener } from "./rag-crypto.js";
 
@@ -59,7 +64,6 @@ const ZERO_FEATURES: RoutingSignalFeatures = Object.freeze({
   explicitDestinationMention: 0,
   margin: 0,
   openSameDayTypeMatch: 0,
-  priorAccepted: 0,
   reasonCodeConsistency: 0,
   ruleOrAliasNearMatch: 0,
   semanticSimilarity: 0,
@@ -102,12 +106,28 @@ function compatibleType(
   capture: DecryptedCapture,
   noteType: EncryptedCandidate["noteType"]
 ): number {
-  const kind = inferOrganizerCaptureKind(capture.rawContent);
+  const kind = inferOrganizerCaptureKind(captureKindText(routedOrganizerCapture(capture)));
   if (kind === "list_items") return noteType === "list" ? 1 : 0;
   if (kind === "log_entry") return noteType === "log" ? 1 : 0;
   if (kind === "project_update") return noteType === "project" ? 1 : 0;
   if (kind === "principle") return noteType === "principle" ? 1 : 0;
   return noteType === "generic" ? 1 : 0.25;
+}
+
+/**
+ * The capture as it stands under the current lease-bound controls. The photos and the model's
+ * reading of them travel with it, because every signal below is computed from them.
+ */
+function currentReading(
+  capture: DecryptedCapture,
+  controls: OrganizerCaptureControls
+): DecryptedCapture {
+  return Object.freeze({
+    attachments: capture.attachments ?? [],
+    controls,
+    rawContent: capture.rawContent,
+    visualDescriptor: capture.visualDescriptor ?? null
+  });
 }
 
 function candidateLimit(job: ClaimedOrganizerJob): number {
@@ -146,20 +166,22 @@ function featureFor(
   const sameTitleCount = allMatches.filter(
     ({ title }) => normalizePrivateRagText(title) === normalizePrivateRagText(match.title)
   ).length;
-  const best = allMatches[0];
-  const runnerUp = allMatches[1];
+  // Separation, not affinity: how far this candidate stands above the best of the others. A
+  // candidate the retriever did not rank first has none, which is why the policy will not file
+  // it unattended however sure the model is.
+  const bestOtherScore = Math.max(
+    0,
+    ...allMatches.filter(({ noteId }) => noteId !== match.noteId).map(({ score }) => score)
+  );
   const margin = isDeterministicDestination
     ? 1
-    : best?.noteId === match.noteId
-      ? Math.max(0, Math.min(1, best.score - (runnerUp?.score ?? 0)))
-      : 0;
+    : Math.max(0, Math.min(1, match.score - bestOtherScore));
   return Object.freeze({
     destinationRecency: match.signals.recency,
     duplicateTitleSuspicion: sameTitleCount > 1 ? 1 : 0,
     explicitDestinationMention: isDeterministicDestination ? 1 : 0,
     margin,
     openSameDayTypeMatch: candidate.isOpen && sameDay && typeCompatibility === 1 ? 1 : 0,
-    priorAccepted: 0,
     reasonCodeConsistency: isDeterministicDestination ? 1 : 0,
     ruleOrAliasNearMatch: isDeterministicDestination
       ? 1
@@ -167,7 +189,7 @@ function featureFor(
           match.signals.fullText,
           match.signals.titleExact,
           match.signals.trigram,
-          titleAliasSignal(capture.rawContent, match.title)
+          titleAliasSignal(captureRetrievalText(routedOrganizerCapture(capture)), match.title)
         ),
     semanticSimilarity: match.signals.vector ?? 0,
     typeCompatibility
@@ -194,7 +216,6 @@ function explicitFallbackFeatures(
       typeCompatibility === 1
         ? 1
         : 0,
-    priorAccepted: 0,
     reasonCodeConsistency: 1,
     ruleOrAliasNearMatch: 1,
     semanticSimilarity: 0,
@@ -445,22 +466,18 @@ export function createOrganizerCandidateRetrieval(
 
   async function fallback(
     input: Parameters<OrganizerCandidateRetrievalPort["retrieve"]>[0]
-  ): Promise<
-    OrganizerCandidatePage & Readonly<{ routingPolicyContext: OrganizerRoutingPolicyContext }>
-  > {
+  ): Promise<Awaited<ReturnType<OrganizerCandidateRetrievalPort["retrieve"]>>> {
     const page = await options.repository.candidates({
       jobId: input.job.jobId,
       leaseToken: input.job.leaseToken,
       limit: candidateLimit(input.job),
       signal: input.signal
     });
-    const currentCapture = Object.freeze({
-      controls: page.controls,
-      rawContent: input.capture.rawContent
-    });
+    const currentCapture = currentReading(input.capture, page.controls);
     return Object.freeze({
       ...page,
       ragGenerationId: null,
+      revalidationCandidates: page.candidates,
       routingPolicyContext: context(input.job, page.candidates, currentCapture, null)
     });
   }
@@ -468,9 +485,7 @@ export function createOrganizerCandidateRetrieval(
   async function completeNoMatch(
     input: Parameters<OrganizerCandidateRetrievalPort["retrieve"]>[0],
     generationId: string
-  ): Promise<
-    OrganizerCandidatePage & Readonly<{ routingPolicyContext: OrganizerRoutingPolicyContext }>
-  > {
+  ): Promise<Awaited<ReturnType<OrganizerCandidateRetrievalPort["retrieve"]>>> {
     // The bounded candidate RPC is the only lease-bound source of current
     // capture controls. Its encrypted candidates are deliberately discarded:
     // a verified complete scan established that none are usable destinations.
@@ -480,21 +495,24 @@ export function createOrganizerCandidateRetrieval(
       limit: candidateLimit(input.job),
       signal: input.signal
     });
-    const currentCapture = Object.freeze({
-      controls: page.controls,
-      rawContent: input.capture.rawContent
-    });
+    const currentCapture = currentReading(input.capture, page.controls);
     if (page.controls.explicitDestinationNoteId !== null || page.controls.ruleMatch !== null) {
       return Object.freeze({
         ...page,
         ragGenerationId: null,
+        revalidationCandidates: page.candidates,
         routingPolicyContext: context(input.job, page.candidates, currentCapture, null)
       });
     }
+    // Disclosure and revalidation are different questions. Nothing here is a usable destination,
+    // so nothing is disclosed; the page the repository listed is still the page the heartbeat
+    // manifest must mirror, and reporting an empty one made the RPC reject the manifest and
+    // charge a permanent validation_failed to the owner's capture.
     return Object.freeze({
       candidates: Object.freeze([]),
       controls: page.controls,
       ragGenerationId: generationId,
+      revalidationCandidates: page.candidates,
       routingPolicyContext: context(input.job, [], currentCapture, [])
     });
   }
@@ -545,6 +563,11 @@ export function createOrganizerCandidateRetrieval(
       if (cacheable) observeSnapshot(input.job.ownerId, probe.page.snapshot);
       else invalidateOwner(input.job.ownerId);
 
+      // Both queries run over what the capture is about. A capture the owner sent without
+      // typing carries only the client's "Photo" placeholder, which matches no note in any
+      // library, so before the descriptor reached here a photo could never find a destination.
+      const retrievalText = captureRetrievalText(routedOrganizerCapture(input.capture));
+
       let queryEmbedding: Float32Array;
       try {
         queryEmbedding = await options.embeddingProvider.embed({
@@ -554,7 +577,7 @@ export function createOrganizerCandidateRetrieval(
             ? {}
             : { providerCredential: input.providerCredential }),
           signal: input.signal,
-          text: input.capture.rawContent
+          text: retrievalText
         });
       } catch (error: unknown) {
         if (error instanceof OrganizerProviderError && error.safeCode === "provider_key_invalid")
@@ -583,7 +606,7 @@ export function createOrganizerCandidateRetrieval(
               query: {
                 embedding: queryEmbedding,
                 modelId: probe.page.snapshot.modelId,
-                text: input.capture.rawContent
+                text: retrievalText
               },
               signal: input.signal
             });
@@ -625,14 +648,12 @@ export function createOrganizerCandidateRetrieval(
           selected.controls.ruleMatch !== null
         )
           return await fallback(input);
-        const currentCapture = Object.freeze({
-          controls: selected.controls,
-          rawContent: input.capture.rawContent
-        });
+        const currentCapture = currentReading(input.capture, selected.controls);
         return Object.freeze({
           candidates: selected.candidates,
           controls: selected.controls,
           ragGenerationId: result.snapshot.generationId,
+          revalidationCandidates: selected.candidates,
           routingPolicyContext: context(
             input.job,
             selected.candidates,

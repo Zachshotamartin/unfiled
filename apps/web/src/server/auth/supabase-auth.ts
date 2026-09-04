@@ -96,7 +96,15 @@ export interface AuthProvider {
   refresh(refreshToken: string): Promise<AuthSession | null>;
   signInWithPassword(email: string, password: string): Promise<AuthSession>;
   signOut(accessToken: string): Promise<void>;
-  signUp(email: string, password: string): Promise<AuthSession>;
+  /**
+   * A session when the deployment confirms nothing, or null when it emailed a code and is
+   * waiting for it. Null is a normal outcome, not a failure.
+   */
+  signUp(email: string, password: string): Promise<AuthSession | null>;
+  /** Exchanges the emailed code for a session. */
+  verifyEmail(email: string, code: string): Promise<AuthSession>;
+  /** Sends another code. Says nothing about whether the address has an account. */
+  resendVerification(email: string): Promise<void>;
 }
 
 function providerMessage(value: unknown): string {
@@ -143,6 +151,33 @@ export const supabaseAuthProvider: AuthProvider = {
     if (response.status === 429) throw providerRateLimit(response);
     if (!response.ok) throw providerUnavailable();
   },
+  async verifyEmail(email, code) {
+    const response = await authFetch("/verify", {
+      method: "POST",
+      body: JSON.stringify({ type: "signup", email, token: code })
+    });
+    if (response.status === 400 || response.status === 401 || response.status === 403) {
+      throw new HttpError(
+        401,
+        ApiErrorCode.UNAUTHORIZED,
+        "That code is wrong or has expired. Ask for a new one."
+      );
+    }
+    if (response.status === 429) throw providerRateLimit(response);
+    if (!response.ok) throw providerUnavailable();
+    return requireAuthSession(await response.json().catch(() => null));
+  },
+  async resendVerification(email) {
+    const response = await authFetch("/resend", {
+      method: "POST",
+      body: JSON.stringify({ type: "signup", email })
+    });
+    if (response.status === 429) throw providerRateLimit(response);
+    // An address without a pending confirmation is answered the same way as one with it, so a
+    // caller cannot learn which addresses have accounts.
+    if (response.status === 400 || response.status === 422) return;
+    if (!response.ok) throw providerUnavailable();
+  },
   async signUp(email, password) {
     const response = await authFetch("/signup", {
       method: "POST",
@@ -167,13 +202,9 @@ export const supabaseAuthProvider: AuthProvider = {
     if (!response.ok) throw providerUnavailable();
     const session = authSession(body);
     if (session === null) {
-      // The identity provider created the account but withheld a session, which means it
-      // still expects an email confirmation step. That step is not part of this product.
-      throw new HttpError(
-        503,
-        ApiErrorCode.PROVIDER_UNAVAILABLE,
-        "Account creation is not available right now. Try again later."
-      );
+      // The account exists and the provider emailed a code instead of a session. The owner
+      // finishes at verifyEmail; nothing has gone wrong.
+      return null;
     }
     return session;
   }

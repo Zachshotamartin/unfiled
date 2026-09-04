@@ -24,10 +24,11 @@
     display: grid;
     grid-template-columns: 4.75rem minmax(0, 1fr);
   }
-  .desktop-nav {
+  .desk-rail {
     display: flex;
   }
-  .mobile-nav {
+  /* The rail carries the same two destinations and one action, so the dock stands down. */
+  .desk-dock {
     display: none;
   }
   .product-page {
@@ -55,12 +56,9 @@
   .product-shell {
     grid-template-columns: 13.75rem minmax(0, 1fr);
   }
-  .desktop-nav {
+  .desk-rail {
     padding-right: 1rem;
     padding-left: 1rem;
-  }
-  .app-nav-marker {
-    left: -1rem;
   }
   .note-editor-page {
     display: grid;

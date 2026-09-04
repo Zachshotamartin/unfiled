@@ -1,10 +1,11 @@
 import {
   MutationResultSchema,
   NoteCreateRequestSchema,
-  NoteSchema,
+  NoteDetailSchema,
   NoteUpdateRequestSchema,
+  noteAttachmentReferences,
   type MutationResult,
-  type NoteDto
+  type NoteDetail
 } from "@unfiled/contracts";
 import { runManualNoteRepositoryParity, type ManualNoteParityDriver } from "@unfiled/domain";
 import { describe, expect, it } from "vitest";
@@ -25,8 +26,8 @@ const context: RepositoryContext = {
   userId: "00000000-0000-4000-8000-000000000041"
 };
 
-function noteDto(note: NoteRecord): NoteDto {
-  return NoteSchema.parse({
+function noteDetail(note: NoteRecord): NoteDetail {
+  return NoteDetailSchema.parse({
     id: note.id,
     spaceId: note.spaceId,
     type: note.type,
@@ -42,13 +43,14 @@ function noteDto(note: NoteRecord): NoteDto {
     tagIds: note.tagIds,
     links: note.links.map(({ linkType, toNoteId }) => ({ linkType, toNoteId })),
     createdAt: note.createdAt,
-    updatedAt: note.updatedAt
+    updatedAt: note.updatedAt,
+    attachments: noteAttachmentReferences(note.bodyMarkdown)
   });
 }
 
 function mutationResult(result: NoteMutationResult): MutationResult {
   return MutationResultSchema.parse({
-    note: noteDto(result.note),
+    note: noteDetail(result.note),
     revision: result.revision,
     mutationId: result.mutation.id,
     replayed: result.mutation.replayed,
@@ -104,7 +106,7 @@ describe("InMemoryManualNotesRepository domain parity", () => {
         ),
       undo: async (mutationId, input) =>
         mutationResult(await repository.undoMutation(context, mutationId, input)),
-      get: async (noteId) => noteDto(await repository.getNote(context, noteId)),
+      get: async (noteId) => noteDetail(await repository.getNote(context, noteId)),
       errorCode: (error) => (error instanceof HttpError ? error.code : undefined)
     };
 

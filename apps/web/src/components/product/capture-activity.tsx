@@ -1,18 +1,12 @@
 "use client";
 
-import {
-  ArrowClockwiseIcon,
-  ArrowRightIcon,
-  CheckCircleIcon,
-  CloudArrowUpIcon,
-  HourglassMediumIcon,
-  TrayIcon,
-  WarningCircleIcon
-} from "@phosphor-icons/react";
 import type { EntityId } from "@unfiled/contracts";
 import Link from "next/link";
+import type { ReactNode } from "react";
 
 import type { CaptureActivityItem, CaptureActivityStatus } from "@/lib/capture/capture-queue";
+
+import { UnfiledGlyph, type UnfiledGlyphName } from "./unfiled-glyph";
 
 export function captureStatusLabel(status: CaptureActivityStatus): string {
   switch (status) {
@@ -39,18 +33,19 @@ export function captureStatusLabel(status: CaptureActivityStatus): string {
   }
 }
 
-function StatusIcon({ status }: Readonly<{ status: CaptureActivityStatus }>) {
-  if (status === "done") return <CheckCircleIcon size={18} weight="fill" aria-hidden="true" />;
-  if (status === "failed" || status === "permanent") {
-    return <WarningCircleIcon size={18} aria-hidden="true" />;
-  }
-  if (status === "inbox" || status === "needs_review") {
-    return <TrayIcon size={18} aria-hidden="true" />;
-  }
-  if (status === "waiting" || status === "retrying") {
-    return <CloudArrowUpIcon size={18} aria-hidden="true" />;
-  }
-  return <HourglassMediumIcon size={18} aria-hidden="true" />;
+/**
+ * Only what needs the owner (ADR-0019, decision 9). A filed capture is a note in the Library, so
+ * it never lingers in the Inbox — and nothing is left behind there when that note is deleted.
+ */
+export function captureNeedsOwner(status: CaptureActivityStatus): boolean {
+  return status !== "done";
+}
+
+function statusGlyph(status: CaptureActivityStatus): UnfiledGlyphName {
+  if (status === "failed" || status === "permanent") return "warning";
+  if (status === "inbox" || status === "needs_review") return "tray";
+  if (status === "waiting" || status === "retrying" || status === "sending") return "send";
+  return "clock";
 }
 
 function formatCaptureTime(value: string): string {
@@ -68,6 +63,10 @@ type CaptureActivityProps = Readonly<{
   loading: boolean;
   onRetryLocal: (captureId: EntityId<"cap">) => void;
   onRetryRemote: (captureId: EntityId<"cap">) => void;
+  /** The review decisions the Inbox now carries, since Review is no longer a destination. */
+  reviewDecisions?: ReactNode;
+  /** False while a review decision is listed above, so "nothing waiting" stays true. */
+  reviewDecisionsEmpty?: boolean;
 }>;
 
 export function CaptureActivity({
@@ -75,14 +74,18 @@ export function CaptureActivity({
   items,
   loading,
   onRetryLocal,
-  onRetryRemote
+  onRetryRemote,
+  reviewDecisions,
+  reviewDecisionsEmpty = true
 }: CaptureActivityProps) {
-  const providerUnavailable = items.some((item) => item.errorCode === "provider_unavailable");
+  const waiting = items.filter((item) => captureNeedsOwner(item.status));
+  const nothingWaiting = waiting.length === 0 && reviewDecisionsEmpty;
+  const providerUnavailable = waiting.some((item) => item.errorCode === "provider_unavailable");
 
   return (
     <section className="capture-activity" aria-labelledby="capture-activity-heading">
       <div className="capture-section-heading">
-        <h2 id="capture-activity-heading">Capture activity</h2>
+        <h2 id="capture-activity-heading">Needs you</h2>
         <span aria-live="polite">Updates every 4 seconds</span>
       </div>
       {providerUnavailable ? (
@@ -94,10 +97,11 @@ export function CaptureActivity({
       ) : null}
       {error === null ? null : (
         <div className="capture-inline-error" role="status">
-          <WarningCircleIcon size={17} aria-hidden="true" /> {error}
+          <UnfiledGlyph glyph="warning" size={17} weight={1.9} /> {error}
         </div>
       )}
-      {loading && items.length === 0 ? (
+      {reviewDecisions}
+      {loading && nothingWaiting ? (
         <div
           className="capture-activity-loading"
           aria-label="Loading capture activity"
@@ -107,17 +111,19 @@ export function CaptureActivity({
           <div className="skeleton-block mt-4 h-12 w-full" />
         </div>
       ) : null}
-      {!loading && items.length === 0 ? (
-        <p className="capture-activity-empty">Saved captures will show their progress here.</p>
+      {!loading && nothingWaiting ? (
+        <p className="capture-activity-empty">
+          Nothing waiting. Everything you wrote is filed in your Library.
+        </p>
       ) : null}
       <div className="capture-activity-list">
-        {items.map((item) => {
+        {waiting.map((item) => {
           const retryLocal = item.local && item.status === "permanent";
           const retryRemote = !item.local && item.status === "failed";
           return (
             <article key={item.id} className="capture-activity-row">
               <div className="capture-state-icon">
-                <StatusIcon status={item.status} />
+                <UnfiledGlyph glyph={statusGlyph(item.status)} size={18} weight={1.9} />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="capture-activity-meta">
@@ -136,11 +142,11 @@ export function CaptureActivity({
                   className="quiet-button shrink-0"
                   onClick={() => (retryLocal ? onRetryLocal(item.id) : onRetryRemote(item.id))}
                 >
-                  <ArrowClockwiseIcon size={15} aria-hidden="true" /> Retry
+                  <UnfiledGlyph glyph="undo" size={15} weight={2} /> Retry
                 </button>
               ) : item.serverAvailable ? (
                 <Link className="quiet-button shrink-0" href={`/app/captures/${item.id}`}>
-                  View <ArrowRightIcon size={15} aria-hidden="true" />
+                  View <UnfiledGlyph glyph="arrow" size={15} weight={2} />
                 </Link>
               ) : null}
             </article>

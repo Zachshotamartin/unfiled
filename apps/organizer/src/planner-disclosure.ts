@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
 
+import { captureKindText, ownerCaptureText } from "@unfiled/ai-routing";
+
+import { ORGANIZER_DESCRIPTOR_CONTRACT } from "./descriptor.js";
 import { OrganizerPlannerReviewError, OrganizerProviderError } from "./errors.js";
 import {
   inferOrganizerCaptureKind,
+  routedOrganizerCapture,
   sameOrganizerCaptureControls,
   type DeterministicDestinationMatch,
   type DecryptedAttachment,
@@ -252,13 +256,17 @@ export function prepareProviderDisclosure(
     disclosureBoundsFailure();
   const expansionStyle = effectiveExpansionStyle(input);
   const attachments = disclosedAttachments(input.capture.attachments ?? []);
+  // The client sends "Photo" so the capture API's non-empty rule is satisfied. Disclosing that
+  // word as the owner's text told the model to preserve a placeholder it never typed, and made
+  // every signal computed from capture text describe a capture nobody wrote.
+  const routedCapture = routedOrganizerCapture(input.capture);
 
   const providerInput: ProviderInput = Object.freeze({
     candidates: Object.freeze(candidates),
     capture: Object.freeze({
-      inferredKind: inferOrganizerCaptureKind(input.capture.rawContent),
+      inferredKind: inferOrganizerCaptureKind(captureKindText(routedCapture)),
       ownerInstructions: input.capture.guidance ?? null,
-      text: input.capture.rawContent,
+      text: ownerCaptureText(routedCapture),
       attachments: attachments.summary
     }),
     contract: ORGANIZER_DISCLOSURE_CONTRACT,
@@ -277,6 +285,55 @@ export function prepareProviderDisclosure(
     expansionStyle,
     images: attachments.images,
     internalToEphemeralCandidateId,
+    serialized
+  });
+}
+
+/**
+ * The bounded disclosure for the descriptor pass: the photos themselves and the owner's own
+ * text, with no candidates, no controls and no identifiers. It is deliberately a different,
+ * smaller document than the routing disclosure — the descriptor pass exists only to read the
+ * photos, and showing it the library would let a description be shaped by the notes it will be
+ * matched against.
+ */
+export function prepareDescriptorDisclosure(
+  input: Readonly<{
+    capture: Readonly<{ attachments?: readonly DecryptedAttachment[]; rawContent: string }>;
+    captureId: `cap_${string}`;
+    promptVersion: string;
+    schemaVersion: number;
+    signal: AbortSignal;
+  }>
+): PreparedProviderDisclosure {
+  if (
+    input.promptVersion !== ORGANIZER_PROMPT_VERSION ||
+    input.schemaVersion !== ORGANIZER_SCHEMA_VERSION
+  ) {
+    throw new OrganizerProviderError("validation_failed", false);
+  }
+  if (input.signal.aborted) throw new OrganizerProviderError("provider_unavailable", true);
+  if (
+    !CAPTURE_ID.test(input.captureId) ||
+    typeof input.capture.rawContent !== "string" ||
+    characterLength(input.capture.rawContent) < 1 ||
+    characterLength(input.capture.rawContent) > MAX_CAPTURE_CHARACTERS
+  ) {
+    disclosureBoundsFailure();
+  }
+  const attachments = disclosedAttachments(input.capture.attachments ?? []);
+  if (attachments.images.length === 0) disclosureBoundsFailure();
+  const serialized = JSON.stringify({
+    capture: { attachments: attachments.summary, text: input.capture.rawContent },
+    contract: ORGANIZER_DESCRIPTOR_CONTRACT
+  });
+  if (new TextEncoder().encode(serialized).byteLength > MAX_USER_INPUT_BYTES)
+    disclosureBoundsFailure();
+  return Object.freeze({
+    deterministicEphemeralCandidateId: null,
+    ephemeralToInternalCandidateId: new Map(),
+    expansionStyle: "off",
+    images: attachments.images,
+    internalToEphemeralCandidateId: new Map(),
     serialized
   });
 }

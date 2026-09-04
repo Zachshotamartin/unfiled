@@ -1,6 +1,5 @@
 "use client";
 
-import { KeyIcon } from "@phosphor-icons/react";
 import type {
   ProviderKeyDeleteRequest,
   ProviderKeyResponse,
@@ -35,6 +34,7 @@ import { AiSettingsSkeleton } from "./ai-settings-controls";
 import { AiSettingsForm } from "./ai-settings-form";
 import { ProviderKeyPanel, ProviderKeyTabs } from "./provider-key-panel";
 import { ResourceError } from "./resource-states";
+import { UnfiledGlyph } from "./unfiled-glyph";
 
 export type AiSettingsProps = Readonly<{
   /** True only when this deployment provides an app-funded provider credential. */
@@ -350,7 +350,7 @@ export function AiSettings({ managedFallbackAvailable = false }: AiSettingsProps
               submission.
             </p>
           </div>
-          <KeyIcon size={25} className="text-action" aria-hidden="true" />
+          <UnfiledGlyph glyph="lock" size={25} weight={1.9} className="text-action" />
         </header>
 
         <ProviderKeyTabs

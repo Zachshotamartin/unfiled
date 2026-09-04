@@ -14,14 +14,34 @@
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "Cache-Control", "value": "no-store" },
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "Referrer-Policy", "value": "no-referrer" }
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        }
       ]
     }
   ],
   "rewrites": [
-    { "source": "/health", "destination": "/api/health" },
-    { "source": "/internal/query", "destination": "/api/internal/query" }
-  ]
+    {
+      "source": "/health",
+      "destination": "/api/health"
+    },
+    {
+      "source": "/internal/query",
+      "destination": "/api/internal/query"
+    }
+  ],
+  "git": {
+    "deploymentEnabled": {
+      "main": false
+    }
+  }
 }

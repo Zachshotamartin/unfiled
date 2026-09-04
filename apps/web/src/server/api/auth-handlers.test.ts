@@ -20,6 +20,8 @@ function provider(overrides: Partial<AuthProvider> = {}): AuthProvider {
     signInWithPassword: vi.fn(() => Promise.resolve(session)),
     signOut: vi.fn(() => Promise.resolve()),
     signUp: vi.fn(() => Promise.resolve(session)),
+    verifyEmail: vi.fn(() => Promise.resolve(session)),
+    resendVerification: vi.fn(() => Promise.resolve()),
     ...overrides
   };
 }
@@ -53,6 +55,73 @@ describe("auth route handlers", () => {
     expect(response.headers.get("set-cookie")).toContain("HttpOnly");
     expect(quota).toHaveBeenCalledWith("person@example.com", "203.0.113.7");
     expect(signUp).toHaveBeenCalledWith("person@example.com", "correct horse battery");
+  });
+
+  it("asks for the emailed code when the deployment confirms addresses", async () => {
+    // A confirming deployment answers sign-up with a code by email and no session. That is the
+    // normal path, not a failure: the account exists and the owner finishes at /auth/verify.
+    const signUp = vi.fn(() => Promise.resolve(null));
+    const handlers = createAuthHandlers({
+      provider: provider({ signUp }),
+      consumeQuota: vi.fn(() => Promise.resolve())
+    });
+    const response = await handlers.signUp(
+      jsonRequest("/api/v1/auth/sign-up", {
+        email: " Person@Example.COM ",
+        password: "correct horse battery"
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      verificationRequired: true,
+      email: "person@example.com"
+    });
+    expect(response.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("exchanges the emailed code for a session and spends the quota on every attempt", async () => {
+    const verifyEmail = vi.fn(() => Promise.resolve(session));
+    const quota = vi.fn(() => Promise.resolve());
+    const handlers = createAuthHandlers({
+      provider: provider({ verifyEmail }),
+      consumeQuota: quota
+    });
+    const response = await handlers.verify(
+      jsonRequest("/api/v1/auth/verify", { email: " Person@Example.COM ", code: "123456" })
+    );
+    expect(response.status).toBe(200);
+    expect(verifyEmail).toHaveBeenCalledWith("person@example.com", "123456");
+    // A six digit code must not be guessable by volume, so every attempt is counted.
+    expect(quota).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a code that is not six digits before reaching the provider", async () => {
+    const verifyEmail = vi.fn(() => Promise.resolve(session));
+    const handlers = createAuthHandlers({
+      provider: provider({ verifyEmail }),
+      consumeQuota: vi.fn(() => Promise.resolve())
+    });
+    for (const code of ["12345", "1234567", "12345a", ""]) {
+      const response = await handlers.verify(
+        jsonRequest("/api/v1/auth/verify", { email: "person@example.com", code })
+      );
+      expect(response.status).toBe(400);
+    }
+    expect(verifyEmail).not.toHaveBeenCalled();
+  });
+
+  it("answers a resend the same way whether or not the address has an account", async () => {
+    // The reply must not disclose who has an account, so a provider that refuses the address
+    // and one that accepts it produce the same response.
+    const handlers = createAuthHandlers({
+      provider: provider({ resendVerification: vi.fn(() => Promise.resolve()) }),
+      consumeQuota: vi.fn(() => Promise.resolve())
+    });
+    const response = await handlers.resendVerification(
+      jsonRequest("/api/v1/auth/resend", { email: "nobody@example.com" })
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ sent: true });
   });
 
   it("rejects short passwords and malformed emails before touching the provider", async () => {

@@ -1,6 +1,7 @@
 import {
   ApiErrorCode,
   NoteCreateRequestSchema,
+  noteAttachmentReferences,
   type EntityId,
   type EntityKind,
   type InteractiveOperationsRequest,
@@ -49,7 +50,10 @@ class AggregateParityDriver implements ManualNoteParityDriver {
     this.#notes.set(transition.note.id, transition.note);
     this.#mutations.set(transition.mutation.id, transition.mutation);
     return {
-      note: transition.note,
+      note: {
+        ...transition.note,
+        attachments: [...noteAttachmentReferences(transition.note.bodyMarkdown)]
+      },
       revision: transition.revision,
       mutationId: transition.mutation.id,
       replayed,
@@ -141,7 +145,10 @@ class AggregateParityDriver implements ManualNoteParityDriver {
         };
         this.#mutations.set(mutationId, mutation);
         return {
-          note: created.note,
+          note: {
+            ...created.note,
+            attachments: [...noteAttachmentReferences(created.note.bodyMarkdown)]
+          },
           revision: created.revision,
           mutationId,
           replayed: false,

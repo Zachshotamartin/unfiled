@@ -1,18 +1,30 @@
 import { CaptureKindSchema, NoteTypeSchema, OrganizationDecisionSchema } from "@unfiled/contracts";
 import { z } from "zod";
 
+import { noteTypeHoldsParagraphs } from "./application.js";
+
 const UnitIntervalSchema = z.number().min(0).max(1);
+
+/** How many of an account's first captures the warm-up override holds back. */
+const WARMUP_CAPTURE_ORDINALS = 5;
 
 export const RoutingBehaviorModeSchema = z.enum(["cautious", "balanced", "automatic"]);
 export type RoutingBehaviorMode = z.infer<typeof RoutingBehaviorModeSchema>;
 
+/**
+ * An operational failure that ends a capture's routing before a plan can be judged. These are
+ * reached only through `failClosedRoutingPolicy`, never as an input to `bandRoutingDecision`:
+ * a failure has no score and no features to band. `retrieval_unavailable` is deliberately not
+ * called `retrieval_degraded`, which is the hard-override reason for a plan that was banded
+ * while the index could not vouch for its candidates.
+ */
 export const RoutingFailureSchema = z.enum([
   "invalid_plan",
   "provider_unavailable",
   "provider_key_invalid",
   "budget_exhausted",
   "revision_conflict",
-  "retrieval_degraded",
+  "retrieval_unavailable",
   "encryption_failure"
 ]);
 export type RoutingFailure = z.infer<typeof RoutingFailureSchema>;
@@ -25,7 +37,6 @@ export const RoutingSignalFeaturesSchema = z.strictObject({
   destinationRecency: UnitIntervalSchema,
   semanticSimilarity: UnitIntervalSchema,
   margin: UnitIntervalSchema,
-  priorAccepted: UnitIntervalSchema,
   reasonCodeConsistency: UnitIntervalSchema,
   duplicateTitleSuspicion: UnitIntervalSchema
 });
@@ -47,7 +58,8 @@ export const RoutingPolicyInputSchema = z.strictObject({
   retrievalAutoEligible: z.boolean(),
   deterministicRuleMatch: z.boolean(),
   duplicateNoteSuspected: z.boolean(),
-  failure: RoutingFailureSchema.nullable(),
+  /** Whether the owner attached a photo or recording that the organizer must place. */
+  captureCarriesUploads: z.boolean(),
   features: RoutingSignalFeaturesSchema,
   createSignals: CreateRoutingSignalsSchema.nullable()
 });
@@ -55,6 +67,7 @@ export type RoutingPolicyInput = z.infer<typeof RoutingPolicyInputSchema>;
 
 export type RoutingBand = "auto" | "review" | "inbox";
 export type RoutingPolicyReason =
+  | "attachment_placement_unavailable"
   | "automatic_threshold_met"
   | "budget_exhausted"
   | "cautious_mode"
@@ -70,6 +83,7 @@ export type RoutingPolicyReason =
   | "provider_key_invalid"
   | "provider_unavailable"
   | "retrieval_degraded"
+  | "retrieval_unavailable"
   | "revision_conflict"
   | "warmup";
 
@@ -82,6 +96,11 @@ export type RoutingPolicyResult = Readonly<{
   reasons: readonly RoutingPolicyReason[];
 }>;
 
+/**
+ * Every weight here is spent on a signal the organizer can actually observe for a capture. A
+ * weight on a feature no production path can raise silently lifts the auto threshold by its
+ * own value, because the documented ceiling is then unreachable.
+ */
 const FEATURE_WEIGHTS = Object.freeze({
   ruleOrAliasNearMatch: 0.3,
   explicitDestinationMention: 0.25,
@@ -90,7 +109,6 @@ const FEATURE_WEIGHTS = Object.freeze({
   destinationRecency: 0.05,
   semanticSimilarity: 0.1,
   margin: 0.1,
-  priorAccepted: 0.1,
   reasonCodeConsistency: 0.05,
   duplicateTitleSuspicion: -0.15
 } satisfies Record<keyof RoutingSignalFeatures, number>);
@@ -135,13 +153,18 @@ function result(
   });
 }
 
+/**
+ * The one entry point for a capture whose routing ended in a failure rather than a plan. The
+ * result is never auto-apply: a failure the owner can act on in Review keeps the capture
+ * there, and everything else falls back to the Inbox.
+ */
 export function failClosedRoutingPolicy(
   failure: RoutingFailure | "invalid_policy_input",
   margin = 0
 ): RoutingPolicyResult {
   if (
     failure === "revision_conflict" ||
-    failure === "retrieval_degraded" ||
+    failure === "retrieval_unavailable" ||
     failure === "encryption_failure"
   ) {
     return result("review", 0, margin, [failure], true);
@@ -153,8 +176,6 @@ export function bandRoutingDecision(input: unknown): RoutingPolicyResult {
   const parsed = RoutingPolicyInputSchema.safeParse(input);
   if (!parsed.success) return failClosedRoutingPolicy("invalid_policy_input");
   const policy = parsed.data;
-  if (policy.failure !== null)
-    return failClosedRoutingPolicy(policy.failure, policy.features.margin);
 
   const primaryScore = scoreRoutingSignals(policy.features);
   const score =
@@ -180,10 +201,26 @@ export function bandRoutingDecision(input: unknown): RoutingPolicyResult {
   if (policy.destinationNoteType === "principle" && policy.captureKind !== "principle") {
     hardOverrides.push("principle_type_mismatch");
   }
+  // A list or log note's body is a rendering of its items, so there is nowhere in one for the
+  // organizer to place a photo. The capture waits for the owner rather than losing the photo.
+  if (
+    policy.captureCarriesUploads &&
+    policy.destinationNoteType !== null &&
+    !noteTypeHoldsParagraphs(policy.destinationNoteType)
+  ) {
+    hardOverrides.push("attachment_placement_unavailable");
+  }
   if (policy.planDecision === "append_to_note" && policy.captureLength > 2_000) {
     hardOverrides.push("long_capture");
   }
-  if (policy.accountCaptureOrdinal <= 5 && !policy.deterministicRuleMatch) {
+  // Warm-up holds a new account's first captures for review so the owner sees how the
+  // organizer files before it files unattended. An owner who has already chosen Automatic has
+  // answered that question, so the setting they were offered decides rather than the ordinal.
+  if (
+    policy.accountCaptureOrdinal <= WARMUP_CAPTURE_ORDINALS &&
+    policy.mode !== "automatic" &&
+    !policy.deterministicRuleMatch
+  ) {
     hardOverrides.push("warmup");
   }
   if (!policy.retrievalAutoEligible && !policy.deterministicRuleMatch) {

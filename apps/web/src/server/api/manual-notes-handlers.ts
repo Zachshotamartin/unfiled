@@ -28,11 +28,12 @@ import {
   TagDeleteRequestSchema,
   TagUpdateRequestSchema,
   entityIdSchema,
+  noteAttachmentReferences,
   type EntityId,
   type EncryptedUserSearchContinuation,
   type EncryptedUserSearchMaterial,
   type EncryptedUserSearchResult,
-  type NoteDto,
+  type NoteDetail,
   type NoteSummary,
   type SearchNoteResult,
   type Space
@@ -147,7 +148,7 @@ function parseId<K extends "lnk" | "mut" | "note" | "rev" | "spc" | "tag">(
   return parse(entityIdSchema(kind), value);
 }
 
-function canonicalNote(note: NoteRecord): NoteDto {
+function canonicalNote(note: NoteRecord): NoteDetail {
   return {
     id: note.id,
     spaceId: note.spaceId,
@@ -164,7 +165,10 @@ function canonicalNote(note: NoteRecord): NoteDto {
     tagIds: note.tagIds,
     links: note.links.map(({ linkType, toNoteId }) => ({ linkType, toNoteId })),
     createdAt: note.createdAt,
-    updatedAt: note.updatedAt
+    updatedAt: note.updatedAt,
+    // The body keeps the references because they carry the placement; the array carries identity
+    // and kind, so a client renders a note's photo without parsing the body for markers.
+    attachments: [...noteAttachmentReferences(note.bodyMarkdown)]
   };
 }
 

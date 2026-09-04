@@ -510,6 +510,14 @@ for _ in $(seq 1 30); do
 done
 curl --fail --silent --show-error --output /dev/null "http://127.0.0.1:3101/health"
 
+# A stale listener on the application port would answer the readiness probe below while the
+# freshly launched server was dying of EADDRINUSE, and the whole run would then exercise a
+# foreign process; refuse to start on top of one, exactly as the mock port does.
+if curl --silent --output /dev/null "$e2e_app_url/api/health"; then
+  echo "Port 3100 is already in use; stop the other listener before running the HTTP E2E." >&2
+  exit 1
+fi
+
 env -u VERCEL -u VERCEL_ENV -u VERCEL_PROJECT_ID -u VERCEL_URL \
 NEXT_PUBLIC_SUPABASE_URL="$e2e_supabase_url" \
 NEXT_PUBLIC_SUPABASE_ANON_KEY="$ANON_KEY" \
@@ -537,13 +545,15 @@ PORT="3100" \
   >"$e2e_tmp_dir/web.log" 2>&1 &
 e2e_app_pid="$!"
 
+# Liveness is checked before the probe, not after it: a server that has already exited cannot be
+# the thing that answered, and asking in that order is what tells the two apart.
 for _ in $(seq 1 60); do
-  if curl --fail --silent --output /dev/null "$e2e_app_url/api/health"; then
-    break
-  fi
   if ! kill -0 "$e2e_app_pid" 2>/dev/null; then
     echo "The built web server exited before becoming ready." >&2
     exit 1
+  fi
+  if curl --fail --silent --output /dev/null "$e2e_app_url/api/health"; then
+    break
   fi
   sleep 1
 done
@@ -1030,7 +1040,6 @@ correct_e1_fixture_decision() {
   local destination_note_id="$4"
   local source_expected_revision="${5:-1}"
   local destination_expected_revision="${6:-1}"
-  local expected_replayed="${7:-false}"
   local idempotency_key="milestone-e1-$label-correction-$e2e_run_id"
   local body
   local status
@@ -1089,8 +1098,7 @@ correct_e1_fixture_decision() {
   E2E_DECISION_ID="$decision_id" E2E_SOURCE_NOTE_ID="$source_note_id" \
     E2E_DESTINATION_NOTE_ID="$destination_note_id" \
     E2E_SOURCE_REVISION="$source_expected_revision" \
-    E2E_DESTINATION_REVISION="$destination_expected_revision" \
-    E2E_EXPECTED_REPLAYED="$expected_replayed" node -e '
+    E2E_DESTINATION_REVISION="$destination_expected_revision" node -e '
       const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
       if (value.outcome !== "applied" || value.decisionId !== process.env.E2E_DECISION_ID) {
         process.exit(1);
@@ -1103,7 +1111,9 @@ correct_e1_fixture_decision() {
           value.destination?.currentRevision !== Number(process.env.E2E_DESTINATION_REVISION) + 1) {
         process.exit(1);
       }
-      if (value.replayed !== (process.env.E2E_EXPECTED_REPLAYED === "true")) process.exit(1);
+      // Every caller applies a correction for the first time, so a reply that says it replayed an
+      // earlier one means the fixture and the server disagree about what just happened.
+      if (value.replayed !== false) process.exit(1);
       process.stdout.write(value.source.mutationId + " " + value.destination.mutationId + "\n");
     ' "$e2e_tmp_dir/e1-$label-correction.json"
 }
@@ -1125,28 +1135,20 @@ e2e_correction_observation_count() {
 SQL
 }
 
-ensure_e2_correction_observed() {
+# The correction endpoint does not acknowledge until its feedback-bound observation is durable:
+# a failed observation returns provider_unavailable, which correct_e1_fixture_decision already
+# refuses. So after one applied correction the observation exists exactly once, and asking again is
+# the whole assertion. This used to replay the correction up to three times and accept a count of
+# one afterwards, which reported success for a product that recorded nothing on the first apply.
+assert_e2_correction_observed() {
   local label="$1"
-  local decision_id="$2"
-  local source_note_id="$3"
-  local destination_note_id="$4"
-  local source_expected_revision="${5:-1}"
-  local destination_expected_revision="${6:-1}"
   local observation_count
-  local replay_attempt
-  for replay_attempt in 1 2 3; do
-    : "$replay_attempt"
-    observation_count="$(e2e_correction_observation_count "$label")"
-    if [[ "$observation_count" == "1" ]]; then
-      return 0
-    fi
-    [[ "$observation_count" == "0" ]]
-    correct_e1_fixture_decision \
-      "$label" "$decision_id" "$source_note_id" "$destination_note_id" \
-      "$source_expected_revision" "$destination_expected_revision" true >/dev/null
-  done
   observation_count="$(e2e_correction_observation_count "$label")"
-  [[ "$observation_count" == "1" ]]
+  if [[ "$observation_count" != "1" ]]; then
+    printf 'The E2 correction %s recorded %s observations on its first apply; expected 1.\n' \
+      "$label" "$observation_count" >&2
+    return 1
+  fi
 }
 
 assert_e1_post_only() {
@@ -3131,9 +3133,7 @@ read -r e2e_e2_accept_source_mutation_a e2e_e2_accept_destination_mutation_a < <
 )
 [[ "$e2e_e2_accept_source_mutation_a" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
 [[ "$e2e_e2_accept_destination_mutation_a" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
-ensure_e2_correction_observed \
-  e2-accept-1 "$e2e_e2_accept_decision_a" \
-  "$e2e_e2_accept_source_a" "$e2e_e2_accept_destination"
+assert_e2_correction_observed e2-accept-1
 
 e2e_e2_accept_first_list_status="$(e2e_routing_http accept-first-list GET /routing-rules)"
 [[ "$e2e_e2_accept_first_list_status" == "200" ]]
@@ -3162,9 +3162,7 @@ read -r e2e_e2_accept_source_mutation_b e2e_e2_accept_destination_mutation_b < <
 )
 [[ "$e2e_e2_accept_source_mutation_b" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
 [[ "$e2e_e2_accept_destination_mutation_b" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
-ensure_e2_correction_observed \
-  e2-accept-2 "$e2e_e2_accept_decision_b" \
-  "$e2e_e2_accept_source_b" "$e2e_e2_accept_destination" 1 2
+assert_e2_correction_observed e2-accept-2
 
 e2e_e2_accept_offer_list_status="$(e2e_routing_http accept-offer-list GET /routing-rules)"
 [[ "$e2e_e2_accept_offer_list_status" == "200" ]]
@@ -3243,9 +3241,7 @@ read -r e2e_e2_decline_source_mutation_a e2e_e2_decline_destination_mutation_a <
 )
 [[ "$e2e_e2_decline_source_mutation_a" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
 [[ "$e2e_e2_decline_destination_mutation_a" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
-ensure_e2_correction_observed \
-  e2-decline-1 "$e2e_e2_decline_decision_a" \
-  "$e2e_e2_decline_source_a" "$e2e_e2_decline_destination"
+assert_e2_correction_observed e2-decline-1
 
 e2e_stage="e2-learned-decline-second-correction"
 read -r e2e_e2_decline_source_b e2e_e2_decline_seed_mutation_b \
@@ -3266,9 +3262,7 @@ read -r e2e_e2_decline_source_mutation_b e2e_e2_decline_destination_mutation_b <
 )
 [[ "$e2e_e2_decline_source_mutation_b" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
 [[ "$e2e_e2_decline_destination_mutation_b" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
-ensure_e2_correction_observed \
-  e2-decline-2 "$e2e_e2_decline_decision_b" \
-  "$e2e_e2_decline_source_b" "$e2e_e2_decline_destination" 1 2
+assert_e2_correction_observed e2-decline-2
 
 e2e_e2_decline_offer_list_status="$(e2e_routing_http decline-offer-list GET /routing-rules)"
 [[ "$e2e_e2_decline_offer_list_status" == "200" ]]
@@ -3842,6 +3836,150 @@ node -e '
   const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
   if (value.code !== "not_found") process.exit(1);
 ' "$e2e_tmp_dir/deleted-capture.json"
+
+# A photo travels the whole real path here: the server seals raw bytes with the encrypted
+# owner's content key, stores them through the encrypted RPC, returns them byte for byte under
+# private/no-store, and binds them to a capture. The SQL tests cover the RPC in isolation and
+# cannot see the app's own sealing, so without this stage a release can be green everywhere and
+# still refuse every photo in production.
+e2e_stage="g-capture-attachment"
+e2e_attachment_id="$(e2e_new_entity_id att)"
+e2e_attachment_capture_id="$(e2e_new_entity_id cap)"
+e2e_photo_fixture="scripts/operations/live-gate/fixtures/photo.jpg"
+if [[ ! -f "$e2e_photo_fixture" ]]; then
+  echo "The capture attachment stage requires $e2e_photo_fixture." >&2
+  exit 1
+fi
+
+e2e_upload_photo() {
+  local output_path="$1"
+  curl --silent --show-error \
+    --output "$output_path" \
+    --write-out '%{http_code}' \
+    --request POST \
+    --header "authorization: Bearer $e2e_encrypted_access_token" \
+    --header "content-type: image/jpeg" \
+    --header "idempotency-key: $e2e_attachment_id" \
+    --header "x-unfiled-capture-id: $e2e_attachment_capture_id" \
+    --header "x-unfiled-privacy: ai_assisted" \
+    --header "x-unfiled-width: 96" \
+    --header "x-unfiled-height: 64" \
+    --data-binary "@$e2e_photo_fixture" \
+    "$e2e_app_url/api/v1/captures/attachments"
+}
+
+e2e_attachment_upload_status="$(e2e_upload_photo "$e2e_tmp_dir/attachment-upload.json")"
+if [[ "$e2e_attachment_upload_status" != "201" ]]; then
+  echo "The photo upload returned $e2e_attachment_upload_status instead of 201." >&2
+  cat "$e2e_tmp_dir/attachment-upload.json" >&2
+  echo >&2
+  # The server names the refusal in its own content-free failure line; showing it here means a
+  # red run explains itself instead of sending the next person guessing.
+  grep "web.request_failed" "$e2e_tmp_dir/web.log" | tail -5 >&2 || true
+  exit 1
+fi
+
+# The replayed upload is the same sealed row, not a second one.
+e2e_attachment_replay_status="$(e2e_upload_photo "$e2e_tmp_dir/attachment-replay.json")"
+if [[ "$e2e_attachment_replay_status" != "201" ]]; then
+  echo "The replayed photo upload returned $e2e_attachment_replay_status instead of 201." >&2
+  cat "$e2e_tmp_dir/attachment-replay.json" >&2
+  echo >&2
+  exit 1
+fi
+
+e2e_attachment_read_status="$(
+  curl --silent --show-error \
+    --output "$e2e_tmp_dir/attachment-read.bin" \
+    --dump-header "$e2e_tmp_dir/attachment-read.headers" \
+    --write-out '%{http_code}' \
+    --request GET \
+    --header "authorization: Bearer $e2e_encrypted_access_token" \
+    "$e2e_app_url/api/v1/captures/attachments/$e2e_attachment_id"
+)"
+if [[ "$e2e_attachment_read_status" != "200" ]]; then
+  echo "Reading the photo back returned $e2e_attachment_read_status instead of 200." >&2
+  exit 1
+fi
+if ! cmp --silent "$e2e_photo_fixture" "$e2e_tmp_dir/attachment-read.bin"; then
+  echo "The photo read back does not match the bytes that were uploaded." >&2
+  exit 1
+fi
+assert_private_cache_headers "$e2e_tmp_dir/attachment-read.headers"
+node -e '
+  const headers = require("node:fs").readFileSync(process.argv[1], "utf8").replaceAll("\r", "");
+  if (!/^content-type:\s*image\/jpeg\s*$/imu.test(headers)) {
+    process.stderr.write("The photo did not come back as image/jpeg.\n");
+    process.exit(1);
+  }
+' "$e2e_tmp_dir/attachment-read.headers"
+
+# The stored row keeps no readable image: a sealed payload, and no JPEG base64 signature.
+psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
+  --no-psqlrc --set=ON_ERROR_STOP=1 --quiet \
+  --set=attachment_id="$e2e_attachment_id" <<'SQL' >/dev/null
+  select pg_catalog.set_config('unfiled.attachment_canary', :'attachment_id', false);
+  do $attachment_canary$
+  declare
+    row_value public.capture_attachments%rowtype;
+  begin
+    select * into row_value
+    from public.capture_attachments
+    where id = pg_catalog.current_setting('unfiled.attachment_canary', true);
+    if not found then
+      raise exception using message = 'sealed_attachment_missing';
+    end if;
+    if row_value.content_envelope is null
+      or not (row_value.content_envelope ? 'payload')
+      or row_value.content_envelope::text like '%/9j/%'
+    then
+      raise exception using message = 'attachment_not_sealed';
+    end if;
+  end;
+  $attachment_canary$;
+SQL
+
+# The capture binds the photo the way a phone does.
+e2e_attachment_capture_body="$({
+  E2E_CAPTURE_ID="$e2e_attachment_capture_id" \
+    E2E_ATTACHMENT_ID="$e2e_attachment_id" \
+    E2E_CREATED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" node -e '
+      process.stdout.write(JSON.stringify({
+        clientCaptureId: process.env.E2E_CAPTURE_ID,
+        rawContent: "A photo capture from the local HTTP end-to-end pass.",
+        source: "web",
+        clientCreatedAt: process.env.E2E_CREATED_AT,
+        clientTimezone: "UTC",
+        privacy: "ai_assisted",
+        expansionDisabled: false,
+        attachmentIds: [process.env.E2E_ATTACHMENT_ID]
+      }));
+    '
+})"
+e2e_encrypted_request_json POST /captures "$e2e_attachment_capture_body" \
+  "$e2e_attachment_capture_id" >/dev/null
+
+# The capture must actually carry the photo. Asserting only the 202 let a server that discards
+# attachmentIds entirely look healthy: the upload succeeded, the capture succeeded, and the
+# photo belonged to nothing.
+e2e_attachment_bound="$(
+  e2e_encrypted_request_json GET "/captures/$e2e_attachment_capture_id" | \
+    E2E_ATTACHMENT_ID="$e2e_attachment_id" node -e '
+      let input = "";
+      process.stdin.on("data", (chunk) => (input += chunk));
+      process.stdin.on("end", () => {
+        const attachments = JSON.parse(input).capture?.attachments ?? [];
+        const ids = attachments.map((attachment) => attachment.id);
+        process.stdout.write(
+          ids.length === 1 && ids[0] === process.env.E2E_ATTACHMENT_ID ? "bound" : `ids=${ids.length}`
+        );
+      });
+    '
+)"
+if [[ "$e2e_attachment_bound" != "bound" ]]; then
+  echo "The capture does not carry the photo that was uploaded for it ($e2e_attachment_bound)." >&2
+  exit 1
+fi
 
 # Leave the shared local database reusable for a subsequent test pass. The API
 # deliberately soft-deletes notes, which removes their searchable plaintext

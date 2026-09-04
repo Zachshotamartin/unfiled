@@ -31,6 +31,40 @@ export const AuthSessionSchema = z.strictObject({
 });
 export type AuthSession = z.infer<typeof AuthSessionSchema>;
 
+/** The six digits an owner receives by email when a new account must be confirmed. */
+export const AuthVerificationCodeSchema = z
+  .string()
+  .trim()
+  .regex(/^[0-9]{6}$/u, "A verification code is six digits.");
+export type AuthVerificationCode = z.infer<typeof AuthVerificationCodeSchema>;
+
+/**
+ * Creating an account either signs the owner in or asks them for the code just emailed to them,
+ * depending on whether the deployment confirms addresses. A client must handle both: the same
+ * build talks to a local stack that confirms nothing and to production, which does.
+ */
+export const AuthSignUpResponseSchema = z.union([
+  AuthSessionSchema,
+  z.strictObject({
+    verificationRequired: z.literal(true),
+    email: NormalizedEmailSchema
+  })
+]);
+export type AuthSignUpResponse = z.infer<typeof AuthSignUpResponseSchema>;
+
+export const AuthVerifyRequestSchema = z.strictObject({
+  email: NormalizedEmailSchema,
+  code: AuthVerificationCodeSchema
+});
+export type AuthVerifyRequest = z.infer<typeof AuthVerifyRequestSchema>;
+
+export const AuthResendRequestSchema = z.strictObject({ email: NormalizedEmailSchema });
+export type AuthResendRequest = z.infer<typeof AuthResendRequestSchema>;
+
+/** Content-free by design: whether a given address has an account is not disclosed here. */
+export const AuthResendResponseSchema = z.strictObject({ sent: z.literal(true) });
+export type AuthResendResponse = z.infer<typeof AuthResendResponseSchema>;
+
 export const AuthSessionResponseSchema = z.strictObject({ user: AuthUserSchema });
 export type AuthSessionResponse = z.infer<typeof AuthSessionResponseSchema>;
 

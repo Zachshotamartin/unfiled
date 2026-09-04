@@ -101,7 +101,7 @@ struct AppShellView: View {
                 receipts: model.receipts,
                 reviewItems: model.reviewItems,
                 isLoading: model.isLoadingLibrary || model.isLoadingReview,
-                needsProviderKey: model.providerKeyMetadataByProvider.isEmpty,
+                needsProviderKey: model.needsProviderKey,
                 submittingInteractionIDs: model.submittingInteractionIDs,
                 interactionErrors: model.interactionErrors,
                 onRefresh: model.refreshAll,
@@ -508,7 +508,16 @@ private struct NoteDestinationView: View {
                 LoadingDestinationView(label: "Loading note")
             }
         }
-        .task(id: "\(noteID):\(model.noteDetail(noteID)?.currentRevision ?? 0)") {
+        // The identity is the note, not the revision the load was supposed to produce. Keying on
+        // the result meant a failed load left the id at revision zero, so the task never ran
+        // again and the screen showed its loading state until the app was relaunched.
+        .task(id: noteID) {
+            _ = await model.loadNote(noteID)
+            async let generatedBlocks: Void = model.loadGeneratedBlocks(noteID: noteID)
+            async let noteContext: Void = model.loadNoteContext(noteID: noteID)
+            _ = await (generatedBlocks, noteContext)
+        }
+        .refreshable {
             _ = await model.loadNote(noteID)
             async let generatedBlocks: Void = model.loadGeneratedBlocks(noteID: noteID)
             async let noteContext: Void = model.loadNoteContext(noteID: noteID)
@@ -528,8 +537,8 @@ private struct RevisionHistoryDestinationView: View {
                     noteTitle: note.title,
                     currentRevision: note.currentRevision,
                     revisions: model.revisions[noteID] ?? [],
-                    isLoading: model.revisions[noteID] == nil,
-                    errorMessage: nil,
+                    isLoading: model.revisions[noteID] == nil && model.revisionsError[noteID] == nil,
+                    errorMessage: model.revisionsError[noteID],
                     onRefresh: { await model.loadRevisions(noteID: noteID) },
                     onPreviewRevision: { revisionID in
                         model.navigationPath.append(

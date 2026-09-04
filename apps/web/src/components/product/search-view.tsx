@@ -1,23 +1,44 @@
 "use client";
 
-import { ArrowRightIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
-import type { SearchNoteResult, SearchNotesResponse } from "@unfiled/contracts";
+import type { SearchNoteResult, SearchNotesRequest, SearchNotesResponse } from "@unfiled/contracts";
 import Link from "next/link";
-import { type SyntheticEvent, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ProductApiError } from "@/lib/product/client";
 import { requestSearchPage } from "@/lib/product/search-client";
 
-import { usePrivateSearchNavigation } from "./private-search-navigation";
 import { EmptyState, ResourceError, ResourceSkeleton } from "./resource-states";
+import { UnfiledGlyph } from "./unfiled-glyph";
 
 function resultKey(result: SearchNoteResult): string {
   return result.noteId;
 }
 
-type SearchScope = "all" | "ai_assisted";
+/**
+ * What the Library asks for. The request carries no privacy scope: the split the picker offered
+ * does not exist in the product, and retrieval runs `unfiled-local-hash-v1`, a deterministic
+ * lexical feature hash computed in process that never contacts a provider.
+ */
+export function searchRequestFor(
+  query: string,
+  includeArchived: boolean,
+  cursor?: string
+): SearchNotesRequest {
+  return {
+    query,
+    archive: includeArchived ? "include" : "exclude",
+    limit: 50,
+    ...(cursor === undefined ? {} : { cursor })
+  };
+}
 
-function usePrivateSearch(query: string, includeArchived: boolean, scope: SearchScope) {
+/**
+ * One search over the library (ADR-0021's context: "there should not be a picker for all notes
+ * or ai assisted notes. there is no separation there"). The request carries no privacy scope, so
+ * retrieval runs the deployed `unfiled-local-hash-v1` path: a deterministic lexical feature hash
+ * computed in process, which never sends the query to a provider.
+ */
+function usePrivateSearch(query: string, includeArchived: boolean) {
   const operation = useRef(0);
   const [data, setData] = useState<SearchNotesResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -40,13 +61,7 @@ function usePrivateSearch(query: string, includeArchived: boolean, scope: Search
       }
       try {
         const page = await requestSearchPage(
-          {
-            query,
-            archive: includeArchived ? "include" : "exclude",
-            limit: 50,
-            ...(scope === "ai_assisted" ? { privacy: "ai_assisted" as const } : {}),
-            ...(cursor === undefined ? {} : { cursor })
-          },
+          searchRequestFor(query, includeArchived, cursor),
           signal
         );
         if (signal.aborted || currentOperation !== operation.current) return;
@@ -78,7 +93,7 @@ function usePrivateSearch(query: string, includeArchived: boolean, scope: Search
         }
       }
     },
-    [includeArchived, query, scope]
+    [includeArchived, query]
   );
 
   useEffect(() => {
@@ -102,12 +117,15 @@ function usePrivateSearch(query: string, includeArchived: boolean, scope: Search
   return { data, error, loadMore, loading, loadingMore, offline, pageError, refresh };
 }
 
-function Results({
+/**
+ * The results that replace the Library's list while the owner is searching. The Library owns the
+ * field and the query; this owns only what the query found.
+ */
+export function SearchResults({
   includeArchived,
-  query,
-  scope
-}: Readonly<{ includeArchived: boolean; query: string; scope: SearchScope }>) {
-  const resource = usePrivateSearch(query, includeArchived, scope);
+  query
+}: Readonly<{ includeArchived: boolean; query: string }>) {
+  const resource = usePrivateSearch(query, includeArchived);
   if (resource.loading && resource.data === null) return <ResourceSkeleton rows={3} />;
   if (resource.error !== null && resource.data === null)
     return (
@@ -131,8 +149,8 @@ function Results({
           <Link key={result.noteId} href={`/app/notes/${result.noteId}`} className="note-row group">
             <div className="flex items-center justify-between gap-4">
               <span className="eyebrow">{result.type}</span>
-              <span className="flex flex-wrap justify-end gap-x-3 font-mono text-[11px] text-disabled-content">
-                <span>{result.spacePath.join(" / ") || "Unfiled"}</span>
+              <span className="flex flex-wrap justify-end gap-x-3 text-[11px] text-muted-content">
+                <span>{result.spacePath.join(" / ")}</span>
                 <time dateTime={result.updatedAt}>
                   {new Date(result.updatedAt).toLocaleDateString()}
                 </time>
@@ -140,15 +158,14 @@ function Results({
             </div>
             <div className="mt-3 flex gap-5">
               <div className="min-w-0 flex-1">
-                <h2 className="text-xl font-medium tracking-[-0.025em]">{result.title}</h2>
+                <h2 className="note-row-title">{result.title}</h2>
                 <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-content">
                   {result.snippet || "Match found in this note."}
                 </p>
               </div>
-              <ArrowRightIcon
-                size={18}
-                className="mt-1 text-disabled-content group-hover:text-action"
-              />
+              <span className="mt-1 text-muted-content group-hover:text-action">
+                <UnfiledGlyph glyph="arrow" size={18} weight={1.9} />
+              </span>
             </div>
           </Link>
         ))}
@@ -168,106 +185,6 @@ function Results({
       <p className="min-h-6 py-2 text-xs text-critical" role="alert">
         {resource.pageError}
       </p>
-    </div>
-  );
-}
-
-export function SearchView() {
-  const privateNavigation = usePrivateSearchNavigation();
-  const [input, setInput] = useState("");
-  const [search, setSearch] = useState({ query: "", sequence: 0 });
-  const [includeArchived, setIncludeArchived] = useState(false);
-  const [scope, setScope] = useState<SearchScope>("all");
-
-  useEffect(() => {
-    const pending = privateNavigation.pending;
-    if (pending === null) return;
-    setInput(pending.query);
-    setSearch((current) => ({ query: pending.query, sequence: current.sequence + 1 }));
-    privateNavigation.consume(pending.sequence);
-  }, [privateNavigation]);
-
-  function submit(event: SyntheticEvent<HTMLFormElement>): void {
-    event.preventDefault();
-    setSearch((current) => ({ query: input.trim(), sequence: current.sequence + 1 }));
-  }
-  return (
-    <div>
-      <form onSubmit={submit} role="search" className="search-form">
-        <div className="search-query-row">
-          <MagnifyingGlassIcon size={21} className="text-muted-content" aria-hidden="true" />
-          <label htmlFor="library-search" className="sr-only">
-            Search your notes
-          </label>
-          <input
-            id="library-search"
-            type="search"
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            placeholder="Search titles and note text"
-            maxLength={200}
-            autoFocus
-          />
-          <button type="submit" className="button-primary" disabled={input.trim().length === 0}>
-            Search
-          </button>
-        </div>
-        <fieldset className="search-scope-controls">
-          <legend>Search scope</legend>
-          <label className="search-scope-option">
-            <input
-              type="radio"
-              name="search-scope"
-              value="all"
-              checked={scope === "all"}
-              onChange={() => setScope("all")}
-            />
-            <span>
-              <strong>All notes</strong>
-              <small>Private exact-text search</small>
-            </span>
-          </label>
-          <label className="search-scope-option">
-            <input
-              type="radio"
-              name="search-scope"
-              value="ai_assisted"
-              checked={scope === "ai_assisted"}
-              onChange={() => setScope("ai_assisted")}
-            />
-            <span>
-              <strong>AI-assisted notes</strong>
-              <small>
-                Your query is sent to OpenAI through Unfiled&apos;s dedicated search service. It
-                does not use your saved organizer key.
-              </small>
-            </span>
-          </label>
-          <label className="search-archive-toggle">
-            <input
-              type="checkbox"
-              checked={includeArchived}
-              onChange={(event) => setIncludeArchived(event.target.checked)}
-            />
-            <span>Include archive</span>
-          </label>
-        </fieldset>
-      </form>
-      <section aria-label="Search results" className="mt-10">
-        {search.query.length === 0 ? (
-          <EmptyState
-            title="Find a line you remember."
-            body="Search looks across note titles and Markdown. Archived notes stay out unless you include them."
-          />
-        ) : (
-          <Results
-            key={search.sequence}
-            query={search.query}
-            includeArchived={includeArchived}
-            scope={scope}
-          />
-        )}
-      </section>
     </div>
   );
 }

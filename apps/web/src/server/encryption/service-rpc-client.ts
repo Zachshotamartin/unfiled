@@ -26,10 +26,19 @@ export type ServiceRpcErrorCodeValue =
 export class ServiceRpcError extends Error {
   public readonly code: ServiceRpcErrorCodeValue;
 
-  public constructor(code: ServiceRpcErrorCodeValue) {
+  /**
+   * A content-free token naming why the database refused the request, so an unmapped
+   * failure is diagnosable from platform logs instead of being an anonymous 503. It
+   * carries the SQLSTATE and, when the database raised one of our own bare snake_case
+   * signals, that signal. Free-text database messages never match and are dropped.
+   */
+  public readonly reason: string | undefined;
+
+  public constructor(code: ServiceRpcErrorCodeValue, reason?: string) {
     super("The encrypted data service could not complete the request");
     this.name = "ServiceRpcError";
     this.code = code;
+    this.reason = reason !== undefined && /^[a-z0-9_]{1,60}$/u.test(reason) ? reason : undefined;
   }
 }
 
@@ -288,7 +297,28 @@ function databaseError(status: number, body: unknown): ServiceRpcError {
   if (message.includes("forbidden") || status === 403) {
     return new ServiceRpcError(ServiceRpcErrorCode.FORBIDDEN);
   }
-  return new ServiceRpcError(ServiceRpcErrorCode.PROVIDER_UNAVAILABLE);
+  return new ServiceRpcError(
+    ServiceRpcErrorCode.PROVIDER_UNAVAILABLE,
+    unmappedReason(status, body, message)
+  );
+}
+
+/**
+ * Names an unmapped database refusal without carrying any owner content: the SQLSTATE the
+ * database reported, plus the raised signal when it is one of our own bare snake_case
+ * tokens. Anything else (free text, quoted values) is left out.
+ */
+function unmappedReason(status: number, body: unknown, message: string): string {
+  const record =
+    body !== null && typeof body === "object" && !Array.isArray(body)
+      ? (body as Readonly<Record<string, unknown>>)
+      : {};
+  const sqlstate =
+    typeof record.code === "string" && /^[0-9A-Za-z]{5}$/u.test(record.code)
+      ? record.code.toLowerCase()
+      : "http" + String(status);
+  const signal = /^[a-z][a-z0-9_]{0,39}$/u.test(message) ? "_" + message : "";
+  return ("db_" + sqlstate + signal).slice(0, 60);
 }
 
 export function createServiceRpcClient(options: ServiceRpcClientOptions): ServiceRpcClient {

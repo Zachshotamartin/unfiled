@@ -1,7 +1,13 @@
 import { z } from "zod";
 
-import { NoteTypeSchema, PrivacyModeSchema } from "./enums.js";
-import { CaptureAttachmentKindSchema, MAX_CAPTURE_ATTACHMENTS } from "./captures.js";
+import { CaptureSourceSchema, NoteTypeSchema, PrivacyModeSchema } from "./enums.js";
+import {
+  CaptureProcessingStateSchema,
+  MAX_CAPTURE_ATTACHMENTS,
+  MAX_NOTE_ATTACHMENTS,
+  NoteAttachmentSchema
+} from "./captures.js";
+import { ApiErrorCodeSchema } from "./errors.js";
 import { entityIdSchema } from "./ids.js";
 const TimestampSchema = z.iso.datetime({ offset: true });
 
@@ -61,11 +67,9 @@ export const AccountExportNoteLinkSchema = z.strictObject({
 });
 
 /// A photo or recording a note places; its bytes sit at attachments/<id>.<jpg|m4a> in the archive
-/// when they could be read.
-export const AccountExportNoteAttachmentSchema = z.strictObject({
-  id: entityIdSchema("att"),
-  kind: CaptureAttachmentKindSchema
-});
+/// when they could be read. This is the same projection the note detail returns, so the archive
+/// and the live note agree on what a note holds.
+export const AccountExportNoteAttachmentSchema = NoteAttachmentSchema;
 export type AccountExportNoteAttachment = z.infer<typeof AccountExportNoteAttachmentSchema>;
 
 export const AccountExportNoteSchema = z.strictObject({
@@ -81,9 +85,27 @@ export const AccountExportNoteSchema = z.strictObject({
   tagIds: z.array(entityIdSchema("tag")).max(100),
   links: z.array(AccountExportNoteLinkSchema).max(100),
   sourceCaptureIds: z.array(entityIdSchema("cap")).max(1_000),
-  attachments: z.array(AccountExportNoteAttachmentSchema).max(MAX_CAPTURE_ATTACHMENTS * 20)
+  attachments: z.array(AccountExportNoteAttachmentSchema).max(MAX_NOTE_ATTACHMENTS)
 });
 export type AccountExportNote = z.infer<typeof AccountExportNoteSchema>;
+
+/**
+ * A capture the owner's library never absorbed: still queued, still being organized, waiting in
+ * Review, kept in the Inbox, or failed. Its words live nowhere else, so the archive carries them
+ * verbatim, with the photos and recordings it holds beside it at attachments/<id>.<jpg|m4a>.
+ */
+export const AccountExportCaptureSchema = z.strictObject({
+  id: entityIdSchema("cap"),
+  rawContent: z.string().min(1).max(10_000),
+  source: CaptureSourceSchema,
+  privacy: PrivacyModeSchema,
+  status: CaptureProcessingStateSchema,
+  lastErrorCode: ApiErrorCodeSchema.nullable(),
+  clientCreatedAt: TimestampSchema,
+  receivedAt: TimestampSchema,
+  attachments: z.array(AccountExportNoteAttachmentSchema).max(MAX_CAPTURE_ATTACHMENTS)
+});
+export type AccountExportCapture = z.infer<typeof AccountExportCaptureSchema>;
 
 export const AccountExportSpaceSchema = z.strictObject({
   id: entityIdSchema("spc"),
@@ -127,6 +149,7 @@ export const AccountExportManifestSchema = z.strictObject({
   spaces: z.array(AccountExportSpaceSchema).max(1_000),
   tags: z.array(AccountExportTagSchema).max(1_000),
   notes: z.array(AccountExportNoteSchema).max(100_000),
-  routingRules: z.array(AccountExportRoutingRuleSchema).max(10_000)
+  routingRules: z.array(AccountExportRoutingRuleSchema).max(10_000),
+  captures: z.array(AccountExportCaptureSchema).max(100_000)
 });
 export type AccountExportManifest = z.infer<typeof AccountExportManifestSchema>;
