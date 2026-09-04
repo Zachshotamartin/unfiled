@@ -259,6 +259,30 @@ boot_simulator() {
 
 # Runs a command with a deadline. macOS ships no coreutils `timeout`, so this is the portable
 # equivalent: the child runs in the background and is killed if it outlives the deadline.
+# How often the wait prints a line saying it is still alive and what the device is doing.
+readonly HEARTBEAT_SECONDS="${UNFILED_IOS_HEARTBEAT_SECONDS:-30}"
+# The device the heartbeat reports on, when this script chose one.
+HEARTBEAT_UDID=""
+
+# What the destination device is doing right now, as CoreSimulator sees it: Booted, Booting,
+# Shutdown, or unknown. This is the difference between "the tests are running" and "the device
+# never came up", which is invisible from xcodebuild's own output.
+simulator_state() {
+  [[ -n "${HEARTBEAT_UDID}" ]] || return 0
+
+  local state
+  state="$(xcrun simctl list devices 2>/dev/null |
+    grep -F "${HEARTBEAT_UDID}" |
+    sed -E 's/.*\(([A-Za-z ]+)\)[^(]*$/\1/' |
+    head -n 1)"
+  printf '%s' "${state:-unknown}"
+}
+
+# Runs a command with a deadline, printing a line every HEARTBEAT_SECONDS so a long step is
+# visibly alive. xcodebuild goes silent from the app target's "Touch ... Unfiled.app" until the
+# tests report, which covers the test-bundle compile, the device boot, the install and the run --
+# minutes with no output at all, indistinguishable from a hang. The heartbeat names the elapsed
+# time and the device state, so a reader can tell which of those is happening.
 run_with_deadline() {
   local deadline="$1"
   shift
@@ -270,6 +294,10 @@ run_with_deadline() {
   while kill -0 "${child}" 2>/dev/null; do
     if ((waited >= deadline)); then
       printf 'Timed out after %ss: %s\n' "${deadline}" "$*" >&2
+      printf 'Booted devices at the timeout:\n' >&2
+      xcrun simctl list devices booted >&2 || true
+      printf 'Simulator and Xcode processes still running:\n' >&2
+      pgrep -fl 'xcodebuild|CoreSimulator|simctl|testmanagerd' >&2 || true
       kill -TERM "${child}" 2>/dev/null || true
       sleep 5
       kill -KILL "${child}" 2>/dev/null || true
@@ -278,6 +306,14 @@ run_with_deadline() {
     fi
     sleep 5
     waited=$((waited + 5))
+    if ((waited % HEARTBEAT_SECONDS == 0)); then
+      if [[ -n "${HEARTBEAT_UDID}" ]]; then
+        printf '  ... still running: %ss elapsed of %ss, simulator is %s\n' \
+          "${waited}" "${deadline}" "$(simulator_state)" >&2
+      else
+        printf '  ... still running: %ss elapsed of %ss\n' "${waited}" "${deadline}" >&2
+      fi
+    fi
   done
 
   wait "${child}"
@@ -294,6 +330,7 @@ test_in_simulator() {
   # An explicit UNFILED_IOS_TEST_DESTINATION is used verbatim and left to xcodebuild.
   local udid="${destination#platform=iOS Simulator,id=}"
   if [[ "${udid}" != "${destination}" ]]; then
+    HEARTBEAT_UDID="${udid}"
     boot_simulator "${udid}"
   fi
 
