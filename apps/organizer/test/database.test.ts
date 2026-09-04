@@ -1361,6 +1361,19 @@ describe("organizer database attachments", () => {
       durationMs: null
     });
     expect(attachments[0]?.source.resourceId).toBe(ATTACHMENT_ID);
+    // The MAC and its key have to survive parsing. They did not: the projection returned early
+    // for everything but a capture, so the cipher was handed an attachment with no MAC at all and
+    // every photo capture in production dead-lettered. The database fixture and the cipher test
+    // each built their own `source`, so neither crossed this seam until now.
+    expect(attachments[0]?.source.contentMac).toMatchObject({
+      keyClass: "ai_assisted",
+      keyPurpose: "content_mac"
+    });
+    expect(attachments[0]?.source.contentMac).toHaveProperty(
+      "value",
+      expect.stringMatching(/^[0-9a-f]{64}$/u)
+    );
+    expect(attachments[0]?.source.contentMacKey).toMatchObject({ purpose: "content_mac" });
     const query = db.queries.at(-1);
     expect(query?.text).toContain("list_encrypted_organizer_attachments");
     expect(query?.values).toEqual([JOB_ID, LEASE]);

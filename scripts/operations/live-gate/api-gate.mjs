@@ -198,18 +198,42 @@ let refreshToken = null;
   }
   confirmsAddresses = mode.confirmsAddresses;
 
-  const up = await api("POST", "/auth/sign-up", { body: { email, password } });
-  const answer = readSignUpAnswer(up);
-  const answered = signUpAnswerMatchesDeployment(answer, confirmsAddresses);
-  record("auth.sign_up", answered, {
-    status: up.status,
-    code: code(up),
-    verificationRequired: answer.verificationRequired,
-    confirmsAddresses
-  });
-  if (!answered) {
-    finish();
-    process.exit(1);
+  // On a deployment that confirms addresses, the account is provisioned through Supabase's admin
+  // API rather than the product's sign-up endpoint. Sign-up would make the gate depend on an email
+  // actually being delivered to gate-<stamp>@example.com -- a domain with no MX by definition --
+  // so the send fails, Supabase answers 500, and the product correctly reports 503
+  // provider_unavailable. That failure describes the gate's own address, not the deployment, and
+  // it stopped the run before a single product behaviour had been exercised.
+  //
+  // This is not sign-up coverage and is not recorded as any. The product's sign-up endpoint is
+  // still exercised below, by the repeated-address check, and its verify endpoint by the
+  // wrong-code check.
+  let up = null;
+  if (confirmsAddresses) {
+    const provisioned = await admin.provisionAccount(email, password);
+    if (
+      !record("auth.account_provisioned_by_admin", provisioned.ok, {
+        status: provisioned.status,
+        confirmsAddresses
+      })
+    ) {
+      finish();
+      process.exit(1);
+    }
+  } else {
+    up = await api("POST", "/auth/sign-up", { body: { email, password } });
+    const answer = readSignUpAnswer(up);
+    const answered = signUpAnswerMatchesDeployment(answer, confirmsAddresses);
+    record("auth.sign_up", answered, {
+      status: up.status,
+      code: code(up),
+      verificationRequired: answer.verificationRequired,
+      confirmsAddresses
+    });
+    if (!answered) {
+      finish();
+      process.exit(1);
+    }
   }
   if (confirmsAddresses) {
     const wrongCode = await api("POST", "/auth/verify", {

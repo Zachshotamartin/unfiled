@@ -333,6 +333,22 @@ select is(
   'capture_attachment',
   'the sealed envelope is the attachment itself'
 );
+-- The organizer verifies each attachment against its content MAC before it reads a byte. The
+-- source used to be compared with its MAC stripped, so the SQL could have dropped it and this
+-- file would still have passed; the organizer then had nothing to verify with and every photo
+-- capture failed. Both halves of that seam are now asserted here and in the organizer.
+select matches(
+  (select value #>> '{attachments,0,source,contentMac,mac}'
+   from organizer_attachment_values where key = 'attachments'),
+  '^[0-9a-f]{64}$',
+  'the attachment source carries its content MAC'
+);
+select is(
+  (select jsonb_typeof(value #> '{attachments,0,source,contentMacKeyRecord}')
+   from organizer_attachment_values where key = 'attachments'),
+  'object',
+  'the attachment source carries the key record that verifies its MAC'
+);
 select is(
   (select value #>> '{attachments,0,source,keyRecord,keyClass}'
    from organizer_attachment_values where key = 'attachments'),
