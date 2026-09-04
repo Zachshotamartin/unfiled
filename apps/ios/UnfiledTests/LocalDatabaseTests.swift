@@ -23,8 +23,7 @@ final class LocalDatabaseTests: XCTestCase {
         )
         let composerSession = try await database.beginComposerDraftSession(
             profileID: profileA,
-            source: .mobile,
-            updatedAfter: "2026-01-01T00:00:00.000Z"
+            source: .mobile
         )
         let savedDraft = try await database.saveComposerDraft(
             ComposerDraft(
@@ -40,10 +39,9 @@ final class LocalDatabaseTests: XCTestCase {
 
         let entries = try await database.outboxEntries(profileID: profileA)
         XCTAssertEqual(entries.map(\.draft.rawContent), [marker])
-        let draft = try await database.recentComposerDraft(
+        let draft = try await database.composerDraft(
             profileID: profileA,
-            source: .mobile,
-            updatedAfter: "2026-01-01T00:00:00.000Z"
+            source: .mobile
         )
         XCTAssertEqual(draft?.rawContent, "draft-\(marker)")
 
@@ -134,8 +132,7 @@ final class LocalDatabaseTests: XCTestCase {
 
         let session = try await database.beginComposerDraftSession(
             profileID: profileA,
-            source: .mobile,
-            updatedAfter: "2026-01-01T00:00:00.000Z"
+            source: .mobile
         )
         let exactSaved = try await database.saveComposerDraft(
             ComposerDraft(
@@ -163,10 +160,9 @@ final class LocalDatabaseTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? LocalDatabaseError, .invalidCapture)
         }
-        let restored = try await database.recentComposerDraft(
+        let restored = try await database.composerDraft(
             profileID: profileA,
-            source: .mobile,
-            updatedAfter: "2026-01-01T00:00:00.000Z"
+            source: .mobile
         )
         XCTAssertEqual(restored?.rawContent, exactBoundary)
     }
@@ -304,8 +300,7 @@ final class LocalDatabaseTests: XCTestCase {
         )
         let session = try await database.beginComposerDraftSession(
             profileID: profileA,
-            source: .mobile,
-            updatedAfter: "2026-01-01T00:00:00.000Z"
+            source: .mobile
         )
         let composerDraft = ComposerDraft(
             profileID: profileA,
@@ -334,10 +329,9 @@ final class LocalDatabaseTests: XCTestCase {
 
         let stored = try await database.outboxEntries(profileID: profileA)
         XCTAssertEqual(stored.map(\.draft.id), [durableCapture.id])
-        let draftAfterEnqueue = try await database.recentComposerDraft(
+        let draftAfterEnqueue = try await database.composerDraft(
             profileID: profileA,
-            source: .mobile,
-            updatedAfter: "2026-01-01T00:00:00.000Z"
+            source: .mobile
         )
         XCTAssertNil(draftAfterEnqueue)
         let staleSaveAccepted = try await database.saveComposerDraft(
@@ -348,10 +342,9 @@ final class LocalDatabaseTests: XCTestCase {
             staleSaveAccepted,
             "A delayed autosave from the submitted composer must be ignored"
         )
-        let draftAfterStaleSave = try await database.recentComposerDraft(
+        let draftAfterStaleSave = try await database.composerDraft(
             profileID: profileA,
-            source: .mobile,
-            updatedAfter: "2026-01-01T00:00:00.000Z"
+            source: .mobile
         )
         XCTAssertNil(draftAfterStaleSave)
     }
@@ -366,8 +359,7 @@ final class LocalDatabaseTests: XCTestCase {
         )
         let session = try await database.beginComposerDraftSession(
             profileID: profileA,
-            source: .mobile,
-            updatedAfter: "2026-01-01T00:00:00.000Z"
+            source: .mobile
         )
         do {
             try await database.enqueue(
@@ -403,8 +395,7 @@ final class LocalDatabaseTests: XCTestCase {
         )
         let session = try await database.beginComposerDraftSession(
             profileID: profileA,
-            source: .mobile,
-            updatedAfter: "2026-01-01T00:00:00.000Z"
+            source: .mobile
         )
         let protectedDraft = ComposerDraft(
             profileID: profileA,
@@ -431,10 +422,9 @@ final class LocalDatabaseTests: XCTestCase {
             XCTAssertEqual(error as? LocalDatabaseError, .invalidStateTransition)
         }
 
-        let retainedDraft = try await database.recentComposerDraft(
+        let retainedDraft = try await database.composerDraft(
             profileID: profileA,
-            source: .mobile,
-            updatedAfter: "2026-01-01T00:00:00.000Z"
+            source: .mobile
         )
         XCTAssertEqual(retainedDraft, protectedDraft)
         let generationStillUsable = try await database.saveComposerDraft(

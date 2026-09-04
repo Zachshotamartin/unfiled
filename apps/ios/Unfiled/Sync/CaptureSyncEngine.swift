@@ -249,13 +249,11 @@ actor CaptureSyncEngine {
 
     func beginComposerDraftSession(
         profileID: UUID,
-        source: LocalCaptureSource,
-        maximumAge: TimeInterval = 30 * 60
+        source: LocalCaptureSource
     ) async throws -> ComposerDraftSession {
         try await database.beginComposerDraftSession(
             profileID: profileID.uuidString.lowercased(),
-            source: source,
-            updatedAfter: APIJSON.dateString(clock().addingTimeInterval(-maximumAge))
+            source: source
         )
     }
 

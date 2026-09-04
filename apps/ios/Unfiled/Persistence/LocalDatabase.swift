@@ -471,10 +471,13 @@ actor LocalDatabase {
         }
     }
 
+    /// A draft belongs to the owner until they send it or clear it. It used to be withheld once it
+    /// was half an hour old, which did not merely hide it: the composer opened empty, its autosave
+    /// wrote that empty text a quarter of a second later, and the row was deleted. What the owner
+    /// had written was destroyed by the act of opening the composer again.
     func beginComposerDraftSession(
         profileID: String,
-        source: LocalCaptureSource,
-        updatedAfter: String
+        source: LocalCaptureSource
     ) throws -> ComposerDraftSession {
         try Self.validateProfile(profileID)
         return try database.write { database in
@@ -502,12 +505,7 @@ actor LocalDatabase {
                   ) else {
                 throw LocalDatabaseError.unavailable
             }
-            let draft = try Self.composerDraft(
-                database,
-                profileID: profileID,
-                source: source,
-                updatedAfter: updatedAfter
-            )
+            let draft = try Self.composerDraft(database, profileID: profileID, source: source)
             return ComposerDraftSession(generation: generation, draft: draft)
         }
     }
@@ -554,19 +552,11 @@ actor LocalDatabase {
         }
     }
 
-    func recentComposerDraft(
-        profileID: String,
-        source: LocalCaptureSource,
-        updatedAfter: String
-    ) throws -> ComposerDraft? {
+    /// The draft waiting for a source, whatever its age.
+    func composerDraft(profileID: String, source: LocalCaptureSource) throws -> ComposerDraft? {
         try Self.validateProfile(profileID)
         return try database.read { database in
-            try Self.composerDraft(
-                database,
-                profileID: profileID,
-                source: source,
-                updatedAfter: updatedAfter
-            )
+            try Self.composerDraft(database, profileID: profileID, source: source)
         }
     }
 
@@ -1010,17 +1000,16 @@ actor LocalDatabase {
     private static func composerDraft(
         _ database: Database,
         profileID: String,
-        source: LocalCaptureSource,
-        updatedAfter: String
+        source: LocalCaptureSource
     ) throws -> ComposerDraft? {
         guard let row = try Row.fetchOne(
             database,
             sql: """
             SELECT profile_id, source, raw_content, privacy, updated_at
             FROM composer_drafts
-            WHERE profile_id = ? AND source = ? AND updated_at >= ?
+            WHERE profile_id = ? AND source = ?
             """,
-            arguments: [profileID, source.rawValue, updatedAfter]
+            arguments: [profileID, source.rawValue]
         ),
         let storedSource = LocalCaptureSource(rawValue: row["source"]),
         let privacy = LocalPrivacyMode(rawValue: row["privacy"])
