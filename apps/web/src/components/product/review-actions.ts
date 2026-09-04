@@ -6,7 +6,7 @@ import type {
   PublicReviewResolution,
   ReviewItemDto
 } from "@unfiled/contracts";
-import { parseListLabel } from "@unfiled/ai-routing";
+import { parseListLabel } from "@/lib/capture/list-label";
 
 /** The decisions a review item can take, as the phone decides them (PresentationMapping.swift). */
 export type ReviewActionKind =
