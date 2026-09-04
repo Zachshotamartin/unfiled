@@ -2,7 +2,7 @@ import SwiftUI
 
 @MainActor
 struct PasswordSignInView: View {
-    typealias SubmitAction = @MainActor (AuthPasswordRequest, AuthMode) async throws -> AuthSession
+    typealias SubmitAction = @MainActor (AuthPasswordRequest, AuthMode) async throws -> AuthSignUpOutcome
     typealias SignedInAction = @MainActor (AuthSession) -> Void
 
     @Binding private var mode: AuthMode
@@ -138,20 +138,10 @@ struct PasswordSignInView: View {
         isFocused: Bool,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        HStack(spacing: 8) {
+        AuthFieldContainer(isFocused: isFocused) {
             content()
                 .font(UnfiledType.body)
-                .foregroundStyle(UnfiledTheme.paper)
-                .tint(UnfiledTheme.persimmon)
         }
-        .padding(.horizontal, UnfiledTheme.fieldPadding)
-        .frame(minHeight: UnfiledTheme.controlHeight)
-        .background(UnfiledTheme.graphite)
-        .overlay {
-            RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius)
-                .stroke(isFocused ? UnfiledTheme.persimmon : UnfiledTheme.border, lineWidth: isFocused ? 2 : 1)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
     }
 
     private func submit() {
@@ -172,10 +162,12 @@ struct PasswordSignInView: View {
         submitTask = Task { @MainActor in
             defer { isSubmitting = false }
             do {
-                let session = try await onSubmit(request, submittedMode)
+                let outcome = try await onSubmit(request, submittedMode)
                 guard !Task.isCancelled else { return }
                 password = ""
-                onSignedIn(session)
+                // A withheld session is not a failure: the account exists and the service emailed a
+                // code. The screen that asks for it replaces this one, so there is nothing to show.
+                if case let .session(session) = outcome { onSignedIn(session) }
             } catch is CancellationError {
                 return
             } catch {

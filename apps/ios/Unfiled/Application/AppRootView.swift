@@ -89,15 +89,31 @@ private struct AuthenticationFlowView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        PasswordSignInView(
-            mode: $model.authMode,
-            onSubmit: { request, mode in
-                mode == .signUp ? try await model.signUp(request) : try await model.signIn(request)
-            },
-            onSignedIn: { session in
-                Task { @MainActor in await model.acceptVerifiedSession(session) }
-            }
-        )
+        // A pending confirmation replaces the credentials form until it is finished or left behind,
+        // so a relaunch during the code step reopens on the code step.
+        if let pending = model.pendingVerification {
+            VerifyEmailView(
+                pending: pending,
+                onVerify: { code in try await model.verifyEmail(code: code) },
+                onResend: { try await model.resendVerificationCode() },
+                onLeave: model.leaveVerification,
+                onSignedIn: { session in
+                    Task { @MainActor in await model.acceptVerifiedSession(session) }
+                }
+            )
+        } else {
+            PasswordSignInView(
+                mode: $model.authMode,
+                onSubmit: { request, mode in
+                    mode == .signUp
+                        ? try await model.signUp(request)
+                        : .session(try await model.signIn(request))
+                },
+                onSignedIn: { session in
+                    Task { @MainActor in await model.acceptVerifiedSession(session) }
+                }
+            )
+        }
     }
 }
 

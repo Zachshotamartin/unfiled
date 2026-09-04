@@ -103,3 +103,12 @@ actor APITokenProviderStub: AccessTokenProviding {
         )
     }
 }
+
+/// Asserts that an awaited expression throws, and hands the error to the caller to inspect. Shared by
+/// every suite that expects a refusal, so a refusal is described the same way wherever it is checked.
+func XCTAssertThrowsErrorAsync<T>(_ expression: @autoclosure () async throws -> T,
+                                  _ verify: (Error) -> Void,
+                                  file: StaticString = #filePath, line: UInt = #line) async {
+    do { _ = try await expression(); XCTFail("Expected error", file: file, line: line) }
+    catch { verify(error) }
+}

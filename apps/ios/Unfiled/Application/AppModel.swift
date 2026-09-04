@@ -192,6 +192,9 @@ final class AppModel: ObservableObject {
 
     @Published private(set) var phase: AppPhase = .booting
     @Published var authMode: AuthMode = .signIn
+    /// Set while an account exists but its address has not been confirmed. It is restored at launch,
+    /// so backgrounding the app during the code step returns the owner to the same step.
+    @Published private(set) var pendingVerification: PendingVerification?
     @Published private(set) var currentUser: AuthUser?
     @Published private(set) var notes: [NotePresentation] = []
     @Published private(set) var noteDetails: [String: NoteDetailPresentation] = [:]
@@ -308,10 +311,12 @@ final class AppModel: ObservableObject {
     private var searchTask: Task<Void, Never>?
     private var searchPaginationState: SearchPaginationState?
     private let explicitSignOutBarrier: ExplicitSignOutBarrier
+    private let pendingVerificationStore: PendingVerificationStore
 
     init(bundle: Bundle = .main, userDefaults: UserDefaults = .standard) {
         SecureAccountExportWriter.removeStaleArtifacts()
         explicitSignOutBarrier = ExplicitSignOutBarrier(defaults: userDefaults)
+        pendingVerificationStore = PendingVerificationStore(defaults: userDefaults)
         do {
             let configuration = try AppConfiguration.load(bundle: bundle)
             let unauthenticatedAPI = try APIClient(baseURL: configuration.apiBaseURL)
@@ -374,6 +379,7 @@ final class AppModel: ObservableObject {
         if await reconcilePendingAccountDeletion(runtime: runtime) { return }
         if explicitSignOutBarrier.isActive {
             try? await runtime.auth.clearLocalSession()
+            restorePendingVerification()
             phase = .signedOut
             return
         }
@@ -383,6 +389,7 @@ final class AppModel: ObservableObject {
             await runtime.captureSync.activate(profileID: user.id)
             await refreshAll()
         } else {
+            restorePendingVerification()
             phase = .signedOut
         }
     }
@@ -392,9 +399,56 @@ final class AppModel: ObservableObject {
         return try await runtime.unauthenticatedAPI.signIn(email: request.email, password: request.password)
     }
 
-    func signUp(_ request: AuthPasswordRequest) async throws -> AuthSession {
+    func signUp(_ request: AuthPasswordRequest) async throws -> AuthSignUpOutcome {
         guard let runtime else { throw APIClientError.invalidConfiguration }
-        return try await runtime.unauthenticatedAPI.signUp(email: request.email, password: request.password)
+        let outcome = try await runtime.unauthenticatedAPI.signUp(
+            email: request.email,
+            password: request.password
+        )
+        if case let .verificationRequired(email) = outcome {
+            // The account exists from this moment. Remembering which address is waiting is what lets
+            // the owner leave the app mid-code and come back to the same step instead of starting
+            // over against an address that would now be refused as taken.
+            recordVerification(PendingVerification(email: email, codeSentAt: Date()))
+        }
+        return outcome
+    }
+
+    /// Exchanges the emailed code for a session. The address comes from the pending entry rather than
+    /// from the screen, so the code is always checked against the account that was just created.
+    func verifyEmail(code: String) async throws -> AuthSession {
+        guard let runtime, let pending = pendingVerification else {
+            throw APIClientError.invalidConfiguration
+        }
+        return try await runtime.unauthenticatedAPI.verifyEmail(email: pending.email, code: code)
+    }
+
+    func resendVerificationCode() async throws {
+        guard let runtime, let pending = pendingVerification else {
+            throw APIClientError.invalidConfiguration
+        }
+        try await runtime.unauthenticatedAPI.resendVerification(email: pending.email)
+        recordVerification(pending.sending(at: Date()))
+    }
+
+    /// Leaves the confirmation step for the sign-in screen. The account is already created, so this
+    /// discards nothing the owner cannot get back: they sign in once the address is confirmed, and
+    /// creating it again tells them it exists.
+    func leaveVerification() {
+        pendingVerification = nil
+        pendingVerificationStore.clear()
+        authMode = .signIn
+    }
+
+    private func recordVerification(_ value: PendingVerification) {
+        pendingVerification = value
+        // A refused defaults write costs only resumption after a relaunch; this launch already holds
+        // the value the screen needs, so there is nothing to tell the owner about.
+        pendingVerificationStore.save(value)
+    }
+
+    private func restorePendingVerification() {
+        pendingVerification = pendingVerificationStore.load(now: Date())
     }
 
     func acceptVerifiedSession(_ session: AuthSession) async {
@@ -410,6 +464,10 @@ final class AppModel: ObservableObject {
             }
             activate(session.user)
             authMode = .signIn
+            // The address is confirmed the moment a session exists for it, so the pending entry has
+            // nothing left to resume and must not outlive this launch.
+            pendingVerification = nil
+            pendingVerificationStore.clear()
             await refreshAll()
             await runtime.captureSync.activate(profileID: session.user.id)
             await refreshAll()

@@ -9,6 +9,14 @@ enum AuthAccessibilityIdentifier {
 
     static let passwordField = "auth.password.field"
     static let modeToggle = "auth.mode.toggle"
+
+    static let verifyScreen = "auth.verify.screen"
+    static let verifyField = "auth.verify.field"
+    static let verifyError = "auth.verify.error"
+    static let verifyNotice = "auth.verify.notice"
+    static let verifySubmit = "auth.verify.submit"
+    static let verifyResend = "auth.verify.resend"
+    static let verifyCancel = "auth.verify.cancel"
 }
 
 enum AuthFormRules {
@@ -192,6 +200,73 @@ struct AuthFieldLabel: View {
 
     var body: some View {
         EditorialEyebrow(text: text)
+    }
+}
+
+/// The chrome every field on the two authentication screens sits in, so the credentials form and the
+/// code entry read as the same surface.
+struct AuthFieldContainer<Content: View>: View {
+    let isFocused: Bool
+    let content: Content
+
+    init(isFocused: Bool, @ViewBuilder content: () -> Content) {
+        self.isFocused = isFocused
+        self.content = content()
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            content
+                .foregroundStyle(UnfiledTheme.paper)
+                .tint(UnfiledTheme.persimmon)
+        }
+        .padding(.horizontal, UnfiledTheme.fieldPadding)
+        .frame(minHeight: UnfiledTheme.controlHeight)
+        .background(UnfiledTheme.graphite)
+        .overlay {
+            RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius)
+                .stroke(
+                    isFocused ? UnfiledTheme.persimmon : UnfiledTheme.border,
+                    lineWidth: isFocused ? 2 : 1
+                )
+        }
+        .clipShape(RoundedRectangle(cornerRadius: UnfiledTheme.controlRadius))
+    }
+}
+
+/// An action under the primary one: the same height and voice, without the filled ground that would
+/// make it compete for the tap. The accent carries the action that continues the task; the quiet
+/// treatment carries the way out, which the credentials screen already sets in ink.
+struct AuthSecondaryButton: View {
+    enum Emphasis: Equatable {
+        case accent
+        case quiet
+
+        var foreground: Color {
+            switch self {
+            case .accent: UnfiledTheme.persimmon
+            case .quiet: UnfiledTheme.paper
+            }
+        }
+    }
+
+    let title: String
+    var emphasis: Emphasis = .accent
+    let isDisabled: Bool
+    let accessibilityIdentifier: String
+    let action: @MainActor () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(UnfiledType.secondaryStrong)
+                .foregroundStyle(isDisabled ? UnfiledTheme.fog : emphasis.foreground)
+                .frame(maxWidth: .infinity, minHeight: UnfiledTheme.minimumTouchTarget)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .accessibilityIdentifier(accessibilityIdentifier)
     }
 }
 
