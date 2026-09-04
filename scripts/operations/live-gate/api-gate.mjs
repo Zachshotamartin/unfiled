@@ -33,11 +33,25 @@ import {
 } from "./account-verification.mjs";
 import {
   captureBindsAttachments,
+  drainsSucceeded,
   filedNoteId,
+  logFieldReads,
+  noteDroppedLinkTo,
   noteIsBacklinkedFrom,
+  noteCarriesTag,
+  noteDroppedTag,
   noteKeepsTextWithoutDirections,
   noteLinksTo,
-  noteReferencesAttachment
+  noteReadsAsRevision,
+  noteReferencesAttachment,
+  providerKeyIsAbsent,
+  receiptEndpointServesTheCaptureReceipt,
+  receiptFiledInto,
+  ruleIsEnabled,
+  searchFindsNote,
+  spaceIsNamed,
+  tagIsNamed,
+  uploadReplayIsTheSameAttachment
 } from "./gate-checks.mjs";
 
 const WEB = (process.env.UNFILED_GATE_WEB_ORIGIN ?? "https://unfiled-web.vercel.app").replace(
@@ -359,7 +373,7 @@ let tagId = null;
       idempotencyKey: key(),
       name: `Gate space ${stamp} renamed`
     });
-    record("spaces.rename", renamed.status === 200, {
+    record("spaces.rename", spaceIsNamed(renamed, `Gate space ${stamp} renamed`), {
       status: renamed.status,
       code: code(renamed)
     });
@@ -382,7 +396,7 @@ let tagId = null;
       idempotencyKey: key(),
       name: `gate-${stamp}-r`
     });
-    record("tags.rename", renamedTag.status === 200, {
+    record("tags.rename", tagIsNamed(renamedTag, `gate-${stamp}-r`), {
       status: renamedTag.status,
       code: code(renamedTag)
     });
@@ -467,7 +481,7 @@ let secondNoteId = null;
         idempotencyKey: key(),
         revisionId: earliest.id
       });
-      record("notes.restore_revision", restored.status === 200, {
+      record("notes.restore_revision", noteReadsAsRevision(restored, earliest), {
         status: restored.status,
         code: code(restored)
       });
@@ -479,7 +493,7 @@ let secondNoteId = null;
         idempotencyKey: key(),
         tagId
       });
-      record("notes.link_tag", linkedTag.status === 200, {
+      record("notes.link_tag", noteCarriesTag(linkedTag, tagId), {
         status: linkedTag.status,
         code: code(linkedTag)
       });
@@ -488,7 +502,7 @@ let secondNoteId = null;
         expectedRevision: noteRevision,
         idempotencyKey: key()
       });
-      record("notes.unlink_tag", unlinked.status === 200, {
+      record("notes.unlink_tag", noteDroppedTag(unlinked, tagId), {
         status: unlinked.status,
         code: code(unlinked)
       });
@@ -540,7 +554,7 @@ let secondNoteId = null;
           toNoteId: secondNoteId,
           linkType: "reference"
         });
-        record("notes.delete_link", unlinked.status === 200, {
+        record("notes.delete_link", noteDroppedLinkTo(unlinked, secondNoteId), {
           status: unlinked.status,
           code: code(unlinked)
         });
@@ -716,9 +730,13 @@ let secondNoteId = null;
         { type: "update_log_field", entryId: entry.id, fieldPath: [field], value: "6 km" }
       ]
     });
-    record("notes.update_log_field", updated.status === 200, {
+    // Reading the note back is what proves the edit: the operation answering 200 says only that
+    // the request was accepted, and an operation that stored nothing answers 200 too.
+    const reread = await api("GET", `/notes/${log.json.note.id}`, { token });
+    record("notes.update_log_field", logFieldReads(reread, entry.id, field, "6 km"), {
       status: updated.status,
-      code: code(updated)
+      code: code(updated),
+      read: reread.status
     });
   }
 }
@@ -754,7 +772,7 @@ let liveRuleRevision = 1;
         idempotencyKey: key(),
         enabled: false
       });
-      record("routing_rules.disable", disabled.status === 200, {
+      record("routing_rules.disable", ruleIsEnabled(disabled, false), {
         status: disabled.status,
         code: code(disabled)
       });
@@ -893,7 +911,7 @@ let receipt = null;
     list.status === 200 && (list.json?.items ?? []).some((c) => c.id === organizedCaptureId),
     { status: list.status, count: (list.json?.items ?? []).length }
   );
-  record("cron.drain", a.drained.skipped === true || a.drained.captures === 200, {
+  record("cron.drain", a.drained.skipped === true || drainsSucceeded(a.drained), {
     ...a.drained,
     note: a.drained.skipped ? "no cron secret; waiting for the schedule" : undefined
   });
@@ -926,10 +944,21 @@ let receipt = null;
     });
   }
   const receiptRead = await api("GET", `/captures/${organizedCaptureId}/receipt`, { token });
-  record("captures.receipt_read", receiptRead.status === 200 || receiptRead.status === 404, {
-    status: receiptRead.status,
-    code: code(receiptRead)
-  });
+  // A capture that reached a receipt must have this endpoint serve back that same receipt. The
+  // step accepted 404 beside 200, so it passed whether or not the endpoint could find anything,
+  // and would have passed on another capture's receipt too. A capture that failed carries no
+  // receipt -- CaptureDetail makes it optional for exactly that status -- so that case asks for
+  // the 404 rather than pretending a receipt was verified.
+  record(
+    "captures.receipt_read",
+    receipt === null
+      ? receiptRead.status === 404
+      : receiptEndpointServesTheCaptureReceipt(receiptRead, {
+          captureId: organizedCaptureId,
+          receipt
+        }),
+    { status: receiptRead.status, code: code(receiptRead), hadReceipt: receipt !== null }
+  );
   if (a.outcome.captureStatus === "failed") {
     const retry = await write("POST", `/captures/${organizedCaptureId}/retry`, token, {
       idempotencyKey: key()
@@ -990,10 +1019,12 @@ if (liveRulePrefix && secondNoteId) {
     "capture_b"
   );
   let receiptB = b.outcome.receipt;
+  // The rule names a note, so filing "by rule" means reaching that note. Accepting
+  // added_to_note or created_note said only that something was filed somewhere, which is what a
+  // rule being ignored entirely also looks like.
   record(
     "capture_b.filed_by_rule",
-    ["done"].includes(b.outcome.captureStatus) &&
-      ["added_to_note", "created_note"].includes(receiptB?.outcome),
+    b.outcome.captureStatus === "done" && receiptFiledInto(receiptB, secondNoteId),
     {
       captureStatus: b.outcome.captureStatus,
       outcome: receiptB?.outcome ?? null,
@@ -1318,8 +1349,11 @@ async function uploadPhoto(captureId, attachmentId, bytes, extra = {}) {
         body: { query: "plumber", archive: "exclude" }
       });
       const hits = response.json?.items ?? [];
+      // The note whose words were searched for has to be among the hits. Counting them passed on
+      // any result at all, so a search that ignored the query and returned the account's other
+      // notes read as green.
       return {
-        done: response.status === 200 && hits.length >= 1,
+        done: searchFindsNote(response, secondNoteId),
         status: response.status,
         hits: hits.length,
         code: code(response)
@@ -1386,6 +1420,14 @@ async function uploadPhoto(captureId, attachmentId, bytes, extra = {}) {
       record("provider_key.delete", removedKey.status === 200 || removedKey.status === 204, {
         status: removedKey.status,
         code: code(removedKey)
+      });
+      // The delete answering 200 is the request being accepted. Whether the key is gone is a
+      // separate fact, and the run never asked for it: an owner who removes their OpenAI key
+      // believed it was gone while the material stayed in production.
+      const afterDelete = await api("GET", "/me/provider-key?provider=openai", { token });
+      record("provider_key.absent_after_delete", providerKeyIsAbsent(afterDelete), {
+        status: afterDelete.status,
+        code: code(afterDelete)
       });
     } else {
       record("provider_key.delete", false, { reason: "no_stored_key" });

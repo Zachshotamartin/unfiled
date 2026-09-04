@@ -329,7 +329,7 @@ jobs:
         run: pnpm test:http:e2e
 
   native-ios:
-    name: iOS app and widget (unsigned simulator)
+    name: iOS app and widget (unsigned build)
     runs-on: macos-15
     timeout-minutes: 40
     steps:
@@ -392,19 +392,77 @@ jobs:
             exit 1
           fi
 
-      # `ios:test` compiles the app and the test bundle for the simulator it runs on, so building
-      # the same sources again for the generic destination first bought a second compile and no
-      # coverage. The named simulator is pinned inside ios-xcode.sh.
-      - name: Build and run iOS unit tests in a simulator
+      # This lane compiles against a generic destination, which boots no simulator, and does not
+      # run the XCTest bundle. GitHub-hosted macOS runners hang on simulator boot often enough to
+      # matter -- actions/runner-images#12725 (macos-15 only, hang correlates with which image
+      # provisioner the job lands on), #13143 and #13264 -- and this repository hit it: the same
+      # content took 223s on a pull-request runner and was still stuck after 26 minutes on the
+      # push runner minutes later, twice, both cancelled by hand.
+      #
+      # Nothing is deleted. The 316 XCTest cases and their target are untouched in
+      # apps/ios/UnfiledTests, and `pnpm ios:test` still runs them on a simulator locally -- with
+      # an explicit boot, a wall-clock deadline and a heartbeat, all kept working for that use.
+      #
+      # To run them here again, set the repository variable RUN_IOS_SIMULATOR_TESTS to "true"
+      # (Settings, Secrets and variables, Actions, Variables). That is the whole switch: no code
+      # change, and the step below is kept in place so it cannot rot into something that no longer
+      # runs. Compiling for the simulator SDK still catches every compile error the tests would.
+      - name: Build the iOS app for the simulator SDK
+        run: pnpm ios:build
+
+      - name: Run iOS unit tests in a simulator
+        if: ${{ vars.RUN_IOS_SIMULATOR_TESTS == 'true' }}
         run: pnpm ios:test
 
-      # Packaging evidence for the commit a release can ship: the Release configuration archives,
-      # names the production origin, carries its privacy manifest, and stays iPhone-only with no
-      # embedded extension. It is unsigned, so per ADR-0010 it is packaging evidence only and no
-      # release statement may infer signing or device correctness from it. Pull requests skip it;
-      # only a commit on main can be released.
+  # Packaging evidence for the commit a release can ship: the Release configuration archives,
+  # names the production origin, carries its privacy manifest, and stays iPhone-only with no
+  # embedded extension. It is unsigned, so per ADR-0010 it is packaging evidence only and no
+  # release statement may infer signing or device correctness from it. Pull requests skip it;
+  # only a commit on main can be released.
+  #
+  # It is a job rather than a step of the lane above because it shares nothing with it: a Release
+  # archive for a generic iOS device, into its own fresh DerivedData, is a second complete compile
+  # of the app and of SQLCipher and GRDB. Run as a step it was serialised after the tests, so every
+  # merge waited for both in turn while a pull request waited for neither. Run as a job the two
+  # compile at the same time and a merge waits for the longer of them.
+  native-ios-archive:
+    name: iOS Release archive packaging (unsigned)
+    if: ${{ github.event_name == 'push' }}
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install XcodeGen
+        env:
+          XCODEGEN_VERSION: 2.46.0
+          XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
+        run: |
+          XCODEGEN_ARCHIVE="${RUNNER_TEMP}/xcodegen.zip"
+          XCODEGEN_INSTALL_ROOT="${RUNNER_TEMP}/xcodegen-${XCODEGEN_VERSION}"
+          curl --fail --location --retry 3 \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip" \
+            --output "${XCODEGEN_ARCHIVE}"
+          printf '%s  %s\n' "${XCODEGEN_SHA256}" "${XCODEGEN_ARCHIVE}" | shasum -a 256 --check -
+          unzip -q "${XCODEGEN_ARCHIVE}" -d "${XCODEGEN_INSTALL_ROOT}"
+          printf '%s\n' "${XCODEGEN_INSTALL_ROOT}/xcodegen/bin" >> "${GITHUB_PATH}"
+
+      - name: Generate the Xcode project from the canonical manifest
+        run: pnpm ios:generate
+
       - name: Verify the Release archive packaging
-        if: ${{ github.event_name == 'push' }}
         run: pnpm ios:archive-preflight
 
   infrastructure:
@@ -439,7 +497,19 @@ jobs:
   ci:
     name: CI
     if: always()
-    needs: [static, secrets, unit, capacity, evaluations, database, e2e, native-ios, infrastructure]
+    needs:
+      [
+        static,
+        secrets,
+        unit,
+        capacity,
+        evaluations,
+        database,
+        e2e,
+        native-ios,
+        native-ios-archive,
+        infrastructure
+      ]
     runs-on: ubuntu-latest
     steps:
       # Every lane, by name. A lane that was cancelled or skipped is not a lane that passed, so
@@ -456,6 +526,12 @@ jobs:
             e2e=${{ needs.e2e.result }}
             native-ios=${{ needs.native-ios.result }}
             infrastructure=${{ needs.infrastructure.result }}
+          # The archive lane runs only on a push, so its correct result depends on the event: it
+          # must have succeeded on a push, and must have been skipped on a pull request. Comparing
+          # against the expectation rather than accepting "skipped" everywhere is what stops a
+          # release-bound commit from passing CI while its packaging evidence never ran.
+          ARCHIVE_RESULT: ${{ needs.native-ios-archive.result }}
+          ARCHIVE_EXPECTED: ${{ github.event_name == 'push' && 'success' || 'skipped' }}
         run: |
           failed=""
           for lane in ${LANE_RESULTS}; do
@@ -465,6 +541,10 @@ jobs:
               *) failed="${failed} ${lane%%=*}" ;;
             esac
           done
+          printf 'native-ios-archive=%s (expected %s)\n' "${ARCHIVE_RESULT}" "${ARCHIVE_EXPECTED}"
+          if [[ "${ARCHIVE_RESULT}" != "${ARCHIVE_EXPECTED}" ]]; then
+            failed="${failed} native-ios-archive"
+          fi
           if [[ -n "${failed}" ]]; then
             printf 'CI is red. Lanes that did not pass:%s\n' "${failed}" >&2
             exit 1
