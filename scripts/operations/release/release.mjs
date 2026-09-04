@@ -14,6 +14,7 @@
 //   UNFILED_GATE_OPENAI_API_KEY          the owner's provider key, saved on the gate's account
 //   UNFILED_GATE_CRON_SECRET             lets the gate drain the queues instead of waiting
 //   UNFILED_RELEASE_SKIP_MIGRATIONS=1    only when the schema is already known to be current
+import { pendingMigrationsFromDryRun, unappliedMigrationsFromList } from "./migration-state.mjs";
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -220,25 +221,41 @@ async function applyMigrations() {
   if (dryRun.code !== 0) {
     fail(`Could not read the production migration state.\n${dryRun.err.slice(-2000)}`);
   }
-  const summary = dryRun.out
-    .trim()
-    .split("\n")
-    .filter((line) => line.startsWith("{"))
-    .pop();
-  let pending = [];
+  // Read strictly: an answer the release cannot read is a reason to stop, never to deploy. On
+  // 2026-09-04 an unreadable dry run was taken as "schema is already current" and five services
+  // shipped against a migration that was never applied.
+  let pending;
   try {
-    pending = JSON.parse(summary ?? "{}").migrations ?? [];
-  } catch {
-    fail("Could not read the production migration state.");
+    pending = pendingMigrationsFromDryRun({ stdout: dryRun.out, stderr: dryRun.err });
+  } catch (error) {
+    fail(`${error instanceof Error ? error.message : String(error)}\n${dryRun.err.slice(-2000)}`);
   }
-  if (pending.length === 0) {
-    console.log("schema is already current");
-    return;
+  if (pending.length > 0) {
+    console.log(`pending: ${pending.join(", ")}`);
+    const push = await run("npx", [...cli, "db", "push", ...migrationTarget(), "--yes"]);
+    if (push.code !== 0) fail("Applying migrations failed; nothing was deployed.");
+    console.log(`applied ${pending.length} migration(s)`);
+  } else {
+    console.log("dry run reports the schema current");
   }
-  console.log(`pending: ${pending.join(", ")}`);
-  const push = await run("npx", [...cli, "db", "push", ...migrationTarget(), "--yes"]);
-  if (push.code !== 0) fail("Applying migrations failed; nothing was deployed.");
-  console.log(`applied ${pending.length} migration(s)`);
+  // Whatever the dry run said, the database's own migration table decides. No code deploys while
+  // a local migration has no remote entry.
+  const listed = await run("npx", [...cli, "migration", "list", ...migrationTarget()], {
+    echo: false
+  });
+  if (listed.code !== 0) {
+    fail(`Could not read the production migration list.\n${listed.err.slice(-2000)}`);
+  }
+  let unapplied;
+  try {
+    unapplied = unappliedMigrationsFromList(listed.out);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+  if (unapplied.length > 0) {
+    fail(`Migrations not recorded in production: ${unapplied.join(", ")}. Nothing was deployed.`);
+  }
+  console.log("every local migration is recorded in production");
 }
 
 /** Provenance the Vercel dashboard shows, so a deployment names the commit it came from. */

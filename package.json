@@ -17,7 +17,7 @@
   "scripts": {
     "audit:production": "pnpm audit --prod --audit-level high",
     "build": "turbo run build --filter=@unfiled/web --filter=@unfiled/worker --filter=@unfiled/verifier --filter=@unfiled/organizer --filter=@unfiled/search-service --filter='./packages/*'",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm test:built-servers && pnpm check:boundaries && pnpm check:openapi && pnpm check:release-probe && pnpm test:live-gate-checks && pnpm demo:seed:check",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm test:built-servers && pnpm check:boundaries && pnpm check:openapi && pnpm check:release-probe && pnpm test:live-gate-checks && pnpm test:release && pnpm demo:seed:check",
     "check:boundaries": "tsx scripts/check-boundaries.ts",
     "check:openapi": "tsx scripts/generate-openapi.ts --check",
     "check:release-probe": "pnpm lint:release-probe && pnpm typecheck:release-probe && pnpm test:release-probe",
@@ -55,6 +55,7 @@
     "test:db:concurrency": "pnpm --filter @unfiled/organizer test:lock-order && pnpm --filter @unfiled/organizer test:storage-contract-concurrency && pnpm --filter @unfiled/search-service test:capability-concurrency",
     "test:http:e2e": "bash .github/workflows/scripts/milestone-b-http-e2e.sh",
     "test:live-gate-checks": "vitest run scripts/operations/live-gate/gate-checks.test.mjs",
+    "test:release": "vitest run scripts/operations/release/migration-state.test.mjs",
     "test:retrieval-capacity": "pnpm --filter @unfiled/organizer test:retrieval-capacity",
     "test:release-probe": "vitest run scripts/operations/deployed-release-probe.test.ts",
     "test:search-capacity": "pnpm --filter @unfiled/search-service test:capacity",
