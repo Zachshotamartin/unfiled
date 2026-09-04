@@ -365,7 +365,9 @@ select 'capture-command', jsonb_build_object(
     'c5d8.private.object.v1',
     '85000000-0000-4000-8000-000000000020', 'R'
   ),
-  'privateReceiptVerificationMac', pg_temp.mac('c5d8-receipt')
+  'privateReceiptVerificationMac', pg_temp.mac('c5d8-receipt'),
+  'promptVersion', 'routing-v2',
+  'schemaVersion', 1
 )
 from (select pg_temp.event_time() as occurred_at) as event;
 
@@ -375,6 +377,15 @@ select 'capture-result', public.create_encrypted_capture_with_job(
 )
 from c5d8_values where key = 'capture-command';
 
+-- A private capture never reaches the organizer, but its job still records the profile the
+-- caller sent. This is the branch the ai_assisted fixture could not reach, and where the new
+-- keys were refused as invalid_capture until the private implementation accepted them.
+select is(
+  (select prompt_version || '/' || schema_version::text from public.organization_jobs
+    where id = 'job_85000000000000000000000001'),
+  'routing-v2/1',
+  'a private capture''s job is stamped with the prompt and schema version the caller sent'
+);
 select ok(
   (select value ->> 'captureId'
     from c5d8_values where key = 'capture-result')
