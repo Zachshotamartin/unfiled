@@ -124,4 +124,32 @@ select pg_temp.rewrite_function(
   ]
 );
 
+-- The private-manual path. The public wrapper hands a private capture, payload intact, to the
+-- original dual-write implementation -- renamed to _legacy by 20260830000020 and to this name by
+-- 20260830000027 -- which carries its own key list and stamps its job as already succeeded.
+-- Every private capture went through here, which is why the encrypted fixture alone could not
+-- show that the new keys were refused.
+select pg_temp.rewrite_function(
+  'private.create_encrypted_private_capture_with_job_impl(uuid, jsonb)',
+  array[
+    array[
+      $f$'explicitDestinationNoteId', 'expansionDisabled',
+      'privateReceiptCipher', 'privateReceiptVerificationMac'
+    ] <> '{}'::jsonb$f$,
+      $f$'explicitDestinationNoteId', 'expansionDisabled',
+      'privateReceiptCipher', 'privateReceiptVerificationMac',
+      'promptVersion', 'schemaVersion'
+    ] <> '{}'::jsonb$f$
+    ],
+    array[
+      $f$job_id_value, capture_id_value, p_owner_id, 'succeeded', 'routing-v1', 1,
+    occurred_value, occurred_value, occurred_value, occurred_value$f$,
+      $f$job_id_value, capture_id_value, p_owner_id, 'succeeded',
+    private.capture_prompt_version(p_capture),
+    private.capture_schema_version(p_capture),
+    occurred_value, occurred_value, occurred_value, occurred_value$f$
+    ]
+  ]
+);
+
 drop function pg_temp.rewrite_function(text, text[][]);
