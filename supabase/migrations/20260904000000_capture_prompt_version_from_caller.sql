@@ -132,21 +132,24 @@ select pg_temp.rewrite_function(
 -- rewritten. Its body is the same text under both.
 do $$
 declare
-  target regprocedure;
-  found integer;
-begin
-  select count(*), min(p.oid)::regprocedure
-  into found, target
-  from pg_catalog.pg_proc as p
-  join pg_catalog.pg_namespace as n on n.oid = p.pronamespace
-  where n.nspname = 'private'
-    and p.proname in (
-      'create_encrypted_private_capture_with_job_impl',
-      'create_encrypted_capture_with_job_legacy'
+  target regprocedure := coalesce(
+    pg_catalog.to_regprocedure(
+      'private.create_encrypted_private_capture_with_job_impl(uuid, jsonb)'
+    ),
+    pg_catalog.to_regprocedure(
+      'private.create_encrypted_capture_with_job_legacy(uuid, jsonb)'
     )
-    and p.proargtypes::oid[] = array['uuid'::regtype::oid, 'jsonb'::regtype::oid];
-  if found <> 1 then
-    raise exception 'expected exactly one private capture implementation, found %', found;
+  );
+  present text;
+begin
+  if target is null then
+    select pg_catalog.string_agg(p.oid::regprocedure::text, ', ' order by p.proname)
+    into present
+    from pg_catalog.pg_proc as p
+    join pg_catalog.pg_namespace as n on n.oid = p.pronamespace
+    where n.nspname = 'private' and p.proname like '%capture%with_job%';
+    raise exception 'no private capture implementation under either name; private has: %',
+      coalesce(present, '(none)');
   end if;
   perform pg_temp.rewrite_function(
     target::text,
