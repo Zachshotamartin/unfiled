@@ -1625,4 +1625,102 @@ describe("production organizer cipher with photos", () => {
       })
     ).rejects.toBeInstanceOf(OrganizerUnavailableError);
   });
+
+  it("writes the photo into the note and keeps the owner's placeholder out of it", async () => {
+    // The phone sends "Photo" so the capture API's non-empty content rule is satisfied. The
+    // note must hold the photo and not that word, and the model must have written nothing.
+    const photo = Object.freeze({
+      attachmentId: "att_01ARZ3NDEKTSV4RRFFQ69G5FAZ" as const,
+      kind: "image" as const,
+      mediaType: "image/jpeg" as const,
+      dataBase64: Buffer.from([255, 216, 255, 224, 0, 16]).toString("base64"),
+      byteLength: 6,
+      width: 4,
+      height: 3,
+      durationMs: null
+    });
+    const plan = materializeAuthorizedOrganizationPlan({
+      captureHasNoOwnerText: true,
+      manifest: manifest(),
+      plan: {
+        alternatives: [],
+        captureKind: "freeform",
+        decision: "create_note",
+        destination: {
+          candidateId: null,
+          newNote: {
+            noteType: "generic",
+            spaceCandidateId: IDS.space,
+            title: "Kitchen tiles"
+          }
+        },
+        generatedExpansion: null,
+        operations: [],
+        reasonCodes: ["no_candidate_fit"],
+        schemaVersion: 1
+      },
+      stableIds: stableIds("create")
+    });
+
+    const command = await createProductionOrganizerCipher().sealCommand({
+      activeReplanCount: 0,
+      authority: AUTHORITY,
+      candidates: [],
+      capture: Object.freeze({
+        attachments: [photo],
+        controls: CONTROLS,
+        rawContent: "Photo"
+      }),
+      controls: CONTROLS,
+      destination: null,
+      job: job(await captureProjection(crypto, "Photo")),
+      plan,
+      preparation: preparation("create", null),
+      ragGenerationId: null,
+      reviewReason: null,
+      routingDecision: AUTO_ROUTING_DECISION,
+      signal: SIGNAL,
+      stableIds: stableIds("create")
+    });
+
+    const write = routedWrite(command);
+    const content = await crypto.aggregate.openNoteContent(
+      crypto.access,
+      rpcRecord(write.noteCipher, {
+        kind: "note_content",
+        recordVersion: 1,
+        resourceId: IDS.createdNote
+      }),
+      { currentRevision: 1, noteId: IDS.createdNote, privacy: "ai_assisted" }
+    );
+    expect(content.bodyMarkdown).toBe(
+      "![Photo](unfiled-attachment:att_01ARZ3NDEKTSV4RRFFQ69G5FAZ)"
+    );
+    expect(content.title).toBe("Kitchen tiles");
+  });
+
+  it("refuses a Review that still claims the auto-apply decision the conflict overtook", async () => {
+    // A pre-commit conflict turns an authorized auto-apply plan into a Review. Carrying the
+    // original decision into that seal makes the capture fail permanently instead of waiting
+    // for the owner, so the binding refuses it here rather than downstream.
+    const rawContent = "A thought that lost its race.";
+    await expect(
+      createProductionOrganizerCipher().sealCommand({
+        activeReplanCount: 0,
+        authority: AUTHORITY,
+        candidates: [],
+        capture: capture(rawContent),
+        controls: CONTROLS,
+        destination: null,
+        job: job(await captureProjection(crypto, rawContent)),
+        plan: reviewPlan(rawContent),
+        preparation: preparation("create", null),
+        ragGenerationId: null,
+        reviewReason: "revision_conflict",
+        routingDecision: AUTO_ROUTING_DECISION,
+        signal: SIGNAL,
+        stableIds: stableIds("review")
+      })
+    ).rejects.toBeInstanceOf(OrganizerUnavailableError);
+  });
 });

@@ -1,7 +1,8 @@
 import {
   inspectPlanSourcePreservation,
   parseDeterministicListCapture,
-  parseDeterministicLogCapture
+  parseDeterministicLogCapture,
+  type RoutedCaptureContent
 } from "@unfiled/ai-routing";
 import {
   OrganizationPlanSchema,
@@ -57,6 +58,12 @@ export type DecryptedCapture = Readonly<{
   /** The owner's directions for this capture, if they gave any. Never note text. */
   guidance?: string | null;
   attachments?: readonly DecryptedAttachment[];
+  /**
+   * What the model read in this capture's photos, from the descriptor pass. The organizer's own
+   * reading, never the owner's words: it chooses and scores destinations, and is never written
+   * into a note.
+   */
+  visualDescriptor?: string | null;
 }>;
 export type DecryptedCandidate = Readonly<{
   bodyMarkdown: string;
@@ -80,7 +87,26 @@ export type PlannerInput = Readonly<{
   schemaVersion: number;
   signal: AbortSignal;
 }>;
-export type OrganizerPlanner = Readonly<{ plan(input: PlannerInput): Promise<unknown> }>;
+export type CaptureDescriptorInput = Readonly<{
+  capture: DecryptedCapture;
+  captureId: `cap_${string}`;
+  promptVersion: string;
+  providerCredential?: OrganizerProviderCredentialAccess;
+  routingEffort?: "economical" | "standard" | "thorough";
+  schemaVersion: number;
+  signal: AbortSignal;
+}>;
+
+export type OrganizerPlanner = Readonly<{
+  /**
+   * Reads the capture's photos into one short factual sentence. Everything the organizer does
+   * before the routing call — choosing candidates, classifying the capture, scoring the
+   * destination — is computed over capture text, and a capture the owner sent without typing
+   * carries only the client's placeholder. This is where that text comes from.
+   */
+  describe(input: CaptureDescriptorInput): Promise<string>;
+  plan(input: PlannerInput): Promise<unknown>;
+}>;
 
 export type DeterministicDestinationCandidate = Readonly<{
   candidateId: `note_${string}`;
@@ -130,6 +156,19 @@ export function sameOrganizerCaptureControls(
     left.explicitDestinationNoteId === right.explicitDestinationNoteId &&
     sameRoutingRuleMatch(left.ruleMatch, right.ruleMatch)
   );
+}
+
+/**
+ * The capture as the shared routing rules read it. Every question about "what did the owner
+ * write" and "what is this capture about" goes through one place, so the disclosure, the
+ * retrieval query, the capture kind and the note body cannot drift apart.
+ */
+export function routedOrganizerCapture(capture: DecryptedCapture): RoutedCaptureContent {
+  return Object.freeze({
+    rawContent: capture.rawContent,
+    attachmentCount: capture.attachments?.length ?? 0,
+    visualDescriptor: capture.visualDescriptor ?? null
+  });
 }
 
 export function inferOrganizerCaptureKind(text: string): OrganizerCaptureKind {
@@ -466,6 +505,9 @@ export function createDeterministicFirstOrganizerPlanner(
   fallback: OrganizerPlanner
 ): OrganizerPlanner {
   return Object.freeze({
+    describe(input) {
+      return fallback.describe(input);
+    },
     plan(input) {
       const deterministic = buildDeterministicDestinationPlan(input);
       return deterministic === null ? fallback.plan(input) : Promise.resolve(deterministic);
@@ -481,6 +523,9 @@ export function proposedNoteIdForJob(jobId: string): `note_${string}` {
 }
 
 export const unavailableProductionPlanner: OrganizerPlanner = Object.freeze({
+  describe() {
+    return Promise.reject(new OrganizerUnavailableError());
+  },
   plan() {
     return Promise.reject(new OrganizerUnavailableError());
   }

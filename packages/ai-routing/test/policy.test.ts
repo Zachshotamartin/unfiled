@@ -17,7 +17,6 @@ const HIGH_FEATURES = Object.freeze({
   destinationRecency: 1,
   semanticSimilarity: 0.8,
   margin: 0.4,
-  priorAccepted: 0.5,
   reasonCodeConsistency: 1,
   duplicateTitleSuspicion: 0
 }) satisfies RoutingSignalFeatures;
@@ -33,7 +32,7 @@ function policy(overrides: Partial<RoutingPolicyInput> = {}): RoutingPolicyInput
     retrievalAutoEligible: true,
     deterministicRuleMatch: false,
     duplicateNoteSuspected: false,
-    failure: null,
+    captureCarriesUploads: false,
     features: HIGH_FEATURES,
     createSignals: null,
     ...overrides
@@ -42,7 +41,7 @@ function policy(overrides: Partial<RoutingPolicyInput> = {}): RoutingPolicyInput
 
 describe("routing scoring policy", () => {
   it("uses the documented weighted score and clamps it", () => {
-    expect(scoreRoutingSignals(HIGH_FEATURES)).toBe(0.995);
+    expect(scoreRoutingSignals(HIGH_FEATURES)).toBe(0.945);
     expect(
       scoreRoutingSignals(
         Object.fromEntries(
@@ -107,7 +106,6 @@ describe("routing scoring policy", () => {
             openSameDayTypeMatch: 0,
             semanticSimilarity: 0,
             typeCompatibility: 0,
-            priorAccepted: 0,
             reasonCodeConsistency: 0,
             explicitDestinationMention: 0,
             destinationRecency: 0,
@@ -143,6 +141,59 @@ describe("routing scoring policy", () => {
     ).toMatchObject({ band: "auto" });
   });
 
+  it("never auto-files an upload into a note that cannot hold a paragraph", () => {
+    // A list or log body is a rendering of its items, so the organizer has nowhere to place the
+    // photo. The capture waits for the owner instead of being filed with the photo dropped.
+    for (const destinationNoteType of ["list", "log"] as const) {
+      const banded = bandRoutingDecision(
+        policy({ captureCarriesUploads: true, captureKind: "list_items", destinationNoteType })
+      );
+      expect(banded.band).toBe("review");
+      expect(banded.reasons).toContain("attachment_placement_unavailable");
+    }
+    for (const destinationNoteType of ["generic", "principle", "project"] as const) {
+      expect(
+        bandRoutingDecision(
+          policy({
+            captureCarriesUploads: true,
+            captureKind: destinationNoteType === "principle" ? "principle" : "freeform",
+            destinationNoteType
+          })
+        )
+      ).toMatchObject({ band: "auto", autoApply: true });
+    }
+    expect(
+      bandRoutingDecision(policy({ captureKind: "list_items", destinationNoteType: "list" }))
+    ).toMatchObject({ band: "auto", autoApply: true });
+  });
+
+  it("lets the owner's Automatic setting decide the warm-up captures", () => {
+    // Warm-up holds a new account back so its owner can watch the first filings. An owner who
+    // has chosen Automatic has already answered that; holding them anyway ignores the setting.
+    const warmup = bandRoutingDecision(policy({ accountCaptureOrdinal: 1 }));
+    expect(warmup.band).toBe("review");
+    expect(warmup.reasons).toContain("warmup");
+    expect(
+      bandRoutingDecision(policy({ accountCaptureOrdinal: 1, mode: "automatic" }))
+    ).toMatchObject({ band: "auto", autoApply: true });
+    expect(
+      bandRoutingDecision(policy({ accountCaptureOrdinal: 5, mode: "cautious" })).reasons
+    ).toContain("warmup");
+    expect(bandRoutingDecision(policy({ accountCaptureOrdinal: 6 }))).toMatchObject({
+      band: "auto"
+    });
+  });
+
+  it("spends every feature weight on a signal production can raise", () => {
+    // A weight on a feature no production path can compute silently lifts the auto threshold
+    // by its own value, because the documented maximum is then unreachable.
+    const perfect = Object.fromEntries(
+      Object.keys(HIGH_FEATURES).map((key) => [key, key === "duplicateTitleSuspicion" ? 0 : 1])
+    ) as RoutingSignalFeatures;
+    expect(scoreRoutingSignals(perfect)).toBe(1);
+    expect(Object.keys(HIGH_FEATURES)).not.toContain("priorAccepted");
+  });
+
   it("maps operational failures to content-safe fail-closed bands", () => {
     for (const failure of [
       "invalid_plan",
@@ -150,7 +201,7 @@ describe("routing scoring policy", () => {
       "provider_key_invalid",
       "budget_exhausted"
     ] as const) {
-      expect(bandRoutingDecision(policy({ failure }))).toMatchObject({
+      expect(failClosedRoutingPolicy(failure)).toMatchObject({
         band: "inbox",
         failClosed: true,
         reasons: [failure]
@@ -158,7 +209,7 @@ describe("routing scoring policy", () => {
     }
     for (const failure of [
       "revision_conflict",
-      "retrieval_degraded",
+      "retrieval_unavailable",
       "encryption_failure"
     ] as const) {
       expect(failClosedRoutingPolicy(failure)).toMatchObject({

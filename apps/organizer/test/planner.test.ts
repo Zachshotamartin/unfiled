@@ -7,8 +7,14 @@ import {
   inferOrganizerCaptureKind,
   proposedNoteIdForJob,
   resolveDeterministicDestination,
-  unavailableProductionPlanner
+  unavailableProductionPlanner,
+  type OrganizerPlanner
 } from "../src/planner.js";
+
+/** A planner double for a capture that carries no photos: nothing may ask it to read one. */
+function unusedDescribe(): OrganizerPlanner["describe"] {
+  return vi.fn().mockRejectedValue(new Error("this capture has no photos to describe"));
+}
 
 const RULE_ID = "rule_01ARZ3NDEKTSV4RRFFQ69G5FAE" as const;
 const RULE_NOTE_ID = "note_01ARZ3NDEKTSV4RRFFQ69G5FAA" as const;
@@ -199,7 +205,10 @@ describe("app-specific planning wrappers", () => {
       explicitDestinationNoteId: null,
       ruleMatch: null
     } as const;
-    const provider = { plan: vi.fn().mockRejectedValue(new Error("provider must not run")) };
+    const provider = {
+      describe: unusedDescribe(),
+      plan: vi.fn().mockRejectedValue(new Error("provider must not run"))
+    };
     const result = await createDeterministicFirstOrganizerPlanner(provider).plan({
       capture: { controls, rawContent: "add eggs to groceries" },
       candidates: [
@@ -248,7 +257,10 @@ describe("app-specific planning wrappers", () => {
       structuredData: { schemaVersion: 1 },
       title: "Journal"
     };
-    const provider = { plan: vi.fn().mockResolvedValue({ provider: true }) };
+    const provider = {
+      describe: unusedDescribe(),
+      plan: vi.fn().mockResolvedValue({ provider: true })
+    };
     const planner = createDeterministicFirstOrganizerPlanner(provider);
     const input = {
       capture,

@@ -12,6 +12,7 @@ import {
   type OrganizerRepository,
   type OrganizerRoutingPolicyContext
 } from "../src/drain.js";
+import { OrganizerDatabaseContractError } from "../src/database.js";
 import {
   OrganizerPlannerReviewError,
   OrganizerProviderError,
@@ -23,6 +24,11 @@ import type { OrganizerAppDefaultApiKeys } from "../src/provider-credential.js";
 
 const signal = new AbortController().signal;
 const authority = {} as OrganizerKeyAuthority;
+
+/** A planner double for a capture that carries no photos: nothing may ask it to read one. */
+function unusedDescribe(): OrganizerPlanner["describe"] {
+  return vi.fn().mockRejectedValue(new Error("this capture has no photos to describe"));
+}
 const controls = Object.freeze({
   expansionDisabled: false,
   explicitDestinationNoteId: null,
@@ -37,7 +43,6 @@ const automaticPolicyContext: OrganizerRoutingPolicyContext = Object.freeze({
     explicitDestinationMention: 1,
     margin: 1,
     openSameDayTypeMatch: 1,
-    priorAccepted: 1,
     reasonCodeConsistency: 1,
     ruleOrAliasNearMatch: 1,
     semanticSimilarity: 1,
@@ -52,7 +57,6 @@ const zeroPolicyFeatures: OrganizerRoutingPolicyContext["features"] = Object.fre
   explicitDestinationMention: 0,
   margin: 0,
   openSameDayTypeMatch: 0,
-  priorAccepted: 0,
   reasonCodeConsistency: 0,
   ruleOrAliasNearMatch: 0,
   semanticSimilarity: 0,
@@ -269,7 +273,10 @@ const reviewPlan = Object.freeze({
   alternatives: [candidate.candidateId],
   reasonCodes: ["ambiguous_intent"]
 });
-const appendPlanner: OrganizerPlanner = { plan: vi.fn().mockResolvedValue(appendPlan) };
+const appendPlanner: OrganizerPlanner = {
+  describe: unusedDescribe(),
+  plan: vi.fn().mockResolvedValue(appendPlan)
+};
 
 function authorized(candidateCount = 1, replanCount: 0 | 1 = 0) {
   return {
@@ -334,6 +341,7 @@ describe("organizer drain", () => {
       rawContent: "Shopping: milk"
     });
     const planner: OrganizerPlanner = {
+      describe: unusedDescribe(),
       plan: vi.fn().mockRejectedValue(new Error("rule path must not call the planner"))
     };
 
@@ -439,7 +447,7 @@ describe("organizer drain", () => {
     });
 
     await expect(
-      drain(repo, { plan: vi.fn() }, crypto).drain({
+      drain(repo, { describe: unusedDescribe(), plan: vi.fn() }, crypto).drain({
         authority,
         requestId: "long-rule-capture",
         signal,
@@ -500,7 +508,7 @@ describe("organizer drain", () => {
       controls: ruleControls,
       rawContent: "add milk and eggs"
     });
-    const planner: OrganizerPlanner = { plan: vi.fn() };
+    const planner: OrganizerPlanner = { describe: unusedDescribe(), plan: vi.fn() };
 
     await expect(
       drain(repo, planner, crypto).drain({
@@ -576,7 +584,7 @@ describe("organizer drain", () => {
       controls: ruleControls,
       rawContent: "Shopping: milk"
     });
-    const planner: OrganizerPlanner = { plan: vi.fn() };
+    const planner: OrganizerPlanner = { describe: unusedDescribe(), plan: vi.fn() };
 
     await expect(
       drain(repo, planner, crypto).drain({
@@ -638,7 +646,10 @@ describe("organizer drain", () => {
           replanCount: 1
         })
     });
-    const planner: OrganizerPlanner = { plan: vi.fn().mockResolvedValue(appendPlan) };
+    const planner: OrganizerPlanner = {
+      describe: unusedDescribe(),
+      plan: vi.fn().mockResolvedValue(appendPlan)
+    };
     const result = await drain(repo, planner).drain({
       authority,
       requestId: "request",
@@ -680,6 +691,7 @@ describe("organizer drain", () => {
   it("schedules a safe retry when a dependency is unavailable", async () => {
     const repo = repository({ fail: vi.fn().mockResolvedValue({ state: "awaiting_retry" }) });
     const planner: OrganizerPlanner = {
+      describe: unusedDescribe(),
       plan: vi.fn().mockRejectedValue(new Error("secret capture leaked?"))
     };
     await expect(
@@ -692,16 +704,22 @@ describe("organizer drain", () => {
 
   it("does not let failure-reporting errors escape", async () => {
     const repo = repository({ fail: vi.fn().mockRejectedValue(new Error("db detail")) });
-    const planner: OrganizerPlanner = { plan: vi.fn().mockRejectedValue(new Error("capture")) };
+    const planner: OrganizerPlanner = {
+      describe: unusedDescribe(),
+      plan: vi.fn().mockRejectedValue(new Error("capture"))
+    };
     await expect(
       drain(repo, planner).drain({ authority, requestId: "request", signal, trigger: "schedule" })
     ).resolves.toMatchObject({ failed: 1 });
   });
 
-  it("releases local ciphertext state even when abort prevents failure reporting", async () => {
+  it("writes the failure transition on its own budget after the job signal aborts", async () => {
+    // The deadline firing is exactly when a job most needs its transition written. Reusing the
+    // aborted signal aborted the transition before it reached the database, leaving the row
+    // running and the capture processing until a recovery run days later.
     const controller = new AbortController();
     const repo = repository({
-      fail: vi.fn().mockRejectedValue(new DOMException("aborted", "AbortError"))
+      fail: vi.fn().mockResolvedValue({ jobId: job.jobId, state: "awaiting_retry" })
     });
     const crypto = cipher();
     vi.mocked(crypto.openCapture).mockImplementationOnce(() => {
@@ -716,10 +734,37 @@ describe("organizer drain", () => {
       trigger: "manual"
     });
 
-    expect(result).toEqual({ claimed: 1, completed: 0, failed: 1, retryScheduled: 0 });
-    expect(repo.fail).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }));
+    expect(result).toEqual({ claimed: 1, completed: 0, failed: 0, retryScheduled: 1 });
+    const failSignal = vi.mocked(repo.fail).mock.calls[0]?.[0].signal;
+    expect(failSignal).toBeInstanceOf(AbortSignal);
+    expect(failSignal?.aborted).toBe(false);
     expect(repo.release).toHaveBeenCalledOnce();
     expect(repo.release).toHaveBeenCalledWith(job.jobId);
+  });
+
+  it("reports a transition that could not be written as its own outcome", async () => {
+    const failures: string[] = [];
+    const repo = repository({
+      fail: vi.fn().mockRejectedValue(new DOMException("aborted", "AbortError"))
+    });
+    const crypto = cipher();
+    vi.mocked(crypto.openCapture).mockRejectedValue(new OrganizerUnavailableError());
+
+    const result = await createOrganizerDrain({
+      cipher: crypto,
+      claimLimit: 2,
+      concurrency: 2,
+      leaseSeconds: 120,
+      onJobFailure: ({ errorCode }) => failures.push(errorCode),
+      planner: appendPlanner,
+      recoveryLimit: 50,
+      repository: repo,
+      routingPolicyContext: automaticPolicyContext,
+      workerId: "organizer-test"
+    }).drain({ authority, requestId: "r", signal, trigger: "manual" });
+
+    expect(result).toEqual({ claimed: 1, completed: 0, failed: 1, retryScheduled: 0 });
+    expect(failures).toEqual(["provider_unavailable", "job_transition_unwritten"]);
   });
 
   it("runs bounded recovery only for the recovery trigger", async () => {
@@ -749,7 +794,10 @@ describe("organizer drain", () => {
         replanCount: 0
       })
     });
-    const createPlanner: OrganizerPlanner = { plan: vi.fn().mockResolvedValue(createPlan) };
+    const createPlanner: OrganizerPlanner = {
+      describe: unusedDescribe(),
+      plan: vi.fn().mockResolvedValue(createPlan)
+    };
     const createCrypto = cipher();
     vi.mocked(createCrypto.openCapture).mockResolvedValueOnce({
       controls,
@@ -777,7 +825,10 @@ describe("organizer drain", () => {
         replanCount: 0
       })
     });
-    const reviewPlanner: OrganizerPlanner = { plan: vi.fn().mockResolvedValue(reviewPlan) };
+    const reviewPlanner: OrganizerPlanner = {
+      describe: unusedDescribe(),
+      plan: vi.fn().mockResolvedValue(reviewPlan)
+    };
     expect(
       (
         await drain(reviewRepo, reviewPlanner).drain({
@@ -804,6 +855,7 @@ describe("organizer drain", () => {
       })
     });
     const planner: OrganizerPlanner = {
+      describe: unusedDescribe(),
       plan: vi.fn().mockResolvedValue({ ...reviewPlan, decision: "add_to_inbox", alternatives: [] })
     };
     const result = await drain(repo, planner).drain({
@@ -817,7 +869,10 @@ describe("organizer drain", () => {
   });
 
   it("does not call the planner or publish when privacy changes before disclosure revalidation", async () => {
-    const planner: OrganizerPlanner = { plan: vi.fn().mockResolvedValue(appendPlan) };
+    const planner: OrganizerPlanner = {
+      describe: unusedDescribe(),
+      plan: vi.fn().mockResolvedValue(appendPlan)
+    };
     const repo = repository({
       heartbeat: vi.fn().mockRejectedValue(new Error("candidate became private"))
     });
@@ -858,7 +913,10 @@ describe("organizer drain", () => {
         })
         .mockResolvedValueOnce({ outcome: "prepared", preparation: prepared("append", 3) })
     });
-    const planner: OrganizerPlanner = { plan: vi.fn().mockResolvedValue(appendPlan) };
+    const planner: OrganizerPlanner = {
+      describe: unusedDescribe(),
+      plan: vi.fn().mockResolvedValue(appendPlan)
+    };
     const result = await drain(repo, planner).drain({
       authority,
       requestId: "r",
@@ -911,6 +969,7 @@ describe("organizer drain", () => {
         })
     });
     const planner: OrganizerPlanner = {
+      describe: unusedDescribe(),
       plan: vi.fn().mockResolvedValueOnce(appendPlan).mockResolvedValueOnce(secondPlan)
     };
     expect(
@@ -983,6 +1042,13 @@ describe("organizer drain", () => {
       plan: { kind: "review" },
       reviewReason: "revision_conflict"
     });
+    // The plan that reached the conflict was an auto-apply plan, and the production cipher
+    // refuses to seal a Review that still claims one. The honest record is that the note moved
+    // under us, not that the score cleared the bar.
+    const resealed = vi.mocked(crypto.sealCommand).mock.calls[2]?.[0].routingDecision;
+    expect(resealed?.autoApply).toBe(false);
+    expect(resealed).toMatchObject({ band: "review", failClosed: true });
+    expect(resealed?.reasons).toContain("revision_conflict");
     expect(vi.mocked(repo.commit).mock.calls[0]?.[0].command).toMatchObject({
       outcome: "review",
       reviewReason: "revision_conflict"
@@ -993,6 +1059,39 @@ describe("organizer drain", () => {
     const reviewReservation = vi.mocked(repo.prepareCreate).mock.calls[0]?.[0].reservationId;
     if (reviewReservation === undefined) throw new Error("Expected a Review reservation");
     expect(new Set([...routeReservations, reviewReservation]).size).toBe(3);
+  });
+
+  it("downgrades the decision when preparation itself turns the write into a Review", async () => {
+    // The same refusal reaches every path that turns an authorized auto-apply plan into a
+    // Review, not only the pre-commit heartbeat.
+    const crypto = cipher();
+    const repo = repository({
+      prepareAppend: vi.fn().mockResolvedValue({
+        conflictReason: "revision",
+        outcome: "review",
+        preparation: prepared("create", null)
+      }),
+      commit: vi.fn().mockResolvedValue({
+        jobId: job.jobId,
+        noteId: null,
+        outcome: "review",
+        replayed: false,
+        revision: null,
+        replanCount: 0
+      })
+    });
+
+    const result = await drain(repo, appendPlanner, crypto).drain({
+      authority,
+      requestId: "r",
+      signal,
+      trigger: "manual"
+    });
+
+    expect(result).toEqual({ claimed: 1, completed: 1, failed: 0, retryScheduled: 0 });
+    const sealed = vi.mocked(crypto.sealCommand).mock.calls[0]?.[0];
+    expect(sealed?.plan.kind).toBe("review");
+    expect(sealed?.routingDecision).toMatchObject({ autoApply: false, failClosed: true });
   });
 
   it("refreshes the candidate page when Review publication returns SQL review", async () => {
@@ -1030,7 +1129,10 @@ describe("organizer drain", () => {
         replanCount: 1
       })
     });
-    const malformedPlanner: OrganizerPlanner = { plan: vi.fn().mockResolvedValue({}) };
+    const malformedPlanner: OrganizerPlanner = {
+      describe: unusedDescribe(),
+      plan: vi.fn().mockResolvedValue({})
+    };
 
     const result = await drain(repo, malformedPlanner, crypto).drain({
       authority,
@@ -1071,7 +1173,10 @@ describe("organizer drain", () => {
         replanCount: 0
       })
     });
-    const planner: OrganizerPlanner = { plan: vi.fn().mockResolvedValue(appendPlan) };
+    const planner: OrganizerPlanner = {
+      describe: unusedDescribe(),
+      plan: vi.fn().mockResolvedValue(appendPlan)
+    };
     expect(
       (await drain(repo, planner).drain({ authority, requestId: "r", signal, trigger: "manual" }))
         .completed
@@ -1093,7 +1198,10 @@ describe("organizer drain", () => {
     const repo = repository({
       fail: vi.fn().mockResolvedValue({ state: retryable ? "awaiting_retry" : "failed" })
     });
-    const planner: OrganizerPlanner = { plan: vi.fn().mockRejectedValue(failure) };
+    const planner: OrganizerPlanner = {
+      describe: unusedDescribe(),
+      plan: vi.fn().mockRejectedValue(failure)
+    };
     await drain(repo, planner).drain({
       authority,
       requestId: "r",
@@ -1102,6 +1210,33 @@ describe("organizer drain", () => {
     });
     expect(repo.fail).toHaveBeenCalledWith(expect.objectContaining({ errorCode: code, retryable }));
     expect(repo.commit).not.toHaveBeenCalled();
+  });
+
+  it("never blames the capture for a fault that was not the capture's", async () => {
+    // `validation_failed` is permanent and tells the owner their thought was malformed. A
+    // database contract breach and a programming fault inside the job loop are the organizer's
+    // problems: they retry, and they never carry that code.
+    for (const failure of [
+      new OrganizerDatabaseContractError("contract_violation"),
+      new TypeError("cannot read properties of undefined")
+    ]) {
+      const repo = repository({
+        fail: vi.fn().mockResolvedValue({ state: "awaiting_retry" }),
+        heartbeat: vi.fn().mockRejectedValue(failure)
+      });
+
+      const result = await drain(repo).drain({
+        authority,
+        requestId: "r",
+        signal,
+        trigger: "schedule"
+      });
+
+      expect(result).toEqual({ claimed: 1, completed: 0, failed: 0, retryScheduled: 1 });
+      expect(repo.fail).toHaveBeenCalledWith(
+        expect.objectContaining({ errorCode: "provider_unavailable", retryable: true })
+      );
+    }
   });
 
   it("binds a BYOK 401 failure to the exact lease-resolved credential revision", async () => {
@@ -1123,6 +1258,7 @@ describe("organizer drain", () => {
       providerRoute
     });
     const planner: OrganizerPlanner = {
+      describe: unusedDescribe(),
       plan: vi.fn().mockImplementation((input: Parameters<OrganizerPlanner["plan"]>[0]) => {
         if (input.providerCredential === undefined) throw new Error("missing credential access");
         return input.providerCredential.use((credential) =>
@@ -1165,6 +1301,7 @@ describe("organizer drain", () => {
       })
     });
     const planner: OrganizerPlanner = {
+      describe: unusedDescribe(),
       plan: vi.fn().mockRejectedValue(new OrganizerPlannerReviewError("refusal"))
     };
     const result = await drain(repo, planner).drain({
@@ -1186,6 +1323,7 @@ describe("organizer drain", () => {
       rawContent: "- milk\n- bread"
     });
     const planner: OrganizerPlanner = {
+      describe: unusedDescribe(),
       plan: vi.fn().mockResolvedValue({
         ...appendPlan,
         operations: [{ type: "append_list_items", section: "Open items", items: ["eggs"] }]
@@ -1214,6 +1352,7 @@ describe("organizer drain", () => {
       rawContent: "Keep this exact private sentence"
     });
     const planner: OrganizerPlanner = {
+      describe: unusedDescribe(),
       plan: vi.fn().mockResolvedValue({
         ...appendPlan,
         captureKind: "freeform",
@@ -1295,6 +1434,7 @@ describe("organizer drain", () => {
       rawContent: "Simplicity compounds"
     });
     const planner: OrganizerPlanner = {
+      describe: unusedDescribe(),
       plan: vi.fn().mockResolvedValue({
         ...appendPlan,
         captureKind: "principle",
@@ -1329,6 +1469,7 @@ describe("organizer drain", () => {
       fail: vi.fn().mockResolvedValue({ state: "awaiting_retry" })
     });
     const planner: OrganizerPlanner = {
+      describe: unusedDescribe(),
       plan: vi.fn().mockImplementation(() => {
         controller.abort();
         return Promise.resolve(appendPlan);
@@ -1356,7 +1497,10 @@ describe("organizer drain", () => {
     });
     const closed = Object.freeze({ ...candidate, isOpen: false });
     const crypto = cipher();
-    const planner: OrganizerPlanner = { plan: vi.fn().mockResolvedValue(appendPlan) };
+    const planner: OrganizerPlanner = {
+      describe: unusedDescribe(),
+      plan: vi.fn().mockResolvedValue(appendPlan)
+    };
     const repo = repository({
       candidates: vi.fn().mockResolvedValue({ candidates: [closed], controls: explicitControls }),
       heartbeat: vi.fn().mockResolvedValue(authorized()),
@@ -1409,7 +1553,10 @@ describe("organizer drain", () => {
         replanCount: 0
       })
     });
-    const planner: OrganizerPlanner = { plan: vi.fn().mockResolvedValue(planned) };
+    const planner: OrganizerPlanner = {
+      describe: unusedDescribe(),
+      plan: vi.fn().mockResolvedValue(planned)
+    };
 
     await expect(
       drain(repo, planner, crypto).drain({
@@ -1489,7 +1636,10 @@ describe("organizer drain", () => {
               }
         )
       });
-      const planner: OrganizerPlanner = { plan: vi.fn().mockResolvedValue(planned) };
+      const planner: OrganizerPlanner = {
+        describe: unusedDescribe(),
+        plan: vi.fn().mockResolvedValue(planned)
+      };
       expect(
         (
           await drain(repo, planner, crypto).drain({
@@ -1590,11 +1740,16 @@ describe("organizer drain with photos", () => {
     durationMs: null
   });
 
+  const DESCRIPTOR = "A grey tile sample resting on the kitchen counter";
+
   it("reads the leased capture's photos, shows them to the planner, and files them by reference", async () => {
     const crypto = cipher();
     vi.mocked(crypto.openCapture).mockResolvedValueOnce({ controls, rawContent: "A thought" });
     vi.mocked(crypto.openCaptureAttachments).mockResolvedValueOnce([decryptedPhoto]);
-    const planner: OrganizerPlanner = { plan: vi.fn().mockResolvedValue(createPlan) };
+    const planner: OrganizerPlanner = {
+      describe: vi.fn().mockResolvedValue(DESCRIPTOR),
+      plan: vi.fn().mockResolvedValue(createPlan)
+    };
     const repo = repository({
       candidates: vi.fn().mockResolvedValue({ candidates: [], controls }),
       heartbeat: vi.fn().mockResolvedValue({
@@ -1645,12 +1800,104 @@ describe("organizer drain with photos", () => {
     expect(sealedPlan?.validatedPlan.operations).toEqual(modelOperations);
     const sealedCapture = vi.mocked(crypto.sealCommand).mock.calls[0]?.[0].capture;
     expect(sealedCapture?.attachments).toEqual([decryptedPhoto]);
+    // The photos are read before anything is retrieved, and that reading travels with the
+    // capture: it is what candidates are matched against and what the kind is inferred from.
+    expect(planner.describe).toHaveBeenCalledWith(
+      expect.objectContaining({ captureId: job.captureId })
+    );
+    expect(plannerInput?.capture.visualDescriptor).toBe(DESCRIPTOR);
+  });
+
+  it("files a capture the owner sent without typing as the photo alone", async () => {
+    // The phone sends "Photo" so the capture API's non-empty content rule is satisfied. That
+    // word is not the owner's writing: it must not reach the note, must not be what candidates
+    // are matched against, and must not be what the capture kind is inferred from.
+    const crypto = cipher();
+    vi.mocked(crypto.openCapture).mockResolvedValueOnce({ controls, rawContent: "Photo" });
+    vi.mocked(crypto.openCaptureAttachments).mockResolvedValueOnce([decryptedPhoto]);
+    const planner: OrganizerPlanner = {
+      describe: vi.fn().mockResolvedValue(DESCRIPTOR),
+      plan: vi.fn().mockResolvedValue({ ...createPlan, operations: [] })
+    };
+    const repo = repository({
+      candidates: vi.fn().mockResolvedValue({ candidates: [], controls }),
+      heartbeat: vi.fn().mockResolvedValue({
+        candidateCount: 0,
+        currentRevision: 1,
+        disclosureAuthorized: true,
+        jobId: job.jobId,
+        leaseExpiresAt: job.leaseExpiresAt,
+        outcome: "authorized",
+        replanCount: 0
+      }),
+      attachments: vi.fn().mockResolvedValue([encryptedPhoto]),
+      commit: vi.fn().mockResolvedValue({
+        jobId: job.jobId,
+        noteId: "note_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        outcome: "created",
+        replayed: false,
+        revision: 1,
+        replanCount: 0
+      })
+    });
+
+    const result = await drain(repo, planner, crypto).drain({
+      authority,
+      requestId: "r",
+      signal,
+      trigger: "schedule"
+    });
+
+    expect(result).toEqual({ claimed: 1, completed: 1, failed: 0, retryScheduled: 0 });
+    const sealed = vi.mocked(crypto.sealCommand).mock.calls[0]?.[0];
+    expect(sealed?.plan.kind).toBe("create");
+    expect(sealed?.plan.kind === "create" ? sealed.plan.operations : ["unexpected"]).toEqual([]);
+    expect(sealed?.capture.rawContent).toBe("Photo");
+    expect(sealed?.routingDecision?.autoApply).toBe(true);
+  });
+
+  it("sends a photo to Review rather than filing it by a word the owner never typed", async () => {
+    const crypto = cipher();
+    vi.mocked(crypto.openCapture).mockResolvedValueOnce({ controls, rawContent: "Photo" });
+    vi.mocked(crypto.openCaptureAttachments).mockResolvedValueOnce([decryptedPhoto]);
+    const planner: OrganizerPlanner = {
+      describe: vi.fn().mockRejectedValue(new OrganizerPlannerReviewError("refusal")),
+      plan: vi.fn().mockRejectedValue(new Error("routing must not run without a reading"))
+    };
+    const repo = repository({
+      candidates: vi.fn().mockResolvedValue({ candidates: [], controls }),
+      attachments: vi.fn().mockResolvedValue([encryptedPhoto]),
+      commit: vi.fn().mockResolvedValue({
+        jobId: job.jobId,
+        noteId: null,
+        outcome: "review",
+        replayed: false,
+        revision: null,
+        replanCount: 0
+      })
+    });
+
+    const result = await drain(repo, planner, crypto).drain({
+      authority,
+      requestId: "r",
+      signal,
+      trigger: "schedule"
+    });
+
+    expect(result).toEqual({ claimed: 1, completed: 1, failed: 0, retryScheduled: 0 });
+    expect(planner.plan).not.toHaveBeenCalled();
+    const sealed = vi.mocked(crypto.sealCommand).mock.calls[0]?.[0];
+    expect(sealed?.plan.kind).toBe("review");
+    expect(sealed?.reviewReason).toBe("planner_ambiguity");
   });
 
   it("does not open or reference anything when the capture has no attachments", async () => {
     const crypto = cipher();
     vi.mocked(crypto.openCapture).mockResolvedValueOnce({ controls, rawContent: "A thought" });
-    const planner: OrganizerPlanner = { plan: vi.fn().mockResolvedValue(createPlan) };
+    const planner: OrganizerPlanner = {
+      describe: unusedDescribe(),
+      plan: vi.fn().mockResolvedValue(createPlan)
+    };
     const repo = repository({
       candidates: vi.fn().mockResolvedValue({ candidates: [], controls }),
       heartbeat: vi.fn().mockResolvedValue({

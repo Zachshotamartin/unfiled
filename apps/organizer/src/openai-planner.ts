@@ -1,3 +1,8 @@
+import {
+  ORGANIZER_DESCRIPTOR_PROMPT,
+  ORGANIZER_DESCRIPTOR_SCHEMA,
+  ORGANIZER_DESCRIPTOR_SCHEMA_NAME
+} from "./descriptor.js";
 import { OrganizerPlannerReviewError, OrganizerProviderError } from "./errors.js";
 import {
   OPENAI_MODEL_IDS,
@@ -24,6 +29,9 @@ import {
 import { isRecord } from "./provider-transport.js";
 
 export const OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses" as const;
+
+/** One bounded sentence, plus room for the strict-JSON envelope around it. */
+const OPENAI_DESCRIPTOR_MAX_OUTPUT_TOKENS = 1_024;
 
 /**
  * Code-pinned OpenAI routing profile. The exact model is no longer a single
@@ -96,6 +104,7 @@ export const OPENAI_PROVIDER_ADAPTER: OrganizerProviderAdapter = Object.freeze({
   provider: "openai",
   buildRequest(input) {
     const effort = effortProfile(input.routingEffort);
+    const describing = input.task === "describe";
     return Object.freeze({
       body: JSON.stringify({
         background: false,
@@ -112,17 +121,22 @@ export const OPENAI_PROVIDER_ADAPTER: OrganizerProviderAdapter = Object.freeze({
             role: "user"
           }
         ],
-        instructions: ORGANIZER_ROUTING_PROMPT,
-        max_output_tokens: effort.maxOutputTokens,
+        instructions: describing ? ORGANIZER_DESCRIPTOR_PROMPT : ORGANIZER_ROUTING_PROMPT,
+        // One sentence needs no room to reason; the routing call still gets the full budget.
+        max_output_tokens: describing
+          ? OPENAI_DESCRIPTOR_MAX_OUTPUT_TOKENS
+          : effort.maxOutputTokens,
         model: input.modelId,
         parallel_tool_calls: false,
-        reasoning: { effort: effort.reasoningEffort },
+        reasoning: { effort: describing ? "low" : effort.reasoningEffort },
         store: false,
         stream: false,
         text: {
           format: {
-            name: OPENAI_ORGANIZATION_PLAN_SCHEMA_NAME,
-            schema: OPENAI_ORGANIZATION_PLAN_SCHEMA,
+            name: describing
+              ? ORGANIZER_DESCRIPTOR_SCHEMA_NAME
+              : OPENAI_ORGANIZATION_PLAN_SCHEMA_NAME,
+            schema: describing ? ORGANIZER_DESCRIPTOR_SCHEMA : OPENAI_ORGANIZATION_PLAN_SCHEMA,
             strict: true,
             type: "json_schema"
           }

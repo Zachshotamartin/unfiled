@@ -1,11 +1,14 @@
 import { buildPrivateRagPayloadValue, type PrivateRagPageReadResult } from "@unfiled/search";
 import { describe, expect, it, vi } from "vitest";
 
-import type {
-  ClaimedOrganizerJob,
-  EncryptedCandidate,
-  OrganizerRagRecord,
-  OrganizerRepository
+import { OrganizerDatabaseContractError } from "../src/database.js";
+import {
+  createOrganizerDrain,
+  type ClaimedOrganizerJob,
+  type EncryptedCandidate,
+  type OrganizerCipher,
+  type OrganizerRagRecord,
+  type OrganizerRepository
 } from "../src/drain.js";
 import type { OrganizerEmbeddingProvider } from "../src/embedding-provider.js";
 import { OrganizerProviderError } from "../src/errors.js";
@@ -339,6 +342,51 @@ describe("organizer encrypted RAG retrieval", () => {
     expect(repo.selectCandidates).not.toHaveBeenCalled();
     expect(opener.openPayload).toHaveBeenCalledTimes(1);
     expect([...vector]).toEqual([0, 0]);
+    // Nothing here is a usable destination, so nothing is disclosed. The repository still
+    // recorded the page it listed to read the current controls, and the revalidation manifest
+    // has to mirror that page or the heartbeat rejects it and the capture fails permanently.
+    expect(result.revalidationCandidates).toEqual([candidate]);
+  });
+
+  it("matches candidates on the model's reading of a capture the owner never typed", async () => {
+    // The stored text of a photo-only capture is the client's "Photo" placeholder, which
+    // matches nothing in any library. The reading of the photos is the only route to a note.
+    const repo = repository();
+    const opener = payloads();
+    const embed = vi.fn().mockResolvedValue(new Float32Array([1, 0]));
+    const retrieval = createOrganizerCandidateRetrieval({
+      embeddingProvider: Object.freeze({ embed }),
+      payloadsForAuthority: () => opener,
+      repository: repo
+    });
+
+    const photoCapture = Object.freeze({
+      attachments: [
+        {
+          attachmentId: "att_01ARZ3NDEKTSV4RRFFQ69G5FAZ" as const,
+          kind: "image" as const,
+          mediaType: "image/jpeg" as const,
+          dataBase64: "/9j/AAAA",
+          byteLength: 6,
+          width: 4,
+          height: 3,
+          durationMs: null
+        }
+      ],
+      controls,
+      rawContent: "Photo",
+      visualDescriptor: "shopping: milk and bread"
+    });
+    const result = await retrieval.retrieve({ authority, capture: photoCapture, job, signal });
+
+    const embedded = vi.mocked(embed).mock.calls[0]?.[0] as Readonly<{ text: string }> | undefined;
+    expect(embedded?.text).toBe("shopping: milk and bread");
+    expect(result.candidates).toEqual([candidate]);
+    expect(result.routingPolicyContext.candidateFeatures?.[0]?.features).toMatchObject({
+      ruleOrAliasNearMatch: 1,
+      typeCompatibility: 1
+    });
+    retrieval.close();
   });
 
   it("fails closed to fallback for incomplete coverage before embedding or decryption", async () => {
@@ -548,5 +596,157 @@ describe("organizer encrypted RAG retrieval", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("drain over the real retrieval port", () => {
+  /**
+   * A repository double that holds the recorded-candidate invariant the way the production RPC
+   * does: the revalidation manifest must mirror, exactly and in order, the last candidate page
+   * this lease listed. Every heartbeat test below the drain mirrors the page it was handed, so
+   * the mismatch that killed a real capture could not be reproduced there.
+   */
+  function invariantRepository(): OrganizerRepository {
+    let recorded: readonly EncryptedCandidate[] = [];
+    return repository({
+      candidates: vi.fn().mockImplementation(() => {
+        recorded = [candidate];
+        return Promise.resolve({ candidates: [candidate], controls });
+      }),
+      claim: vi.fn().mockResolvedValue([job]),
+      commit: vi.fn().mockResolvedValue({
+        jobId: job.jobId,
+        noteId: "note_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        outcome: "created",
+        replayed: false,
+        revision: 1,
+        replanCount: 0
+      }),
+      heartbeat: vi.fn().mockImplementation((input: { candidateManifest: unknown }) => {
+        const manifest = input.candidateManifest as {
+          candidates: readonly Readonly<{ noteId: string; revision: number }>[];
+        };
+        if (
+          manifest.candidates.length !== recorded.length ||
+          manifest.candidates.some((entry, index) => {
+            const expected = recorded[index];
+            return expected === undefined
+              ? true
+              : entry.noteId !== expected.noteId || entry.revision !== expected.revision;
+          })
+        ) {
+          return Promise.reject(new OrganizerDatabaseContractError("contract_violation"));
+        }
+        return Promise.resolve({
+          candidateCount: manifest.candidates.length,
+          currentRevision: 1,
+          disclosureAuthorized: true,
+          jobId: job.jobId,
+          leaseExpiresAt: job.leaseExpiresAt,
+          outcome: "authorized",
+          replanCount: 0
+        });
+      }),
+      prepareCreate: vi.fn().mockResolvedValue({
+        expectedRevision: null,
+        ids: {
+          decisionId: "dec_01ARZ3NDEKTSV4RRFFQ69G5FAC",
+          generatedBlockId: "blk_01ARZ3NDEKTSV4RRFFQ69G5FAJ",
+          mutationId: "mut_01ARZ3NDEKTSV4RRFFQ69G5FAD",
+          reviewItemId: "rvw_01ARZ3NDEKTSV4RRFFQ69G5FAE",
+          revisionId: "rev_01ARZ3NDEKTSV4RRFFQ69G5FAF"
+        },
+        jobId: job.jobId,
+        keys: { contentMac: {}, objectWrap: {} },
+        mode: "create",
+        noteId: "note_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        replanCount: 0,
+        replayed: false,
+        reservations: {
+          decision: { operationCount: 1, reservationId: "r-decision" },
+          generatedBlock: { operationCount: 1, reservationId: "r-block" },
+          noteWrite: { operationCount: 4, reservationId: "r-write" },
+          receipt: { operationCount: 1, reservationId: "r-receipt" },
+          review: { operationCount: 1, reservationId: "r-review" }
+        },
+        targetRevision: 1
+      }),
+      selectCandidates: vi.fn().mockImplementation(() => {
+        recorded = [candidate];
+        return Promise.resolve({ candidates: [candidate], controls, snapshot });
+      })
+    });
+  }
+
+  function cipherDouble(): OrganizerCipher {
+    return {
+      openCapture: vi.fn().mockResolvedValue({ controls, rawContent: "zxqv unrelated thought" }),
+      openCaptureAttachments: vi.fn().mockResolvedValue([]),
+      openCandidate: vi.fn().mockRejectedValue(new Error("no candidate is disclosed here")),
+      sealCommand: vi
+        .fn()
+        .mockImplementation(
+          ({ plan, reviewReason }: Parameters<OrganizerCipher["sealCommand"]>[0]) =>
+            Promise.resolve({
+              decision: { sealed: true },
+              generatedBlock: null,
+              noteWrite: plan.kind === "review" ? null : { sealed: true },
+              outcome:
+                plan.kind === "append" ? "appended" : plan.kind === "create" ? "created" : "review",
+              receipt: { sealed: true },
+              review: plan.kind === "review" ? { sealed: true } : null,
+              reviewReason
+            })
+        )
+    };
+  }
+
+  it("keeps the revalidation manifest on the page the repository recorded", async () => {
+    // A verified complete scan that finds no usable destination discloses nothing, while the
+    // repository still holds the page it listed to read the current controls. Reporting that
+    // empty disclosure as the recorded page made the heartbeat reject the manifest, and an
+    // owner writing a thought unrelated to all their notes lost the capture to a permanent
+    // validation_failed.
+    const repo = invariantRepository();
+    const retrieval = createOrganizerCandidateRetrieval({
+      embeddingProvider: embeddingProvider(new Float32Array([0, 1])),
+      payloadsForAuthority: () => payloads(),
+      repository: repo
+    });
+
+    const result = await createOrganizerDrain({
+      cipher: cipherDouble(),
+      claimLimit: 1,
+      concurrency: 1,
+      leaseSeconds: 120,
+      planner: {
+        describe: vi.fn().mockRejectedValue(new Error("this capture carries no photos")),
+        plan: vi.fn().mockResolvedValue({
+          schemaVersion: 1,
+          captureKind: "freeform",
+          decision: "create_note",
+          destination: {
+            candidateId: null,
+            newNote: { title: "A thought", noteType: "generic", spaceCandidateId: null }
+          },
+          operations: [{ type: "append_raw", content: "zxqv unrelated thought" }],
+          generatedExpansion: null,
+          alternatives: [],
+          reasonCodes: ["no_candidate_fit"]
+        })
+      },
+      recoveryLimit: 10,
+      repository: repo,
+      retrieval,
+      workerId: "organizer-test"
+    }).drain({ authority, requestId: "r", signal, trigger: "schedule" });
+
+    expect(result).toEqual({ claimed: 1, completed: 1, failed: 0, retryScheduled: 0 });
+    const manifestSizes = vi
+      .mocked(repo.heartbeat)
+      .mock.calls.map(([input]) => input.candidateManifest.candidates.length);
+    expect(manifestSizes.length).toBeGreaterThan(0);
+    expect(new Set(manifestSizes)).toEqual(new Set([1]));
+    retrieval.close();
   });
 });

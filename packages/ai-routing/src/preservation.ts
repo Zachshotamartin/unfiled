@@ -7,7 +7,7 @@ const DESTINATION_TAIL =
   /\s+(?:to|in)\s+(?:my\s+|the\s+)?[\p{L}\p{N}][\p{L}\p{N} '\u2019-]{0,59}$/iu;
 
 export type SourcePreservationMethod =
-  "append_raw" | "append_paragraphs" | "ordered_extraction" | "none";
+  "append_raw" | "append_paragraphs" | "ordered_extraction" | "no_source" | "none";
 
 export type SourcePreservationResult = Readonly<{
   preserved: boolean;
@@ -98,6 +98,24 @@ export function inspectSourcePreservation(
   captureText: string,
   operations: readonly ModelOperation[]
 ): SourcePreservationResult {
+  // A capture whose only content is what the owner uploaded has no words to keep. The model
+  // must then write nothing at all: there is no source to preserve, and text it invented in
+  // place of the missing source is exactly what this check exists to refuse.
+  if (captureText.length === 0) {
+    const writtenTokenCount = operations.flatMap((operation) =>
+      operationSourceText(operation).flatMap(tokens)
+    ).length;
+    const wroteNothing = operations.length === 0;
+    return Object.freeze({
+      preserved: wroteNothing,
+      method: wroteNothing ? "no_source" : "none",
+      captureTokenCount: 0,
+      operationTokenCount: writtenTokenCount,
+      matchedCaptureTokenCount: 0,
+      novelOperationTokenCount: writtenTokenCount,
+      coverage: wroteNothing ? 1 : 0
+    });
+  }
   const exactRaw = operations.some(
     (operation) => operation.type === "append_raw" && operation.content === captureText
   );
