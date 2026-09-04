@@ -594,7 +594,7 @@ request_json() {
   local body="${3:-}"
   local idempotency_key="${4:-}"
   local arguments=(
-    --fail
+    --fail-with-body
     --silent
     --show-error
     --request "$method"
@@ -803,7 +803,7 @@ e2e_encrypted_request_json() {
   local body="${3:-}"
   local idempotency_key="${4:-}"
   local arguments=(
-    --fail
+    --fail-with-body
     --silent
     --show-error
     --request "$method"

@@ -16,7 +16,9 @@ import {
   type CaptureReceiptResponse,
   type CaptureRetryResponse,
   type CaptureSummary,
-  type EntityId
+  type EntityId,
+  ORGANIZER_PROMPT_VERSION,
+  ORGANIZER_SCHEMA_VERSION
 } from "@unfiled/contracts";
 
 import { ConfigurationError, HttpError } from "@/server/api/errors";
@@ -328,7 +330,9 @@ export class SupabaseHttpCaptureRepository implements CaptureRepository {
           // who wrote where a capture should go was silently ignored -- the same loss this method
           // refuses to accept for attachments a few lines above.
           ...(input.guidance === undefined ? {} : { guidance: input.guidance }),
-          expansionDisabled: input.expansionDisabled
+          expansionDisabled: input.expansionDisabled,
+          promptVersion: ORGANIZER_PROMPT_VERSION,
+          schemaVersion: ORGANIZER_SCHEMA_VERSION
         }
       })
     );
