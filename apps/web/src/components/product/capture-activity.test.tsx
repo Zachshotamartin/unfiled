@@ -152,3 +152,36 @@ describe("CaptureActivity", () => {
     expect(html).not.toContain("Everything you wrote is filed in your Library.");
   });
 });
+
+describe("the key card", () => {
+  it("leads Needs you until a provider key exists, and counts as waiting", () => {
+    const html = renderToStaticMarkup(
+      <CaptureActivity
+        error={null}
+        items={[]}
+        loading={false}
+        onRetryLocal={vi.fn()}
+        onRetryRemote={vi.fn()}
+        providerKeyMissing
+      />
+    );
+    expect(html).toContain("Add your AI key");
+    expect(html).toContain("Organizing needs your own OpenAI or Claude key.");
+    expect(html).toContain('href="/app/settings"');
+    expect(html).not.toContain("Nothing waiting.");
+  });
+
+  it("stands down once a key exists", () => {
+    const html = renderToStaticMarkup(
+      <CaptureActivity
+        error={null}
+        items={[]}
+        loading={false}
+        onRetryLocal={vi.fn()}
+        onRetryRemote={vi.fn()}
+      />
+    );
+    expect(html).not.toContain("Add your AI key");
+    expect(html).toContain("Nothing waiting.");
+  });
+});

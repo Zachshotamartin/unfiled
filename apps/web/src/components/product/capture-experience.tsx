@@ -78,8 +78,13 @@ function hasDraft(value: CaptureComposerValue): boolean {
  */
 export function CaptureExperience({
   reviewDecisions,
+  providerKeyMissing = false,
   reviewDecisionsEmpty = true
-}: Readonly<{ reviewDecisions?: ReactNode; reviewDecisionsEmpty?: boolean }> = {}) {
+}: Readonly<{
+  providerKeyMissing?: boolean;
+  reviewDecisions?: ReactNode;
+  reviewDecisionsEmpty?: boolean;
+}> = {}) {
   const activeProfile = useRef<string | null>(null);
   const flushPromise = useRef<Promise<void> | null>(null);
   /**
@@ -495,6 +500,7 @@ export function CaptureExperience({
         onRetryLocal={(captureId) => void retryLocal(captureId)}
         onRetryRemote={(captureId) => void retryRemote(captureId)}
         reviewDecisions={reviewDecisions}
+        providerKeyMissing={providerKeyMissing}
         reviewDecisionsEmpty={reviewDecisionsEmpty}
       />
     </>

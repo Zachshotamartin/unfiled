@@ -1,9 +1,14 @@
 "use client";
 
 import type {
+  CaptureDetailResponse,
+  CaptureReceipt,
+  CaptureReceiptResponse,
   EntityId,
   GeneratedBlockDetailResponse,
   GeneratedBlockResolveRequest,
+  NoteSummary,
+  OrganizationPlan,
   PublicReviewResolution,
   ReviewItemDto
 } from "@unfiled/contracts";
@@ -26,10 +31,20 @@ import {
   type GeneratedResolutionAttempt
 } from "./generated-blocks-surface";
 import { EmptyState, ResourceError, ResourceSkeleton } from "./resource-states";
-import { UnfiledGlyph, type UnfiledGlyphName } from "./unfiled-glyph";
+import {
+  letUnfiledDecide,
+  noteTypeForCaptureKind,
+  receiptBoundTo,
+  reviewAllowedActions,
+  reviewSuggestedDestinations,
+  reviewSuggestedNewNote,
+  suggestedNoteTitle
+} from "./review-actions";
+import { reviewReasonSentences } from "./review-reasons";
+import { UnfiledGlyph } from "./unfiled-glyph";
 
 type GeneratedResolution = GeneratedBlockResolveRequest["resolution"];
-type ReviewResolution = Extract<PublicReviewResolution, { type: "dismiss" | "keep_both" }>;
+type ReviewResolution = PublicReviewResolution;
 
 type ReviewAttempt = Readonly<{
   idempotencyKey: string;
@@ -41,7 +56,10 @@ export function reviewDecisionAttempt(
   resolution: ReviewResolution,
   createKey: () => string = createIdempotencyKey
 ): ReviewAttempt {
-  return previous?.resolution.type === resolution.type
+  // The same decision keeps its key so a retry is safe; a different target is a new decision.
+  return previous !== null &&
+    previous !== undefined &&
+    JSON.stringify(previous.resolution) === JSON.stringify(resolution)
     ? previous
     : { idempotencyKey: createKey(), resolution };
 }
@@ -64,20 +82,24 @@ function reviewKey(item: ReviewItemDto): string {
   return item.id;
 }
 
+function noteKey(note: NoteSummary): string {
+  return note.id;
+}
+
 export function reviewLabel(type: ReviewItemDto["type"]): string {
   switch (type) {
     case "structure_conflict":
-      return "Structure conflict";
+      return "Structured note conflict";
     case "revision_conflict":
-      return "Revision conflict";
+      return "The note changed while filing";
     case "duplicate_suggestion":
-      return "Possible duplicate";
+      return "Possible duplicate note";
     case "failed_job":
-      return "Processing failed";
+      return "Organization needs another attempt";
     case "low_confidence":
-      return "Needs a destination";
+      return "Low-confidence destination";
     case "pending_expansion":
-      return "AI-generated proposal";
+      return "Expansion needs approval";
   }
 }
 
@@ -98,13 +120,6 @@ export function reviewCopy(item: ReviewItemDto): string {
     return "This older expansion request is held for safety. Dismissing it does not change your note.";
   }
   return "This item needs a decision before Unfiled can continue safely.";
-}
-
-function reviewGlyph(type: ReviewItemDto["type"]): UnfiledGlyphName {
-  if (type === "structure_conflict") return "checklist";
-  if (type === "revision_conflict") return "move";
-  if (type === "pending_expansion") return "card";
-  return "warning";
 }
 
 export function DuplicateReviewProposal({ item }: Readonly<{ item: ReviewItemDto }>) {
@@ -264,11 +279,12 @@ export function ReviewView({
     "/api/v1/review-items?state=open&limit=30",
     reviewKey
   );
+  const notes = usePagedResource<NoteSummary>("/api/v1/notes?limit=100", noteKey);
   const attempts = useRef(new Map<string, ReviewAttempt>());
   const listRegion = useRef<HTMLDivElement>(null);
   const [pending, setPending] = useState<Readonly<{
     reviewItemId: string;
-    resolution: ReviewResolution["type"];
+    resolution: ReviewResolution["type"] | "delete";
   }> | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -291,7 +307,11 @@ export function ReviewView({
   );
 
   const resolveReview = useCallback(
-    async (item: ReviewItemDto, resolution: ReviewResolution): Promise<void> => {
+    async (
+      item: ReviewItemDto,
+      resolution: ReviewResolution,
+      successMessage?: string
+    ): Promise<void> => {
       if (pending !== null) return;
       const request = reviewDecisionAttempt(attempts.current.get(item.id), resolution);
       attempts.current.set(item.id, request);
@@ -302,9 +322,10 @@ export function ReviewView({
         const result = await browserApi.resolveReviewItem(item.id, request);
         attempts.current.delete(item.id);
         const nextMessage =
-          result.reviewItem.resolution?.type === "keep_both"
+          successMessage ??
+          (result.reviewItem.resolution?.type === "keep_both"
             ? "Both notes kept unchanged. Nothing was merged, removed, or rewritten."
-            : "Suggestion dismissed. No note was changed.";
+            : "Closed. No note was changed.");
         removeResolvedItem(item.id, nextMessage);
         if (result.replayed) await resource.refresh();
       } catch (reason) {
@@ -321,6 +342,25 @@ export function ReviewView({
             )
           );
         }
+      } finally {
+        setPending(null);
+      }
+    },
+    [pending, removeResolvedItem, resource]
+  );
+
+  const deleteCapture = useCallback(
+    async (item: ReviewItemDto): Promise<void> => {
+      if (pending !== null || item.captureId === null) return;
+      setPending({ reviewItemId: item.id, resolution: "delete" });
+      setError(null);
+      setMessage(null);
+      try {
+        await browserApi.deleteCapture(item.captureId, { idempotencyKey: createIdempotencyKey() });
+        removeResolvedItem(item.id, "Capture deleted. Nothing was filed.");
+        await resource.refresh();
+      } catch (reason) {
+        setError(productErrorMessage(reason, "The capture could not be deleted."));
       } finally {
         setPending(null);
       }
@@ -369,71 +409,22 @@ export function ReviewView({
       >
         {error ?? message}
       </p>
-      <div className="border-t border-outline">
-        {items.map((item) => {
-          const duplicate = item.proposal.type === "duplicate_notes";
-          const generatedProposal = item.proposal.type === "generated_block" ? item.proposal : null;
-          const dismissable = reviewItemIsDismissable(item);
-          const itemPending = pending?.reviewItemId === item.id ? pending.resolution : null;
-          return (
-            <article key={item.id} className="review-row">
-              <div className="review-icon">
-                <UnfiledGlyph glyph={reviewGlyph(item.type)} size={19} weight={1.9} />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-baseline justify-between gap-3">
-                  <h2 className="settings-section-title">{reviewLabel(item.type)}</h2>
-                  <time className="text-[11px] text-muted-content" dateTime={item.createdAt}>
-                    {new Date(item.createdAt).toLocaleString()}
-                  </time>
-                </div>
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-content">
-                  {reviewCopy(item)}
-                </p>
-                {duplicate ? <DuplicateReviewProposal item={item} /> : null}
-                {generatedProposal !== null && item.noteId !== null ? (
-                  <GeneratedReviewDecision
-                    blockId={generatedProposal.blockId}
-                    noteId={item.noteId}
-                    onResolved={(nextMessage) => removeResolvedItem(item.id, nextMessage)}
-                  />
-                ) : null}
-                {generatedProposal !== null && item.noteId === null ? (
-                  <MissingGeneratedBlockBinding />
-                ) : null}
-                {dismissable ? (
-                  <div className="review-actions" aria-label="Review decision">
-                    {duplicate ? (
-                      <button
-                        type="button"
-                        className="button-primary"
-                        disabled={pending !== null}
-                        onClick={() => void resolveReview(item, { type: "keep_both" })}
-                      >
-                        <UnfiledGlyph glyph="check" size={16} weight={2.2} />
-                        {itemPending === "keep_both" ? "Keeping…" : "Keep both"}
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="button-secondary"
-                      disabled={pending !== null}
-                      onClick={() => void resolveReview(item, { type: "dismiss" })}
-                    >
-                      <UnfiledGlyph glyph="close" size={16} weight={2.2} />
-                      {itemPending === "dismiss" ? "Dismissing…" : "Dismiss"}
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-              {item.noteId === null || generatedProposal !== null ? null : (
-                <Link className="quiet-button shrink-0" href={`/app/notes/${item.noteId}`}>
-                  Open note <UnfiledGlyph glyph="arrow" size={15} weight={2} />
-                </Link>
-              )}
-            </article>
-          );
-        })}
+      <div className="review-card-list">
+        {items.map((item, index) => (
+          <ReviewCard
+            key={item.id}
+            index={index}
+            item={item}
+            notes={notes.data?.items ?? []}
+            onDelete={(target) => void deleteCapture(target)}
+            onRemoved={removeResolvedItem}
+            onResolve={(target, resolution, nextMessage) =>
+              void resolveReview(target, resolution, nextMessage)
+            }
+            pending={pending}
+            total={items.length}
+          />
+        ))}
       </div>
       {resource.data?.pageInfo.hasMore ? (
         <div className="pagination-row">
@@ -452,4 +443,229 @@ export function ReviewView({
       </p>
     </div>
   );
+}
+
+/** The phone's review card (ReviewView.swift): the capture, why it stopped, where it could go. */
+type ReviewCardProps = Readonly<{
+  index: number;
+  item: ReviewItemDto;
+  notes: readonly NoteSummary[];
+  onDelete: (item: ReviewItemDto) => void;
+  onRemoved: (reviewItemId: string, nextMessage: string) => void;
+  onResolve: (item: ReviewItemDto, resolution: ReviewResolution, message?: string) => void;
+  pending: Readonly<{ reviewItemId: string; resolution: string }> | null;
+  total: number;
+}>;
+
+export function ReviewCard(props: ReviewCardProps) {
+  return props.item.captureId === null ? (
+    <ReviewCardBody {...props} capture={null} receipt={null} />
+  ) : (
+    <CaptureReviewCard {...props} captureId={props.item.captureId} />
+  );
+}
+
+function CaptureReviewCard({
+  captureId,
+  ...props
+}: ReviewCardProps & Readonly<{ captureId: EntityId<"cap"> }>) {
+  const capture = useLiveResource<CaptureDetailResponse>(`/api/v1/captures/${captureId}`);
+  const receipt = useLiveResource<CaptureReceiptResponse>(`/api/v1/captures/${captureId}/receipt`);
+  return (
+    <ReviewCardBody
+      {...props}
+      capture={capture.data?.capture ?? null}
+      receipt={receipt.data?.receipt ?? null}
+    />
+  );
+}
+
+function ReviewCardBody({
+  capture,
+  index,
+  item,
+  notes,
+  onDelete,
+  onRemoved,
+  onResolve,
+  pending,
+  receipt,
+  total
+}: ReviewCardProps &
+  Readonly<{
+    capture: Readonly<{ rawContent: string }> | null;
+    receipt: CaptureReceipt | null;
+  }>) {
+  const allowed = reviewAllowedActions(item, receipt);
+  const bound = receiptBoundTo(item, receipt);
+  const reasons = reviewReasonSentences(bound?.reasonCodes ?? []);
+  const suggested = reviewSuggestedDestinations(item, notes);
+  const newNote = reviewSuggestedNewNote(item);
+  const captureText = capture?.rawContent ?? "";
+  const decision = letUnfiledDecide(item, allowed, notes, captureText);
+  const duplicate = item.proposal.type === "duplicate_notes";
+  const generatedProposal = item.proposal.type === "generated_block" ? item.proposal : null;
+  const busy = pending !== null;
+  const itemPending = pending?.reviewItemId === item.id ? pending.resolution : null;
+  const position = (value: number) => value.toString().padStart(2, "0");
+
+  return (
+    <article className="review-card" aria-labelledby={`review-${item.id}-title`}>
+      <div className="review-card-head">
+        <p className="eyebrow">
+          <UnfiledGlyph glyph="tray" size={15} weight={1.9} /> Needs your input
+        </p>
+        <span className="review-card-position">
+          {position(index + 1)} / {position(total)}
+        </span>
+      </div>
+      <h2 id={`review-${item.id}-title`} className="review-card-title">
+        {reviewLabel(item.type)}
+      </h2>
+      {captureText.length > 0 ? (
+        <p className="review-thought">{captureText}</p>
+      ) : (
+        <p className="review-copy">{reviewCopy(item)}</p>
+      )}
+      {reasons.length > 0 ? (
+        <section className="review-reasons" aria-label="Why it stopped">
+          <p className="eyebrow">Why it stopped</p>
+          {reasons.map((sentence) => (
+            <p key={sentence}>{sentence}</p>
+          ))}
+        </section>
+      ) : null}
+      {duplicate ? <DuplicateReviewProposal item={item} /> : null}
+      {generatedProposal !== null && item.noteId !== null ? (
+        <GeneratedReviewDecision
+          blockId={generatedProposal.blockId}
+          noteId={item.noteId}
+          onResolved={(nextMessage) => onRemoved(item.id, nextMessage)}
+        />
+      ) : null}
+      {generatedProposal !== null && item.noteId === null ? <MissingGeneratedBlockBinding /> : null}
+      {allowed.includes("route") && suggested.length > 0 ? (
+        <section className="review-destinations" aria-label="Suggested destinations">
+          <p className="eyebrow">Suggested destinations</p>
+          <div className="review-destination-list">
+            {suggested.map((note) => (
+              <button
+                key={note.id}
+                type="button"
+                className="review-destination"
+                disabled={busy}
+                onClick={() =>
+                  onResolve(
+                    item,
+                    { type: "route", noteId: note.id, expectedRevision: note.currentRevision },
+                    `Filed into ${note.title}.`
+                  )
+                }
+              >
+                <UnfiledGlyph glyph="move" size={15} weight={1.9} /> {note.title}
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
+      {allowed.length === 0 || generatedProposal !== null ? null : (
+        <div className="review-actions" aria-label="Review decision">
+          {decision !== null ? (
+            <button
+              type="button"
+              className="button-primary"
+              disabled={busy}
+              onClick={() =>
+                onResolve(
+                  item,
+                  decision,
+                  decision.type === "route" ? "Filed where Unfiled suggested." : "Started a note."
+                )
+              }
+            >
+              <UnfiledGlyph glyph="check" size={16} weight={2.2} />
+              {itemPending === decision.type ? "Saving your choice…" : "Let Unfiled decide"}
+            </button>
+          ) : null}
+          {allowed.includes("create") ? (
+            <button
+              type="button"
+              className="button-secondary"
+              disabled={busy}
+              onClick={() =>
+                onResolve(
+                  item,
+                  {
+                    type: "create",
+                    title: newNote?.title ?? suggestedNoteTitle(captureText),
+                    noteType: newNote?.noteType ?? noteTypeForCaptureKind(reviewCaptureKind(item)),
+                    spaceId: null
+                  },
+                  "Started a note."
+                )
+              }
+            >
+              <UnfiledGlyph glyph="plus" size={16} weight={2.2} />
+              {newNote === null ? "New note" : `New note: ${newNote.title}`}
+            </button>
+          ) : null}
+          {allowed.includes("keep_both") ? (
+            <button
+              type="button"
+              className="button-primary"
+              disabled={busy}
+              onClick={() => onResolve(item, { type: "keep_both" })}
+            >
+              <UnfiledGlyph glyph="library" size={16} weight={2.2} />
+              {itemPending === "keep_both" ? "Keeping…" : "Keep both notes"}
+            </button>
+          ) : null}
+          {item.captureId === null ? (
+            allowed.includes("dismiss") ? (
+              <button
+                type="button"
+                className="button-secondary"
+                disabled={busy}
+                onClick={() => onResolve(item, { type: "dismiss" })}
+              >
+                <UnfiledGlyph glyph="close" size={16} weight={2.2} />
+                {itemPending === "dismiss" ? "Closing…" : "Not now"}
+              </button>
+            ) : null
+          ) : (
+            <button
+              type="button"
+              className="button-secondary"
+              disabled={busy}
+              onClick={() => onDelete(item)}
+            >
+              <UnfiledGlyph glyph="trash" size={16} weight={2.2} />
+              {itemPending === "delete" ? "Deleting…" : "Delete capture"}
+            </button>
+          )}
+        </div>
+      )}
+      {duplicate ? (
+        <p className="review-safety-copy">
+          Keeping both changes neither note. Not now also leaves both notes untouched.
+        </p>
+      ) : null}
+      <div className="review-card-footer">
+        {item.captureId === null ? null : (
+          <span>
+            <UnfiledGlyph glyph="clock" size={14} weight={1.9} /> Original preserved
+          </span>
+        )}
+        {item.noteId === null || generatedProposal !== null ? null : (
+          <Link className="quiet-button" href={`/app/notes/${item.noteId}`}>
+            Open note <UnfiledGlyph glyph="arrow" size={15} weight={2} />
+          </Link>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function reviewCaptureKind(item: ReviewItemDto): OrganizationPlan["captureKind"] {
+  return item.proposal.type === "route_capture" ? item.proposal.plan.captureKind : "freeform";
 }

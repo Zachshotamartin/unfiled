@@ -51,7 +51,7 @@ describe("review proposal presentation", () => {
       proposal: { type: "generated_block", blockId: "blk_01J6M9Q7G4BMKB33GSG3NJ6D1X" }
     };
 
-    expect(reviewLabel(generated.type)).toBe("AI-generated proposal");
+    expect(reviewLabel(generated.type)).toBe("Expansion needs approval");
     expect(reviewCopy(generated)).toContain("outside your editable note");
   });
 
