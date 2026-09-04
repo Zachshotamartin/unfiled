@@ -75,8 +75,18 @@ archive_paths() {
   readonly ARCHIVE_APP="${applications_directory}/Unfiled.app"
   require_directory "${ARCHIVE_APP}"
 
-  local extension_count
-  extension_count="$(find "${ARCHIVE_APP}/PlugIns" -mindepth 1 -maxdepth 1 -type d -name '*.appex' 2>/dev/null | wc -l | tr -d ' ')"
+  # An application with no PlugIns directory embeds no extension, which is the state this asserts
+  # (ADR-0017 removed the only one). It has to be said rather than inferred from `find` failing on
+  # a missing directory: under `pipefail` that failure ended the script with status 1 and, because
+  # its stderr was discarded, no message at all — so every command here died on the correct case.
+  local extension_count='0'
+  if [[ -d "${ARCHIVE_APP}/PlugIns" ]]; then
+    extension_count="$(
+      find "${ARCHIVE_APP}/PlugIns" -mindepth 1 -maxdepth 1 -type d -name '*.appex' |
+        wc -l |
+        tr -d ' '
+    )"
+  fi
   require_equal "${extension_count}" '0' 'embedded extension count'
 }
 

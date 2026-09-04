@@ -272,24 +272,41 @@ final class LiveGateTests: XCTestCase {
             source: .mobile, composerGeneration: photoGeneration, attachments: [attachment]
         )
         model.captureSheet = nil
-        let photoReceiptArrived = await waitUntil(30) { self.model.receipts.contains { $0.original == "Photo" } }
+        // The row is found by the photo bound to it, never by the placeholder word the composer
+        // writes: a card that reads "Photo" and carries no photo is the state the owner reported
+        // as broken, so a gate that identifies the capture by that word cannot fail on it.
+        let carriesGatePhoto: (ReceiptPresentation) -> Bool = { receipt in
+            receipt.attachments.contains { $0.id == attachment.id }
+        }
+        let photoReceiptArrived = await waitUntil(30) { self.model.receipts.contains(where: carriesGatePhoto) }
         step("photo.receipt_row_at_once", photoReceiptArrived, "receipts \(model.receipts.count)")
         let photoSettled = await waitUntil(300, every: 10) {
             await self.model.refreshAll()
-            guard let receipt = self.model.receipts.first(where: { $0.original == "Photo" }) else { return false }
+            guard let receipt = self.model.receipts.first(where: carriesGatePhoto) else { return false }
             return !receipt.pending
         }
-        let photoReceipt = model.receipts.first { $0.original == "Photo" }
+        var photoReceipt = model.receipts.first(where: carriesGatePhoto)
         let readBack = await model.attachmentBytes(id: attachment.id)
         step("photo.bytes_read_back_unchanged", readBack == prepared.data, "bytes \(readBack?.count ?? 0)")
         if Self.organizerKey != nil {
-            step("photo.organized", photoSettled && photoReceipt?.outcome != nil, "outcome \(photoReceipt?.outcome.map { "\($0)" } ?? "nil")")
-            if let noteID = photoReceipt?.destinationNoteID {
+            let organizedOutcomes: [CaptureReceiptOutcome] = [.createdNote, .addedToNote, .keptInInbox, .needsReview]
+            let organized = photoReceipt?.outcome.map { organizedOutcomes.contains($0) } ?? false
+            step("photo.organized", photoSettled && organized, "outcome \(photoReceipt?.outcome.map { "\($0)" } ?? "nil")")
+            // A review files nothing by itself, so the capture is filed the way the owner would
+            // file it before the step named for a filed note reads that note.
+            if photoReceipt?.outcome == .needsReview, let reviewID = photoReceipt?.reviewItemID {
+                await model.handleReviewAction(reviewID: reviewID, action: .decide)
+                let decided = await waitUntil(60) { !self.model.reviewItems.contains { $0.id == reviewID } }
                 await model.refreshAll()
+                photoReceipt = model.receipts.first(where: carriesGatePhoto)
+                step("photo.review_filed", decided && photoReceipt?.destinationNoteID != nil, "outcome \(photoReceipt?.outcome.map { "\($0)" } ?? "nil")")
+            }
+            if let noteID = photoReceipt?.destinationNoteID {
+                _ = await model.loadNote(noteID, force: true)
                 let body = model.noteDetail(noteID)?.bodyMarkdown ?? ""
                 step("photo.filed_note_references_photo", body.contains("unfiled-attachment:\(attachment.id)"), "note \(noteID)")
             } else {
-                step("photo.filed_note_references_photo", photoReceipt?.outcome == .needsReview, "no destination; outcome \(photoReceipt?.outcome.map { "\($0)" } ?? "nil")")
+                step("photo.filed_note_references_photo", false, "nothing was filed; outcome \(photoReceipt?.outcome.map { "\($0)" } ?? "nil")")
             }
         } else {
             step("photo.keyless_fails_retryable", photoSettled && photoReceipt?.retryable == true, "retryable \(photoReceipt?.retryable ?? false)")

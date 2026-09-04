@@ -1,0 +1,57 @@
+# The supply-chain check for what ships: a high or critical advisory in the production dependency
+# graph turns this red. It runs on its own schedule because advisories are published against a graph
+# that is not changing, and on every change to the lockfile because that is when the graph moves.
+#
+# It has no retries and swallows nothing. `pnpm audit` exits non-zero both for advisories and for a
+# registry it cannot reach, and both of those mean the same thing here: this commit's production
+# dependencies are not known to be clean. A run that could not reach the registry is red until it
+# can, rather than a green run that quietly audited nothing.
+name: Dependency audit
+
+on:
+  schedule:
+    # Daily, a few minutes off the hour so it does not land in the busiest scheduling window.
+    - cron: "17 6 * * *"
+  push:
+    branches: [main]
+    paths:
+      - pnpm-lock.yaml
+      - package.json
+      - .github/workflows/dependency-audit.yml
+  pull_request:
+    paths:
+      - pnpm-lock.yaml
+      - package.json
+      - .github/workflows/dependency-audit.yml
+  workflow_dispatch:
+
+concurrency:
+  group: dependency-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Production dependency advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.14.0
+          run_install: false
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: pnpm
+
+      - name: Audit the production dependency graph
+        run: pnpm audit:production
