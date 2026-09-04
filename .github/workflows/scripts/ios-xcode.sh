@@ -232,6 +232,57 @@ test_destination() {
   printf 'platform=iOS Simulator,id=%s\n' "${simulator_identifier}"
 }
 
+# How long the simulator gets to finish booting before the lane gives up on it.
+readonly SIMULATOR_BOOT_TIMEOUT_SECONDS="${UNFILED_IOS_BOOT_TIMEOUT_SECONDS:-240}"
+# How long the test run gets. A hung CoreSimulator does not fail xcodebuild, it just stops
+# answering, so without this the lane sits in silence until the job's own 40-minute timeout kills
+# it with no evidence of where it stopped.
+readonly TEST_TIMEOUT_SECONDS="${UNFILED_IOS_TEST_TIMEOUT_SECONDS:-1500}"
+
+# Boots the destination device and waits for the boot to finish, so a wedged CoreSimulator is a
+# fast, named failure instead of an xcodebuild that waits forever. xcodebuild boots the device
+# itself otherwise, and gives no sign it is doing so: the last line of a hung run is the app
+# target's own "Touch ... Unfiled.app", which reads as a build that stopped rather than a
+# simulator that never came up.
+boot_simulator() {
+  local udid="$1"
+
+  printf 'Booting the destination simulator (%s), up to %ss.\n' "${udid}" \
+    "${SIMULATOR_BOOT_TIMEOUT_SECONDS}" >&2
+  if ! run_with_deadline "${SIMULATOR_BOOT_TIMEOUT_SECONDS}" \
+    xcrun simctl bootstatus "${udid}" -b; then
+    printf 'The simulator never finished booting. CoreSimulator state:\n' >&2
+    xcrun simctl list devices >&2 || true
+    return 1
+  fi
+}
+
+# Runs a command with a deadline. macOS ships no coreutils `timeout`, so this is the portable
+# equivalent: the child runs in the background and is killed if it outlives the deadline.
+run_with_deadline() {
+  local deadline="$1"
+  shift
+
+  "$@" &
+  local child=$!
+  local waited=0
+
+  while kill -0 "${child}" 2>/dev/null; do
+    if ((waited >= deadline)); then
+      printf 'Timed out after %ss: %s\n' "${deadline}" "$*" >&2
+      kill -TERM "${child}" 2>/dev/null || true
+      sleep 5
+      kill -KILL "${child}" 2>/dev/null || true
+      wait "${child}" 2>/dev/null || true
+      return 124
+    fi
+    sleep 5
+    waited=$((waited + 5))
+  done
+
+  wait "${child}"
+}
+
 test_in_simulator() {
   require_command xcodebuild
   require_project
@@ -239,7 +290,19 @@ test_in_simulator() {
   local destination
   destination="$(test_destination)"
 
-  xcodebuild \
+  # The destination names a device by id whenever this script chose it, so it can be booted first.
+  # An explicit UNFILED_IOS_TEST_DESTINATION is used verbatim and left to xcodebuild.
+  local udid="${destination#platform=iOS Simulator,id=}"
+  if [[ "${udid}" != "${destination}" ]]; then
+    boot_simulator "${udid}"
+  fi
+
+  # xcodebuild refuses to write a result bundle over one that already exists, which would turn a
+  # second run on the same machine into an error about the bundle rather than a test result.
+  rm -rf "${IOS_BUILD_ROOT}/test-results.xcresult"
+
+  run_with_deadline "${TEST_TIMEOUT_SECONDS}" \
+    xcodebuild \
     -project "${XCODE_PROJECT}" \
     -scheme "${XCODE_SCHEME}" \
     -configuration Debug \
@@ -248,6 +311,7 @@ test_in_simulator() {
     -derivedDataPath "${DERIVED_DATA_PATH}" \
     -clonedSourcePackagesDirPath "${PACKAGE_CACHE_PATH}" \
     -parallel-testing-enabled NO \
+    -resultBundlePath "${IOS_BUILD_ROOT}/test-results.xcresult" \
     CODE_SIGNING_ALLOWED=NO \
     CODE_SIGNING_REQUIRED=NO \
     CODE_SIGN_IDENTITY= \
