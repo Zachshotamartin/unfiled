@@ -678,12 +678,57 @@ final class CaptureSyncEngineTests: XCTestCase {
         await engine.deactivate(profileID: profileID)
 
         XCTAssertEqual(entry?.state, .synced)
-        XCTAssertEqual(entry?.attemptCount, 2)
+        // One attempt, not two: the first send failed because the phone had no connection, which
+        // says nothing about the capture and must not spend one of the owner's five attempts.
+        XCTAssertEqual(entry?.attemptCount, 1)
         XCTAssertEqual(requests.count, 2)
         XCTAssertEqual(requests.authorizationHeaders, [
             "Bearer profile-a-token",
             "Bearer profile-a-token"
         ])
+    }
+
+    func testCaptureStaysRetryableWhileThePhoneHasNoConnection() async throws {
+        // A phone offline for a while used to burn all five attempts on the backoff schedule and
+        // park the capture in failed, where only a manual Retry could reach it. Being offline is
+        // not the capture's fault, so it stays retryable however long the outage lasts.
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try LocalDatabase.open(
+            bundleIdentifier: "com.unfiled.tests.sync-offline",
+            keyProvider: FixedDatabaseKeyProvider(byte: 0x63),
+            directoryURL: directory
+        )
+        try await database.enqueue(capture(content: "wait for signal"), now: timestamp)
+
+        let requests = LockedRequestRecorder()
+        APIURLProtocolStub.install { request in
+            requests.record(request)
+            throw URLError(.notConnectedToInternet)
+        }
+        let engine = CaptureSyncEngine(
+            database: database,
+            api: try makeStubbedAPIClient(),
+            profileAuthorizer: StaticCaptureProfileAuthorizer(
+                profileID: profileID,
+                token: "profile-a-token"
+            ),
+            retryPollInterval: .milliseconds(10),
+            retryDelay: { _ in 0.01 }
+        )
+
+        await engine.activate(profileID: profileID)
+        for _ in 0 ..< 40 {
+            if requests.count > LocalDatabase.maximumAutomaticCaptureAttempts + 2 { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        await engine.deactivate(profileID: profileID)
+
+        let entry = try await database.outboxEntries(
+            profileID: profileID.uuidString.lowercased()
+        ).first
+        XCTAssertGreaterThan(requests.count, LocalDatabase.maximumAutomaticCaptureAttempts)
+        XCTAssertNotEqual(entry?.state, .failed)
     }
 
     private func capture(content: String) -> CaptureDraft {

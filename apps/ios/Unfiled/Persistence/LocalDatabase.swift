@@ -272,7 +272,11 @@ actor LocalDatabase {
         errorCode: String,
         nextAttemptAt: String,
         now: String,
-        maximumAttempts: Int = maximumAutomaticCaptureAttempts
+        maximumAttempts: Int = maximumAutomaticCaptureAttempts,
+        /// False when the attempt failed for a reason that says nothing about the capture, such
+        /// as an unreachable network. Such an attempt is rescheduled without spending one of the
+        /// owner's five, so a minute without signal cannot park a capture forever.
+        countsAsAttempt: Bool = true
     ) throws -> CaptureOutboxState {
         try Self.validateProfile(profileID)
         try Self.validateMaximumAttempts(maximumAttempts)
@@ -291,17 +295,20 @@ actor LocalDatabase {
             ) else {
                 throw LocalDatabaseError.invalidStateTransition
             }
-            let nextState: CaptureOutboxState = attemptCount >= maximumAttempts ? .failed : .retry
+            let nextState: CaptureOutboxState =
+                countsAsAttempt && attemptCount >= maximumAttempts ? .failed : .retry
             try database.execute(
                 sql: """
                 UPDATE capture_outbox
                 SET state = ?, lease_token = NULL, lease_expires_at = NULL,
+                    attempt_count = attempt_count - CASE WHEN ? THEN 0 ELSE 1 END,
                     last_error_code = ?, next_attempt_at = ?, updated_at = ?
                 WHERE profile_id = ? AND capture_id = ? AND state = 'leased'
                   AND lease_token = ?
                 """,
                 arguments: [
                     nextState.rawValue,
+                    countsAsAttempt,
                     nextState == .failed ? "retry_limit_reached" : errorCode,
                     nextState == .failed ? now : nextAttemptAt,
                     now,

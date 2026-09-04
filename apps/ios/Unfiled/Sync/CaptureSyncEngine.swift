@@ -395,12 +395,27 @@ actor CaptureSyncEngine {
                 leaseToken: leaseToken,
                 errorCode: safeErrorCode(error),
                 nextAttemptAt: APIJSON.dateString(now.addingTimeInterval(delay)),
-                now: APIJSON.dateString(now)
+                now: APIJSON.dateString(now),
+                countsAsAttempt: Self.countsAsCaptureAttempt(error)
             )
             return true
         }
     }
 
+
+    /// Whether a failed send says anything about the capture itself.
+    ///
+    /// A server that rejected the capture has told us something, and five of those retire it. An
+    /// unreachable service or an abandoned request has told us nothing, and counting those meant
+    /// a phone offline for about a minute burned every attempt and parked the capture in failed,
+    /// where only a manual Retry could reach it.
+    static func countsAsCaptureAttempt(_ error: Error) -> Bool {
+        switch error as? APIClientError {
+        case .transportFailure, .cancelled: false
+        case .none: !(error is CancellationError)
+        default: true
+        }
+    }
 
     private func apiSource(_ source: LocalCaptureSource) -> CaptureSource {
         switch source {
