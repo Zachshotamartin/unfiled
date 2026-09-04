@@ -65,6 +65,15 @@ describe("owner instructions in the planner disclosure", () => {
     expect(input.capture.ownerInstructions).toBeNull();
   });
 
+  it("tells the model that a title names the note, not the capture", () => {
+    expect(ORGANIZER_ROUTING_PROMPT).toContain("names what the note is for");
+    expect(ORGANIZER_ROUTING_PROMPT).toContain("Do not reuse the capture text");
+    expect(ORGANIZER_ROUTING_PROMPT).toContain(
+      "that name is the title and only the rest is content"
+    );
+    expect(ORGANIZER_ROUTING_PROMPT).toContain("whatever the capture's own words");
+  });
+
   it("tells the model that directions are not content", () => {
     expect(ORGANIZER_ROUTING_PROMPT).toContain("capture.ownerInstructions");
     expect(ORGANIZER_ROUTING_PROMPT).toContain("never write them into a note");

@@ -1,5 +1,7 @@
 import { isCaptureAttachmentReference, type ModelOperation } from "@unfiled/contracts";
 
+import { parseListLabel } from "./extraction.js";
+
 const NON_INFORMATIONAL_CONNECTORS = new Set(["and", "or"]);
 const ROUTING_PREFIX =
   /^(?:(?:please\s+)?(?:add|append|put|save|record|log)\s+|(?:shopping|grocery|groceries|workout)(?:\s+list)?\s*:\s*)/iu;
@@ -37,8 +39,12 @@ function tokens(value: string): readonly string[] {
   return matched.filter((token) => !NON_INFORMATIONAL_CONNECTORS.has(token));
 }
 
-function captureContentTokens(value: string): readonly string[] {
-  const canonical = canonicalText(value);
+// The words the operations have to carry, in order. A routing scaffold ("add ... to groceries")
+// is not content, and neither is the name the owner gave a list ("todo list, x, y"): that name
+// becomes the note's title, so a list operation that carries it again would be a duplicate.
+function captureContentTokens(value: string, listLabelled: boolean): readonly string[] {
+  const source = listLabelled ? (parseListLabel(value)?.remainder ?? value) : value;
+  const canonical = canonicalText(source);
   const hadRoutingPrefix = ROUTING_PREFIX.test(canonical);
   const withoutPrefix = canonical.replace(ROUTING_PREFIX, "");
   return tokens(hadRoutingPrefix ? withoutPrefix.replace(DESTINATION_TAIL, "") : withoutPrefix);
@@ -123,7 +129,8 @@ export function inspectSourcePreservation(
     (operation) =>
       operation.type === "append_paragraphs" && operation.paragraphs.join("\n\n") === captureText
   );
-  const captureTokens = captureContentTokens(captureText);
+  const listLabelled = operations.some((operation) => operation.type === "append_list_items");
+  const captureTokens = captureContentTokens(captureText, listLabelled);
   const fullCaptureTokens = tokens(captureText);
   const operationTokens = operations.flatMap((operation) =>
     operationSourceText(operation).flatMap(tokens)

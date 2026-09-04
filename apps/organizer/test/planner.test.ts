@@ -131,6 +131,50 @@ describe("app-specific planning wrappers", () => {
     });
   });
 
+  it("reads past the owner's possessive to the note's title", () => {
+    const todo = {
+      candidateId: "note_01ARZ3NDEKTSV4RRFFQ69G5FAB" as const,
+      isOpen: true,
+      noteId: "note_01ARZ3NDEKTSV4RRFFQ69G5FAA" as const,
+      title: "Todo list"
+    };
+    const controls = { expansionDisabled: false, explicitDestinationNoteId: null, ruleMatch: null };
+    expect(
+      resolveDeterministicDestination({
+        candidates: [todo],
+        capture: { controls, rawContent: "add call the dentist to my todo list" }
+      })
+    ).toEqual({ candidateId: todo.candidateId, source: "exact_title_phrase" });
+    // A title that carries the possessive itself still matches its own phrase.
+    expect(
+      resolveDeterministicDestination({
+        candidates: [{ ...todo, title: "My list" }],
+        capture: { controls, rawContent: "put this in my list" }
+      })
+    ).toBeNull();
+    expect(
+      resolveDeterministicDestination({
+        candidates: [{ ...todo, title: "My list" }],
+        capture: { controls, rawContent: "add this to my list" }
+      })
+    ).toEqual({ candidateId: todo.candidateId, source: "exact_title_phrase" });
+    // Both "My list" and "List" open is ambiguous, as it always was.
+    expect(
+      resolveDeterministicDestination({
+        candidates: [
+          { ...todo, title: "My list" },
+          {
+            ...todo,
+            candidateId: "note_01ARZ3NDEKTSV4RRFFQ69G5FAD",
+            noteId: "note_01ARZ3NDEKTSV4RRFFQ69G5FAC",
+            title: "List"
+          }
+        ],
+        capture: { controls, rawContent: "add this to my list" }
+      })
+    ).toBeNull();
+  });
+
   it("rejects ambiguous duplicate titles and ineligible title matches", () => {
     const capture = {
       controls: {

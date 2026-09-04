@@ -97,13 +97,13 @@ export type RoutingPolicyResult = Readonly<{
  * own value, because the documented ceiling is then unreachable.
  */
 const FEATURE_WEIGHTS = Object.freeze({
-  ruleOrAliasNearMatch: 0.3,
-  explicitDestinationMention: 0.25,
-  openSameDayTypeMatch: 0.2,
-  typeCompatibility: 0.1,
-  destinationRecency: 0.05,
+  typeCompatibility: 0.3,
+  ruleOrAliasNearMatch: 0.2,
+  explicitDestinationMention: 0.15,
+  openSameDayTypeMatch: 0.1,
   semanticSimilarity: 0.1,
-  margin: 0.1,
+  destinationRecency: 0.05,
+  margin: 0.05,
   reasonCodeConsistency: 0.05,
   duplicateTitleSuspicion: -0.15
 } satisfies Record<keyof RoutingSignalFeatures, number>);
@@ -231,28 +231,31 @@ export function bandRoutingDecision(input: unknown): RoutingPolicyResult {
   // placement is, so it chooses between filing and leaving the capture in the Inbox -- it does
   // not ask the owner to adjudicate a note the organizer understood.
   //
-  // The bar is 0.45 because of what the weights can actually reach. `explicitDestinationMention`
-  // (0.25) and `reasonCodeConsistency` (0.05) are both zero for every candidate the retriever
-  // merely found -- they fire only for a destination the owner named or a rule matched -- so 0.55
-  // is the ceiling for a purely semantic append and a strong one lands near 0.48. The old bar of
-  // 0.8 sat above everything an ordinary capture could score, which is why filing the organizer
-  // had got right arrived in Review anyway.
+  // The model is the matcher. It read every candidate the scan disclosed and chose one; when
+  // that note is made of exactly this kind of thing -- an item into a list, an entry into a log,
+  // a thought into a plain note -- the placement is understood and files unattended. "Eggs for
+  // the weekend" into Groceries shares no word with the note, so no lexical signal will ever
+  // vouch for it; the fact that a list holds items, and the model chose this list, is the
+  // evidence. What remains for the score is the loose fit: a shapeless thought into a note built
+  // for something else (typeCompatibility 0.25) needs corroboration -- shared words or a title
+  // the capture names (0.2), the same day's note (0.1), a near vector (0.1) -- to clear 0.45.
   //
-  // The margin gate went with it. Margin is the retriever's score gap between the top two
-  // candidates, and it is already weighted into the score. Gating on it a second time held a
-  // capture because the *retriever* could not separate two notes, when the model that chose
-  // between them had read both. Choosing among plausible places is the work, not a reason to ask.
+  // Margin is not a gate. It is the retriever's score gap between the top two candidates, and it
+  // is weighted into the score; holding a capture because the *retriever* could not separate two
+  // notes, when the model that chose between them had read both, asked the owner to do the work.
+  const holdsTheCapture =
+    policy.planDecision === "append_to_note" && policy.features.typeCompatibility === 1;
   if (hardOverrides.length > 0) {
     // A blocker over a placement worth showing becomes a question, because there is something for
     // the owner to accept or redirect. A blocker over a placement the organizer had no confidence
     // in has nothing to approve, so it waits in the Inbox instead of arriving as a question whose
     // proposed answer is a guess.
-    return startsANote || score >= 0.45
+    return startsANote || holdsTheCapture || score >= 0.45
       ? result("review", score, policy.features.margin, hardOverrides)
       : result("inbox", score, policy.features.margin, [...hardOverrides, "low_score"]);
   }
   const autoThreshold = policy.mode === "automatic" ? 0.4 : 0.45;
-  if (startsANote || score >= autoThreshold) {
+  if (startsANote || holdsTheCapture || score >= autoThreshold) {
     return result("auto", score, policy.features.margin, ["automatic_threshold_met"]);
   }
   return result("inbox", score, policy.features.margin, ["low_score"]);

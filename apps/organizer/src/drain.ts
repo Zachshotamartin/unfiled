@@ -13,10 +13,12 @@ import {
   type RoutingFailure,
   type RoutingPolicyResult,
   type RoutingSignalFeatures,
-  type StableOrganizationIds
+  type StableOrganizationIds,
+  captureKindTypeCompatibility,
+  reconcileCaptureKind
 } from "@unfiled/ai-routing";
 import type { PrivateRagGenerationSnapshot, PrivateRagPageReadResult } from "@unfiled/search";
-import type { OrganizationPlan } from "@unfiled/contracts";
+import type { CaptureKind, OrganizationPlan } from "@unfiled/contracts";
 import { createHash } from "node:crypto";
 
 import type { OrganizerKeyAuthority } from "./key-management.js";
@@ -554,7 +556,7 @@ function routingPolicyForPlan(
   plan: ReturnType<typeof parseAuthorizedOrganizationPlan>["plan"],
   manifest: OrganizerCandidateManifest,
   capture: DecryptedCapture,
-  inferredKind: ReturnType<typeof inferOrganizerCaptureKind>,
+  inferredKind: CaptureKind,
   context: OrganizerRoutingPolicyContext,
   deterministicRuleMatch = false
 ): RoutingPolicyResult {
@@ -578,7 +580,12 @@ function routingPolicyForPlan(
         ruleOrAliasNearMatch: 1,
         typeCompatibility: 1
       })
-    : contextualFeatures;
+    : destinationNoteType === null
+      ? contextualFeatures
+      : Object.freeze({
+          ...contextualFeatures,
+          typeCompatibility: captureKindTypeCompatibility(inferredKind, destinationNoteType)
+        });
   const decision = bandRoutingDecision({
     accountCaptureOrdinal: context.accountCaptureOrdinal,
     captureCarriesUploads: (capture.attachments?.length ?? 0) > 0,
@@ -967,6 +974,9 @@ export function createOrganizerDrain(
         const inferredKind = inferOrganizerCaptureKind(
           captureKindText(routedOrganizerCapture(currentCapture))
         );
+        // The kind the plan is judged by: the text's shape, or the model's reading of a
+        // shapeless capture as one item for a list or one entry for a log.
+        let captureKind: CaptureKind = inferredKind;
         const isRoutingRulePath =
           controls.explicitDestinationNoteId === null && controls.ruleMatch !== null;
         const deterministicRoutingRulePlan = isRoutingRulePath
@@ -1115,10 +1125,15 @@ export function createOrganizerDrain(
             manifest,
             unknownPlan
           });
-          if (initiallyAuthorized.plan.captureKind !== inferredKind) {
+          const reconciledKind = reconcileCaptureKind(
+            inferredKind,
+            initiallyAuthorized.plan.captureKind
+          );
+          if (reconciledKind === null) {
             pendingReviewReason = "planner_ambiguity";
             continue;
           }
+          captureKind = reconciledKind;
           const overridden = isRoutingRulePath
             ? Object.freeze({ plan: initiallyAuthorized.plan })
             : applyDeterministicExtractionOverride({
@@ -1140,7 +1155,7 @@ export function createOrganizerDrain(
           authorized.plan,
           manifest,
           currentCapture,
-          inferredKind,
+          captureKind,
           routingPolicyContext,
           isRoutingRulePath
         );

@@ -171,9 +171,12 @@ export function routedOrganizerCapture(capture: DecryptedCapture): RoutedCapture
   });
 }
 
+const PROJECT_LABEL = /^\s*(?:project|status)\s+update\s*:/iu;
+
 export function inferOrganizerCaptureKind(text: string): OrganizerCaptureKind {
   const normalized = text.normalize("NFKC").replace(/\s+/gu, " ").trim();
   if (PRINCIPLE_LABEL.test(normalized)) return "principle";
+  if (PROJECT_LABEL.test(normalized)) return "project_update";
   if (parseDeterministicListCapture(text) !== null) return "list_items";
   if (parseDeterministicLogCapture(text) !== null) return "log_entry";
   if (/\b(?:blocked|milestone|next step|project update|shipped)\b/iu.test(text))
@@ -188,6 +191,10 @@ export function inferOrganizerCaptureKind(text: string): OrganizerCaptureKind {
     return "principle";
   return "freeform";
 }
+
+// "add w to my todo list" names the note "Todo list"; the possessive is the owner's, not the
+// title's. A title that carries the possessive itself ("My list") still matches its own phrase.
+const DESTINATION_PHRASE_POSSESSIVE = /^(?:my|our|the)\s+/u;
 
 function normalizedDestinationTitle(value: string): string {
   return value
@@ -228,7 +235,11 @@ export function resolveDeterministicDestination(
   );
   if (phrase.length === 0) return null;
 
-  const matches = eligible.filter(({ title }) => normalizedDestinationTitle(title) === phrase);
+  const bare = phrase.replace(DESTINATION_PHRASE_POSSESSIVE, "");
+  const matches = eligible.filter(({ title }) => {
+    const normalizedTitle = normalizedDestinationTitle(title);
+    return normalizedTitle === phrase || (bare.length > 0 && normalizedTitle === bare);
+  });
   return matches.length === 1 && matches[0] !== undefined
     ? Object.freeze({ candidateId: matches[0].candidateId, source: "exact_title_phrase" })
     : null;

@@ -3,7 +3,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import {
   captureKindText,
   captureRetrievalText,
-  type RoutingSignalFeatures
+  type RoutingSignalFeatures,
+  captureKindTypeCompatibility
 } from "@unfiled/ai-routing";
 import {
   createPrivateRagRetriever,
@@ -42,8 +43,6 @@ import { createOrganizerRagPayloadOpener } from "./rag-crypto.js";
 const CANDIDATE_LIMIT = 8;
 const ECONOMICAL_CANDIDATE_LIMIT = 6;
 const MAX_TRACKED_CACHE_OWNERS = 512;
-const MINIMUM_SEMANTIC_MATCH = 0.8;
-const MINIMUM_TRIGRAM_MATCH = 0.5;
 const STOP_WORDS = new Set([
   "about",
   "after",
@@ -106,12 +105,10 @@ function compatibleType(
   capture: DecryptedCapture,
   noteType: EncryptedCandidate["noteType"]
 ): number {
-  const kind = inferOrganizerCaptureKind(captureKindText(routedOrganizerCapture(capture)));
-  if (kind === "list_items") return noteType === "list" ? 1 : 0;
-  if (kind === "log_entry") return noteType === "log" ? 1 : 0;
-  if (kind === "project_update") return noteType === "project" ? 1 : 0;
-  if (kind === "principle") return noteType === "principle" ? 1 : 0;
-  return noteType === "generic" ? 1 : 0.25;
+  return captureKindTypeCompatibility(
+    inferOrganizerCaptureKind(captureKindText(routedOrganizerCapture(capture))),
+    noteType
+  );
 }
 
 /**
@@ -274,16 +271,6 @@ function context(
     mode: job.routingMode,
     retrievalAutoEligible: matches !== null
   });
-}
-
-function hasUsableRetrievalEvidence(match: PrivateRagMatch): boolean {
-  return (
-    match.isOpen &&
-    (match.signals.titleExact === 1 ||
-      match.signals.fullText > 0 ||
-      match.signals.trigram >= MINIMUM_TRIGRAM_MATCH ||
-      (match.signals.vector ?? 0) >= MINIMUM_SEMANTIC_MATCH)
-  );
 }
 
 function assertSelectedBindings(
@@ -488,7 +475,8 @@ export function createOrganizerCandidateRetrieval(
   ): Promise<Awaited<ReturnType<OrganizerCandidateRetrievalPort["retrieve"]>>> {
     // The bounded candidate RPC is the only lease-bound source of current
     // capture controls. Its encrypted candidates are deliberately discarded:
-    // a verified complete scan established that none are usable destinations.
+    // a verified complete scan found no open note at all, so there is no
+    // destination to disclose and the library is, for filing, empty.
     const page = await options.repository.candidates({
       jobId: input.job.jobId,
       leaseToken: input.job.leaseToken,
@@ -504,8 +492,8 @@ export function createOrganizerCandidateRetrieval(
         routingPolicyContext: context(input.job, page.candidates, currentCapture, null)
       });
     }
-    // Disclosure and revalidation are different questions. Nothing here is a usable destination,
-    // so nothing is disclosed; the page the repository listed is still the page the heartbeat
+    // Disclosure and revalidation are different questions. No open note exists to be a
+    // destination, so nothing is disclosed; the page the repository listed is still the page the heartbeat
     // manifest must mirror, and reporting an empty one made the RPC reject the manifest and
     // charge a permanent validation_failed to the owner's capture.
     return Object.freeze({
@@ -620,8 +608,13 @@ export function createOrganizerCandidateRetrieval(
           invalidateOwner(input.job.ownerId);
           return await fallback(input);
         }
+        // Every open note the scan ranked is disclosed, best first, up to the limit. The scan's
+        // evidence -- shared words, a shared title, a near vector -- orders the candidates and
+        // feeds the policy; it does not decide what the model may see. A capture that shares no
+        // word with the note it belongs in ("eggs for the weekend" beside Groceries) is the
+        // ordinary case, and a model that never sees the note can only start another one.
         const usableMatches = result.matches
-          .filter(hasUsableRetrievalEvidence)
+          .filter(({ isOpen }) => isOpen)
           .slice(0, candidateLimit(input.job));
         if (usableMatches.length === 0) {
           return await completeNoMatch(input, result.snapshot.generationId);
