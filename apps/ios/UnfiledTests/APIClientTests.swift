@@ -36,7 +36,8 @@ final class APIClientTests: XCTestCase {
              "user":{"id":"00000000-0000-4000-8000-000000000001","email":"person@example.com"}}
             """)
         }
-        let session = try await makeStubbedAPIClient().signUp(email: "person@example.com", password: "correct horse battery")
+        let outcome = try await makeStubbedAPIClient().signUp(email: "person@example.com", password: "correct horse battery")
+        guard case let .session(session) = outcome else { return XCTFail("Expected a session, got \(outcome)") }
         XCTAssertEqual(session.refreshToken, "refresh")
         await XCTAssertThrowsErrorAsync(try await makeStubbedAPIClient().signUp(email: "person@example.com", password: "short")) {
             XCTAssertEqual($0 as? APIClientError, .invalidRequest)
@@ -776,11 +777,4 @@ private final class LockedStreamCancellationProbe: @unchecked Sendable {
             cancellations += 1
         }
     }
-}
-
-private func XCTAssertThrowsErrorAsync<T>(_ expression: @autoclosure () async throws -> T,
-                                           _ verify: (Error) -> Void,
-                                           file: StaticString = #filePath, line: UInt = #line) async {
-    do { _ = try await expression(); XCTFail("Expected error", file: file, line: line) }
-    catch { verify(error) }
 }

@@ -92,7 +92,7 @@ final class LiveGateTests: XCTestCase {
 
     /// The auth endpoints rate-limit one address; a run right after another waits for the window
     /// the server names (bounded) instead of reporting a false failure.
-    private func signUpWaitingForRateLimit(email: String, password: String) async throws -> AuthSession {
+    private func signUpWaitingForRateLimit(email: String, password: String) async throws -> AuthSignUpOutcome {
         for attempt in 0 ..< 3 {
             do {
                 return try await model.signUp(try AuthPasswordRequest(email: email, password: password))
@@ -111,7 +111,14 @@ final class LiveGateTests: XCTestCase {
         let password = "Gate-\(UUID().uuidString.prefix(20))-1"
 
         // Account
-        let session = try await signUpWaitingForRateLimit(email: email, password: password)
+        let outcome = try await signUpWaitingForRateLimit(email: email, password: password)
+        // A deployment that confirms addresses emails six digits instead of a session. The gate has
+        // no mailbox to read them from, so it says exactly that rather than reporting a pass it did
+        // not earn; the phone gate for such an origin needs an address the run can read.
+        guard case let .session(session) = outcome else {
+            step("auth.sign_up", false, "verification required; the gate cannot read the emailed code")
+            return
+        }
         step("auth.sign_up", !session.accessToken.isEmpty)
         await model.acceptVerifiedSession(session)
         step("auth.signed_in_phase", model.phase == .signedIn, "\(model.phase)")
