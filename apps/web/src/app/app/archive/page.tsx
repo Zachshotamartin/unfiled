@@ -14,6 +14,7 @@ export default function ArchivePage() {
           <div className="mt-4">
             <NoteLibrary
               query="/api/v1/notes?archive=only&deleted=exclude&limit=50"
+              restorableFrom="archived"
               emptyTitle="The archive is empty."
               emptyBody="Archived notes stay searchable and can be restored at any time."
             />
@@ -30,6 +31,7 @@ export default function ArchivePage() {
           <div className="mt-4">
             <NoteLibrary
               query="/api/v1/notes?archive=include&deleted=only&limit=50"
+              restorableFrom="deleted"
               emptyTitle="Nothing waiting for recovery."
               emptyBody="Deleted notes appear here during the recovery window."
             />

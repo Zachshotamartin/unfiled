@@ -629,6 +629,25 @@
     color: var(--color-accent);
   }
 
+  /* "Organize again": one line of directions and its button, then a note about photos. */
+  .review-directions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-control-gap);
+    margin-top: 1rem;
+  }
+
+  .review-directions .editor-control {
+    flex: 1 1 16rem;
+    min-width: 0;
+  }
+
+  .review-directions .review-copy {
+    flex-basis: 100%;
+    margin-top: 0;
+  }
+
   .review-card-footer {
     display: flex;
     align-items: center;

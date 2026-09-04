@@ -43,7 +43,7 @@ import {
 import { submitCaptureWithPhotos } from "@/lib/capture/capture-submission";
 import type { CaptureOutboxStatus } from "@/lib/capture/capture-store";
 
-import { CaptureActivity } from "./capture-activity";
+import { CaptureActivity, captureNeedsOwner } from "./capture-activity";
 import { CaptureComposer, type CaptureComposerValue } from "./capture-composer";
 
 /**
@@ -76,15 +76,31 @@ function hasDraft(value: CaptureComposerValue): boolean {
  * the owner. `reviewDecisions` is the review list the Inbox now carries, since Review is no
  * longer a destination of its own.
  */
+/** A sealed capture the owner is changing: its words come back, and saving replaces it. */
+export type CaptureEditRequest = Readonly<{
+  attachmentCount: number;
+  captureId: EntityId<"cap">;
+  rawContent: string;
+}>;
+
 export function CaptureExperience({
+  editRequest = null,
+  onEditConsumed,
+  onWaitingChange,
   reviewDecisions,
   providerKeyMissing = false,
   reviewDecisionsEmpty = true
 }: Readonly<{
+  editRequest?: CaptureEditRequest | null;
+  onEditConsumed?: () => void;
+  /** How many captures still need the owner, for the heading's count. */
+  onWaitingChange?: (count: number) => void;
   providerKeyMissing?: boolean;
   reviewDecisions?: ReactNode;
   reviewDecisionsEmpty?: boolean;
 }> = {}) {
+  /** The capture the next save replaces, once its words have been taken into the composer. */
+  const replacing = useRef<EntityId<"cap"> | null>(null);
   const activeProfile = useRef<string | null>(null);
   const flushPromise = useRef<Promise<void> | null>(null);
   /**
@@ -111,6 +127,19 @@ export function CaptureExperience({
   const [initializing, setInitializing] = useState(true);
   const [hydrated, setHydrated] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (editRequest === null) return;
+    replacing.current = editRequest.captureId;
+    setComposer({ ...EMPTY_COMPOSER, rawContent: editRequest.rawContent });
+    setComposerError(
+      editRequest.attachmentCount === 0
+        ? null
+        : "This capture's photos stay with the original; a browser tab cannot carry them over. Saving files the words as a new capture."
+    );
+    setAcknowledgement(null);
+    window.setTimeout(() => document.getElementById("capture-text")?.focus(), 0);
+  }, [editRequest]);
 
   /** Every change to the pending photos goes through here, so the ref is never behind the view. */
   const keepPhotos = useCallback((next: readonly PendingCapturePhoto[]): void => {
@@ -365,6 +394,12 @@ export function CaptureExperience({
     keepPhotos(pendingPhotos.current.filter((photo) => photo.attachmentId !== attachmentId));
   }
 
+  // The heading's count: every capture that still needs the owner, the same rule the list uses.
+  useEffect(() => {
+    if (!hydrated) return;
+    onWaitingChange?.(activity.filter((item) => captureNeedsOwner(item.status)).length);
+  }, [activity, hydrated, onWaitingChange]);
+
   async function submit(event: SyntheticEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     setComposerError(null);
@@ -408,6 +443,17 @@ export function CaptureExperience({
           setComposer(EMPTY_COMPOSER);
           setAcknowledgement(navigator.onLine ? "Saved" : "Saved. Waiting to sync.");
           void loadLocal(profileId);
+          // The words were taken from a sealed capture: the new one organizes normally and the
+          // earlier one goes, closing its review or failed job with it (ADR-0019, decision 6).
+          const replaced = replacing.current;
+          if (replaced !== null) {
+            replacing.current = null;
+            onEditConsumed?.();
+            void browserApi
+              .deleteCapture(replaced, { idempotencyKey: createIdempotencyKey() })
+              .then(() => loadRemote(profileId))
+              .catch(() => setActivityError("The capture you edited could not be removed."));
+          }
         },
         () => window.setTimeout(() => void flush(profileId), 0)
       );
