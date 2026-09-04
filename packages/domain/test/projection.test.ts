@@ -341,6 +341,25 @@ describe("structured Markdown projections", () => {
     expect(reconcileLogMarkdown(data, markdown, nextEntryId)).toEqual(data);
   });
 
+  it("keeps a log value of the whole bound and refuses one past it", () => {
+    // The bound is the contract's LOG_FIELD_VALUE_MAX_CHARACTERS (10,000): a capture filed
+    // whole as one entry fits, and one character more is a structure conflict, not a truncation.
+    const whole = "w".repeat(10_000);
+    const data = {
+      schemaVersion: 1 as const,
+      entries: [{ id: ENTRY_A, occurredAt: "2026-08-30T18:30:00.000Z", fields: { raw: whole } }]
+    };
+    const markdown = renderLogMarkdown(data);
+    expect(reconcileLogMarkdown(data, markdown, nextEntryId)).toEqual(data);
+    expect(() =>
+      reconcileLogMarkdown(
+        data,
+        `## 2026-08-30T18:30:00.000Z\n\n- raw: ${"w".repeat(10_001)}`,
+        nextEntryId
+      )
+    ).toThrow(/limited to 10000 characters/u);
+  });
+
   it("reconciles duplicate log timestamps by prior ID order and allocates on timestamp edits", () => {
     const occurredAt = "2026-08-30T18:30:00.000Z";
     const previous = {

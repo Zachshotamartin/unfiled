@@ -24,7 +24,19 @@ export const ListStructuredDataSchema = z.strictObject({
 });
 export type ListStructuredData = z.infer<typeof ListStructuredDataSchema>;
 
-export const LogFieldValueSchema = z.union([z.string().max(500), z.number(), z.null()]);
+/**
+ * The longest string one log field holds. The organizer files a whole capture as one entry
+ * (`raw`), and a detailed workout or a day's notes runs well past 500 characters; that bound
+ * refused every such entry at write time while the plan and the preservation check had already
+ * accepted it. The database and the domain parser enforce the same number.
+ */
+export const LOG_FIELD_VALUE_MAX_CHARACTERS = 10_000;
+
+export const LogFieldValueSchema = z.union([
+  z.string().max(LOG_FIELD_VALUE_MAX_CHARACTERS),
+  z.number(),
+  z.null()
+]);
 export type LogFieldValue = z.infer<typeof LogFieldValueSchema>;
 
 export const LogEntrySchema = z.strictObject({

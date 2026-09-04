@@ -1190,6 +1190,18 @@ if (OPENAI_KEY && secondNoteId) {
       destinationIsSecond: noteId === secondNoteId
     }
   );
+  // The directions name a note that exists. Reaching any note used to pass this section, so a
+  // release in which directions were disclosed but never honored looked healthy; the owner's
+  // "put this in my workout log" then came back as a review of something else. The named note
+  // is the destination, filed without a review.
+  record(
+    "capture_c.directions_reach_the_named_note",
+    outcome.captureStatus === "done" && noteId === secondNoteId,
+    {
+      captureStatus: outcome.captureStatus,
+      destinationIsSecond: noteId === secondNoteId
+    }
+  );
 }
 
 // ---------------------------------------------------------------- photos (capture D)

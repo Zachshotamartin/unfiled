@@ -1,4 +1,8 @@
-import { buildPrivateRagPayloadValue, type PrivateRagPageReadResult } from "@unfiled/search";
+import {
+  type PrivateRagMatch,
+  buildPrivateRagPayloadValue,
+  type PrivateRagPageReadResult
+} from "@unfiled/search";
 import { describe, expect, it, vi } from "vitest";
 
 import { OrganizerDatabaseContractError } from "../src/database.js";
@@ -13,7 +17,7 @@ import {
 import type { OrganizerEmbeddingProvider } from "../src/embedding-provider.js";
 import { OrganizerProviderError } from "../src/errors.js";
 import type { OrganizerKeyAuthority } from "../src/key-management.js";
-import { createOrganizerCandidateRetrieval } from "../src/retrieval.js";
+import { discloseNamedNotes, createOrganizerCandidateRetrieval } from "../src/retrieval.js";
 import { ORGANIZER_PROMPT_VERSION } from "../src/prompt.js";
 
 const OWNER_ID = "22222222-2222-4222-8222-222222222222";
@@ -602,6 +606,57 @@ describe("organizer encrypted RAG retrieval", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("disclosing a note the owner named", () => {
+  const match = (noteId: string, title: string, score: number): PrivateRagMatch =>
+    Object.freeze({
+      noteId,
+      indexedRevision: 1,
+      noteType: "generic",
+      spaceId: null,
+      title,
+      headings: [],
+      latestSnippet: "",
+      isOpen: true,
+      pinned: false,
+      updatedAt: "2026-09-01T00:00:00.000Z",
+      score,
+      signals: {
+        fullText: 0,
+        trigram: 0,
+        vector: null,
+        recency: 0,
+        titleExact: 0,
+        pinned: false,
+        privateManual: false
+      }
+    });
+  const ranked = Array.from({ length: 10 }, (_, index) =>
+    match(`note_rank${index}`, `Ranked ${index}`, 1 - index / 10)
+  );
+
+  it("keeps the ranked order and swaps the weakest note for the one the owner named", () => {
+    const named = match("note_workout", "Workout log", 0.01);
+    const disclosed = discloseNamedNotes(ranked, [named], 8);
+    expect(disclosed).toHaveLength(8);
+    expect(disclosed.slice(0, 7)).toEqual(ranked.slice(0, 7));
+    expect(disclosed[7]).toBe(named);
+  });
+
+  it("adds nothing when the named note is already disclosed", () => {
+    const already = ranked[2];
+    if (already === undefined) throw new Error("fixture");
+    expect(discloseNamedNotes(ranked, [already], 8)).toEqual(ranked.slice(0, 8));
+  });
+
+  it("fills an unfilled slot instead of dropping a ranked note", () => {
+    const named = match("note_workout", "Workout log", 0.01);
+    expect(discloseNamedNotes(ranked.slice(0, 3), [named], 8)).toEqual([
+      ...ranked.slice(0, 3),
+      named
+    ]);
   });
 });
 

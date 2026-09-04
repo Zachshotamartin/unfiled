@@ -9,7 +9,7 @@ select set_config(
   true
 );
 
-select plan(50);
+select plan(52);
 
 select ok(
   not has_function_privilege('service_role', 'private.apply_user_note_mutation_core(text,integer,jsonb,text)', 'EXECUTE')
@@ -93,6 +93,21 @@ select is(
 select ok((select char_length(body_markdown) > 500 from public.notes where title = 'B Log Boundary String'), 'encoded canonical log text may exceed the decoded 500-character bound');
 select is(public.apply_user_note_mutation((select id from public.notes where title = 'B Log Boundary String'), 1, jsonb_build_array(jsonb_build_object('type', 'replace_body_markdown', 'bodyMarkdown', (select body_markdown from public.notes where title = 'B Log Boundary String'))), 'b-log-boundary-roundtrip') -> 'note' ->> 'currentRevision', '2', 'encoded boundary string round-trips through Markdown');
 select is((select char_length(structured_data -> 'entries' -> 0 -> 'fields' ->> 'payload') from public.notes where title = 'B Log Boundary String'), 500, 'round-trip preserves the decoded 500-character value');
+
+-- A whole capture filed as one entry: the field bound is 10,000 characters (20260904000001).
+select is(
+  public.create_note(
+    'b-log-long-field', 'log', 'B Log Long Field',
+    E'## 2026-08-30T12:00:00.000Z\n\n- raw: ' || repeat('x', 10000),
+    null, 'ai_assisted',
+    jsonb_build_object('schemaVersion', 1, 'entries', jsonb_build_array(jsonb_build_object(
+      'id', 'ent_0000000000000000000000000E', 'occurredAt', '2026-08-30T12:00:00.000Z',
+      'fields', jsonb_build_object('raw', repeat('x', 10000))
+    )))
+  ) ->> 'replayed',
+  'false', 'a 10,000-character log field value is created'
+);
+select is(public.apply_user_note_mutation((select id from public.notes where title = 'B Log Long Field'), 1, jsonb_build_array(jsonb_build_object('type', 'replace_body_markdown', 'bodyMarkdown', E'## 2026-08-30T12:00:00.000Z\n\n- raw: ' || repeat('x', 10001))), 'b-log-too-long-field') ->> 'errorCode', 'structure_conflict', 'a 10,001-character log field value is refused');
 
 -- SQL parses through double precision and renders the shared plain-decimal grammar.
 select is(public.create_note('b-log-number-create', 'log', 'B Log Numbers', '') ->> 'replayed', 'false', 'numeric log fixture is created');

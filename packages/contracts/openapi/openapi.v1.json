@@ -8289,7 +8289,7 @@
                               },
                               "additionalProperties": {
                                 "anyOf": [
-                                  { "type": "string", "maxLength": 500 },
+                                  { "type": "string", "maxLength": 10000 },
                                   { "type": "number" },
                                   { "type": "null" }
                                 ]
@@ -8782,7 +8782,7 @@
                               },
                               "additionalProperties": {
                                 "anyOf": [
-                                  { "type": "string", "maxLength": 500 },
+                                  { "type": "string", "maxLength": 10000 },
                                   { "type": "number" },
                                   { "type": "null" }
                                 ]
@@ -9013,7 +9013,7 @@
                               },
                               "additionalProperties": {
                                 "anyOf": [
-                                  { "type": "string", "maxLength": 500 },
+                                  { "type": "string", "maxLength": 10000 },
                                   { "type": "number" },
                                   { "type": "null" }
                                 ]
@@ -9446,7 +9446,7 @@
                                 },
                                 "additionalProperties": {
                                   "anyOf": [
-                                    { "type": "string", "maxLength": 500 },
+                                    { "type": "string", "maxLength": 10000 },
                                     { "type": "number" },
                                     { "type": "null" }
                                   ]
@@ -9718,7 +9718,7 @@
                               },
                               "additionalProperties": {
                                 "anyOf": [
-                                  { "type": "string", "maxLength": 500 },
+                                  { "type": "string", "maxLength": 10000 },
                                   { "type": "number" },
                                   { "type": "null" }
                                 ]
@@ -9949,7 +9949,7 @@
                               },
                               "additionalProperties": {
                                 "anyOf": [
-                                  { "type": "string", "maxLength": 500 },
+                                  { "type": "string", "maxLength": 10000 },
                                   { "type": "number" },
                                   { "type": "null" }
                                 ]
@@ -10197,7 +10197,7 @@
                                     },
                                     "additionalProperties": {
                                       "anyOf": [
-                                        { "type": "string", "maxLength": 500 },
+                                        { "type": "string", "maxLength": 10000 },
                                         { "type": "number" },
                                         { "type": "null" }
                                       ]
@@ -10440,7 +10440,7 @@
                                     },
                                     "additionalProperties": {
                                       "anyOf": [
-                                        { "type": "string", "maxLength": 500 },
+                                        { "type": "string", "maxLength": 10000 },
                                         { "type": "number" },
                                         { "type": "null" }
                                       ]
@@ -10691,7 +10691,7 @@
                               },
                               "additionalProperties": {
                                 "anyOf": [
-                                  { "type": "string", "maxLength": 500 },
+                                  { "type": "string", "maxLength": 10000 },
                                   { "type": "number" },
                                   { "type": "null" }
                                 ]
@@ -10922,7 +10922,7 @@
                               },
                               "additionalProperties": {
                                 "anyOf": [
-                                  { "type": "string", "maxLength": 500 },
+                                  { "type": "string", "maxLength": 10000 },
                                   { "type": "number" },
                                   { "type": "null" }
                                 ]

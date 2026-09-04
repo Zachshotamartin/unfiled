@@ -602,6 +602,35 @@ describe("deterministic organization application", () => {
     expect(result.insertedItemIds).toEqual([IDS.itemOne, IDS.itemTwo]);
   });
 
+  it("creates a log note from a capture filed whole as one entry, past the old 500-character bound", () => {
+    // A detailed workout is one entry of several hundred characters. The plan schema and the
+    // preservation check accepted it while the field bound refused it at write time, so the
+    // capture failed as provider_unavailable and Review answered "The service is busy".
+    const raw = Array.from(
+      { length: 12 },
+      (_, index) => `Set ${index + 1}: bench press 4x8 at 185 lb, last rep slow and clean.`
+    ).join("\n");
+    expect(raw.length).toBeGreaterThan(500);
+    const command = createCommand(
+      "log",
+      [{ type: "append_log_entry", entry: { raw } }],
+      "Workout log",
+      "log_entry"
+    );
+
+    const result = applyMaterializedOrganizationCommand({
+      command,
+      ownerId: OWNER_ID,
+      captureText: raw,
+      occurredAt: OCCURRED_AT,
+      idFactory: deterministicFactory({ ent: [IDS.entryOne] })
+    });
+
+    const structured = LogStructuredDataSchema.parse(result.note.structuredData);
+    expect(structured.entries).toHaveLength(1);
+    expect(structured.entries[0]?.fields).toEqual({ raw });
+  });
+
   it("appends a log entry at the injected occurrence time with a retry-stable entry ID", () => {
     const before = currentNote("log", {
       structuredData: { schemaVersion: 1, entries: [] }

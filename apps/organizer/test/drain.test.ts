@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  OrganizationApplicationError,
+  OrganizationApplicationErrorCode
+} from "@unfiled/ai-routing";
+
+import {
+  reviewReasonCodes,
   createOrganizerDrain,
   isOrganizerDrainResult,
   unavailableOrganizerCipher,
@@ -312,6 +318,51 @@ function drain(
   });
 }
 
+describe("the reasons a Review carries", () => {
+  type SourcePlan = NonNullable<Parameters<typeof reviewReasonCodes>[0]>;
+  const plan = (overrides: Partial<SourcePlan>): SourcePlan => ({
+    schemaVersion: 1,
+    captureKind: "freeform",
+    decision: "create_note",
+    destination: {
+      candidateId: null,
+      newNote: { title: "T", noteType: "generic", spaceCandidateId: null }
+    },
+    operations: [],
+    generatedExpansion: null,
+    alternatives: [],
+    reasonCodes: ["no_candidate_fit"],
+    ...overrides
+  });
+
+  it("claims ambiguity only when the plan named alternatives, deferred, or was never made", () => {
+    expect(reviewReasonCodes(null, false)).toEqual(["ambiguous_intent"]);
+    expect(reviewReasonCodes(null, true)).toEqual(["ambiguous_intent", "routing_rule_match"]);
+    expect(
+      reviewReasonCodes(
+        plan({ decision: "needs_review", reasonCodes: ["ambiguous_intent"] }),
+        false
+      )
+    ).toEqual(["ambiguous_intent"]);
+    expect(
+      reviewReasonCodes(plan({ alternatives: ["note_01ARZ3NDEKTSV4RRFFQ69G5FAB"] }), false)
+    ).toEqual(["ambiguous_intent", "no_candidate_fit"]);
+  });
+
+  it("leads with a suspected duplicate, and lets a blocked concrete plan keep its own reasons", () => {
+    expect(
+      reviewReasonCodes(plan({ reasonCodes: ["no_candidate_fit", "duplicate_suspected"] }), false)
+    ).toEqual(["duplicate_suspected", "no_candidate_fit"]);
+    // A detailed capture the organizer understood, held by something other than ambiguity:
+    // "it could belong in more than one place" would be untrue, so it is not said.
+    expect(reviewReasonCodes(plan({}), false)).toEqual(["no_candidate_fit"]);
+    expect(reviewReasonCodes(plan({ reasonCodes: ["type_match"] }), true)).toEqual([
+      "routing_rule_match",
+      "type_match"
+    ]);
+  });
+});
+
 describe("organizer drain", () => {
   it("executes matched-note and zero-candidate matched-space routes without the planner", async () => {
     const ruleId = "rule_01ARZ3NDEKTSV4RRFFQ69G5FAE" as const;
@@ -605,7 +656,9 @@ describe("organizer drain", () => {
       plan: {
         kind: "review",
         validatedPlan: {
-          reasonCodes: ["ambiguous_intent", "routing_rule_match"]
+          // The rule's own append plan was understood; its target changed under it. That is
+          // not ambiguity, so the receipt no longer claims it.
+          reasonCodes: ["routing_rule_match"]
         }
       },
       preparation: { replanCount: 1 },
@@ -741,6 +794,29 @@ describe("organizer drain", () => {
     expect(failSignal?.aborted).toBe(false);
     expect(repo.release).toHaveBeenCalledOnce();
     expect(repo.release).toHaveBeenCalledWith(job.jobId);
+  });
+
+  it("fails a plan the note refuses as invalid_plan, once, instead of retrying it as an outage", async () => {
+    // A value past a bound, an operation the note type cannot hold: the same plan fails the
+    // same way on every attempt. Five retries under provider_unavailable told the owner their
+    // AI key was down.
+    const repo = repository({ fail: vi.fn().mockResolvedValue({ state: "failed" }) });
+    const crypto = cipher();
+    vi.mocked(crypto.sealCommand).mockRejectedValueOnce(
+      new OrganizationApplicationError(OrganizationApplicationErrorCode.INVALID_OPERATION)
+    );
+
+    const result = await drain(repo, appendPlanner, crypto).drain({
+      authority,
+      requestId: "r",
+      signal,
+      trigger: "manual"
+    });
+
+    expect(result).toEqual({ claimed: 1, completed: 0, failed: 1, retryScheduled: 0 });
+    expect(repo.fail).toHaveBeenCalledWith(
+      expect.objectContaining({ errorCode: "invalid_plan", retryable: false })
+    );
   });
 
   it("reports a transition that could not be written as its own outcome", async () => {

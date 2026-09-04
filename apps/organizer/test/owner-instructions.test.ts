@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { prepareProviderDisclosure } from "../src/planner-disclosure.js";
+import { resolveDeterministicDestination } from "../src/planner.js";
 import type { PlannerInput } from "../src/planner.js";
 import { ORGANIZER_PROMPT_VERSION, ORGANIZER_ROUTING_PROMPT } from "../src/prompt.js";
 
@@ -52,6 +53,35 @@ describe("owner instructions in the planner disclosure", () => {
     };
     expect(input.capture.text).toBe("Ask about the tap");
     expect(input.capture.ownerInstructions).toBe("file with the plumber note");
+  });
+
+  it("names the candidate the directions point at, so the model is told where to file", () => {
+    const input = plannerInput({
+      controls,
+      rawContent: "Ask about the tap",
+      guidance: "put this in my plumber note"
+    });
+    const destination = resolveDeterministicDestination({
+      candidates: input.candidates.map(({ candidateId: id, isOpen, noteId: note, title }) => ({
+        candidateId: id,
+        isOpen,
+        noteId: note,
+        title
+      })),
+      capture: input.capture
+    });
+    expect(destination).toEqual({ candidateId, source: "exact_title_phrase" });
+    const disclosure = prepareProviderDisclosure(input, destination);
+    const disclosed = JSON.parse(disclosure.serialized) as {
+      candidates: readonly { candidateId: string; title: string }[];
+      controls: { explicitDestinationCandidateId: string | null };
+    };
+    expect(disclosed.controls.explicitDestinationCandidateId).toBe(
+      disclosed.candidates.find(({ title }) => title === "Plumber")?.candidateId
+    );
+    // The prompt tells the model what that control means.
+    expect(ORGANIZER_ROUTING_PROMPT).toContain("controls.explicitDestinationCandidateId");
+    expect(ORGANIZER_ROUTING_PROMPT).toContain("the note the owner named");
   });
 
   it("sends null when the owner gave no directions", () => {

@@ -4,7 +4,9 @@ import {
   captureKindText,
   failClosedRoutingPolicy,
   materializeAuthorizedOrganizationPlan,
+  OrganizationApplicationError,
   OrganizationMaterializationError,
+  SourcePreservationError,
   ownerCaptureText,
   parseAuthorizedOrganizationPlan,
   type MaterializedOrganizationCommand,
@@ -518,6 +520,15 @@ function preparedStableIds(
 function safeFailure(error: unknown): Readonly<{ errorCode: string; retryable: boolean }> {
   if (error instanceof OrganizerProviderError)
     return { errorCode: error.safeCode, retryable: error.retryable };
+  // A plan the note refused -- an operation its type cannot hold, a value past a bound, a
+  // source not preserved -- is the same plan on every attempt. Retrying it five times as
+  // provider_unavailable told the owner their AI key was down; it was not.
+  if (
+    error instanceof OrganizationApplicationError ||
+    error instanceof OrganizationMaterializationError ||
+    error instanceof SourcePreservationError
+  )
+    return { errorCode: "invalid_plan", retryable: false };
   if (error instanceof OrganizerUnavailableError)
     return { errorCode: "provider_unavailable", retryable: true };
   if (error instanceof OrganizerDatabaseContractError)
@@ -645,6 +656,38 @@ function assertDecryptedCandidateBinding(
   }
 }
 
+/**
+ * The reasons a Review carries, in the order the owner reads them. The first one has to be true
+ * of this capture: "it could belong in more than one place" is right when the plan named
+ * alternatives, the model deferred, or no plan was made at all, and wrong for a plan the
+ * organizer understood that a duplicate check or a failure held: a suspected duplicate says so
+ * instead, and a failure leaves the plan's own reasons to speak beside the review reason.
+ */
+export function reviewReasonCodes(
+  sourcePlan: OrganizationPlan | null,
+  ruleMatched: boolean
+): readonly OrganizationPlan["reasonCodes"][number][] {
+  const ambiguous =
+    sourcePlan === null ||
+    sourcePlan.decision === "needs_review" ||
+    sourcePlan.alternatives.length > 0;
+  const planReasons = (sourcePlan?.reasonCodes ?? []).filter(
+    (reasonCode) => reasonCode !== "ambiguous_intent"
+  );
+  const duplicate = planReasons.includes("duplicate_suspected");
+  // A concrete plan that a failure blocked -- a rule target that changed under it, a note that
+  // refused the write -- claims nothing extra here: its own reasons stay, and the review
+  // reason beside them says what stopped it.
+  const leading: OrganizationPlan["reasonCodes"][number][] = duplicate
+    ? ["duplicate_suspected"]
+    : ambiguous
+      ? ["ambiguous_intent"]
+      : [];
+  return Array.from(
+    new Set([...leading, ...(ruleMatched ? (["routing_rule_match"] as const) : []), ...planReasons])
+  ).slice(0, 5);
+}
+
 function forcedReview(
   manifest: OrganizerCandidateManifest,
   preparation: OrganizerPreparation,
@@ -663,16 +706,10 @@ function forcedReview(
   )
     .filter((candidateId) => authorizedCandidates.has(candidateId))
     .slice(0, 2);
-  const reasonCodes = Array.from(
-    new Set([
-      "ambiguous_intent" as const,
-      ...(manifest.controls.explicitDestinationNoteId === null &&
-      manifest.controls.ruleMatch !== null
-        ? (["routing_rule_match"] as const)
-        : []),
-      ...(sourcePlan?.reasonCodes ?? [])
-    ])
-  ).slice(0, 5);
+  const reasonCodes = reviewReasonCodes(
+    sourcePlan,
+    manifest.controls.explicitDestinationNoteId === null && manifest.controls.ruleMatch !== null
+  );
   const authorized = parseAuthorizedOrganizationPlan({
     manifest,
     unknownPlan: {

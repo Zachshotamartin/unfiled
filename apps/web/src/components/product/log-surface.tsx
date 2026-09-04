@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  LOG_FIELD_VALUE_MAX_CHARACTERS,
   LogStructuredDataSchema,
   type EntityId,
   type LogEntry,
@@ -83,6 +84,9 @@ function previousLabel(value: LogFieldValue | undefined): string | undefined {
   return value === undefined || value === null ? undefined : String(value);
 }
 
+/** Past this many characters a value reads as prose and gets a multi-line box. */
+const LONG_FORM_THRESHOLD = 120;
+
 function LogFieldEditor({
   disabled,
   entry,
@@ -104,6 +108,7 @@ function LogFieldEditor({
   const initial = draftValue(value);
   const changed = draft !== initial;
   const prior = previousLabel(previous);
+  const longForm = !numeric && (draft.includes("\n") || draft.length > LONG_FORM_THRESHOLD);
   const parsedDraftNumber = draft.trim().length === 0 ? null : Number(draft);
   const validNumericDraft = parsedDraftNumber !== null && Number.isFinite(parsedDraftNumber);
 
@@ -133,22 +138,43 @@ function LogFieldEditor({
     <div className="log-field">
       <label htmlFor={controlId}>{fieldKey}</label>
       <div className="log-field-editor">
-        <input
-          id={controlId}
-          type={numeric ? "number" : "text"}
-          inputMode={numeric ? "decimal" : "text"}
-          value={draft}
-          placeholder={prior}
-          maxLength={numeric ? undefined : 500}
-          disabled={disabled}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              submitDraft();
-            }
-          }}
-        />
+        {longForm ? (
+          // A capture filed whole as one entry is paragraphs, not a value: it gets a box that
+          // shows them, saves on blur or Cmd/Ctrl+Enter, and lets Enter break a line.
+          <textarea
+            id={controlId}
+            value={draft}
+            placeholder={prior}
+            maxLength={LOG_FIELD_VALUE_MAX_CHARACTERS}
+            disabled={disabled}
+            rows={Math.min(12, Math.max(3, draft.split("\n").length + 1))}
+            onChange={(event) => setDraft(event.target.value)}
+            onBlur={submitDraft}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault();
+                submitDraft();
+              }
+            }}
+          />
+        ) : (
+          <input
+            id={controlId}
+            type={numeric ? "number" : "text"}
+            inputMode={numeric ? "decimal" : "text"}
+            value={draft}
+            placeholder={prior}
+            maxLength={numeric ? undefined : LOG_FIELD_VALUE_MAX_CHARACTERS}
+            disabled={disabled}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                submitDraft();
+              }
+            }}
+          />
+        )}
         {numeric ? (
           <div className="log-stepper" aria-label={`${fieldKey} stepper`} role="group">
             <button

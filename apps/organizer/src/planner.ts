@@ -195,6 +195,14 @@ export function inferOrganizerCaptureKind(text: string): OrganizerCaptureKind {
 // "add w to my todo list" names the note "Todo list"; the possessive is the owner's, not the
 // title's. A title that carries the possessive itself ("My list") still matches its own phrase.
 const DESTINATION_PHRASE_POSSESSIVE = /^(?:my|our|the)\s+/u;
+// In directions the owner names the note more freely than in a capture: "put this in my workout
+// log", "add to Workout log", "file under the note called Groceries". The marker set is wider than
+// the capture's own "into|to" because directions are only ever about where the capture goes, so
+// "in" cannot be part of the content the way it can in a capture.
+const DIRECTIONS_DESTINATION_MARKER = /\b(?:into|to|in|under|on|with)\b/giu;
+const DIRECTIONS_NOTE_PREFIX =
+  /^(?:the\s+|my\s+|our\s+)?(?:(?:note|list|log)\s+)?(?:titled\s+|called\s+|named\s+)?/u;
+const DIRECTIONS_NOTE_SUFFIX = /\s+note$/u;
 
 function normalizedDestinationTitle(value: string): string {
   return value
@@ -211,6 +219,60 @@ function normalizedDestinationTitle(value: string): string {
  * Explicit note controls win. Otherwise the final `to`/`into` phrase must be
  * an exact normalized title with exactly one open candidate.
  */
+/** The phrase after the last destination marker in a text, or null when it names nothing. */
+function phraseAfterLastMarker(text: string, marker: RegExp): string | null {
+  const normalized = text.normalize("NFKC").replace(/\s+/gu, " ").trim();
+  const markers = [...normalized.matchAll(marker)];
+  const finalMarker = markers.at(-1);
+  if (finalMarker?.index === undefined) return null;
+  const phrase = normalizedDestinationTitle(
+    normalized.slice(finalMarker.index + finalMarker[0].length)
+  );
+  return phrase.length === 0 ? null : phrase;
+}
+
+/**
+ * The titles a capture names as its destination, one group per source and the owner's directions
+ * ("put this in my workout log") before the capture's own words ("add eggs to groceries"). Each
+ * group holds the phrase as written and stripped of a leading possessive, article and "note
+ * titled" wording, so "the note called Groceries" and "my groceries" both reach a note titled
+ * Groceries. Only exact normalized titles match: a phrase is a name, never a search.
+ */
+export function namedDestinationPhraseGroups(
+  capture: Readonly<{ rawContent: string; guidance?: string | null }>
+): readonly (readonly string[])[] {
+  const groups: (readonly string[])[] = [];
+  const offer = (phrase: string | null): void => {
+    if (phrase === null) return;
+    const variants: string[] = [];
+    const stripped = phrase.replace(DIRECTIONS_NOTE_PREFIX, "");
+    for (const variant of [
+      phrase,
+      phrase.replace(DESTINATION_PHRASE_POSSESSIVE, ""),
+      stripped,
+      // "the workout log note": the owner says what the thing is, not what it is called.
+      stripped.replace(DIRECTIONS_NOTE_SUFFIX, "")
+    ]) {
+      const trimmed = variant.trim();
+      if (trimmed.length > 0 && !variants.includes(trimmed)) variants.push(trimmed);
+    }
+    if (variants.length > 0) groups.push(Object.freeze(variants));
+  };
+  const guidance = capture.guidance ?? null;
+  if (guidance !== null) offer(phraseAfterLastMarker(guidance, DIRECTIONS_DESTINATION_MARKER));
+  offer(phraseAfterLastMarker(capture.rawContent, /\b(?:into|to)\b/giu));
+  return Object.freeze(groups);
+}
+
+/** Every title phrase a capture names, flattened, for a retriever looking the notes up. */
+export function namedDestinationPhrases(
+  capture: Readonly<{ rawContent: string; guidance?: string | null }>
+): readonly string[] {
+  return Object.freeze(
+    Array.from(new Set(namedDestinationPhraseGroups(capture).flatMap((group) => [...group])))
+  );
+}
+
 export function resolveDeterministicDestination(
   input: Readonly<{
     candidates: readonly DeterministicDestinationCandidate[];
@@ -226,23 +288,18 @@ export function resolveDeterministicDestination(
       : null;
   }
 
-  const normalizedCapture = input.capture.rawContent.normalize("NFKC").replace(/\s+/gu, " ").trim();
-  const destinationMarkers = [...normalizedCapture.matchAll(/\b(?:into|to)\b/giu)];
-  const finalMarker = destinationMarkers.at(-1);
-  if (finalMarker?.index === undefined) return null;
-  const phrase = normalizedDestinationTitle(
-    normalizedCapture.slice(finalMarker.index + finalMarker[0].length)
-  );
-  if (phrase.length === 0) return null;
-
-  const bare = phrase.replace(DESTINATION_PHRASE_POSSESSIVE, "");
-  const matches = eligible.filter(({ title }) => {
-    const normalizedTitle = normalizedDestinationTitle(title);
-    return normalizedTitle === phrase || (bare.length > 0 && normalizedTitle === bare);
-  });
-  return matches.length === 1 && matches[0] !== undefined
-    ? Object.freeze({ candidateId: matches[0].candidateId, source: "exact_title_phrase" })
-    : null;
+  // Directions outrank the capture's words. Within one source the phrase and its stripped forms
+  // are one name: exactly one open note may carry it, and a name two notes share names none.
+  for (const group of namedDestinationPhraseGroups(input.capture)) {
+    const matches = eligible.filter(({ title }) =>
+      group.includes(normalizedDestinationTitle(title))
+    );
+    if (matches.length === 1 && matches[0] !== undefined) {
+      return Object.freeze({ candidateId: matches[0].candidateId, source: "exact_title_phrase" });
+    }
+    if (matches.length > 1) return null;
+  }
+  return null;
 }
 
 export function expectedOrganizerNoteType(
