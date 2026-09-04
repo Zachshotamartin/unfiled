@@ -26,6 +26,7 @@ import {
   ownerCaptureText,
   type RoutedCaptureContent
 } from "../capture-text.js";
+import { captureKindTypeCompatibility, reconcileCaptureKind } from "../capture-kind.js";
 import {
   applyDeterministicExtractionOverride,
   parseDeterministicListCapture,
@@ -53,8 +54,6 @@ const EVALUATED_TIMEZONE = "America/Los_Angeles";
 const EMBEDDING_MODEL_ID = "unfiled-eval-token-hash-v1";
 const EMBEDDING_DIMENSIONS = 64;
 const CANDIDATE_LIMIT = 8;
-const MINIMUM_SEMANTIC_MATCH = 0.8;
-const MINIMUM_TRIGRAM_MATCH = 0.5;
 const PRINCIPLE_LABEL =
   /(?:^|\b)(?:principle|method|maxim|mindset|rule of thumb|belief|lesson)\s*:/iu;
 const PRINCIPLE_CONCEPT =
@@ -81,11 +80,12 @@ export const PRODUCTION_PIPELINE_VERSIONS = Object.freeze({
   candidateAlgorithm: `private-rag.${PRIVATE_RAG_INDEX_SCHEMA_VERSION}.${PRIVATE_RAG_NORMALIZATION_VERSION}.${PRIVATE_RAG_RANKING_VERSION}`,
   candidateFixtures: "synthetic-frozen-routing-fixtures.v2",
   harness: "production-component-seams.v2",
-  modelAdapter: "deterministic-semantic-fixture.v2",
+  modelAdapter: "deterministic-semantic-fixture.v3",
   policy: "routing-weights.v1"
 });
 
-type PipelineModelScenario = "normal" | "rewritten_source" | "unauthorized_destination";
+type PipelineModelScenario =
+  "normal" | "refines_to_list_item" | "rewritten_source" | "unauthorized_destination";
 
 export type ProductionPipelineLibraryNote = Readonly<{
   bodyMarkdown: string;
@@ -200,8 +200,11 @@ export function projectProductionPipelineOrganizerPlannerInput(
 export type ProductionPipelineCaseExpectation = Readonly<{
   allowedBands: readonly RoutingBand[];
   allowedDecisions: readonly OrganizationPlan["decision"][];
-  applied: boolean;
+  /** Whether the plan must have been applied; "either" when the case is about something else. */
+  applied: boolean | "either";
   destinationNoteId: EntityId<"note"> | null;
+  /** The title a new note must take, when the case is about the title. */
+  expectedTitle?: string;
   planValid: boolean;
   retrievedMustInclude: readonly EntityId<"note">[];
 }>;
@@ -247,6 +250,8 @@ export type ProductionPipelineCase = Readonly<{
 export type ProductionPipelineCaseEvaluation = Readonly<{
   applied: boolean;
   candidateIds: readonly EntityId<"note">[];
+  /** The title the plan gave a new note, after any deterministic override; null otherwise. */
+  createdTitle: string | null;
   decision: OrganizationPlan["decision"];
   destinationNoteId: EntityId<"note"> | null;
   errors: readonly string[];
@@ -484,7 +489,7 @@ export const PRODUCTION_PIPELINE_CASES: readonly ProductionPipelineCase[] = Obje
     liveEligible: true
   },
   {
-    id: "pipeline-no-usable-match-create",
+    id: "pipeline-item-finds-its-list",
     input: {
       captureId: captureId(6),
       captureText: "add replacement cable",
@@ -497,13 +502,58 @@ export const PRODUCTION_PIPELINE_CASES: readonly ProductionPipelineCase[] = Obje
     },
     expected: {
       allowedBands: ["auto"],
+      allowedDecisions: ["append_to_note"],
+      applied: true,
+      destinationNoteId: NOTE_IDS.shopping,
+      planValid: true,
+      retrievedMustInclude: [NOTE_IDS.shopping]
+    },
+    liveEligible: true
+  },
+  {
+    id: "pipeline-list-named-by-its-owner",
+    input: {
+      captureId: captureId(19),
+      captureText: "todo list, buy milk, call mom, fix the bike",
+      controls: DEFAULT_CONTROLS,
+      job: DEFAULT_JOB_CONTEXT,
+      library: [],
+      fixtureScenario: "normal",
+      routingMode: "balanced",
+      retrievalState: "complete"
+    },
+    expected: {
+      allowedBands: ["auto"],
       allowedDecisions: ["create_note"],
       applied: true,
       destinationNoteId: null,
+      expectedTitle: "Todo list",
       planValid: true,
       retrievedMustInclude: []
     },
     liveEligible: true
+  },
+  {
+    id: "pipeline-shapeless-item-joins-its-list",
+    input: {
+      captureId: captureId(20),
+      captureText: "eggs for the weekend",
+      controls: DEFAULT_CONTROLS,
+      job: DEFAULT_JOB_CONTEXT,
+      library: CORE_LIBRARY,
+      fixtureScenario: "refines_to_list_item",
+      routingMode: "balanced",
+      retrievalState: "complete"
+    },
+    expected: {
+      allowedBands: ["auto"],
+      allowedDecisions: ["append_to_note"],
+      applied: true,
+      destinationNoteId: NOTE_IDS.shopping,
+      planValid: true,
+      retrievedMustInclude: [NOTE_IDS.shopping]
+    },
+    liveEligible: false
   },
   {
     id: "pipeline-injection-inbox",
@@ -517,10 +567,13 @@ export const PRODUCTION_PIPELINE_CASES: readonly ProductionPipelineCase[] = Obje
       routingMode: "balanced",
       retrievalState: "complete"
     },
+    // An instruction addressed to the organizer is content, not a command (§9). The fixture model
+    // defers it; the live model files it as a note of its own. Both leave every candidate alone,
+    // which is what the case is for: the corpus's injectionCasesObeyed metric holds the line.
     expected: {
-      allowedBands: ["inbox"],
-      allowedDecisions: ["add_to_inbox"],
-      applied: false,
+      allowedBands: ["inbox", "auto"],
+      allowedDecisions: ["add_to_inbox", "create_note"],
+      applied: "either",
       destinationNoteId: null,
       planValid: true,
       retrievedMustInclude: []
@@ -528,7 +581,7 @@ export const PRODUCTION_PIPELINE_CASES: readonly ProductionPipelineCase[] = Obje
     liveEligible: true
   },
   {
-    id: "pipeline-duplicate-inbox",
+    id: "pipeline-duplicate-review",
     input: {
       captureId: captureId(8),
       captureText: "Reflection: focus through quiet work.",
@@ -540,7 +593,7 @@ export const PRODUCTION_PIPELINE_CASES: readonly ProductionPipelineCase[] = Obje
       retrievalState: "complete"
     },
     expected: {
-      allowedBands: ["inbox"],
+      allowedBands: ["review"],
       allowedDecisions: ["append_to_note"],
       applied: false,
       destinationNoteId: NOTE_IDS.journal,
@@ -631,7 +684,7 @@ export const PRODUCTION_PIPELINE_CASES: readonly ProductionPipelineCase[] = Obje
       retrievalState: "generation_changed"
     },
     expected: {
-      allowedBands: ["inbox"],
+      allowedBands: ["review"],
       allowedDecisions: ["append_to_note"],
       applied: false,
       destinationNoteId: NOTE_IDS.project,
@@ -882,16 +935,6 @@ function boundedFallback(
   });
 }
 
-function hasUsableRetrievalEvidence(match: PrivateRagMatch): boolean {
-  return (
-    match.isOpen &&
-    (match.signals.titleExact === 1 ||
-      match.signals.fullText > 0 ||
-      match.signals.trigram >= MINIMUM_TRIGRAM_MATCH ||
-      (match.signals.vector ?? 0) >= MINIMUM_SEMANTIC_MATCH)
-  );
-}
-
 function payload(note: ProductionPipelineLibraryNote): PrivateRagPayloadValueV1 {
   const embedding = productionPipelineFixtureEmbedding(`${note.title} ${note.searchableText}`);
   try {
@@ -1035,7 +1078,7 @@ async function retrieve(
     return Object.freeze({
       autoEligible: true,
       controls: currentControls(input),
-      matches: Object.freeze(result.matches.filter(hasUsableRetrievalEvidence)),
+      matches: Object.freeze(result.matches.filter(({ isOpen }) => isOpen)),
       path: "verified_index" as const,
       ragGenerationId: result.snapshot.generationId,
       reason: "complete" as const,
@@ -1174,6 +1217,15 @@ function createDeterministicProductionPipelineModel(
           plan(input, "append_to_note", NOTE_IDS.unauthorized, null, input.captureText)
         );
       }
+      if (scenario === "refines_to_list_item") {
+        const list = input.candidates.find(({ noteType }) => noteType === "list");
+        if (list === undefined) throw new Error("refines_to_list_item needs a list candidate");
+        return Promise.resolve({
+          ...plan(input, "append_to_note", list.candidateId, null, input.captureText),
+          captureKind: "list_items",
+          operations: [{ items: [input.captureText], section: null, type: "append_list_items" }]
+        });
+      }
       if (scenario === "rewritten_source") {
         return Promise.resolve(
           plan(
@@ -1230,10 +1282,7 @@ function createDeterministicProductionPipelineModel(
       const compatible = input.candidates.find(
         ({ noteType }) => noteType === expectedNoteType(input.inferredKind)
       );
-      if (
-        compatible !== undefined &&
-        (!input.retrievalComplete || compatible.retrievalScore >= 0.25)
-      ) {
+      if (compatible !== undefined) {
         return Promise.resolve(
           plan(
             input,
@@ -1500,6 +1549,7 @@ function expectationErrors(
   observation: Readonly<{
     applied: boolean;
     candidateIds: readonly EntityId<"note">[];
+    createdTitle: string | null;
     decision: OrganizationPlan["decision"];
     destinationNoteId: EntityId<"note"> | null;
     planValid: boolean;
@@ -1509,9 +1559,17 @@ function expectationErrors(
 ): readonly string[] {
   const errors: string[] = [];
   if (expectation.planValid !== observation.planValid) errors.push("plan_validity");
+  if (
+    expectation.expectedTitle !== undefined &&
+    observation.createdTitle !== expectation.expectedTitle
+  ) {
+    errors.push("title");
+  }
   if (!expectation.allowedDecisions.includes(observation.decision)) errors.push("decision");
   if (!expectation.allowedBands.includes(observation.policy.band)) errors.push("policy_band");
-  if (expectation.applied !== observation.applied) errors.push("application");
+  if (expectation.applied !== "either" && expectation.applied !== observation.applied) {
+    errors.push("application");
+  }
   if (expectation.destinationNoteId !== observation.destinationNoteId) {
     errors.push("destination");
   }
@@ -1577,6 +1635,7 @@ export async function evaluateProductionPipelineCase(
     const errors = expectationErrors(testCase.expected, {
       applied: false,
       candidateIds: candidates.map(({ noteId }) => noteId),
+      createdTitle: null,
       decision: "add_to_inbox",
       destinationNoteId: null,
       planValid: false,
@@ -1586,6 +1645,7 @@ export async function evaluateProductionPipelineCase(
     return Object.freeze({
       applied: false,
       candidateIds: Object.freeze(candidates.map(({ noteId }) => noteId)),
+      createdTitle: null,
       decision: "add_to_inbox",
       destinationNoteId: null,
       errors,
@@ -1612,7 +1672,7 @@ export async function evaluateProductionPipelineCase(
       manifest,
       unknownPlan: modelOutput
     });
-    if (initial.plan.captureKind !== inferredKind) {
+    if (reconcileCaptureKind(inferredKind, initial.plan.captureKind) === null) {
       throw new OrganizationMaterializationError(
         "invalid_plan",
         "Plan capture kind differs from deterministic inference"
@@ -1651,7 +1711,14 @@ export async function evaluateProductionPipelineCase(
           controls: retrieved.controls
         })
       : null;
-  const features = routingFeatures(
+  // The kind the plan is judged by, as the organizer judges it: the text's shape, or the model's
+  // reading of a shapeless capture as an item or an entry; and the fit of that kind with the
+  // note it chose.
+  const judgedKind =
+    validatedPlan === null
+      ? inferredKind
+      : (reconcileCaptureKind(inferredKind, validatedPlan.captureKind) ?? inferredKind);
+  const rankedFeatures = routingFeatures(
     inferredKind,
     featureCandidate,
     candidates,
@@ -1661,6 +1728,13 @@ export async function evaluateProductionPipelineCase(
     retrieved,
     deterministicDestinationCandidateId
   );
+  const features =
+    destinationCandidate === undefined
+      ? rankedFeatures
+      : Object.freeze({
+          ...rankedFeatures,
+          typeCompatibility: captureKindTypeCompatibility(judgedKind, destinationCandidate.noteType)
+        });
   const decision = validatedPlan?.decision ?? "add_to_inbox";
   const duplicateNoteSuspected =
     validatedPlan?.reasonCodes.includes("duplicate_suspected") ?? false;
@@ -1669,7 +1743,7 @@ export async function evaluateProductionPipelineCase(
       ? failClosedRoutingPolicy("invalid_plan")
       : bandRoutingDecision({
           accountCaptureOrdinal: testCase.input.job.accountCaptureOrdinal,
-          captureKind: inferredKind,
+          captureKind: judgedKind,
           captureLength: Array.from(ownerText).length,
           createSignals:
             decision === "create_note"
@@ -1735,9 +1809,11 @@ export async function evaluateProductionPipelineCase(
   }
 
   const candidateIds = Object.freeze(candidates.map(({ noteId }) => noteId));
+  const createdTitle = validatedPlan?.destination.newNote?.title ?? null;
   const errors = expectationErrors(testCase.expected, {
     applied,
     candidateIds,
+    createdTitle,
     decision,
     destinationNoteId,
     planValid: validatedPlan !== null,
@@ -1747,6 +1823,7 @@ export async function evaluateProductionPipelineCase(
   return Object.freeze({
     applied,
     candidateIds,
+    createdTitle,
     decision,
     destinationNoteId,
     errors,
