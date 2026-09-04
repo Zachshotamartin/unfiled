@@ -10,6 +10,7 @@ import {
   unavailableProductionPlanner,
   type OrganizerPlanner
 } from "../src/planner.js";
+import { ORGANIZER_PROMPT_VERSION } from "../src/prompt.js";
 
 /** A planner double for a capture that carries no photos: nothing may ask it to read one. */
 function unusedDescribe(): OrganizerPlanner["describe"] {
@@ -86,7 +87,7 @@ describe("app-specific planning wrappers", () => {
           explicitDestinationNoteId: null,
           ruleMatch: null
         },
-        promptVersion: "routing-v1",
+        promptVersion: ORGANIZER_PROMPT_VERSION,
         schemaVersion: 1,
         signal: new AbortController().signal
       })
@@ -225,7 +226,7 @@ describe("app-specific planning wrappers", () => {
       ],
       captureId: "cap_01ARZ3NDEKTSV4RRFFQ69G5FAV",
       controls,
-      promptVersion: "routing-v1",
+      promptVersion: ORGANIZER_PROMPT_VERSION,
       schemaVersion: 1,
       signal: new AbortController().signal
     });
@@ -267,7 +268,7 @@ describe("app-specific planning wrappers", () => {
       candidates: [journal],
       captureId: "cap_01ARZ3NDEKTSV4RRFFQ69G5FAV" as const,
       controls,
-      promptVersion: "routing-v1",
+      promptVersion: ORGANIZER_PROMPT_VERSION,
       schemaVersion: 1,
       signal: new AbortController().signal
     };

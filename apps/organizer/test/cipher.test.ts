@@ -41,6 +41,7 @@ import type {
   DecryptedCapture,
   OrganizerCaptureControls
 } from "../src/planner.js";
+import { ORGANIZER_PROMPT_VERSION } from "../src/prompt.js";
 
 const keyManagementMocks = vi.hoisted(() => ({
   custodianForOrganizerAuthority: vi.fn()
@@ -263,7 +264,7 @@ function job(
     settingsRevision: 1,
     occurredAt: OCCURRED_AT,
     ownerId: OWNER_ID,
-    promptVersion: "routing-v1",
+    promptVersion: ORGANIZER_PROMPT_VERSION,
     replanCount: 0,
     routingEffort: "standard",
     routingMode: "balanced",
@@ -1107,7 +1108,7 @@ describe("production organizer cipher", () => {
       generatedBlock: {
         kind: "suggestion",
         modelId: "gpt-5.6-terra",
-        promptVersion: "routing-v1"
+        promptVersion: ORGANIZER_PROMPT_VERSION
       },
       review: { type: "pending_expansion" }
     });

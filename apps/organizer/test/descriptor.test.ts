@@ -11,6 +11,7 @@ import {
 import { OrganizerPlannerReviewError } from "../src/errors.js";
 import { createOpenAIOrganizerPlanner } from "../src/openai-planner.js";
 import type { CaptureDescriptorInput, DecryptedCapture } from "../src/planner.js";
+import { ORGANIZER_PROMPT_VERSION } from "../src/prompt.js";
 
 const API_KEY = "a".repeat(32);
 const DESCRIPTOR = "A handwritten shopping list on a yellow notepad";
@@ -38,7 +39,7 @@ function descriptorInput(overrides: Partial<CaptureDescriptorInput> = {}): Captu
   return {
     capture: capture(),
     captureId: "cap_01ARZ3NDEKTSV4RRFFQ69G5FAV",
-    promptVersion: "routing-v1",
+    promptVersion: ORGANIZER_PROMPT_VERSION,
     schemaVersion: 1,
     signal: new AbortController().signal,
     ...overrides

@@ -269,13 +269,17 @@ describe("production-component-seam deterministic routing evaluation", () => {
       },
       expected: {
         ...sameDayCase.expected,
-        allowedBands: ["review"],
-        applied: false
+        allowedBands: ["auto"],
+        applied: true
       }
     });
 
+    // Same-day evidence is worth exactly its weight, 0.2, and that is what this pins. Losing it
+    // no longer changes the band: what is left still describes a capture the organizer placed
+    // against a note it could see, so it files rather than asking the owner about the same list
+    // they wrote in yesterday.
     expect(sameDay.policy.band).toBe("auto");
-    expect(priorLocalDay.policy.band).toBe("review");
+    expect(priorLocalDay.policy.band).toBe("auto");
     expect(sameDay.policy.score - priorLocalDay.policy.score).toBeCloseTo(0.2, 4);
   });
 

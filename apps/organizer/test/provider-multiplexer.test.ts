@@ -9,6 +9,7 @@ import {
 } from "../src/provider-credential.js";
 import { createOrganizerProviderPlanner } from "../src/provider-multiplexer.js";
 import { createProviderRegistryPlanner } from "../src/provider-planner.js";
+import { ORGANIZER_PROMPT_VERSION } from "../src/prompt.js";
 
 const OPENAI_KEY = "sk-byok-openai-abcdefghijklmnopqrstuvwxyz0123456789";
 const CLAUDE_KEY = "sk-ant-byok-claude-abcdefghijklmnopqrstuvwxyz0123456789";
@@ -47,7 +48,7 @@ function plannerInput(overrides: Partial<PlannerInput> = {}): PlannerInput {
     ],
     captureId: "cap_01ARZ3NDEKTSV4RRFFQ69G5FAV",
     controls,
-    promptVersion: "routing-v1",
+    promptVersion: ORGANIZER_PROMPT_VERSION,
     schemaVersion: 1,
     signal: new AbortController().signal,
     ...overrides
