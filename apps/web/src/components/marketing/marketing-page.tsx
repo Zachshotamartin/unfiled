@@ -1,4 +1,4 @@
-import { ArrowRightIcon } from "@phosphor-icons/react/ssr";
+import { UnfiledGlyph } from "@/components/product/unfiled-glyph";
 import Image from "next/image";
 import Link from "next/link";
 
@@ -38,7 +38,7 @@ export function MarketingPage() {
             <div className="mt-8 flex flex-wrap gap-3">
               <a href={signInHref} className="button-primary">
                 Sign in
-                <ArrowRightIcon size={18} weight="bold" aria-hidden="true" />
+                <UnfiledGlyph glyph="arrow" size={17} weight={2.2} />
               </a>
               <Link href="/app" className="button-secondary">
                 View the app
@@ -190,7 +190,7 @@ export function MarketingPage() {
               </h2>
               <a href={signInHref} className="button-primary mt-8">
                 Sign in
-                <ArrowRightIcon size={18} weight="bold" aria-hidden="true" />
+                <UnfiledGlyph glyph="arrow" size={17} weight={2.2} />
               </a>
             </div>
             <figure className="marketing-frame relative mx-auto mt-12 aspect-[4/3] w-full max-w-[72rem] sm:mt-16 sm:aspect-[16/5]">

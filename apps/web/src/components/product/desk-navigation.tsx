@@ -5,6 +5,8 @@ import { usePathname, useRouter } from "next/navigation";
 
 import { BrandLogo } from "@/components/brand-logo";
 
+import { useLiveResource } from "@/lib/product/use-live-resource";
+
 import { UnfiledGlyph, type UnfiledGlyphName } from "./unfiled-glyph";
 
 /**
@@ -24,6 +26,25 @@ export const DESK_DESTINATIONS: readonly Readonly<{
 
 /** The id of the composer's field, which the capture action puts the caret into. */
 export const COMPOSER_FIELD_ID = "capture-text";
+
+/** The count on the Inbox tab: open review decisions, "30+" past the page the list carries. */
+export function useOpenReviewBadge(): string | null {
+  const reviews = useLiveResource<{
+    items: readonly { id: string }[];
+    pageInfo: { hasMore: boolean };
+  }>("/api/v1/review-items?state=open&limit=30");
+  const count = reviews.data?.items.length ?? 0;
+  if (count === 0) return null;
+  return reviews.data?.pageInfo.hasMore ? `${count}+` : String(count);
+}
+
+export function DeskBadge({ value }: Readonly<{ value: string | null }>) {
+  return value === null ? null : (
+    <span className="desk-badge" aria-label={`${value} waiting`}>
+      {value}
+    </span>
+  );
+}
 
 export function isDeskDestinationActive(pathname: string, href: string, exact: boolean): boolean {
   return exact ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
@@ -54,11 +75,18 @@ function useCaptureAction(): () => void {
 }
 
 function RailItem({
+  badge = null,
   exact = false,
   glyph,
   href,
   label
-}: Readonly<{ exact?: boolean; glyph: UnfiledGlyphName; href: string; label: string }>) {
+}: Readonly<{
+  badge?: string | null;
+  exact?: boolean;
+  glyph: UnfiledGlyphName;
+  href: string;
+  label: string;
+}>) {
   const pathname = usePathname();
   const active = isDeskDestinationActive(pathname, href, exact);
   return (
@@ -67,8 +95,9 @@ function RailItem({
       aria-current={active ? "page" : undefined}
       className={`desk-rail-item ${active ? "desk-rail-item-active" : ""}`}
     >
-      <span className="shrink-0">
+      <span className="desk-glyph-slot shrink-0">
         <UnfiledGlyph glyph={glyph} size={22} weight={1.9} />
+        <DeskBadge value={badge} />
       </span>
       <span className="hidden xl:inline">{label}</span>
       <span className="sr-only xl:hidden">{label}</span>
@@ -79,6 +108,7 @@ function RailItem({
 export function DeskRail() {
   const router = useRouter();
   const capture = useCaptureAction();
+  const badge = useOpenReviewBadge();
   return (
     <aside className="desk-rail">
       <div className="hidden xl:block">
@@ -89,7 +119,11 @@ export function DeskRail() {
       </div>
       <nav aria-label="Desk" className="mt-10 grid gap-1">
         {DESK_DESTINATIONS.map((destination) => (
-          <RailItem key={destination.href} {...destination} />
+          <RailItem
+            key={destination.href}
+            {...destination}
+            badge={destination.href === "/app" ? badge : null}
+          />
         ))}
         <button type="button" className="desk-rail-capture mt-1" onClick={capture}>
           <span className="shrink-0">
@@ -130,12 +164,18 @@ export function DeskRail() {
 export function DeskDock() {
   const pathname = usePathname();
   const capture = useCaptureAction();
+  const badge = useOpenReviewBadge();
   const [inbox, library] = DESK_DESTINATIONS;
   if (inbox === undefined || library === undefined) return null;
   return (
     <nav aria-label="Desk" className="desk-dock">
       {[inbox].map((destination) => (
-        <DockItem key={destination.href} destination={destination} pathname={pathname} />
+        <DockItem
+          key={destination.href}
+          badge={badge}
+          destination={destination}
+          pathname={pathname}
+        />
       ))}
       <button
         type="button"
@@ -153,9 +193,14 @@ export function DeskDock() {
 }
 
 function DockItem({
+  badge = null,
   destination,
   pathname
-}: Readonly<{ destination: (typeof DESK_DESTINATIONS)[number]; pathname: string }>) {
+}: Readonly<{
+  badge?: string | null;
+  destination: (typeof DESK_DESTINATIONS)[number];
+  pathname: string;
+}>) {
   const active = isDeskDestinationActive(pathname, destination.href, destination.exact);
   return (
     <Link
@@ -163,7 +208,10 @@ function DockItem({
       aria-current={active ? "page" : undefined}
       className={`desk-dock-item ${active ? "desk-dock-item-active" : ""}`}
     >
-      <UnfiledGlyph glyph={destination.glyph} size={22} weight={1.9} />
+      <span className="desk-glyph-slot">
+        <UnfiledGlyph glyph={destination.glyph} size={22} weight={1.9} />
+        <DeskBadge value={badge} />
+      </span>
       {destination.label}
     </Link>
   );
