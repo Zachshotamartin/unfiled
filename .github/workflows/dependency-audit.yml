@@ -1,28 +1,20 @@
 # The supply-chain check for what ships: a high or critical advisory in the production dependency
-# graph turns this red. It runs on its own schedule because advisories are published against a graph
-# that is not changing, and on every change to the lockfile because that is when the graph moves.
+# graph turns this red.
 #
-# It has no retries and swallows nothing. `pnpm audit` exits non-zero both for advisories and for a
-# registry it cannot reach, and both of those mean the same thing here: this commit's production
-# dependencies are not known to be clean. A run that could not reach the registry is red until it
-# can, rather than a green run that quietly audited nothing.
+# It never runs on a pull request or a push, and so can never block a change. `pnpm audit` asks
+# npm's advisory service over the network, and that service answers when it feels like it: it hung
+# for minutes at a time while the registry itself served in a tenth of a second. A check that can
+# fail for reasons unrelated to the commit does not belong in front of a commit.
+#
+# It still swallows nothing. A registry it cannot reach means this graph is not known to be clean,
+# and that is red until it can be checked, rather than a green run that quietly audited nothing.
+# Nobody is blocked while it is red, so the honest answer costs nothing.
 name: Dependency audit
 
 on:
   schedule:
     # Daily, a few minutes off the hour so it does not land in the busiest scheduling window.
     - cron: "17 6 * * *"
-  push:
-    branches: [main]
-    paths:
-      - pnpm-lock.yaml
-      - package.json
-      - .github/workflows/dependency-audit.yml
-  pull_request:
-    paths:
-      - pnpm-lock.yaml
-      - package.json
-      - .github/workflows/dependency-audit.yml
   workflow_dispatch:
 
 concurrency:
