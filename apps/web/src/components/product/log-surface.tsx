@@ -1,6 +1,5 @@
 "use client";
 
-import { MinusIcon, PlusIcon } from "@phosphor-icons/react";
 import {
   LogStructuredDataSchema,
   type EntityId,
@@ -11,6 +10,8 @@ import {
 } from "@unfiled/contracts";
 import { renderLogMarkdown } from "@unfiled/domain";
 import { useEffect, useId, useMemo, useState } from "react";
+
+import { UnfiledGlyph } from "./unfiled-glyph";
 
 type LogFieldUpdate = Readonly<{
   entryId: EntityId<"ent">;
@@ -156,7 +157,7 @@ function LogFieldEditor({
               aria-label={`Decrease ${fieldKey}`}
               onClick={() => step(-1)}
             >
-              <MinusIcon size={16} aria-hidden="true" />
+              <UnfiledGlyph glyph="minus" size={16} weight={1.9} />
             </button>
             <button
               type="button"
@@ -164,7 +165,7 @@ function LogFieldEditor({
               aria-label={`Increase ${fieldKey}`}
               onClick={() => step(1)}
             >
-              <PlusIcon size={16} aria-hidden="true" />
+              <UnfiledGlyph glyph="plus" size={16} weight={1.9} />
             </button>
           </div>
         ) : null}

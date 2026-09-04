@@ -1,15 +1,5 @@
 "use client";
 
-import {
-  ArchiveTrayIcon,
-  ArrowCounterClockwiseIcon,
-  EyeIcon,
-  LinkSimpleIcon,
-  PlusIcon,
-  TagIcon,
-  TrashIcon,
-  XIcon
-} from "@phosphor-icons/react";
 import type {
   EntityId,
   MutationResult,
@@ -29,6 +19,7 @@ import { usePagedResource } from "@/lib/product/use-paged-resource";
 
 import { MarkdownPreview } from "./markdown-preview";
 import { NoteContextSections } from "./note-context-sections";
+import { UnfiledGlyph } from "./unfiled-glyph";
 
 type InspectorProps = Readonly<{
   note: NoteDto;
@@ -185,7 +176,8 @@ export function NoteInspector({ note, onConflict, onMutation }: InspectorProps) 
 
       <details open className="inspector-section">
         <summary className="inspector-summary">
-          <TagIcon size={16} aria-hidden="true" /> Tags <span>{note.tagIds.length}</span>
+          <UnfiledGlyph glyph="card" size={16} weight={1.9} /> Tags{" "}
+          <span>{note.tagIds.length}</span>
         </summary>
         <div className="mt-4 grid gap-1">
           {tags.data?.items.map((tag) => {
@@ -234,14 +226,14 @@ export function NoteInspector({ note, onConflict, onMutation }: InspectorProps) 
             aria-label="Create and add tag"
             disabled={pending !== null}
           >
-            <PlusIcon size={17} />
+            <UnfiledGlyph glyph="plus" size={17} weight={1.9} />
           </button>
         </form>
       </details>
 
       <details className="inspector-section">
         <summary className="inspector-summary">
-          <LinkSimpleIcon size={16} aria-hidden="true" /> Links{" "}
+          <UnfiledGlyph glyph="link" size={16} weight={1.9} /> Links{" "}
           <span>{links.data?.items.length ?? note.links.length}</span>
         </summary>
         <div className="mt-4 border-t border-outline">
@@ -282,7 +274,7 @@ export function NoteInspector({ note, onConflict, onMutation }: InspectorProps) 
             aria-label="Link note"
             disabled={pending !== null || linkTarget.length === 0}
           >
-            <PlusIcon size={17} />
+            <UnfiledGlyph glyph="plus" size={17} weight={1.9} />
           </button>
         </form>
         {notes.data?.pageInfo.hasMore ? (
@@ -301,7 +293,7 @@ export function NoteInspector({ note, onConflict, onMutation }: InspectorProps) 
 
       <details open className="inspector-section">
         <summary className="inspector-summary">
-          <ArrowCounterClockwiseIcon size={16} aria-hidden="true" /> Revisions{" "}
+          <UnfiledGlyph glyph="undo" size={16} weight={1.9} /> Revisions{" "}
           <span>{revisions.data?.items.length ?? "…"}</span>
         </summary>
         <div className="mt-4 border-t border-outline">
@@ -321,7 +313,7 @@ export function NoteInspector({ note, onConflict, onMutation }: InspectorProps) 
                   className="quiet-button"
                   onClick={() => setSnapshot(revision)}
                 >
-                  <EyeIcon size={14} /> View
+                  <UnfiledGlyph glyph="search" size={14} weight={1.9} /> View
                 </button>
                 {revision.revision === note.currentRevision ? (
                   <span className="eyebrow">Current</span>
@@ -369,7 +361,7 @@ export function NoteInspector({ note, onConflict, onMutation }: InspectorProps) 
                 aria-label="Close revision snapshot"
                 onClick={() => setSnapshot(null)}
               >
-                <XIcon size={16} />
+                <UnfiledGlyph glyph="close" size={16} weight={1.9} />
               </button>
             </header>
             <dl>
@@ -380,10 +372,6 @@ export function NoteInspector({ note, onConflict, onMutation }: InspectorProps) 
               <div>
                 <dt>Source</dt>
                 <dd>{revisionSource(snapshot.source)}</dd>
-              </div>
-              <div>
-                <dt>Privacy</dt>
-                <dd>{snapshot.privacy === "private_manual" ? "Private manual" : "AI allowed"}</dd>
               </div>
               <div>
                 <dt>Relations</dt>
@@ -412,7 +400,7 @@ export function NoteInspector({ note, onConflict, onMutation }: InspectorProps) 
               )
             }
           >
-            <ArchiveTrayIcon size={17} aria-hidden="true" />{" "}
+            <UnfiledGlyph glyph="archive" size={17} weight={1.9} />{" "}
             {note.archivedAt === null ? "Archive note" : "Return to notes"}
           </button>
           {note.deletedAt === null ? (
@@ -426,7 +414,7 @@ export function NoteInspector({ note, onConflict, onMutation }: InspectorProps) 
                 )
               }
             >
-              <TrashIcon size={17} aria-hidden="true" /> Move to recently deleted
+              <UnfiledGlyph glyph="trash" size={17} weight={1.9} /> Move to recently deleted
             </button>
           ) : (
             <button
@@ -437,7 +425,7 @@ export function NoteInspector({ note, onConflict, onMutation }: InspectorProps) 
                 void mutate("Note restored", () => browserApi.restoreDeletedNote(note.id, write()))
               }
             >
-              <ArrowCounterClockwiseIcon size={17} aria-hidden="true" /> Restore deleted note
+              <UnfiledGlyph glyph="undo" size={17} weight={1.9} /> Restore deleted note
             </button>
           )}
         </div>

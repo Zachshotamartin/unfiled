@@ -1,4 +1,4 @@
-import { WarningCircleIcon } from "@phosphor-icons/react";
+import { UnfiledGlyph } from "./unfiled-glyph";
 
 export function SettingsChoice<Value extends string>({
   checked,
@@ -46,7 +46,7 @@ export function SettingsNotice({
 }: Readonly<{ message: string; tone: "alert" | "status" }>) {
   return (
     <div className="ai-settings-notice" role={tone} data-tone={tone}>
-      <WarningCircleIcon size={18} aria-hidden="true" />
+      <UnfiledGlyph glyph="warning" size={18} weight={1.9} />
       <span>{message}</span>
     </div>
   );

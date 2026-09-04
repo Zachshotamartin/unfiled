@@ -1,42 +1,27 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 
-import { CaptureExperience } from "@/components/product/capture-experience";
-import { NoteLibrary } from "@/components/product/note-library";
+import { DeskSettingsButton } from "@/components/product/desk-menu";
+import { InboxView } from "@/components/product/inbox-view";
 import { PageHeading } from "@/components/product/page-heading";
 
 export const metadata: Metadata = {
-  title: "Today",
-  description: "Capture something quickly and follow its progress into your Unfiled library."
+  title: "Inbox",
+  description: "Write something down and see everything that still needs you."
 };
 
-export default function TodayPage() {
-  const date = new Intl.DateTimeFormat("en-US", {
-    dateStyle: "full",
-    timeZone: "America/Los_Angeles"
-  }).format(new Date());
-
+/**
+ * The Inbox (ADR-0019, decision 6): where thoughts land. The capture card first, then only what
+ * needs the owner — review decisions as cards with their actions inline, and captures that are
+ * still organizing, failed, or stopped. Filed captures are notes in the Library.
+ */
+export default function InboxPage() {
   return (
     <main id="main-content" className="product-page">
       <div className="content-column">
-        <PageHeading eyebrow={date} title="Today" />
-        <div className="mt-12">
-          <CaptureExperience />
+        <PageHeading title="Inbox" action={<DeskSettingsButton />} />
+        <div className="mt-8">
+          <InboxView />
         </div>
-        <section aria-labelledby="recent-heading" className="mt-16">
-          <div className="mb-4 flex items-end justify-between gap-4">
-            <h2
-              id="recent-heading"
-              className="text-sm font-semibold tracking-wide text-muted-content uppercase"
-            >
-              Recently touched
-            </h2>
-            <Link href="/app/notes" className="text-sm text-muted-content hover:text-content">
-              All notes
-            </Link>
-          </div>
-          <NoteLibrary query="/api/v1/notes?limit=8" />
-        </section>
       </div>
     </main>
   );

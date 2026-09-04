@@ -1,0 +1,81 @@
+/*
+ * Paper: the palette, type scale, and spacing the iPhone app draws from
+ * (ADR-0019, decisions 1, 2 and 10). The web carried the earlier dark
+ * treatment; these tokens are the same roles the app's `UnfiledTheme` and
+ * `UnfiledType` define, so both surfaces read as one product. There is no
+ * black ground anywhere: the screens sit on a cool light paper.
+ */
+:root {
+  color-scheme: light;
+
+  /* Screen ground. */
+  --color-canvas: #f3f4f6;
+  /* Surfaces that sit on the ground: fields, cards, the dock. */
+  --color-surface: #ffffff;
+  /* Pressed and secondary controls. */
+  --color-surface-raised: #e6e8ec;
+  /* Hairlines. */
+  --color-border: #dde1e6;
+  /* Primary text. */
+  --color-text-primary: #14171b;
+  /* Secondary text: metadata, descriptions, section labels. */
+  --color-text-secondary: #626b76;
+  /* Text of a control that cannot be used, and placeholder text. */
+  --color-text-disabled: #9aa1ab;
+  /* The one accent: state dots, links, the primary action. */
+  --color-accent: #1e6b57;
+  --color-accent-pressed: #17543f;
+  /* Text and glyphs that sit on the accent. */
+  --color-accent-contrast: #f3f4f6;
+  --color-danger: #a03a28;
+  --color-warning: #8a5a12;
+  /* The tinted surface a clearly labelled generated block sits on. */
+  --color-generated-surface: #eaf1ee;
+
+  /*
+   * Screen titles and everything the owner wrote are set in the reading face;
+   * `ui-serif` resolves to the same system serif the app asks SwiftUI for.
+   */
+  --font-paper-serif: ui-serif, "New York", Georgia, "Iowan Old Style", "Times New Roman", serif;
+
+  --radius-input: 13px;
+  --radius-button: 13px;
+  --radius-card: 16px;
+  --radius-container: 16px;
+  --radius-sheet: 20px;
+  --radius-circular: 999px;
+
+  --motion-duration-immediate: 0ms;
+  --motion-duration-press: 150ms;
+  --motion-duration-layout: 200ms;
+  --motion-duration-receipt: 250ms;
+  --motion-duration-maximum: 300ms;
+  --motion-easing-standard: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-standard: var(--motion-easing-standard);
+
+  --focus-ring: 0 0 0 2px var(--color-canvas), 0 0 0 4px var(--color-accent);
+
+  --z-rail: 10;
+  --z-sticky: 20;
+  --z-sheet: 30;
+  --z-dialog: 40;
+  --z-toast: 50;
+
+  /* Named distances, so every screen opens the same way (ADR-0019, decision 10). */
+  --space-screen-padding: 1.375rem;
+  --space-section-top: 2rem;
+  --space-header-bottom: 1.5rem;
+  --space-label-to-rule: 0.875rem;
+  --space-row-vertical: 1.375rem;
+  --space-control-gap: 0.625rem;
+  --space-card-padding: 1rem;
+  --space-field-padding: 1rem;
+  --size-control-height: 3.25rem;
+  --size-touch-target: 2.75rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-easing-standard: linear;
+  }
+}

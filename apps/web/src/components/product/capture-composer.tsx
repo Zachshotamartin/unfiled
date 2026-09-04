@@ -1,18 +1,19 @@
 "use client";
 
-import {
-  CheckIcon,
-  LockKeyIcon,
-  PaperPlaneTiltIcon,
-  SlidersHorizontalIcon
-} from "@phosphor-icons/react";
-import type { EntityId, NoteSummary, PrivacyMode } from "@unfiled/contracts";
+import type { EntityId, NoteSummary } from "@unfiled/contracts";
 import type { SyntheticEvent } from "react";
 
+import { UnfiledGlyph } from "./unfiled-glyph";
+
+/**
+ * The composer no longer asks how a capture should be handled. Every capture is filed by the
+ * organizer (ADR-0021, decision 1), so there is no privacy field here and none in the value the
+ * composer produces: a `private_manual` capture mints a job the drain can never claim, because
+ * `claim_organization_jobs` only accepts `capture.privacy = 'ai_assisted'`.
+ */
 export type CaptureComposerValue = Readonly<{
   expansionDisabled: boolean;
   explicitDestinationNoteId: EntityId<"note"> | null;
-  privacy: PrivacyMode;
   rawContent: string;
 }>;
 
@@ -36,7 +37,6 @@ export function CaptureComposer({
   value
 }: CaptureComposerProps) {
   const length = value.rawContent.length;
-  const privateCapture = value.privacy === "private_manual";
   const invalid = length > 10_000 || value.rawContent.trim().length === 0;
 
   return (
@@ -71,7 +71,7 @@ export function CaptureComposer({
 
         <details className="capture-options">
           <summary>
-            <SlidersHorizontalIcon size={17} aria-hidden="true" /> Options
+            <UnfiledGlyph glyph="sliders" size={17} weight={1.9} /> Options
           </summary>
           <div className="capture-options-grid">
             <label className="capture-option-field" htmlFor="capture-destination">
@@ -100,28 +100,8 @@ export function CaptureComposer({
             <label className="capture-toggle">
               <input
                 type="checkbox"
-                checked={privateCapture}
-                disabled={disabled}
-                onChange={(event) =>
-                  onChange({
-                    ...value,
-                    expansionDisabled: event.target.checked || value.expansionDisabled,
-                    privacy: event.target.checked ? "private_manual" : "ai_assisted"
-                  })
-                }
-              />
-              <span>
-                <strong>
-                  <LockKeyIcon size={16} aria-hidden="true" /> Keep private
-                </strong>
-                Never send this capture to an AI provider.
-              </span>
-            </label>
-            <label className="capture-toggle">
-              <input
-                type="checkbox"
                 checked={!value.expansionDisabled}
-                disabled={disabled || privateCapture}
+                disabled={disabled}
                 onChange={(event) =>
                   onChange({ ...value, expansionDisabled: !event.target.checked })
                 }
@@ -142,13 +122,13 @@ export function CaptureComposer({
             <p role="status" aria-live="polite">
               {acknowledgement === null ? null : (
                 <>
-                  <CheckIcon size={15} weight="bold" aria-hidden="true" /> {acknowledgement}
+                  <UnfiledGlyph glyph="check" size={15} weight={2.2} /> {acknowledgement}
                 </>
               )}
             </p>
           </div>
           <button type="submit" className="button-primary" disabled={disabled || invalid}>
-            <PaperPlaneTiltIcon size={17} weight="bold" aria-hidden="true" /> Save
+            <UnfiledGlyph glyph="send" size={17} weight={2.2} /> Save
           </button>
         </div>
       </form>

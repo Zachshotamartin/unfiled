@@ -1,5 +1,6 @@
-import { ArrowClockwiseIcon, CloudSlashIcon, NoteBlankIcon } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
+
+import { UnfiledGlyph } from "./unfiled-glyph";
 
 export function ResourceSkeleton({ rows = 4 }: Readonly<{ rows?: number }>) {
   return (
@@ -22,7 +23,7 @@ export function EmptyState({
 }: Readonly<{ action?: ReactNode; body: string; title: string }>) {
   return (
     <section className="empty-state" aria-labelledby="empty-title">
-      <NoteBlankIcon size={29} className="text-action" aria-hidden="true" />
+      <UnfiledGlyph glyph="card" size={29} weight={1.9} className="text-action" />
       <h2 id="empty-title" className="mt-5 text-2xl font-semibold tracking-[-0.035em]">
         {title}
       </h2>
@@ -37,16 +38,20 @@ export function ResourceError({
   offline = false,
   retry
 }: Readonly<{ message: string; offline?: boolean; retry: () => void }>) {
-  const Icon = offline ? CloudSlashIcon : ArrowClockwiseIcon;
   return (
     <section className="empty-state" role="alert">
-      <Icon size={29} className="text-action" aria-hidden="true" />
+      <UnfiledGlyph
+        glyph={offline ? "warning" : "undo"}
+        size={29}
+        weight={1.9}
+        className="text-action"
+      />
       <h2 className="mt-5 text-2xl font-semibold tracking-[-0.035em]">
         {offline ? "You’re offline." : "This view didn’t load."}
       </h2>
       <p className="mt-3 max-w-md leading-7 text-muted-content">{message}</p>
       <button type="button" className="button-secondary mt-6" onClick={retry}>
-        <ArrowClockwiseIcon size={17} aria-hidden="true" /> Try again
+        <UnfiledGlyph glyph="undo" size={17} weight={1.9} /> Try again
       </button>
     </section>
   );

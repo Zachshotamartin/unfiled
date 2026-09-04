@@ -1,14 +1,5 @@
 "use client";
 
-import {
-  ArrowRightIcon,
-  BracketsCurlyIcon,
-  CheckIcon,
-  GitDiffIcon,
-  SparkleIcon,
-  WarningCircleIcon,
-  XIcon
-} from "@phosphor-icons/react";
 import type {
   EntityId,
   GeneratedBlockDetailResponse,
@@ -17,7 +8,7 @@ import type {
   ReviewItemDto
 } from "@unfiled/contracts";
 import Link from "next/link";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   browserApi,
@@ -35,6 +26,7 @@ import {
   type GeneratedResolutionAttempt
 } from "./generated-blocks-surface";
 import { EmptyState, ResourceError, ResourceSkeleton } from "./resource-states";
+import { UnfiledGlyph, type UnfiledGlyphName } from "./unfiled-glyph";
 
 type GeneratedResolution = GeneratedBlockResolveRequest["resolution"];
 type ReviewResolution = Extract<PublicReviewResolution, { type: "dismiss" | "keep_both" }>;
@@ -94,11 +86,11 @@ export function reviewCopy(item: ReviewItemDto): string {
   return "This item needs a decision before Unfiled can continue safely.";
 }
 
-function ReviewIcon({ type }: Readonly<{ type: ReviewItemDto["type"] }>) {
-  if (type === "structure_conflict") return <BracketsCurlyIcon size={19} aria-hidden="true" />;
-  if (type === "revision_conflict") return <GitDiffIcon size={19} aria-hidden="true" />;
-  if (type === "pending_expansion") return <SparkleIcon size={19} aria-hidden="true" />;
-  return <WarningCircleIcon size={19} aria-hidden="true" />;
+function reviewGlyph(type: ReviewItemDto["type"]): UnfiledGlyphName {
+  if (type === "structure_conflict") return "checklist";
+  if (type === "revision_conflict") return "move";
+  if (type === "pending_expansion") return "card";
+  return "warning";
 }
 
 export function DuplicateReviewProposal({ item }: Readonly<{ item: ReviewItemDto }>) {
@@ -112,7 +104,7 @@ export function DuplicateReviewProposal({ item }: Readonly<{ item: ReviewItemDto
             <Link href={`/app/notes/${note.noteId}`}>
               Open candidate {index + 1}
               <span>revision {note.revision}</span>
-              <ArrowRightIcon size={14} aria-hidden="true" />
+              <UnfiledGlyph glyph="arrow" size={14} weight={2} />
             </Link>
           </li>
         ))}
@@ -242,7 +234,18 @@ function MissingGeneratedBlockBinding() {
   );
 }
 
-export function ReviewView() {
+/**
+ * The open review decisions. They live in the Inbox now (ADR-0019, decision 6): Review is no
+ * longer a destination. `focusReviewItemId` narrows the list to one decision, which is what the
+ * receipt's "Open Review" pushes; that page reads as decided once the item is resolved.
+ */
+export function ReviewView({
+  focusReviewItemId,
+  onEmptyChange
+}: Readonly<{
+  focusReviewItemId?: EntityId<"rvw">;
+  onEmptyChange?: (empty: boolean) => void;
+}> = {}) {
   const resource = usePagedResource<ReviewItemDto>(
     "/api/v1/review-items?state=open&limit=30",
     reviewKey
@@ -321,11 +324,18 @@ export function ReviewView() {
       />
     );
   }
-  if (resource.data?.items.length === 0 && message === null && error === null) {
-    return (
+  const items = (resource.data?.items ?? []).filter(
+    (item) => focusReviewItemId === undefined || item.id === focusReviewItemId
+  );
+  // The Inbox says "nothing waiting" only when this list is empty too, so it has to be told.
+  useEffect(() => onEmptyChange?.(items.length === 0), [items.length, onEmptyChange]);
+  if (items.length === 0 && message === null && error === null) {
+    // In the Inbox this list is one part of "Needs you", which already says when nothing is
+    // waiting; a second empty state stacked under the first would say it twice.
+    return focusReviewItemId === undefined ? null : (
       <EmptyState
-        title="Nothing needs review."
-        body="Generated proposals, possible duplicates, and conflicting edits will wait here without changing the saved note."
+        title="This review is already decided."
+        body="Nothing is waiting on it. The capture's receipt shows what happened."
       />
     );
   }
@@ -340,7 +350,7 @@ export function ReviewView() {
         {error ?? message}
       </p>
       <div className="border-t border-outline">
-        {resource.data?.items.map((item) => {
+        {items.map((item) => {
           const duplicate = item.proposal.type === "duplicate_notes";
           const generatedProposal = item.proposal.type === "generated_block" ? item.proposal : null;
           const legacyExpansion =
@@ -351,15 +361,12 @@ export function ReviewView() {
           return (
             <article key={item.id} className="review-row">
               <div className="review-icon">
-                <ReviewIcon type={item.type} />
+                <UnfiledGlyph glyph={reviewGlyph(item.type)} size={19} weight={1.9} />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-baseline justify-between gap-3">
                   <h2 className="text-lg font-medium">{reviewLabel(item.type)}</h2>
-                  <time
-                    className="font-mono text-[11px] text-disabled-content"
-                    dateTime={item.createdAt}
-                  >
+                  <time className="text-[11px] text-muted-content" dateTime={item.createdAt}>
                     {new Date(item.createdAt).toLocaleString()}
                   </time>
                 </div>
@@ -386,7 +393,7 @@ export function ReviewView() {
                         disabled={pending !== null}
                         onClick={() => void resolveReview(item, { type: "keep_both" })}
                       >
-                        <CheckIcon size={16} weight="bold" aria-hidden="true" />
+                        <UnfiledGlyph glyph="check" size={16} weight={2.2} />
                         {itemPending === "keep_both" ? "Keeping…" : "Keep both"}
                       </button>
                     ) : null}
@@ -396,7 +403,7 @@ export function ReviewView() {
                       disabled={pending !== null}
                       onClick={() => void resolveReview(item, { type: "dismiss" })}
                     >
-                      <XIcon size={16} weight="bold" aria-hidden="true" />
+                      <UnfiledGlyph glyph="close" size={16} weight={2.2} />
                       {itemPending === "dismiss" ? "Dismissing…" : "Dismiss"}
                     </button>
                   </div>
@@ -404,7 +411,7 @@ export function ReviewView() {
               </div>
               {item.noteId === null || generatedProposal !== null ? null : (
                 <Link className="quiet-button shrink-0" href={`/app/notes/${item.noteId}`}>
-                  Open note <ArrowRightIcon size={15} aria-hidden="true" />
+                  Open note <UnfiledGlyph glyph="arrow" size={15} weight={2} />
                 </Link>
               )}
             </article>

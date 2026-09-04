@@ -1,15 +1,5 @@
 "use client";
 
-import {
-  CheckIcon,
-  FolderSimpleIcon,
-  NoteIcon,
-  PencilSimpleIcon,
-  PlusIcon,
-  TrashIcon,
-  WarningCircleIcon,
-  XIcon
-} from "@phosphor-icons/react";
 import type { NoteSummary, RoutingRuleDto, RoutingRuleType, Space } from "@unfiled/contracts";
 import { type SyntheticEvent, useMemo, useRef, useState } from "react";
 
@@ -48,6 +38,7 @@ import { useLiveResource } from "@/lib/product/use-live-resource";
 import { usePagedResource } from "@/lib/product/use-paged-resource";
 
 import { EmptyState, ResourceError } from "./resource-states";
+import { UnfiledGlyph } from "./unfiled-glyph";
 
 type RoutingRuleFilter = "all" | "active" | "blocked" | "paused" | "suggested";
 type EditorSelection = "new" | RoutingRuleDto | null;
@@ -227,13 +218,13 @@ export function RoutingRuleEditor({
           disabled={pending}
           onClick={onCancel}
         >
-          <XIcon size={17} aria-hidden="true" />
+          <UnfiledGlyph glyph="close" size={17} weight={1.9} />
         </button>
       </header>
 
       {rule !== null && rule.destinationStatus !== "active" ? (
         <div className="routing-rule-warning" role="status">
-          <WarningCircleIcon size={18} aria-hidden="true" />
+          <UnfiledGlyph glyph="warning" size={18} weight={1.9} />
           <p>This destination is {rule.destinationStatus}. Choose an active replacement to save.</p>
         </div>
       ) : null}
@@ -398,7 +389,7 @@ export function RoutingRuleEditor({
             Cancel
           </button>
           <button type="submit" className="button-primary" disabled={pending || !canSave}>
-            <CheckIcon size={17} weight="bold" aria-hidden="true" />
+            <UnfiledGlyph glyph="check" size={17} weight={2.2} />
             {pending ? "Saving…" : rule === null ? "Create rule" : "Save changes"}
           </button>
         </div>
@@ -433,7 +424,6 @@ export function RoutingRuleItem({
   const offered = rule.proposalState === "offered";
   const blocked = rule.destinationStatus !== "active";
   const state = routingRuleStateLabel(rule);
-  const DestinationIcon = rule.destination.type === "note" ? NoteIcon : FolderSimpleIcon;
   const canToggle = rule.enabled || !blocked;
 
   return (
@@ -444,7 +434,12 @@ export function RoutingRuleItem({
           <span className="routing-rule-state">{state}</span>
         </div>
         <p className="routing-rule-destination">
-          <DestinationIcon size={16} aria-hidden="true" /> {destination}
+          <UnfiledGlyph
+            glyph={rule.destination.type === "note" ? "library" : "tray"}
+            size={16}
+            weight={1.9}
+          />{" "}
+          {destination}
         </p>
         <div className="routing-rule-meta" aria-label="Rule details">
           <span>{ROUTING_RULE_TYPE_COPY[rule.ruleType].label}</span>
@@ -483,7 +478,7 @@ export function RoutingRuleItem({
               disabled={pending}
               onClick={onRemove}
             >
-              <TrashIcon size={16} aria-hidden="true" />
+              <UnfiledGlyph glyph="trash" size={16} weight={1.9} />
               {pending ? "Working…" : offered ? "Decline" : "Delete rule"}
             </button>
           </div>
@@ -495,7 +490,7 @@ export function RoutingRuleItem({
               disabled={pending || blocked}
               onClick={onAccept}
             >
-              <CheckIcon size={17} weight="bold" aria-hidden="true" /> Accept and turn on
+              <UnfiledGlyph glyph="check" size={17} weight={2.2} /> Accept and turn on
             </button>
             <button
               type="button"
@@ -519,7 +514,7 @@ export function RoutingRuleItem({
               {rule.enabled ? "On" : "Off"}
             </button>
             <button type="button" className="button-secondary" disabled={pending} onClick={onEdit}>
-              <PencilSimpleIcon size={16} aria-hidden="true" /> Edit
+              <UnfiledGlyph glyph="pen" size={16} weight={1.9} /> Edit
             </button>
             <button
               type="button"
@@ -527,7 +522,7 @@ export function RoutingRuleItem({
               disabled={pending}
               onClick={onRequestRemoval}
             >
-              <TrashIcon size={16} aria-hidden="true" /> Delete
+              <UnfiledGlyph glyph="trash" size={16} weight={1.9} /> Delete
             </button>
           </>
         )}
@@ -861,7 +856,7 @@ export function RoutingRulesSettings() {
             setMutationError(null);
           }}
         >
-          <PlusIcon size={17} weight="bold" aria-hidden="true" /> New rule
+          <UnfiledGlyph glyph="plus" size={17} weight={2.2} /> New rule
         </button>
       </div>
 
@@ -888,7 +883,7 @@ export function RoutingRulesSettings() {
 
       {mutationError === null ? null : (
         <div className="routing-rules-notice" role="alert">
-          <WarningCircleIcon size={18} aria-hidden="true" />
+          <UnfiledGlyph glyph="warning" size={18} weight={1.9} />
           <span>{mutationError}</span>
           <button type="button" className="quiet-button" onClick={() => void resource.refresh()}>
             Refresh
@@ -898,7 +893,7 @@ export function RoutingRulesSettings() {
 
       {resource.error !== null && resource.data !== null ? (
         <div className="routing-rules-notice" role="status">
-          <WarningCircleIcon size={18} aria-hidden="true" />
+          <UnfiledGlyph glyph="warning" size={18} weight={1.9} />
           <span>{resource.offline ? "You’re offline. Showing saved rules." : resource.error}</span>
           <button type="button" className="quiet-button" onClick={() => void resource.refresh()}>
             Try again

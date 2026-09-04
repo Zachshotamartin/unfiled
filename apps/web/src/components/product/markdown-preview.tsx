@@ -1,8 +1,14 @@
 import type { ReactNode } from "react";
 
+import { CaptureAttachment } from "./capture-attachment";
+
 type ListItem = Readonly<{ checked?: boolean; text: string }>;
 type Block =
-  | Readonly<{ attachment: "image" | "recording"; kind: "attachment" }>
+  | Readonly<{
+      attachment: "image" | "recording";
+      attachmentId: string;
+      kind: "attachment";
+    }>
   | Readonly<{ kind: "code"; lines: readonly string[] }>
   | Readonly<{ kind: "heading"; level: number; text: string }>
   | Readonly<{ items: readonly ListItem[]; kind: "list"; ordered: boolean }>
@@ -63,16 +69,17 @@ function blocks(markdown: string): readonly Block[] {
       output.push({ kind: "rule" });
       continue;
     }
-    // A photo or recording the organizer placed here. The bytes are read through the
-    // owner's session on the phone; the web preview names what sits at this spot.
+    // A photo or recording the organizer placed here. The reference carries the attachment id,
+    // which is what the browser needs to ask for the bytes through the owner's own session.
     const attachment =
-      /^\s*(!?)\[(?:Photo|Recording)\]\(unfiled-attachment:att_[0-9A-HJKMNP-TV-Z]{26}\)\s*$/u.exec(
+      /^\s*(!?)\[(?:Photo|Recording)\]\(unfiled-attachment:(att_[0-9A-HJKMNP-TV-Z]{26})\)\s*$/u.exec(
         line
       );
-    if (attachment !== null) {
+    if (attachment?.[2] !== undefined) {
       output.push({
         kind: "attachment",
-        attachment: attachment[1] === "!" ? "image" : "recording"
+        attachment: attachment[1] === "!" ? "image" : "recording",
+        attachmentId: attachment[2]
       });
       continue;
     }
@@ -166,9 +173,12 @@ export function MarkdownPreview({ markdown }: Readonly<{ markdown: string }>) {
         if (block.kind === "rule") return <hr key={key} />;
         if (block.kind === "attachment") {
           return (
-            <p key={key} className="markdown-attachment">
-              {block.attachment === "image" ? "Photo" : "Recording"}
-            </p>
+            <div key={key} className="markdown-attachment">
+              <CaptureAttachment
+                attachmentId={block.attachmentId}
+                kind={block.attachment === "image" ? "image" : "audio"}
+              />
+            </div>
           );
         }
         if (block.kind === "quote") return <blockquote key={key}>{inline(block.text)}</blockquote>;
