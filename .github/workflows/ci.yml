@@ -329,7 +329,7 @@ jobs:
         run: pnpm test:http:e2e
 
   native-ios:
-    name: iOS app and widget (unsigned simulator)
+    name: iOS app and widget (unsigned build)
     runs-on: macos-15
     timeout-minutes: 40
     steps:
@@ -392,10 +392,26 @@ jobs:
             exit 1
           fi
 
-      # `ios:test` compiles the app and the test bundle for the simulator it runs on, so building
-      # the same sources again for the generic destination first bought a second compile and no
-      # coverage. The named simulator is pinned inside ios-xcode.sh.
-      - name: Build and run iOS unit tests in a simulator
+      # This lane compiles against a generic destination, which boots no simulator, and does not
+      # run the XCTest bundle. GitHub-hosted macOS runners hang on simulator boot often enough to
+      # matter -- actions/runner-images#12725 (macos-15 only, hang correlates with which image
+      # provisioner the job lands on), #13143 and #13264 -- and this repository hit it: the same
+      # content took 223s on a pull-request runner and was still stuck after 26 minutes on the
+      # push runner minutes later, twice, both cancelled by hand.
+      #
+      # Nothing is deleted. The 316 XCTest cases and their target are untouched in
+      # apps/ios/UnfiledTests, and `pnpm ios:test` still runs them on a simulator locally -- with
+      # an explicit boot, a wall-clock deadline and a heartbeat, all kept working for that use.
+      #
+      # To run them here again, set the repository variable RUN_IOS_SIMULATOR_TESTS to "true"
+      # (Settings, Secrets and variables, Actions, Variables). That is the whole switch: no code
+      # change, and the step below is kept in place so it cannot rot into something that no longer
+      # runs. Compiling for the simulator SDK still catches every compile error the tests would.
+      - name: Build the iOS app for the simulator SDK
+        run: pnpm ios:build
+
+      - name: Run iOS unit tests in a simulator
+        if: ${{ vars.RUN_IOS_SIMULATOR_TESTS == 'true' }}
         run: pnpm ios:test
 
   # Packaging evidence for the commit a release can ship: the Release configuration archives,

@@ -232,29 +232,30 @@ test_destination() {
   printf 'platform=iOS Simulator,id=%s\n' "${simulator_identifier}"
 }
 
-# How long the simulator gets to finish booting before the lane gives up on it.
-readonly SIMULATOR_BOOT_TIMEOUT_SECONDS="${UNFILED_IOS_BOOT_TIMEOUT_SECONDS:-240}"
+
 # How long the test run gets. A hung CoreSimulator does not fail xcodebuild, it just stops
 # answering, so without this the lane sits in silence until the job's own 40-minute timeout kills
 # it with no evidence of where it stopped.
 readonly TEST_TIMEOUT_SECONDS="${UNFILED_IOS_TEST_TIMEOUT_SECONDS:-1500}"
 
-# Boots the destination device and waits for the boot to finish, so a wedged CoreSimulator is a
-# fast, named failure instead of an xcodebuild that waits forever. xcodebuild boots the device
-# itself otherwise, and gives no sign it is doing so: the last line of a hung run is the app
-# target's own "Touch ... Unfiled.app", which reads as a build that stopped rather than a
-# simulator that never came up.
-boot_simulator() {
+# Asks the destination device to start, and does not wait for it. xcodebuild boots the device
+# itself otherwise and says nothing while it does, which is why a wedged CoreSimulator used to
+# look like a build that stopped after "Touch ... Unfiled.app".
+#
+# This deliberately does not block. `simctl bootstatus -b` waits for the whole system to settle,
+# not just for the device to reach Booted, and on a CI runner that is slow out of all proportion:
+# the device reported Booted after 30 seconds and bootstatus was still waiting past 180. Waiting
+# for it put that time in front of every run, in series with the compile that follows. Starting
+# the boot here lets the device come up while xcodebuild compiles, and the heartbeat below reports
+# what the device is actually doing, so a boot that never finishes is visible and bounded without
+# being paid for on every green run.
+start_simulator() {
   local udid="$1"
 
-  printf 'Booting the destination simulator (%s), up to %ss.\n' "${udid}" \
-    "${SIMULATOR_BOOT_TIMEOUT_SECONDS}" >&2
-  if ! run_with_deadline "${SIMULATOR_BOOT_TIMEOUT_SECONDS}" \
-    xcrun simctl bootstatus "${udid}" -b; then
-    printf 'The simulator never finished booting. CoreSimulator state:\n' >&2
-    xcrun simctl list devices >&2 || true
-    return 1
-  fi
+  printf 'Starting the destination simulator (%s); it boots while the build compiles.\n' \
+    "${udid}" >&2
+  # A device that is already booted is not an error here, it is the desired state.
+  xcrun simctl boot "${udid}" 2>/dev/null || true
 }
 
 # Runs a command with a deadline. macOS ships no coreutils `timeout`, so this is the portable
@@ -289,9 +290,16 @@ run_with_deadline() {
 
   "$@" &
   local child=$!
+  # SECONDS is the shell's own wall-clock counter since it was last assigned. Accumulating the
+  # loop's own sleeps instead undercounted: each pass also spends real time reading the device
+  # state, so a "240s" bound measured 217s of sleeps in 180 counted seconds on the runner -- a
+  # deadline that drifts is a deadline that does not mean what it says.
+  SECONDS=0
   local waited=0
+  local next_heartbeat="${HEARTBEAT_SECONDS}"
 
   while kill -0 "${child}" 2>/dev/null; do
+    waited="${SECONDS}"
     if ((waited >= deadline)); then
       printf 'Timed out after %ss: %s\n' "${deadline}" "$*" >&2
       printf 'Booted devices at the timeout:\n' >&2
@@ -305,13 +313,13 @@ run_with_deadline() {
       return 124
     fi
     sleep 5
-    waited=$((waited + 5))
-    if ((waited % HEARTBEAT_SECONDS == 0)); then
+    if ((SECONDS >= next_heartbeat)); then
+      next_heartbeat=$((SECONDS + HEARTBEAT_SECONDS))
       if [[ -n "${HEARTBEAT_UDID}" ]]; then
         printf '  ... still running: %ss elapsed of %ss, simulator is %s\n' \
-          "${waited}" "${deadline}" "$(simulator_state)" >&2
+          "${SECONDS}" "${deadline}" "$(simulator_state)" >&2
       else
-        printf '  ... still running: %ss elapsed of %ss\n' "${waited}" "${deadline}" >&2
+        printf '  ... still running: %ss elapsed of %ss\n' "${SECONDS}" "${deadline}" >&2
       fi
     fi
   done
@@ -331,7 +339,7 @@ test_in_simulator() {
   local udid="${destination#platform=iOS Simulator,id=}"
   if [[ "${udid}" != "${destination}" ]]; then
     HEARTBEAT_UDID="${udid}"
-    boot_simulator "${udid}"
+    start_simulator "${udid}"
   fi
 
   # xcodebuild refuses to write a result bundle over one that already exists, which would turn a
