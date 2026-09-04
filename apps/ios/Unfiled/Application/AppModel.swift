@@ -200,6 +200,25 @@ final class LiveRefreshLoop {
     }
 }
 
+/// The step of the app's boot that is running. A boot failure names this rather than assuming
+/// the local database, so the owner is told what to do about the failure they actually had.
+private enum BootStage {
+    case configuration
+    case session
+    case storage
+
+    var failureMessage: String {
+        switch self {
+        case .configuration:
+            "Unfiled could not read its own configuration. Reinstall this development build."
+        case .session:
+            "Unfiled could not open its saved sign-in. Restart the app; if the problem continues, reinstall this development build."
+        case .storage:
+            "Unfiled could not open its protected local storage. Restart the app; if the problem continues, reinstall this development build."
+        }
+    }
+}
+
 private enum NoteContextLoadResult<Value: Sendable>: Sendable {
     case value(Value)
     case failure(NoteContextFailure)
@@ -427,9 +446,15 @@ final class AppModel: ObservableObject {
         SecureAccountExportWriter.removeStaleArtifacts()
         explicitSignOutBarrier = ExplicitSignOutBarrier(defaults: userDefaults)
         pendingVerificationStore = PendingVerificationStore(defaults: userDefaults)
+        // Which step of the boot is running, so a failure can say what actually failed. One
+        // catch covering all of them told every owner their local storage was broken and to
+        // reinstall, even when the build's own configuration was the thing that would not load
+        // -- advice that cannot help, for a cause it names wrongly.
+        var stage = BootStage.configuration
         do {
             let configuration = try AppConfiguration.load(bundle: bundle)
             let unauthenticatedAPI = try APIClient(baseURL: configuration.apiBaseURL)
+            stage = .session
             let vault = KeychainSessionVault(
                 service: "\(configuration.bundleIdentifier).auth",
                 account: "session-v1"
@@ -447,6 +472,7 @@ final class AppModel: ObservableObject {
                 baseURL: configuration.apiBaseURL,
                 tokenProvider: auth
             )
+            stage = .storage
             let database = try LocalDatabase.open(
                 bundleIdentifier: configuration.bundleIdentifier
             )
@@ -468,9 +494,7 @@ final class AppModel: ObservableObject {
                 accountDeletionRecoveryStore: accountDeletionRecoveryStore
             )
         } catch {
-            phase = .failed(
-                "Unfiled could not open its protected local storage. Restart the app; if the problem continues, reinstall this development build."
-            )
+            phase = .failed(stage.failureMessage)
         }
     }
 
