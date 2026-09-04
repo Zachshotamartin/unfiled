@@ -340,61 +340,7 @@ select is(
 select matches(
   (select value #>> '{attachments,0,source,contentMac,mac}'
    from organizer_attachment_values where key = 'attachments'),
-  '^[0-9a-f]{64}select is(
-  (select value #>> '{attachments,0,source,keyRecord,keyClass}'
-   from organizer_attachment_values where key = 'attachments'),
-  'ai_assisted',
-  'the object key the organizer can unwrap comes with it'
-);
-select is(
-  (select value #>> '{attachments,0,source,contentMacKeyRecord,purpose}'
-   from organizer_attachment_values where key = 'attachments'),
-  'content_mac',
-  'so does the key that authenticates it'
-);
-select is(
-  (select value #>> '{attachments,0,source,contentMac,mac}'
-   from organizer_attachment_values where key = 'attachments'),
-  encode(extensions.digest('att_99000000000000000000000001', 'sha256'), 'hex'),
-  'the attachment carries its own MAC'
-);
-select is(
-  (select value #>> '{attachments,0,source,encryptedByteLength}'
-   from organizer_attachment_values where key = 'attachments'),
-  '48',
-  'the ciphertext length is projected for the reader'
-);
-select throws_ok(
-  $$select private.list_encrypted_organizer_attachments_impl(
-    'job_99000000000000000000000001', '00000000-0000-4000-8000-000000000000'
-  )$$,
-  '42501', 'invalid_or_expired_lease',
-  'a wrong lease token reads nothing'
-);
-
--- SET ROLE is not the organizer login
-
--- SET ROLE is not a production login: session_user stays postgres, so the public wrapper
--- refuses even though the grant exists. pgTAP's own assertions do not run under the role, so
--- the refusal is captured and checked after the role is dropped.
-grant unfiled_organizer_worker to postgres;
-set local role unfiled_organizer_worker;
-insert into organizer_attachment_values(key, value)
-values ('set-role-error', pg_temp.caught_error(
-  $$select public.list_encrypted_organizer_attachments(
-    'job_99000000000000000000000001', '00000000-0000-4000-8000-000000000000'
-  )$$
-));
-reset role;
-select is(
-  (select value ->> 'message' from organizer_attachment_values where key = 'set-role-error'),
-  'forbidden',
-  'SET ROLE cannot impersonate the organizer login for attachments'
-);
-
-select * from finish();
-rollback;
-,
+  '^[0-9a-f]{64}$',
   'the attachment source carries its content MAC'
 );
 select is(
