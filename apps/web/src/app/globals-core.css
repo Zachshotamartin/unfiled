@@ -259,13 +259,13 @@
     color: var(--color-text-secondary);
     font-size: 0.7rem;
     font-weight: 600;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.08em;
     line-height: 1.3;
     text-transform: uppercase;
   }
 
   .section-label {
-    font-size: 0.75rem;
+    font-size: 0.7rem;
   }
 
   .field-label {
@@ -292,6 +292,13 @@
     align-items: flex-end;
     justify-content: space-between;
     gap: 1.5rem;
+  }
+
+  /* The count under a screen title, as the phone's ScreenHeader subtitle. */
+  .page-subtitle {
+    margin-top: 0.5rem;
+    color: var(--color-text-secondary);
+    font-size: 0.875rem;
   }
 
   .page-heading h1 {
@@ -545,9 +552,9 @@
 
   .generated-block-label {
     color: var(--color-accent);
-    font-size: 0.68rem;
-    font-weight: 650;
-    letter-spacing: 0.04em;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
   }
 

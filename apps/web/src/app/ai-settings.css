@@ -38,8 +38,9 @@
     border-radius: var(--radius-button);
     padding: 0.4rem 0.55rem;
     color: var(--color-text-secondary);
-    font-size: 0.66rem;
-    letter-spacing: 0.06em;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
   }
 
@@ -185,10 +186,10 @@
     border-radius: var(--radius-button);
     padding: 0.12rem 0.4rem;
     color: var(--color-warning);
-    font-size: 0.6rem;
+    font-size: 0.7rem;
     font-style: normal;
     font-weight: 600;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
   }
 
@@ -396,8 +397,9 @@
 
   .provider-key-status dt {
     color: var(--color-text-secondary);
-    font-size: 0.64rem;
-    letter-spacing: 0.06em;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
   }
 

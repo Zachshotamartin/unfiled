@@ -191,9 +191,9 @@
   }
 
   .capture-section-heading h2 {
-    font-size: 0.78rem;
-    font-weight: 650;
-    letter-spacing: 0.09em;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
   }
 
@@ -277,6 +277,40 @@
     width: 100%;
   }
 
+  .capture-detail-actions {
+    display: grid;
+    gap: var(--space-control-gap);
+    margin-top: 1.25rem;
+    justify-items: start;
+  }
+
+  .capture-detail-actions .review-directions {
+    width: 100%;
+    margin-top: 0;
+  }
+
+  .receipt-destination h2 {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-family: var(--font-paper-serif);
+    font-size: 1.35rem;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+  }
+
+  .receipt-reasons {
+    display: grid;
+    gap: 0.35rem;
+    margin-top: 1.25rem;
+  }
+
+  .receipt-reasons p {
+    color: var(--color-text-secondary);
+    font-size: 0.875rem;
+    line-height: 1.5;
+  }
+
   .capture-detail-back {
     display: inline-flex;
     min-height: 2.75rem;
@@ -344,8 +378,8 @@
     display: block;
     margin-bottom: 0.3rem;
     color: var(--color-accent);
-    font-size: 0.65rem;
-    font-weight: 650;
+    font-size: 0.7rem;
+    font-weight: 600;
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }

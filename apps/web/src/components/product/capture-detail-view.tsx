@@ -8,6 +8,7 @@ import type {
   EntityId
 } from "@unfiled/contracts";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { browserApi, productErrorMessage } from "@/lib/product/browser-api";
@@ -20,6 +21,9 @@ import { CAPTURE_POLL_INTERVAL_MS } from "@/lib/capture/capture-queue";
 import { captureStatusLabel } from "./capture-activity";
 import { CaptureAttachments } from "./capture-attachment";
 import { ReceiptCorrection, type CorrectionOutcome } from "./receipt-correction";
+import { reviewReasonSentences } from "./review-reasons";
+import { organizeCaptureAgain } from "@/lib/capture/organize-again";
+import { useLiveResource } from "@/lib/product/use-live-resource";
 import { UnfiledGlyph } from "./unfiled-glyph";
 
 export function ReceiptAction({
@@ -87,6 +91,40 @@ export function CaptureDetailView({ captureId }: Readonly<{ captureId: EntityId<
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [directions, setDirections] = useState("");
+  const [organizingAgain, setOrganizingAgain] = useState(false);
+  const router = useRouter();
+  // "Open Review" leads somewhere only while the item is open; otherwise the receipt says so.
+  const openReviews = useLiveResource<{ items: readonly { id: string }[] }>(
+    "/api/v1/review-items?state=open&limit=30"
+  );
+
+  async function organizeAgain(): Promise<void> {
+    const current = capture;
+    if (current === null || working) return;
+    setWorking(true);
+    setOrganizingAgain(true);
+    setError(null);
+    try {
+      await organizeCaptureAgain(
+        browserApi,
+        {
+          id: current.id,
+          rawContent: current.rawContent,
+          expansionDisabled: current.expansionDisabled
+        },
+        directions
+      );
+      router.push("/app");
+    } catch (reason) {
+      setError(
+        productErrorMessage(reason, "That capture could not be organized again. Try once more.")
+      );
+    } finally {
+      setOrganizingAgain(false);
+      setWorking(false);
+    }
+  }
 
   const refresh = useCallback(async (): Promise<void> => {
     const hidden = actions.some(
@@ -440,6 +478,11 @@ export function CaptureDetailView({ captureId }: Readonly<{ captureId: EntityId<
   }
 
   const receipt = capture.receipt;
+  const reasons = reviewReasonSentences(receipt?.reasonCodes ?? []);
+  const reviewOpen =
+    receipt?.reviewItemId !== null &&
+    receipt?.reviewItemId !== undefined &&
+    (openReviews.data?.items ?? []).some((item) => item.id === receipt.reviewItemId);
   const canRemoveInsertedContent = Boolean(receipt?.destination) && Boolean(receipt?.mutationId);
   const receiptUndoIntent = actions.find(
     (localAction): localAction is UndoMutationIntent =>
@@ -462,6 +505,40 @@ export function CaptureDetailView({ captureId }: Readonly<{ captureId: EntityId<
           Original capture
         </span>
         <p>{capture.rawContent}</p>
+        <div className="capture-detail-actions">
+          <Link className="button-secondary" href={`/app?edit=${capture.id}`}>
+            <UnfiledGlyph glyph="pen" size={16} weight={2.2} /> Edit text
+          </Link>
+          <form
+            className="review-directions"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void organizeAgain();
+            }}
+          >
+            <label htmlFor="capture-directions" className="sr-only">
+              Directions for organizing again
+            </label>
+            <input
+              id="capture-directions"
+              className="editor-control"
+              maxLength={500}
+              placeholder="Tell Unfiled what to do (optional)"
+              value={directions}
+              disabled={working}
+              onChange={(event) => setDirections(event.target.value)}
+            />
+            <button type="submit" className="button-secondary" disabled={working}>
+              <UnfiledGlyph glyph="send" size={16} weight={2.2} />
+              {organizingAgain ? "Organizing…" : "Organize again"}
+            </button>
+            {capture.attachments.length === 0 ? null : (
+              <p className="review-copy">
+                Its photos stay with the original; a browser tab cannot carry them over.
+              </p>
+            )}
+          </form>
+        </div>
         {/*
           The photos and recordings this capture carries. The server serves the decrypted bytes
           with their real media type, so the web is the surface that can actually show them.
@@ -493,10 +570,27 @@ export function CaptureDetailView({ captureId }: Readonly<{ captureId: EntityId<
         </section>
       ) : (
         <section className="capture-receipt" aria-labelledby="receipt-heading">
-          <span className="field-label">Receipt</span>
-          <h2 id="receipt-heading" className="mt-3">
-            {receipt.headline}
-          </h2>
+          {receipt.destination === null ? null : (
+            <div className="receipt-destination">
+              <span className="field-label">Destination</span>
+              <h2 id="receipt-heading" className="mt-3">
+                <UnfiledGlyph glyph="move" size={18} weight={1.9} /> {receipt.destination.title}
+              </h2>
+            </div>
+          )}
+          {reasons.length === 0 ? null : (
+            <div className="receipt-reasons" aria-label="Why it stopped">
+              <span className="field-label">Why it stopped</span>
+              {reasons.map((sentence) => (
+                <p key={sentence}>{sentence}</p>
+              ))}
+            </div>
+          )}
+          {receipt.destination === null ? (
+            <h2 id="receipt-heading" className="sr-only">
+              {receipt.headline}
+            </h2>
+          ) : null}
           <div className="receipt-content-list">
             {receipt.insertedContent.map((content, index) => (
               <div
@@ -524,10 +618,12 @@ export function CaptureDetailView({ captureId }: Readonly<{ captureId: EntityId<
                 undoIntent={action.type === "undo" ? (receiptUndoIntent ?? null) : null}
               />
             ))}
-            {receipt.reviewItemId === null ? null : (
+            {receipt.reviewItemId === null ? null : reviewOpen ? (
               <Link className="button-secondary" href={`/app/review/${receipt.reviewItemId}`}>
                 Open Review <UnfiledGlyph glyph="arrow" size={15} weight={2} />
               </Link>
+            ) : openReviews.data === null ? null : (
+              <p className="review-copy">This review was closed without filing.</p>
             )}
           </div>
           {correction === null ? null : (

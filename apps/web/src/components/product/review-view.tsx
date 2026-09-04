@@ -41,6 +41,7 @@ import {
   suggestedNoteTitle
 } from "./review-actions";
 import { reviewReasonSentences } from "./review-reasons";
+import { organizeCaptureAgain } from "@/lib/capture/organize-again";
 import { UnfiledGlyph } from "./unfiled-glyph";
 
 type GeneratedResolution = GeneratedBlockResolveRequest["resolution"];
@@ -270,9 +271,17 @@ function MissingGeneratedBlockBinding() {
  */
 export function ReviewView({
   focusReviewItemId,
+  onCountChange,
+  onEditText,
   onEmptyChange
 }: Readonly<{
   focusReviewItemId?: EntityId<"rvw">;
+  /** How many open decisions there are, for the Inbox heading. */
+  onCountChange?: (count: number) => void;
+  /** "Edit text": the capture's words go back to the composer, and saving replaces it. */
+  onEditText?: (
+    capture: Readonly<{ id: EntityId<"cap">; rawContent: string; attachmentCount: number }>
+  ) => void;
   onEmptyChange?: (empty: boolean) => void;
 }> = {}) {
   const resource = usePagedResource<ReviewItemDto>(
@@ -284,7 +293,7 @@ export function ReviewView({
   const listRegion = useRef<HTMLDivElement>(null);
   const [pending, setPending] = useState<Readonly<{
     reviewItemId: string;
-    resolution: ReviewResolution["type"] | "delete";
+    resolution: ReviewResolution["type"] | "delete" | "organize_again";
   }> | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -368,6 +377,32 @@ export function ReviewView({
     [pending, removeResolvedItem, resource]
   );
 
+  const organizeAgain = useCallback(
+    async (item: ReviewItemDto, capture: ReviewCapture, guidance: string): Promise<void> => {
+      if (pending !== null) return;
+      setPending({ reviewItemId: item.id, resolution: "organize_again" });
+      setError(null);
+      setMessage(null);
+      try {
+        await organizeCaptureAgain(browserApi, capture, guidance);
+        removeResolvedItem(
+          item.id,
+          guidance.trim().length === 0
+            ? "Organizing again."
+            : "Organizing again with your directions."
+        );
+        await resource.refresh();
+      } catch (reason) {
+        setError(
+          productErrorMessage(reason, "That capture could not be organized again. Try once more.")
+        );
+      } finally {
+        setPending(null);
+      }
+    },
+    [pending, removeResolvedItem, resource]
+  );
+
   const items = (resource.data?.items ?? []).filter(
     (item) => focusReviewItemId === undefined || item.id === focusReviewItemId
   );
@@ -377,7 +412,10 @@ export function ReviewView({
   // reached only once data had arrived, so the first render ran no hooks and the second ran one,
   // and React tore down the whole page rather than the list: every view of the app showed "This
   // page did not load" while every request behind it had answered 200.
-  useEffect(() => onEmptyChange?.(items.length === 0), [items.length, onEmptyChange]);
+  useEffect(() => {
+    onEmptyChange?.(items.length === 0);
+    if (resource.data !== null) onCountChange?.(items.length);
+  }, [items.length, onCountChange, onEmptyChange, resource.data]);
 
   if (resource.loading && resource.data === null) return <CardSkeleton cards={2} />;
   if (resource.error !== null && resource.data === null) {
@@ -417,6 +455,10 @@ export function ReviewView({
             item={item}
             notes={notes.data?.items ?? []}
             onDelete={(target) => void deleteCapture(target)}
+            onEditText={onEditText}
+            onOrganizeAgain={(target, capture, guidance) =>
+              void organizeAgain(target, capture, guidance)
+            }
             onRemoved={removeResolvedItem}
             onResolve={(target, resolution, nextMessage) =>
               void resolveReview(target, resolution, nextMessage)
@@ -446,11 +488,21 @@ export function ReviewView({
 }
 
 /** The phone's review card (ReviewView.swift): the capture, why it stopped, where it could go. */
+/** What organizing again and editing need from the capture: its words and its settings. */
+type ReviewCapture = Readonly<{
+  id: EntityId<"cap">;
+  rawContent: string;
+  expansionDisabled: boolean;
+  attachmentCount: number;
+}>;
+
 type ReviewCardProps = Readonly<{
   index: number;
   item: ReviewItemDto;
   notes: readonly NoteSummary[];
   onDelete: (item: ReviewItemDto) => void;
+  onEditText?: ((capture: ReviewCapture) => void) | undefined;
+  onOrganizeAgain: (item: ReviewItemDto, capture: ReviewCapture, guidance: string) => void;
   onRemoved: (reviewItemId: string, nextMessage: string) => void;
   onResolve: (item: ReviewItemDto, resolution: ReviewResolution, message?: string) => void;
   pending: Readonly<{ reviewItemId: string; resolution: string }> | null;
@@ -474,7 +526,16 @@ function CaptureReviewCard({
   return (
     <ReviewCardBody
       {...props}
-      capture={capture.data?.capture ?? null}
+      capture={
+        capture.data === null
+          ? null
+          : {
+              id: capture.data.capture.id,
+              rawContent: capture.data.capture.rawContent,
+              expansionDisabled: capture.data.capture.expansionDisabled,
+              attachmentCount: capture.data.capture.attachments.length
+            }
+      }
       receipt={receipt.data?.receipt ?? null}
     />
   );
@@ -486,6 +547,8 @@ function ReviewCardBody({
   item,
   notes,
   onDelete,
+  onEditText,
+  onOrganizeAgain,
   onRemoved,
   onResolve,
   pending,
@@ -493,9 +556,10 @@ function ReviewCardBody({
   total
 }: ReviewCardProps &
   Readonly<{
-    capture: Readonly<{ rawContent: string }> | null;
+    capture: ReviewCapture | null;
     receipt: CaptureReceipt | null;
   }>) {
+  const [directions, setDirections] = useState("");
   const allowed = reviewAllowedActions(item, receipt);
   const bound = receiptBoundTo(item, receipt);
   const reasons = reviewReasonSentences(bound?.reasonCodes ?? []);
@@ -620,6 +684,18 @@ function ReviewCardBody({
               {itemPending === "keep_both" ? "Keeping…" : "Keep both notes"}
             </button>
           ) : null}
+          {capture !== null ? (
+            <>
+              <button
+                type="button"
+                className="button-secondary"
+                disabled={busy || onEditText === undefined}
+                onClick={() => onEditText?.(capture)}
+              >
+                <UnfiledGlyph glyph="pen" size={16} weight={2.2} /> Edit text
+              </button>
+            </>
+          ) : null}
           {item.captureId === null ? (
             allowed.includes("dismiss") ? (
               <button
@@ -645,6 +721,37 @@ function ReviewCardBody({
           )}
         </div>
       )}
+      {capture !== null ? (
+        <form
+          className="review-directions"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onOrganizeAgain(item, capture, directions);
+          }}
+        >
+          <label htmlFor={`review-directions-${item.id}`} className="sr-only">
+            Directions for organizing again
+          </label>
+          <input
+            id={`review-directions-${item.id}`}
+            className="editor-control"
+            maxLength={500}
+            placeholder="Tell Unfiled what to do (optional)"
+            value={directions}
+            disabled={busy}
+            onChange={(event) => setDirections(event.target.value)}
+          />
+          <button type="submit" className="button-secondary" disabled={busy}>
+            <UnfiledGlyph glyph="send" size={16} weight={2.2} />
+            {itemPending === "organize_again" ? "Organizing…" : "Organize again"}
+          </button>
+          {capture.attachmentCount === 0 ? null : (
+            <p className="review-copy">
+              Its photos stay with the original; a browser tab cannot carry them over.
+            </p>
+          )}
+        </form>
+      ) : null}
       {duplicate ? (
         <p className="review-safety-copy">
           Keeping both changes neither note. Not now also leaves both notes untouched.
