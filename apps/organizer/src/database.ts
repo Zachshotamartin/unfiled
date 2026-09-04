@@ -391,7 +391,14 @@ function projection(
     encryptedByteLength,
     serializedEnvelopeBytes: new TextEncoder().encode(serializedEnvelope).byteLength
   };
-  if (expected.kind !== "capture") return Object.freeze(base);
+  // A capture and an attachment both carry a content MAC, and the exact-key check above already
+  // demands one of each. This returned early for everything but a capture, so an attachment
+  // reached the cipher with no MAC and no MAC key at all: openCaptureAttachments then threw from
+  // its catch-all, the drain retried five times, and every photo capture in production
+  // dead-lettered as provider_unavailable. Text captures never noticed; they take the other branch.
+  if (expected.kind !== "capture" && expected.kind !== "capture_attachment") {
+    return Object.freeze(base);
+  }
 
   const contentMac = exact(row.contentMac, [
     "mac",

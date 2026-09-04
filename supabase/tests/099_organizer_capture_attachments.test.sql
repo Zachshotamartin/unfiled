@@ -333,6 +333,76 @@ select is(
   'capture_attachment',
   'the sealed envelope is the attachment itself'
 );
+-- The organizer verifies each attachment against its content MAC before it reads a byte. The
+-- source used to be compared with its MAC stripped, so the SQL could have dropped it and this
+-- file would still have passed; the organizer then had nothing to verify with and every photo
+-- capture failed. Both halves of that seam are now asserted here and in the organizer.
+select matches(
+  (select value #>> '{attachments,0,source,contentMac,mac}'
+   from organizer_attachment_values where key = 'attachments'),
+  '^[0-9a-f]{64}select is(
+  (select value #>> '{attachments,0,source,keyRecord,keyClass}'
+   from organizer_attachment_values where key = 'attachments'),
+  'ai_assisted',
+  'the object key the organizer can unwrap comes with it'
+);
+select is(
+  (select value #>> '{attachments,0,source,contentMacKeyRecord,purpose}'
+   from organizer_attachment_values where key = 'attachments'),
+  'content_mac',
+  'so does the key that authenticates it'
+);
+select is(
+  (select value #>> '{attachments,0,source,contentMac,mac}'
+   from organizer_attachment_values where key = 'attachments'),
+  encode(extensions.digest('att_99000000000000000000000001', 'sha256'), 'hex'),
+  'the attachment carries its own MAC'
+);
+select is(
+  (select value #>> '{attachments,0,source,encryptedByteLength}'
+   from organizer_attachment_values where key = 'attachments'),
+  '48',
+  'the ciphertext length is projected for the reader'
+);
+select throws_ok(
+  $$select private.list_encrypted_organizer_attachments_impl(
+    'job_99000000000000000000000001', '00000000-0000-4000-8000-000000000000'
+  )$$,
+  '42501', 'invalid_or_expired_lease',
+  'a wrong lease token reads nothing'
+);
+
+-- SET ROLE is not the organizer login
+
+-- SET ROLE is not a production login: session_user stays postgres, so the public wrapper
+-- refuses even though the grant exists. pgTAP's own assertions do not run under the role, so
+-- the refusal is captured and checked after the role is dropped.
+grant unfiled_organizer_worker to postgres;
+set local role unfiled_organizer_worker;
+insert into organizer_attachment_values(key, value)
+values ('set-role-error', pg_temp.caught_error(
+  $$select public.list_encrypted_organizer_attachments(
+    'job_99000000000000000000000001', '00000000-0000-4000-8000-000000000000'
+  )$$
+));
+reset role;
+select is(
+  (select value ->> 'message' from organizer_attachment_values where key = 'set-role-error'),
+  'forbidden',
+  'SET ROLE cannot impersonate the organizer login for attachments'
+);
+
+select * from finish();
+rollback;
+,
+  'the attachment source carries its content MAC'
+);
+select is(
+  (select jsonb_typeof(value #> '{attachments,0,source,contentMacKeyRecord}')
+   from organizer_attachment_values where key = 'attachments'),
+  'object',
+  'the attachment source carries the key record that verifies its MAC'
+);
 select is(
   (select value #>> '{attachments,0,source,keyRecord,keyClass}'
    from organizer_attachment_values where key = 'attachments'),
