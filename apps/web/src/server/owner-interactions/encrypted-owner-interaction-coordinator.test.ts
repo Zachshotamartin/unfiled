@@ -1188,6 +1188,120 @@ describe("encrypted owner-interaction coordinator", () => {
     expect(diagnostics).not.toContain(privateCanary);
   });
 
+  /** An adapter answering a correction that already committed, so only the observation remains. */
+  function committedCorrectionAdapter(crypto: CryptoHarness) {
+    const encryptedResponse = stored("idempotency_response", `idempotency:${IDEMPOTENCY}`, 1);
+    const preparation: PrepareDecisionCorrectionResult = Object.freeze({
+      ...correctionPreparation(false),
+      completed: true,
+      replayed: true,
+      selectedOutcome: "applied",
+      source: null,
+      members: Object.freeze([]),
+      commonReservations: Object.freeze([]),
+      branches: Object.freeze({
+        applied: Object.freeze({
+          available: true,
+          feedbackEventId: FEEDBACK,
+          batchId: BATCH_ID,
+          reservations: Object.freeze([])
+        }),
+        needsReview: Object.freeze({
+          available: false,
+          reviewItemId: null,
+          reservations: Object.freeze([])
+        })
+      }),
+      encryptedResponse,
+      encryptedResponseVerificationMac: mac()
+    });
+    crypto.setResponse({
+      outcome: "applied",
+      decisionId: DECISION,
+      source: { noteId: NOTE_A, currentRevision: 3, mutationId: MUTATION_UNDO },
+      destination: {
+        type: "new_note",
+        noteId: NOTE_B,
+        currentRevision: 1,
+        mutationId: DESTINATION_MUTATION
+      },
+      replayed: false
+    });
+    return adapterStub({
+      prepareDecisionCorrection: vi.fn(() => Promise.resolve(preparation)),
+      commitDecisionCorrection: vi.fn(() =>
+        Promise.resolve(
+          commitResult("encrypted_decision_correction", "applied", encryptedResponse, {
+            decisionId: DECISION,
+            feedbackEventId: FEEDBACK,
+            batchId: BATCH_ID,
+            members: Object.freeze([
+              Object.freeze({
+                role: "source_removal" as const,
+                noteId: NOTE_A,
+                currentRevision: 3,
+                revisionId: REV_UNDO,
+                mutationId: MUTATION_UNDO
+              }),
+              Object.freeze({
+                role: "destination_write" as const,
+                noteId: NOTE_B,
+                currentRevision: 1,
+                revisionId: DESTINATION_REVISION,
+                mutationId: DESTINATION_MUTATION
+              })
+            ]),
+            replayed: true
+          })
+        )
+      )
+    });
+  }
+
+  it("stops waiting for the observation at the deadline it was handed", async () => {
+    const crypto = cryptoHarness();
+    const adapter = committedCorrectionAdapter(crypto);
+    const neverSettles = (): Promise<void> => new Promise(() => undefined);
+    const startedAt = Date.now();
+
+    await expectServiceError(
+      coordinator(adapter, crypto, neverSettles, Date.now() + 25).correctDecision(
+        DECISION,
+        correctionRequest()
+      ),
+      ServiceRpcErrorCode.PROVIDER_UNAVAILABLE
+    );
+
+    // The deadline, not the default wait, bounded the answer.
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+  });
+
+  it("waits fifteen seconds for the observation before answering unavailable", async () => {
+    vi.useFakeTimers();
+    try {
+      const crypto = cryptoHarness();
+      const adapter = committedCorrectionAdapter(crypto);
+      const neverSettles = (): Promise<void> => new Promise(() => undefined);
+      let settled = false;
+      const pending = expectServiceError(
+        coordinator(adapter, crypto, neverSettles).correctDecision(DECISION, correctionRequest()),
+        ServiceRpcErrorCode.PROVIDER_UNAVAILABLE
+      ).finally(() => {
+        settled = true;
+      });
+
+      // Five seconds -- the old bound -- sat inside the observation's ordinary range and turned
+      // durable corrections into 503s; the wait now outlasts a slow observation.
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await pending;
+      expect(settled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("applies every authenticated batch inverse and consumes only the exact selected reservations", async () => {
     const crypto = cryptoHarness();
     const before = snapshot("Before");

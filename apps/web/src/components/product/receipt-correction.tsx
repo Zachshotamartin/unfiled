@@ -9,8 +9,19 @@ import type {
 } from "@unfiled/contracts";
 import { type SyntheticEvent, useEffect, useState } from "react";
 
-import { browserApi, productErrorMessage } from "@/lib/product/browser-api";
-import { createIdempotencyKey } from "@/lib/product/client";
+import {
+  browserApi,
+  isAmbiguousProductMutationFailure,
+  productErrorMessage
+} from "@/lib/product/browser-api";
+import {
+  attemptToReplay,
+  correctionAttempt,
+  retainAfterFailure,
+  submitCorrection,
+  type CorrectionAttempt,
+  type RetainedCorrection
+} from "@/lib/product/correct-decision";
 
 const NOTE_TYPES: readonly NoteType[] = ["generic", "list", "log", "principle", "project"];
 
@@ -45,6 +56,8 @@ export function ReceiptCorrection({
   const [spaceId, setSpaceId] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A move whose answer was lost is asked about again with the same key, not moved twice.
+  const [retained, setRetained] = useState<RetainedCorrection | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -81,23 +94,43 @@ export function ReceiptCorrection({
     };
   }
 
+  // The move the form is asking for, so a retry after a lost answer replays the same request
+  // only while the owner still wants that move.
+  const intent = JSON.stringify({
+    mode,
+    destinationNoteId,
+    title: title.trim(),
+    noteType,
+    spaceId
+  });
+
   async function submit(event: SyntheticEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     setPending(true);
     setError(null);
+    let attempt: CorrectionAttempt | null = attemptToReplay(retained, intent);
     try {
-      const source = await browserApi.getNote(sourceNoteId);
-      const result = await browserApi.correctDecision(decisionId, {
-        idempotencyKey: createIdempotencyKey(),
-        source: { noteId: source.note.id, expectedRevision: source.note.currentRevision },
-        destination: await buildDestination()
-      });
+      if (attempt === null) {
+        const source = await browserApi.getNote(sourceNoteId);
+        attempt = correctionAttempt(
+          decisionId,
+          { noteId: source.note.id, expectedRevision: source.note.currentRevision },
+          await buildDestination()
+        );
+      }
+      const result = await submitCorrection(browserApi, attempt);
+      setRetained(null);
       onCorrected({
         kind: result.outcome,
         message: correctionOutcomeMessage(result.outcome)
       });
     } catch (reason) {
-      setError(productErrorMessage(reason, "This filing could not be moved."));
+      setRetained(attempt === null ? null : retainAfterFailure(attempt, intent, reason));
+      setError(
+        isAmbiguousProductMutationFailure(reason)
+          ? "Unfiled could not confirm the move. Try again: the same request is sent, not a second move."
+          : productErrorMessage(reason, "This filing could not be moved.")
+      );
     } finally {
       setPending(false);
     }

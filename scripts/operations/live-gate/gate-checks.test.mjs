@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   captureBindsAttachments,
   captureWasDeleted,
+  correctionOutcomeIsAmbiguous,
   drainsSucceeded,
   filedNoteId,
   listCarriesId,
@@ -62,6 +63,40 @@ const noteServing = (bodyMarkdown) =>
 const noteWith = (note) => Object.freeze({ status: 200, json: { note: { id: NOTE_ID, ...note } } });
 
 const listing = (items) => Object.freeze({ status: 200, json: { items } });
+
+describe("correctionOutcomeIsAmbiguous", () => {
+  it("holds when the observation wait ran out behind a durable move", () => {
+    expect(
+      correctionOutcomeIsAmbiguous({ status: 503, json: { code: "provider_unavailable" } })
+    ).toBe(true);
+  });
+
+  it("holds when the platform answered without the product", () => {
+    expect(correctionOutcomeIsAmbiguous({ status: 502, json: null })).toBe(true);
+    expect(correctionOutcomeIsAmbiguous({ status: 500, json: { code: "internal_error" } })).toBe(
+      true
+    );
+  });
+
+  it("fails for an applied correction, which needs no replay", () => {
+    expect(correctionOutcomeIsAmbiguous({ status: 200, json: { outcome: "applied" } })).toBe(false);
+  });
+
+  it("fails for a definitive refusal, which a replay would only repeat", () => {
+    expect(correctionOutcomeIsAmbiguous({ status: 409, json: { code: "stale_revision" } })).toBe(
+      false
+    );
+    expect(correctionOutcomeIsAmbiguous({ status: 403, json: { code: "forbidden" } })).toBe(false);
+    expect(correctionOutcomeIsAmbiguous({ status: 400, json: { code: "validation_failed" } })).toBe(
+      false
+    );
+  });
+
+  it("fails when there is no answer to read", () => {
+    expect(correctionOutcomeIsAmbiguous(null)).toBe(false);
+    expect(correctionOutcomeIsAmbiguous(undefined)).toBe(false);
+  });
+});
 
 describe("filedNoteId", () => {
   it("names the note a filed capture reached", () => {

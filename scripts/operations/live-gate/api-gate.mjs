@@ -35,6 +35,7 @@ import {
   captureBindsAttachments,
   drainsSucceeded,
   filedNoteId,
+  correctionOutcomeIsAmbiguous,
   logFieldReads,
   noteDroppedLinkTo,
   noteIsBacklinkedFrom,
@@ -98,6 +99,9 @@ function ulid() {
 }
 
 const MAX_RATE_LIMIT_WAIT_MS = 6 * 60_000;
+// The API keeps observing a correction after it answers 503 for the wait running out; a replay
+// this long after finds the observation landed and reads the stored answer.
+const CORRECTION_REPLAY_WAIT_MS = 2_000;
 async function api(method, path, options = {}) {
   // The auth endpoints rate-limit one address; a gate run right after another waits for the
   // window the server names instead of reporting a false failure.
@@ -1072,7 +1076,12 @@ if (liveRulePrefix && secondNoteId) {
   });
   if (move && targetId && receiptB?.destination?.noteId) {
     const sourceNote = await api("GET", `/notes/${receiptB.destination.noteId}`, { token });
-    const corrected = await write("POST", `/decisions/${move.decisionId}/correct`, token, {
+    // The API commits the move, then waits a bounded time for the rule observation before it
+    // answers; when that wait runs out it says 503 provider_unavailable with the move already
+    // durable, and the contract (ADR-0011) is the identical request again. The gate does what
+    // the phone does: same key, same body, one replay after a pause for the observation to land.
+    // Reading that 503 as a broken deployment rolled back a healthy release on 2026-09-04.
+    const correction = {
       idempotencyKey: key(),
       source: {
         noteId: receiptB.destination.noteId,
@@ -1083,11 +1092,19 @@ if (liveRulePrefix && secondNoteId) {
         noteId: targetId,
         expectedRevision: target.json?.note?.currentRevision ?? 1
       }
-    });
+    };
+    let corrected = await write("POST", `/decisions/${move.decisionId}/correct`, token, correction);
+    let replayed = false;
+    if (correctionOutcomeIsAmbiguous(corrected)) {
+      await sleep(CORRECTION_REPLAY_WAIT_MS);
+      corrected = await write("POST", `/decisions/${move.decisionId}/correct`, token, correction);
+      replayed = true;
+    }
     record("decision.correct_move", corrected.status === 200, {
       status: corrected.status,
       code: code(corrected),
-      applied: corrected.json?.outcome ?? corrected.json?.applied ?? null
+      applied: corrected.json?.outcome ?? corrected.json?.applied ?? null,
+      replayed
     });
     receiptB = (await receiptOf(b.captureId)) ?? receiptB;
     record("decision.receipt_shows_new_destination", receiptB?.destination?.noteId === targetId, {

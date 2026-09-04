@@ -115,7 +115,12 @@ import {
 const OWNER_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const ENCRYPTED_ORGANIZER_REASON_SENTINEL = "encrypted_organizer";
-const ROUTING_RULE_OBSERVATION_MAX_WAIT_MS = 5_000;
+// The observation is a chain of sequential service RPCs -- claim, epoch, proposal lookup,
+// prepare, seal, commit -- around key opens. In production it settles in two to five seconds
+// and, on a slow day, longer; a five-second bound sat inside that range and turned durable
+// corrections into retryable 503s. Fifteen seconds still leaves the 60-second route budget
+// (MAX_OPERATION_SCOPE_MS in the managed repository) with room to answer.
+const ROUTING_RULE_OBSERVATION_MAX_WAIT_MS = 15_000;
 
 function interactionDiagnostic(stage: string): void {
   if (process.env.UNFILED_E1_HTTP_DIAGNOSTICS === "1") {
