@@ -122,6 +122,13 @@ export type ApplyMaterializedCreateOrganizationCommandInput = Readonly<{
   idFactory: EntityIdFactory;
   occurredAt: string;
   ownerId: string;
+  /**
+   * Paragraphs the organizer places itself, such as a reference to a photo the owner
+   * attached. They are applied after the model's operations and are deliberately excluded
+   * from the operation cap and from source preservation: preservation exists to prove the
+   * model kept the owner's words, and this text is not the model's.
+   */
+  attachmentParagraphs?: readonly string[] | undefined;
 }>;
 
 export type ApplyMaterializedAppendOrganizationCommandInput = Readonly<{
@@ -131,6 +138,13 @@ export type ApplyMaterializedAppendOrganizationCommandInput = Readonly<{
   idFactory: EntityIdFactory;
   occurredAt: string;
   ownerId: string;
+  /**
+   * Paragraphs the organizer places itself, such as a reference to a photo the owner
+   * attached. They are applied after the model's operations and are deliberately excluded
+   * from the operation cap and from source preservation: preservation exists to prove the
+   * model kept the owner's words, and this text is not the model's.
+   */
+  attachmentParagraphs?: readonly string[] | undefined;
 }>;
 
 export type ApplyMaterializedOrganizationCommandInput =
@@ -558,6 +572,24 @@ function restoreOperation(snapshot: NoteSnapshot): UserOperation {
   });
 }
 
+
+/**
+ * The organizer's own paragraphs, applied through the same machinery as the model's so the
+ * note body, its structured projection and its open state all stay consistent.
+ */
+function withOrganizerPlacement(
+  operations: readonly MaterializedOrganizationOperation[],
+  paragraphs: readonly string[] | undefined
+): readonly MaterializedOrganizationOperation[] {
+  if (paragraphs === undefined || paragraphs.length === 0) return operations;
+  if (paragraphs.some((paragraph) => paragraph.length === 0)) {
+    return fail(OrganizationApplicationErrorCode.INVALID_COMMAND);
+  }
+  return Object.freeze([
+    ...operations,
+    Object.freeze({ type: "append_paragraphs" as const, paragraphs: Object.freeze([...paragraphs]) })
+  ]) as readonly MaterializedOrganizationOperation[];
+}
 function buildDraft(
   command: RoutedCommand,
   operations: readonly MaterializedOrganizationOperation[],
@@ -739,13 +771,14 @@ function applyWithAuthority(
       }
       throw error;
     }
+    const placedOperations = withOrganizerPlacement(operations, input.attachmentParagraphs);
 
     if (command.kind === "create") {
       const initial = emptyCreateSnapshot(command, authority.targetPrivacy);
       const idFactory = commandIdFactory(command, input.idFactory, initial);
       const draft = buildDraft(
         command,
-        operations,
+        placedOperations,
         initial,
         exactCaptureText,
         occurredAt,
@@ -793,7 +826,7 @@ function applyWithAuthority(
     const idFactory = commandIdFactory(command, input.idFactory, beforeSnapshot);
     const draft = buildDraft(
       command,
-      operations,
+      placedOperations,
       beforeSnapshot,
       exactCaptureText,
       occurredAt,

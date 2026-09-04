@@ -1633,17 +1633,18 @@ describe("organizer drain with photos", () => {
     );
     const plannerInput = vi.mocked(planner.plan).mock.calls[0]?.[0];
     expect(plannerInput?.capture.attachments).toEqual([decryptedPhoto]);
+    // The sealed plan carries the model's operations and nothing else. The organizer's own
+    // photo reference is placed by the application layer, so the plan the model authored is
+    // still validated as the model's: smuggling the reference in here failed source
+    // preservation for every capture with a photo, and pushed a five-operation plan past the
+    // operation cap.
     const sealedPlan = vi.mocked(crypto.sealCommand).mock.calls[0]?.[0].plan;
-    const expectedOperations = [
-      { type: "append_raw", content: "A thought" },
-      {
-        type: "append_paragraphs",
-        paragraphs: ["![Photo](unfiled-attachment:att_01ARZ3NDEKTSV4RRFFQ69G5FAZ)"]
-      }
-    ];
+    const modelOperations = [{ type: "append_raw", content: "A thought" }];
     expect(sealedPlan?.kind).toBe("create");
-    expect(sealedPlan?.kind === "create" ? sealedPlan.operations : []).toEqual(expectedOperations);
-    expect(sealedPlan?.validatedPlan.operations).toEqual(expectedOperations);
+    expect(sealedPlan?.kind === "create" ? sealedPlan.operations : []).toEqual(modelOperations);
+    expect(sealedPlan?.validatedPlan.operations).toEqual(modelOperations);
+    const sealedCapture = vi.mocked(crypto.sealCommand).mock.calls[0]?.[0].capture;
+    expect(sealedCapture?.attachments).toEqual([decryptedPhoto]);
   });
 
   it("does not open or reference anything when the capture has no attachments", async () => {

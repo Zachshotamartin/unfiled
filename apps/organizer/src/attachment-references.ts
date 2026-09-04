@@ -28,22 +28,14 @@ export function attachmentReferenceOperation(
   });
 }
 
-/// Places the attachment references after the owner's own words in a materialized write.
-/// The model's plan is validated for source preservation before this runs, so the
-/// references are the organizer's own placement, never model text. Review decisions
-/// carry no operations and are returned unchanged.
-export function withAttachmentReferences(
-  command: MaterializedOrganizationCommand,
+/// The paragraphs the organizer places for a capture's uploads, in upload order.
+///
+/// These are the organizer's own words, never the model's. They are handed to the application
+/// layer separately so the model's plan is still validated as the model's plan: appending them
+/// to a validated plan made every capture with a photo fail source preservation, and pushed a
+/// five-operation plan past the operation cap.
+export function attachmentParagraphs(
   attachments: readonly ReferencedAttachment[]
-): MaterializedOrganizationCommand {
-  const operation = attachmentReferenceOperation(attachments);
-  if (operation === null || command.kind === "review") return command;
-  const placed = Object.freeze([...command.operations, operation]);
-  const validatedPlan = {
-    ...command.validatedPlan,
-    operations: [...command.validatedPlan.operations, operation]
-  };
-  return command.kind === "append"
-    ? Object.freeze({ ...command, operations: placed, validatedPlan })
-    : Object.freeze({ ...command, operations: placed, validatedPlan });
+): readonly string[] {
+  return Object.freeze(attachments.map(attachmentReference));
 }

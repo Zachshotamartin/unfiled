@@ -1,4 +1,3 @@
-import { withAttachmentReferences } from "./attachment-references.js";
 import {
   applyDeterministicExtractionOverride,
   bandRoutingDecision,
@@ -1151,14 +1150,11 @@ export function createOrganizerDrain(
         );
         let plan: MaterializedOrganizationCommand;
         try {
-          plan = withAttachmentReferences(
-            materializeAuthorizedOrganizationPlan({
-              ...authorized,
-              captureText: currentCapture.rawContent,
-              stableIds
-            }),
-            currentCapture.attachments
-          );
+          plan = materializeAuthorizedOrganizationPlan({
+            ...authorized,
+            captureText: currentCapture.rawContent,
+            stableIds
+          });
         } catch (error: unknown) {
           if (!(error instanceof OrganizationMaterializationError)) throw error;
           pendingReviewReason = "planner_ambiguity";

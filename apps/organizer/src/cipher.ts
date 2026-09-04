@@ -1,3 +1,4 @@
+import { attachmentParagraphs } from "./attachment-references.js";
 import {
   applyMaterializedOrganizationCommand,
   type AppliedOrganizationCommand
@@ -895,14 +896,16 @@ async function sealRoutedCommand(
           ),
           idFactory: deterministicIdFactory(input.job.jobId, input.preparation.ids.decisionId),
           occurredAt: input.job.occurredAt,
-          ownerId: input.job.ownerId
+          ownerId: input.job.ownerId,
+          attachmentParagraphs: attachmentParagraphs(input.capture.attachments ?? [])
         }
       : {
           captureText: input.capture.rawContent,
           command: input.plan,
           idFactory: deterministicIdFactory(input.job.jobId, input.preparation.ids.decisionId),
           occurredAt: input.job.occurredAt,
-          ownerId: input.job.ownerId
+          ownerId: input.job.ownerId,
+          attachmentParagraphs: attachmentParagraphs(input.capture.attachments ?? [])
         }
   );
   if (

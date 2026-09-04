@@ -200,6 +200,32 @@ function expectCode(callback: () => unknown, code: OrganizationApplicationErrorC
 }
 
 describe("deterministic organization application", () => {
+  it("places the organizer's own photo reference without holding the model to it", () => {
+    // The reference is the organizer's text, not the model's. It must reach the note body,
+    // while source preservation still judges only what the model wrote. Appending it to the
+    // model's operations instead failed preservation for every capture carrying a photo.
+    const capture = "Tile sample for the kitchen.";
+    const reference = "![Photo](unfiled-attachment:att_01ARZ3NDEKTSV4RRFFQ69G5FAZ)";
+    const command = createCommand(
+      "generic",
+      [{ type: "append_raw", content: capture }],
+      "Kitchen renovation",
+      "freeform"
+    );
+
+    const result = applyMaterializedOrganizationCommand({
+      command,
+      ownerId: OWNER_ID,
+      captureText: capture,
+      occurredAt: OCCURRED_AT,
+      idFactory: deterministicFactory(),
+      attachmentParagraphs: [reference]
+    });
+
+    expect(result.kind).toBe("create");
+    expect(result.note.bodyMarkdown).toBe(`${capture}\n\n${reference}`);
+  });
+
   it("creates an authoritative AI-assisted note and preserves append_raw bytes exactly", () => {
     const capture = "  Keep\nthis exact source.  ";
     const command = createCommand(
