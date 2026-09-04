@@ -9,8 +9,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 cd "$ROOT"
 
-auth_file="$HOME/Library/Application Support/com.vercel.cli/auth.json"
-[ -f "$auth_file" ] || { echo "Vercel CLI is not logged in on this machine (run: vercel login)." >&2; exit 1; }
+# The CLI login is a session, not an API token: the API answers 403 to it. Only a token created
+# at https://vercel.com/account/tokens can deploy or read what is deployed.
+[ -n "${VERCEL_TOKEN:-}" ] || {
+  echo "VERCEL_TOKEN is not set. Create one at https://vercel.com/account/tokens, then run:" >&2
+  echo "  VERCEL_TOKEN=... scripts/operations/release/configure-ci.sh" >&2
+  exit 1
+}
 command -v gh >/dev/null || { echo "The GitHub CLI is required (run: brew install gh && gh auth login)." >&2; exit 1; }
 if [ -f "$ROOT/.env.live-gate" ]; then set -a; . "$ROOT/.env.live-gate"; set +a; fi
 keychain() { security find-generic-password -s "$1" -a "$2" -w 2>/dev/null || true; }
@@ -19,12 +24,12 @@ staging="$(mktemp -d)"
 trap 'rm -rf "$staging"' EXIT
 chmod 700 "$staging"
 
-node - "$auth_file" "$staging" <<'NODE'
+node - "$staging" <<'NODE'
 const fs = require("node:fs");
-const [, , authPath, staging] = process.argv;
-const token = JSON.parse(fs.readFileSync(authPath, "utf8")).token;
+const [, , staging] = process.argv;
+const token = process.env.VERCEL_TOKEN;
 if (typeof token !== "string" || token.length < 20) {
-  console.error("The Vercel CLI login does not carry a usable token.");
+  console.error("VERCEL_TOKEN is not a usable token.");
   process.exit(1);
 }
 const names = {

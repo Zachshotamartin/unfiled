@@ -22,13 +22,14 @@ if [ -f "$ROOT/.env.live-gate" ]; then set -a; . "$ROOT/.env.live-gate"; set +a;
 export UNFILED_GATE_OPENAI_API_KEY="${UNFILED_GATE_OPENAI_API_KEY:-$(keychain unfiled-gate OPENAI_API_KEY)}"
 export UNFILED_GATE_CRON_SECRET="${UNFILED_GATE_CRON_SECRET:-$(keychain unfiled-beta-web-secret CRON_SECRET)}"
 
-# The Vercel CLI's own login is a fine source for a local release; CI passes a token instead.
-vercel_cli_auth="$HOME/Library/Application Support/com.vercel.cli/auth.json"
-if [[ -z "${VERCEL_TOKEN:-}" && -f "$vercel_cli_auth" ]]; then
-  VERCEL_TOKEN="$(node -e 'process.stdout.write(String(require(process.argv[1]).token ?? ""))' "$vercel_cli_auth")"
-  export VERCEL_TOKEN
+# A release needs a Vercel API token, which is not the same thing as the CLI being logged in:
+# the value the CLI stores is a session the API answers 403 to. Taking it from there produced a
+# release that failed at the first deploy with an unhelpful message about an invalid token.
+if [[ -z "${VERCEL_TOKEN:-}" ]]; then
+  echo "VERCEL_TOKEN is not set. Create one at https://vercel.com/account/tokens and export it," >&2
+  echo "or add it as the repository secret so Actions can release." >&2
+  exit 1
 fi
-
 # Project ids come from the local links when they are present, so a laptop release needs no
 # extra configuration; CI supplies the same ids as secrets.
 for app in organizer worker verifier search web; do

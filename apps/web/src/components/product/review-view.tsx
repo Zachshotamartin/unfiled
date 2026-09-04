@@ -314,6 +314,17 @@ export function ReviewView({
     [pending, removeResolvedItem, resource]
   );
 
+  const items = (resource.data?.items ?? []).filter(
+    (item) => focusReviewItemId === undefined || item.id === focusReviewItemId
+  );
+  // The Inbox says "nothing waiting" only when this list is empty too, so it has to be told.
+  //
+  // This runs before the loading and error returns below, not after them. Sitting after, it was
+  // reached only once data had arrived, so the first render ran no hooks and the second ran one,
+  // and React tore down the whole page rather than the list: every view of the app showed "This
+  // page did not load" while every request behind it had answered 200.
+  useEffect(() => onEmptyChange?.(items.length === 0), [items.length, onEmptyChange]);
+
   if (resource.loading && resource.data === null) return <ResourceSkeleton rows={4} />;
   if (resource.error !== null && resource.data === null) {
     return (
@@ -324,11 +335,6 @@ export function ReviewView({
       />
     );
   }
-  const items = (resource.data?.items ?? []).filter(
-    (item) => focusReviewItemId === undefined || item.id === focusReviewItemId
-  );
-  // The Inbox says "nothing waiting" only when this list is empty too, so it has to be told.
-  useEffect(() => onEmptyChange?.(items.length === 0), [items.length, onEmptyChange]);
   if (items.length === 0 && message === null && error === null) {
     // In the Inbox this list is one part of "Needs you", which already says when nothing is
     // waiting; a second empty state stacked under the first would say it twice.
