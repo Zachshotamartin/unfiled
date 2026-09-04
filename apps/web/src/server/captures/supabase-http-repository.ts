@@ -323,6 +323,11 @@ export class SupabaseHttpCaptureRepository implements CaptureRepository {
           ...(input.explicitDestinationNoteId === undefined
             ? {}
             : { explicitDestinationNoteId: input.explicitDestinationNoteId }),
+          // The owner's own directions for this capture. They were dropped here while the
+          // destination and the expansion switch beside them were kept, so on this path an owner
+          // who wrote where a capture should go was silently ignored -- the same loss this method
+          // refuses to accept for attachments a few lines above.
+          ...(input.guidance === undefined ? {} : { guidance: input.guidance }),
           expansionDisabled: input.expansionDisabled
         }
       })

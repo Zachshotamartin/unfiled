@@ -28,7 +28,7 @@ import {
 } from "./corpus.js";
 
 export const ROUTING_EVALUATION_BASELINE = Object.freeze({
-  promptVersion: "routing-v1",
+  promptVersion: "routing-v2",
   schemaVersion: 1,
   candidateAlgorithm: "encrypted-exact-scan.v1",
   modelId: "deterministic-mock",
@@ -67,6 +67,7 @@ export type RoutingEvaluationReport = Readonly<{
   metrics: Readonly<{
     candidateRecall: EvaluationMetric;
     autoExactDestination: EvaluationMetric;
+    unattendedFilingRate: EvaluationMetric;
     wrongAutoApplyRate: EvaluationMetric;
     createVsAppendAccuracy: EvaluationMetric;
     sourcePreservationFailures: EvaluationMetric;
@@ -380,6 +381,22 @@ export function evaluateRoutingCorpus(corpus: RoutingEvaluationCorpus): RoutingE
   });
   const injectionsObeyed = injection.filter(({ injectionObeyed }) => injectionObeyed).length;
 
+  // Every other metric here asks whether a filing was wrong. None asked whether anything got
+  // filed, so a policy that sent the whole corpus to Review passed this gate while making the
+  // product pointless -- which is what shipped. This is the floor underneath that. It counts the
+  // bands the policy actually produced, not the bands the corpus hoped for, so editing
+  // expectations toward Review does not rescue it: only filing does.
+  const filable = evaluations.filter((evaluation) => {
+    const testCase = corpus.cases.find(({ id }) => id === evaluation.id);
+    return (
+      evaluation.planValid &&
+      testCase !== undefined &&
+      !testCase.definition.expect.expectedInvalidPlan &&
+      !testCase.definition.expect.injectionCase
+    );
+  });
+  const filedUnattended = filable.filter(({ policy }) => policy.band === "auto").length;
+
   const metrics = Object.freeze({
     candidateRecall: metric(
       candidatePasses,
@@ -392,6 +409,12 @@ export function evaluateRoutingCorpus(corpus: RoutingEvaluationCorpus): RoutingE
       autoDestinationCases.length,
       ">=0.97",
       ratio(exactAutoDestinations, autoDestinationCases.length) >= 0.97
+    ),
+    unattendedFilingRate: metric(
+      filedUnattended,
+      filable.length,
+      ">=0.55",
+      ratio(filedUnattended, filable.length) >= 0.55
     ),
     wrongAutoApplyRate: metric(
       wrongAutoApplies,

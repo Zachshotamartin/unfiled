@@ -11,7 +11,7 @@ import {
 } from "../src/anthropic-schema.js";
 import { OrganizerPlannerReviewError, OrganizerProviderError } from "../src/errors.js";
 import type { PlannerInput } from "../src/planner.js";
-import { ORGANIZER_ROUTING_PROMPT } from "../src/prompt.js";
+import { ORGANIZER_PROMPT_VERSION, ORGANIZER_ROUTING_PROMPT } from "../src/prompt.js";
 import { createOrganizerProviderCredentialAccess } from "../src/provider-credential.js";
 
 const API_KEY = "sk-ant-test-abcdefghijklmnopqrstuvwxyz0123456789";
@@ -52,7 +52,7 @@ function plannerInput(overrides: Partial<PlannerInput> = {}): PlannerInput {
     ],
     captureId: "cap_01ARZ3NDEKTSV4RRFFQ69G5FAV",
     controls,
-    promptVersion: "routing-v1",
+    promptVersion: ORGANIZER_PROMPT_VERSION,
     schemaVersion: 1,
     signal: new AbortController().signal,
     ...overrides
@@ -706,9 +706,9 @@ describe("Claude Messages organizer planner", () => {
   it("rejects unknown durable profiles and bounded-input violations before fetch", async () => {
     const fetchImplementation = vi.fn<typeof fetch>();
     const service = createAnthropicOrganizerPlanner({ apiKey: API_KEY, fetchImplementation });
-    await expect(service.plan(plannerInput({ promptVersion: "routing-v2" }))).rejects.toMatchObject(
-      { retryable: false, safeCode: "validation_failed" }
-    );
+    await expect(
+      service.plan(plannerInput({ promptVersion: `${ORGANIZER_PROMPT_VERSION}-unknown` }))
+    ).rejects.toMatchObject({ retryable: false, safeCode: "validation_failed" });
     await expect(
       service.plan(plannerInput({ capture: { controls, rawContent: "x".repeat(10_001) } }))
     ).rejects.toBeInstanceOf(OrganizerPlannerReviewError);

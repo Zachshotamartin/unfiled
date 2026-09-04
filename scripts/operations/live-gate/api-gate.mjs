@@ -34,7 +34,9 @@ import {
 import {
   captureBindsAttachments,
   filedNoteId,
+  noteIsBacklinkedFrom,
   noteKeepsTextWithoutDirections,
+  noteLinksTo,
   noteReferencesAttachment
 } from "./gate-checks.mjs";
 
@@ -516,12 +518,15 @@ let secondNoteId = null;
       noteRevision = link.json?.note?.currentRevision ?? noteRevision;
       const links = await api("GET", `/notes/${noteId}/links`, { token });
       const linkItems = links.json?.items ?? links.json?.links ?? [];
-      record("notes.list_links", links.status === 200 && linkItems.length >= 1, {
+      // Counting the list said a link came back, not that this link did. The gate passed on any
+      // non-empty answer, so a link stored against the wrong note or under the wrong kind read
+      // as green.
+      record("notes.list_links", noteLinksTo(links, secondNoteId, "reference"), {
         status: links.status,
         count: linkItems.length
       });
       const backlinks = await api("GET", `/notes/${secondNoteId}/backlinks`, { token });
-      record("notes.backlinks", backlinks.status === 200, {
+      record("notes.backlinks", noteIsBacklinkedFrom(backlinks, noteId), {
         status: backlinks.status,
         count: (backlinks.json?.items ?? []).length
       });

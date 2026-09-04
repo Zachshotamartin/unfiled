@@ -50,7 +50,7 @@ describe("versioned deterministic routing corpus", () => {
       expectedHostileReplays: 11,
       unsupportedCategories: ["multilingual"],
       baseline: {
-        promptVersion: "routing-v1",
+        promptVersion: "routing-v2",
         modelId: "deterministic-mock",
         scope: "deterministic_policy_and_safety"
       },

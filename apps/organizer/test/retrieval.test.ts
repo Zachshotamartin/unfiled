@@ -14,6 +14,7 @@ import type { OrganizerEmbeddingProvider } from "../src/embedding-provider.js";
 import { OrganizerProviderError } from "../src/errors.js";
 import type { OrganizerKeyAuthority } from "../src/key-management.js";
 import { createOrganizerCandidateRetrieval } from "../src/retrieval.js";
+import { ORGANIZER_PROMPT_VERSION } from "../src/prompt.js";
 
 const OWNER_ID = "22222222-2222-4222-8222-222222222222";
 const NOTE_ID = "note_01ARZ3NDEKTSV4RRFFQ69G5FAA" as const;
@@ -44,7 +45,7 @@ const job: ClaimedOrganizerJob = Object.freeze({
   settingsRevision: 1,
   occurredAt: "2026-08-31T19:58:00.000Z",
   ownerId: OWNER_ID,
-  promptVersion: "routing-v1",
+  promptVersion: ORGANIZER_PROMPT_VERSION,
   replanCount: 0,
   routingEffort: "standard",
   routingMode: "balanced",

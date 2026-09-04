@@ -69,10 +69,11 @@ describe("routing scoring policy", () => {
         })
       )
     ).toMatchObject({ band: "auto", autoApply: true });
+    // The retriever's score gap no longer decides on the model's behalf. This is a 0.74 capture
+    // whose top two candidates sit 0.1 apart; the model read both and chose, so Balanced files it.
     expect(bandRoutingDecision(policy({ features: automaticSignals }))).toMatchObject({
-      band: "review",
-      autoApply: false,
-      reasons: ["low_margin"]
+      band: "auto",
+      autoApply: true
     });
     const cautious = bandRoutingDecision(policy({ mode: "cautious" }));
     expect(cautious.band).toBe("review");
@@ -120,7 +121,6 @@ describe("routing scoring policy", () => {
     ["duplicate", { duplicateNoteSuspected: true }],
     ["principle mismatch", { destinationNoteType: "principle", captureKind: "freeform" }],
     ["long capture", { captureLength: 2_001 }],
-    ["account warm-up", { accountCaptureOrdinal: 5 }],
     ["retrieval degradation", { retrievalAutoEligible: false }]
   ] as const)("hard-overrides automatic routing for %s", (_label, overrides) => {
     expect(bandRoutingDecision(policy(overrides))).toMatchObject({
@@ -129,7 +129,7 @@ describe("routing scoring policy", () => {
     });
   });
 
-  it("honors the deterministic rule warm-up and retrieval exceptions", () => {
+  it("honors the deterministic rule retrieval exception", () => {
     expect(
       bandRoutingDecision(
         policy({
@@ -167,21 +167,112 @@ describe("routing scoring policy", () => {
     ).toMatchObject({ band: "auto", autoApply: true });
   });
 
-  it("lets the owner's Automatic setting decide the warm-up captures", () => {
-    // Warm-up holds a new account back so its owner can watch the first filings. An owner who
-    // has chosen Automatic has already answered that; holding them anyway ignores the setting.
-    const warmup = bandRoutingDecision(policy({ accountCaptureOrdinal: 1 }));
-    expect(warmup.band).toBe("review");
-    expect(warmup.reasons).toContain("warmup");
+  it("files a new account's first captures instead of holding them for review", () => {
+    // The warm-up held an account's first five captures so its owner could watch the organizer
+    // work. What they watched was every capture they had ever written arrive in Review, which is
+    // the opposite of what they installed the app to do.
+    for (const accountCaptureOrdinal of [1, 2, 5, 6]) {
+      expect(bandRoutingDecision(policy({ accountCaptureOrdinal }))).toMatchObject({
+        band: "auto",
+        autoApply: true
+      });
+    }
+  });
+
+  it("auto-files a plan to start a note whatever the score, ordinal, or scan says", () => {
+    // Starting a note damages no existing note and chooses between nothing, so the create score --
+    // assembled out of how badly the candidates fit -- is not a reason to ask the owner. An owner
+    // whose library is still empty is exactly the owner this used to interrogate every time.
+    const startsANote = {
+      planDecision: "create_note",
+      destinationNoteType: null,
+      createSignals: { noCandidateFitStrength: 0.2, titleValidity: 0.5 }
+    } as const;
+    expect(scoreCreateRoutingSignals(startsANote.createSignals)).toBe(0.29);
+    for (const overrides of [
+      {},
+      { accountCaptureOrdinal: 1 },
+      { retrievalAutoEligible: false },
+      { features: { ...HIGH_FEATURES, margin: 0 } }
+    ]) {
+      expect(bandRoutingDecision(policy({ ...startsANote, ...overrides }))).toMatchObject({
+        band: "auto",
+        autoApply: true
+      });
+    }
+  });
+
+  it("still holds a new note the owner may already have, and an append it cannot place", () => {
+    // Two things starting a note can get wrong: duplicating one that exists, and being made while
+    // the owner has asked to approve everything. Neither is a score, and both survive the change.
+    const startsANote = {
+      planDecision: "create_note",
+      destinationNoteType: null,
+      createSignals: { noCandidateFitStrength: 1, titleValidity: 1 }
+    } as const;
     expect(
-      bandRoutingDecision(policy({ accountCaptureOrdinal: 1, mode: "automatic" }))
-    ).toMatchObject({ band: "auto", autoApply: true });
-    expect(
-      bandRoutingDecision(policy({ accountCaptureOrdinal: 5, mode: "cautious" })).reasons
-    ).toContain("warmup");
-    expect(bandRoutingDecision(policy({ accountCaptureOrdinal: 6 }))).toMatchObject({
-      band: "auto"
+      bandRoutingDecision(policy({ ...startsANote, duplicateNoteSuspected: true })).reasons
+    ).toContain("duplicate_suspected");
+    expect(bandRoutingDecision(policy({ ...startsANote, mode: "cautious" })).reasons).toContain(
+      "cautious_mode"
+    );
+    // An append is where the organizer can genuinely be ignorant: a scan that could not vouch for
+    // its candidates means the note it chose may not be the note it would have chosen.
+    expect(bandRoutingDecision(policy({ retrievalAutoEligible: false })).reasons).toContain(
+      "retrieval_degraded"
+    );
+  });
+
+  it("bands an append by what a retrieved candidate can actually score", () => {
+    // In production a candidate the retriever merely found has explicitDestinationMention and
+    // reasonCodeConsistency of zero -- they fire only for a destination the owner named or a rule
+    // matched -- so 0.55 is the ceiling for a purely semantic append. The old 0.8 bar sat above
+    // every score this case can reach, which is the whole reason ordinary filing went to Review.
+    const found = {
+      ...HIGH_FEATURES,
+      ruleOrAliasNearMatch: 0,
+      explicitDestinationMention: 0,
+      reasonCodeConsistency: 0
+    };
+    const ceiling = { ...found, semanticSimilarity: 1, margin: 1 };
+    expect(scoreRoutingSignals(ceiling)).toBe(0.55);
+
+    const strong = { ...found, semanticSimilarity: 0.9, margin: 0.4 };
+    expect(scoreRoutingSignals(strong)).toBe(0.48);
+    expect(bandRoutingDecision(policy({ features: strong }))).toMatchObject({ band: "auto" });
+
+    const weak = { ...found, openSameDayTypeMatch: 0, semanticSimilarity: 0.8, margin: 0.3 };
+    expect(scoreRoutingSignals(weak)).toBe(0.26);
+    expect(bandRoutingDecision(policy({ features: weak }))).toMatchObject({
+      band: "inbox",
+      reasons: ["low_score"]
     });
+  });
+
+  it("never sends a capture to Review over a score alone", () => {
+    // Review is for what the organizer could not resolve, and every one of those is a hard
+    // override. Confidence is not one: a placement it is unsure of waits in the Inbox, which
+    // costs the owner a glance, instead of asking them to adjudicate a note it understood.
+    for (const semanticSimilarity of [0, 0.2, 0.4, 0.6, 0.8, 1]) {
+      for (const margin of [0, 0.5, 1]) {
+        for (const mode of ["balanced", "automatic"] as const) {
+          const banded = bandRoutingDecision(
+            policy({
+              mode,
+              features: {
+                ...HIGH_FEATURES,
+                ruleOrAliasNearMatch: 0,
+                explicitDestinationMention: 0,
+                reasonCodeConsistency: 0,
+                semanticSimilarity,
+                margin
+              }
+            })
+          );
+          expect(banded.band).not.toBe("review");
+        }
+      }
+    }
   });
 
   it("spends every feature weight on a signal production can raise", () => {

@@ -22,12 +22,25 @@ import { createIdempotencyKey } from "@/lib/product/client";
 import { browserCaptureStore } from "@/lib/capture/browser-capture-store";
 import { replayPendingCaptureActions, runCaptureAction } from "@/lib/capture/capture-action-runner";
 import type { CaptureLocalAction } from "@/lib/capture/capture-action";
+import type { PendingCapturePhoto } from "@/lib/capture/capture-attachment-upload";
+import {
+  canSendCapture,
+  captureRawContent,
+  MAX_CAPTURE_CHARACTERS,
+  MAX_CAPTURE_PHOTOS,
+  remainingCapturePhotos
+} from "@/lib/capture/capture-composer-rules";
+import {
+  browserImageCodec,
+  captureImageFailureMessage,
+  prepareCaptureImage
+} from "@/lib/capture/capture-image-preparation";
 import {
   CAPTURE_POLL_INTERVAL_MS,
   flushCaptureOutbox,
-  mergeCaptureActivity,
-  submitDurably
+  mergeCaptureActivity
 } from "@/lib/capture/capture-queue";
+import { submitCaptureWithPhotos } from "@/lib/capture/capture-submission";
 import type { CaptureOutboxStatus } from "@/lib/capture/capture-store";
 
 import { CaptureActivity } from "./capture-activity";
@@ -69,8 +82,19 @@ export function CaptureExperience({
 }: Readonly<{ reviewDecisions?: ReactNode; reviewDecisionsEmpty?: boolean }> = {}) {
   const activeProfile = useRef<string | null>(null);
   const flushPromise = useRef<Promise<void> | null>(null);
+  /**
+   * The photos of the capture being written, and the capture id they are uploaded under. Both
+   * live only as long as this tab: the outbox seals JSON and has nowhere to keep bytes. The id is
+   * kept across a failed attempt so a second try binds to the same capture and re-sends nothing
+   * the server already holds.
+   */
+  const pendingPhotos = useRef<readonly PendingCapturePhoto[]>([]);
+  const pendingCaptureId = useRef<EntityId<"cap"> | null>(null);
   const [profileId, setProfileId] = useState<string | null>(null);
   const [composer, setComposer] = useState<CaptureComposerValue>(EMPTY_COMPOSER);
+  const [photos, setPhotos] = useState<readonly PendingCapturePhoto[]>([]);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const [preparingPhotos, setPreparingPhotos] = useState(false);
   const [notes, setNotes] = useState<readonly NoteSummary[]>([]);
   const [localItems, setLocalItems] = useState<readonly CaptureOutboxStatus[]>([]);
   const [remoteItems, setRemoteItems] = useState<readonly CaptureSummary[]>([]);
@@ -82,6 +106,19 @@ export function CaptureExperience({
   const [initializing, setInitializing] = useState(true);
   const [hydrated, setHydrated] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  /** Every change to the pending photos goes through here, so the ref is never behind the view. */
+  const keepPhotos = useCallback((next: readonly PendingCapturePhoto[]): void => {
+    pendingPhotos.current = next;
+    setPhotos(next);
+  }, []);
+
+  useEffect(
+    () => () => {
+      for (const photo of pendingPhotos.current) URL.revokeObjectURL(photo.previewUrl);
+    },
+    []
+  );
 
   const loadLocal = useCallback(async (profile: string): Promise<void> => {
     try {
@@ -273,6 +310,56 @@ export function CaptureExperience({
     [hiddenCaptureIds, localItems, remoteItems]
   );
 
+  /**
+   * Prepares each chosen file the way the phone does, and keeps it in front of the owner. A file
+   * that is not a photo this API would accept is named here, before anything is sent.
+   */
+  async function addPhotos(files: readonly File[]): Promise<void> {
+    setPhotoError(null);
+    const room = remainingCapturePhotos(pendingPhotos.current.length);
+    if (room === 0) {
+      setPhotoError(`A capture carries up to ${MAX_CAPTURE_PHOTOS} photos.`);
+      return;
+    }
+    setPreparingPhotos(true);
+    try {
+      const prepared: PendingCapturePhoto[] = [];
+      for (const file of files.slice(0, room)) {
+        try {
+          const image = await prepareCaptureImage(file, browserImageCodec);
+          prepared.push({
+            attachmentId: createEntityId("att"),
+            image,
+            previewUrl: URL.createObjectURL(new Blob([image.bytes], { type: image.mediaType })),
+            stored: false
+          });
+        } catch (reason) {
+          setPhotoError(captureImageFailureMessage(reason));
+        }
+      }
+      if (files.length > room) {
+        setPhotoError(
+          `A capture carries up to ${MAX_CAPTURE_PHOTOS} photos, so the rest were not added.`
+        );
+      }
+      if (prepared.length > 0) {
+        pendingCaptureId.current ??= createEntityId("cap");
+        keepPhotos([...pendingPhotos.current, ...prepared]);
+      }
+    } finally {
+      setPreparingPhotos(false);
+    }
+  }
+
+  function removePhoto(attachmentId: EntityId<"att">): void {
+    setPhotoError(null);
+    const removed = pendingPhotos.current.find((photo) => photo.attachmentId === attachmentId);
+    if (removed !== undefined) URL.revokeObjectURL(removed.previewUrl);
+    // A photo the server already holds stays unbound there, where it is swept within the day.
+    // Removing it here is the owner saying this is not the capture it belongs to.
+    keepPhotos(pendingPhotos.current.filter((photo) => photo.attachmentId !== attachmentId));
+  }
+
   async function submit(event: SyntheticEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     setComposerError(null);
@@ -281,18 +368,19 @@ export function CaptureExperience({
       setComposerError("Encrypted browser storage is still starting.");
       return;
     }
-    if (composer.rawContent.trim().length === 0) {
-      setComposerError("Write something before saving.");
-      return;
-    }
-    if (composer.rawContent.length > 10_000) {
-      setComposerError("Captures can contain up to 10,000 characters.");
+    const photosToSend = pendingPhotos.current;
+    if (!canSendCapture(composer.rawContent, photosToSend.length)) {
+      setComposerError(
+        composer.rawContent.length > MAX_CAPTURE_CHARACTERS
+          ? `Captures can contain up to ${MAX_CAPTURE_CHARACTERS.toLocaleString()} characters.`
+          : "Write something or add a photo before saving."
+      );
       return;
     }
     const now = Date.now();
     const request = CaptureCreateRequestSchema.parse({
-      clientCaptureId: createEntityId("cap"),
-      rawContent: composer.rawContent,
+      clientCaptureId: pendingCaptureId.current ?? createEntityId("cap"),
+      rawContent: captureRawContent(composer.rawContent, photosToSend.length),
       source: "web",
       clientCreatedAt: new Date(now).toISOString(),
       clientTimezone: clientTimezone(),
@@ -304,25 +392,38 @@ export function CaptureExperience({
     });
     setSubmitting(true);
     try {
-      await submitDurably(
+      const submission = await submitCaptureWithPhotos(
         browserCaptureStore,
-        profileId,
-        request,
-        now,
+        browserApi,
+        { now, photos: photosToSend, profileId, request },
         () => {
+          for (const photo of photosToSend) URL.revokeObjectURL(photo.previewUrl);
+          keepPhotos([]);
+          pendingCaptureId.current = null;
           setComposer(EMPTY_COMPOSER);
           setAcknowledgement(navigator.onLine ? "Saved" : "Saved. Waiting to sync.");
           void loadLocal(profileId);
         },
         () => window.setTimeout(() => void flush(profileId), 0)
       );
+      // A photo that could not be uploaded stops the capture, because a browser tab has nowhere
+      // to keep its bytes: filing the words alone would lose the picture without saying so.
+      if (submission.status === "photos_unsent") {
+        keepPhotos(submission.photos);
+        setComposerError(submission.message);
+        return;
+      }
       try {
         await browserCaptureStore.deleteDraft(profileId);
       } catch {
         setStorageError("The capture was saved, but its old draft could not be cleared.");
       }
     } catch {
-      setComposerError("This capture could not be saved securely. Nothing was sent.");
+      setComposerError(
+        photosToSend.length === 0
+          ? "This capture could not be saved securely. Nothing was sent."
+          : "This capture could not be saved securely on this device, so it was not created. Your words and photos are still here: save again."
+      );
     } finally {
       setSubmitting(false);
     }
@@ -378,8 +479,13 @@ export function CaptureExperience({
         disabled={initializing || submitting || storageError !== null}
         error={composerError}
         notes={notes}
+        onAddPhotos={(files) => void addPhotos(files)}
         onChange={setComposer}
+        onRemovePhoto={removePhoto}
         onSubmit={(event) => void submit(event)}
+        photoError={photoError}
+        photos={photos}
+        preparingPhotos={preparingPhotos}
         value={composer}
       />
       <CaptureActivity

@@ -33,6 +33,24 @@ function projectIdFor(app) {
   return process.env[`VERCEL_PROJECT_ID_${app.toUpperCase()}`];
 }
 
+/**
+ * Fills in any project id the environment did not name, by asking Vercel for the projects this
+ * token can see. A release should work from a clean checkout: requiring a linked working copy
+ * meant the script only ran where someone had already run `vercel link` by hand.
+ */
+async function resolveProjectIds() {
+  if (APPS.every((app) => projectIdFor(app))) return;
+  const { status, body } = await vercelApi("/v9/projects?limit=100");
+  if (status !== 200 || !Array.isArray(body?.projects)) return;
+  for (const app of APPS) {
+    if (projectIdFor(app)) continue;
+    const project = body.projects.find((candidate) => candidate.name === `unfiled-${app}`);
+    if (project === undefined) continue;
+    process.env[`VERCEL_PROJECT_ID_${app.toUpperCase()}`] = project.id;
+    if (!process.env.VERCEL_ORG_ID) process.env.VERCEL_ORG_ID = project.accountId;
+  }
+}
+
 /** Every requirement, named before anything is deployed. */
 function requirements() {
   const missing = [];
@@ -45,7 +63,16 @@ function requirements() {
   if (!SKIP_MIGRATIONS && !process.env.SUPABASE_DB_URL && !linkedProject()) {
     missing.push("SUPABASE_DB_URL");
   }
-  for (const name of ["UNFILED_GATE_OPENAI_API_KEY", "UNFILED_GATE_CRON_SECRET"]) {
+  // Everything the live gate needs, checked here rather than discovered by the gate. The gate
+  // confirms its own synthetic account through Supabase's admin API, so without these two it
+  // stops at once with exit 2 -- and it runs after the five deploys, which meant a release could
+  // put new code in front of every owner and only then find out it could not verify any of it.
+  for (const name of [
+    "UNFILED_GATE_OPENAI_API_KEY",
+    "UNFILED_GATE_CRON_SECRET",
+    "UNFILED_GATE_SUPABASE_URL",
+    "UNFILED_GATE_SUPABASE_SERVICE_ROLE_KEY"
+  ]) {
     if (!process.env[name]) missing.push(name);
   }
   if (missing.length > 0) {
@@ -263,14 +290,35 @@ async function waitForLiveCommit(commit) {
 }
 
 async function main() {
+  if (!process.env.VERCEL_TOKEN) {
+    fail(
+      "VERCEL_TOKEN is not set. Create one at https://vercel.com/account/tokens; the Vercel CLI's" +
+        " own login is a session the API refuses."
+    );
+  }
+  await resolveProjectIds();
   requirements();
   const head = await run("git", ["rev-parse", "HEAD"], { echo: false });
   const commit = head.out.trim();
   if (!/^[0-9a-f]{40}$/u.test(commit)) fail("Could not read the commit being released.");
   console.log(`== releasing ${commit.slice(0, 7)}`);
 
+  // Recording what is live is what makes the gate's rollback possible, so a release that cannot
+  // read it does not start. Discovering that only after a red gate would leave production on a
+  // broken deployment with nothing to promote back.
   const previous = {};
-  for (const app of APPS) previous[app] = await currentProductionDeployment(app);
+  for (const app of APPS) {
+    const deployment = await currentProductionDeployment(app);
+    if (deployment === null) {
+      fail(
+        `Could not read the deployment currently serving ${app}. Without it a red gate could not` +
+          ` be rolled back, so nothing was deployed. Check that VERCEL_TOKEN is a Vercel API` +
+          ` token (Account Settings, Tokens) rather than the CLI's own login, which the API` +
+          ` rejects.`
+      );
+    }
+    previous[app] = deployment;
+  }
 
   await applyMigrations();
 

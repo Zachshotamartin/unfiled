@@ -16,6 +16,22 @@ export type ResourceState<T> = Readonly<{
 
 const LIVE_REFRESH_MS = 4_000;
 
+/**
+ * Whether a freshly fetched response carries the same content as the one already on screen. Both
+ * sides are parsed from the same endpoint's JSON, so comparing their serializations compares the
+ * bytes the server sent. A comparison that throws answers "different", which is what this did
+ * before it compared at all.
+ */
+export function sameResourceValue<T>(previous: T | null, next: T): boolean {
+  if (Object.is(previous, next)) return true;
+  if (previous === null || next === null) return false;
+  try {
+    return JSON.stringify(previous) === JSON.stringify(next);
+  } catch {
+    return false;
+  }
+}
+
 export interface ResourceLoadEpoch {
   current: number;
 }
@@ -86,7 +102,12 @@ export function useLiveResource<T>(url: string, loader?: () => Promise<T>): Reso
       {
         resolved(next) {
           if (!mounted.current) return;
-          setResourceData(next);
+          // A poll that found nothing new must not replace the object it already holds. Callers
+          // key off identity: usePagedResource treats a new first-page object as a fresh list and
+          // discards every page loaded after it, so re-storing an equal response every four
+          // seconds collapsed every paginated screen -- notes, review, spaces, revisions,
+          // backlinks, generated blocks -- back to its first page while the owner was reading it.
+          setResourceData((previous) => (sameResourceValue(previous, next) ? previous : next));
           setError(null);
           setOffline(false);
         },

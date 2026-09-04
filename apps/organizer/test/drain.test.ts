@@ -21,6 +21,7 @@ import {
 import type { OrganizerKeyAuthority } from "../src/key-management.js";
 import type { OrganizerPlanner } from "../src/planner.js";
 import type { OrganizerAppDefaultApiKeys } from "../src/provider-credential.js";
+import { ORGANIZER_PROMPT_VERSION } from "../src/prompt.js";
 
 const signal = new AbortController().signal;
 const authority = {} as OrganizerKeyAuthority;
@@ -78,7 +79,7 @@ const job: ClaimedOrganizerJob = Object.freeze({
   settingsRevision: 1,
   occurredAt: "2026-08-31T19:58:00.000Z",
   ownerId: "22222222-2222-4222-8222-222222222222",
-  promptVersion: "routing-v1",
+  promptVersion: ORGANIZER_PROMPT_VERSION,
   replanCount: 0,
   routingEffort: "standard",
   routingMode: "balanced",
@@ -1185,7 +1186,10 @@ describe("organizer drain", () => {
     const heartbeatInput = vi.mocked(repo.heartbeat).mock.calls[0]?.[0];
     expect(plannerInput?.controls).toEqual(currentControls);
     expect(plannerInput?.capture.controls).toEqual(currentControls);
-    expect(plannerInput).toMatchObject({ promptVersion: "routing-v1", schemaVersion: 1 });
+    expect(plannerInput).toMatchObject({
+      promptVersion: ORGANIZER_PROMPT_VERSION,
+      schemaVersion: 1
+    });
     expect(heartbeatInput?.candidateManifest.controls).toEqual(currentControls);
   });
 

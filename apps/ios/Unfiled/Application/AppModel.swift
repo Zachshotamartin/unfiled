@@ -130,6 +130,95 @@ struct GeneratedBlockLookup: Hashable, Sendable {
     let noteID: NoteID
 }
 
+/// How often the app asks the server what changed while it is in front of the owner.
+///
+/// The web already answers this question in `apps/web/src/lib/product/use-live-resource.ts`: it
+/// polls every four seconds and refreshes again on focus, on reconnect, and on a cross-tab
+/// broadcast. The phone matches that cadence for the wait the owner is actually watching, and
+/// backs off when there is nothing left on this device to wait for.
+enum LiveRefreshCadence {
+    /// A capture is queued or being organized. The row has to move from organizing to its
+    /// outcome on its own, so the phone asks as often as the web does.
+    static let organizing = Duration.seconds(4)
+
+    /// Nothing on this phone is in flight, so the only changes left to find were made somewhere
+    /// else: a review resolved on the web, a note edited from another device. Twenty five seconds
+    /// still brings those in without a pull, at roughly a sixth of the requests the organizing
+    /// cadence spends, and it is short enough that an owner reading the screen is never looking
+    /// at something half a minute old.
+    static let idle = Duration.seconds(25)
+
+    /// The wait before the next refresh. It is decided by what is on the screen rather than by a
+    /// clock, so the app and a test make the decision the same way.
+    static func interval(for receipts: [ReceiptPresentation]) -> Duration {
+        receipts.contains(where: \.pending) ? organizing : idle
+    }
+
+    /// Whether the loop should be running at all. It stops entirely when the app is not in front
+    /// of the owner, because there is no screen to keep live and the refresh would only spend the
+    /// battery, and when there is no owner, because there is then nothing it may ask for.
+    static func isLive(isForeground: Bool, isSignedIn: Bool) -> Bool {
+        isForeground && isSignedIn
+    }
+}
+
+/// The loop that keeps every screen live: it waits, refreshes, and waits again. The interval is
+/// asked for before each wait rather than captured once, so the cadence follows the state instead
+/// of whatever the state was when the loop started. It is a task rather than a timer so it cannot
+/// begin a refresh while its own last one is still running, and so stopping it ends the current
+/// wait at once.
+@MainActor
+final class LiveRefreshLoop {
+    private var task: Task<Void, Never>?
+
+    var isRunning: Bool { task != nil }
+
+    /// Starts the loop, or leaves a running one alone so a second caller never doubles the rate.
+    func start(
+        interval: @escaping @Sendable @MainActor () -> Duration,
+        refresh: @escaping @Sendable @MainActor () async -> Void
+    ) {
+        guard task == nil else { return }
+        task = Task { @MainActor in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: interval())
+                } catch {
+                    // The wait ends early only when the loop is stopped, and a stopped loop has
+                    // nothing left to refresh.
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                await refresh()
+            }
+        }
+    }
+
+    func stop() {
+        task?.cancel()
+        task = nil
+    }
+}
+
+/// The step of the app's boot that is running. A boot failure names this rather than assuming
+/// the local database, so the owner is told what to do about the failure they actually had.
+private enum BootStage {
+    case configuration
+    case session
+    case storage
+
+    var failureMessage: String {
+        switch self {
+        case .configuration:
+            "Unfiled could not read its own configuration. Reinstall this development build."
+        case .session:
+            "Unfiled could not open its saved sign-in. Restart the app; if the problem continues, reinstall this development build."
+        case .storage:
+            "Unfiled could not open its protected local storage. Restart the app; if the problem continues, reinstall this development build."
+        }
+    }
+}
+
 private enum NoteContextLoadResult<Value: Sendable>: Sendable {
     case value(Value)
     case failure(NoteContextFailure)
@@ -188,6 +277,23 @@ final class AppModel: ObservableObject {
         let provider: AIProvider
         let credentialRevision: Int
         let request: ProviderKeyDeleteRequest
+    }
+
+    /// Who asked for a refresh: the owner, by pulling or opening the app or writing a capture, or
+    /// nobody, because the live loop's wait ran out.
+    enum RefreshReason: Equatable, Sendable {
+        case explicit
+        case live
+
+        /// Whether the screen may go back into its loading state. Only a refresh the owner asked
+        /// for may: the Inbox disables every one of its buttons while it loads, so a poll that
+        /// raised the flag would take them away from under the owner's finger every few seconds.
+        var showsLoadingState: Bool { self == .explicit }
+
+        /// Whether falling back to the copy stored on this iPhone is worth saying out loud. Only
+        /// when the owner asked: a poll that nags every few seconds about a network it is about
+        /// to try again is noise rather than news.
+        var announcesStoredCopy: Bool { self == .explicit }
     }
 
     @Published private(set) var phase: AppPhase = .booting
@@ -325,6 +431,11 @@ final class AppModel: ObservableObject {
     /// The refresh currently running, owned by the model rather than by whichever view asked
     /// for it, so a pull-to-refresh that ends does not cancel the work it started.
     private var refreshAllTask: Task<Void, Never>?
+    /// The loop that keeps the screen live while the app is in front of a signed-in owner.
+    private let liveRefresh = LiveRefreshLoop()
+    /// Whether the app is in front of the owner. A launch puts it there, and the scene reports
+    /// every change after that.
+    private var isForeground = true
     private var searchEpoch: UInt64 = 0
     private var searchTask: Task<Void, Never>?
     private var searchPaginationState: SearchPaginationState?
@@ -335,9 +446,15 @@ final class AppModel: ObservableObject {
         SecureAccountExportWriter.removeStaleArtifacts()
         explicitSignOutBarrier = ExplicitSignOutBarrier(defaults: userDefaults)
         pendingVerificationStore = PendingVerificationStore(defaults: userDefaults)
+        // Which step of the boot is running, so a failure can say what actually failed. One
+        // catch covering all of them told every owner their local storage was broken and to
+        // reinstall, even when the build's own configuration was the thing that would not load
+        // -- advice that cannot help, for a cause it names wrongly.
+        var stage = BootStage.configuration
         do {
             let configuration = try AppConfiguration.load(bundle: bundle)
             let unauthenticatedAPI = try APIClient(baseURL: configuration.apiBaseURL)
+            stage = .session
             let vault = KeychainSessionVault(
                 service: "\(configuration.bundleIdentifier).auth",
                 account: "session-v1"
@@ -355,6 +472,7 @@ final class AppModel: ObservableObject {
                 baseURL: configuration.apiBaseURL,
                 tokenProvider: auth
             )
+            stage = .storage
             let database = try LocalDatabase.open(
                 bundleIdentifier: configuration.bundleIdentifier
             )
@@ -376,9 +494,7 @@ final class AppModel: ObservableObject {
                 accountDeletionRecoveryStore: accountDeletionRecoveryStore
             )
         } catch {
-            phase = .failed(
-                "Unfiled could not open its protected local storage. Restart the app; if the problem continues, reinstall this development build."
-            )
+            phase = .failed(stage.failureMessage)
         }
     }
 
@@ -625,27 +741,33 @@ final class AppModel: ObservableObject {
     /// itself: every request failed at once, the app called that an outage, and the screen fell
     /// back to its stored copy. The work now belongs to the model; callers only wait for it.
     func refreshAll() async {
+        await refreshAll(reason: .explicit)
+    }
+
+    private func refreshAll(reason: RefreshReason) async {
         if let inFlight = refreshAllTask {
             await inFlight.value
             return
         }
-        let task = Task { await self.performRefreshAll() }
+        let task = Task { await self.performRefreshAll(reason: reason) }
         refreshAllTask = task
         await task.value
         refreshAllTask = nil
     }
 
-    private func performRefreshAll() async {
+    private func performRefreshAll(reason: RefreshReason) async {
         guard let runtime, let user = currentUser else { return }
         let context = currentAccountContext(for: user)
         refreshEpoch &+= 1
         let operationEpoch = refreshEpoch
         let reviewOperationGeneration = reviewQueueGeneration.beginRequest()
         let activeNoteIDsAtStart = activeNoteMembership.ids
-        isLoadingLibrary = true
-        isLoadingReview = true
+        if reason.showsLoadingState {
+            isLoadingLibrary = true
+            isLoadingReview = true
+        }
         defer {
-            if isCurrent(context), refreshEpoch == operationEpoch {
+            if reason.showsLoadingState, isCurrent(context), refreshEpoch == operationEpoch {
                 isLoadingLibrary = false
                 isLoadingReview = false
             }
@@ -757,7 +879,7 @@ final class AppModel: ObservableObject {
             }
             rebuildActiveNotes()
             rebuildNoteDetails()
-            if !decoded.isEmpty {
+            if !decoded.isEmpty, reason.announcesStoredCopy {
                 bannerMessage = "Showing the encrypted copy stored on this iPhone."
             }
         }
@@ -957,12 +1079,7 @@ final class AppModel: ObservableObject {
             ),
             at: 0
         )
-        Task { @MainActor [weak self] in
-            guard let self, self.isCurrent(context) else { return }
-            await runtime.captureSync.drain(profileID: user.id)
-            guard self.isCurrent(context) else { return }
-            await self.refreshAll()
-        }
+        refreshAfterCaptureWrite(runtime: runtime, user: user, context: context)
     }
 
     /// Organizes a stopped capture again: the same text becomes a new capture carrying the
@@ -1009,12 +1126,7 @@ final class AppModel: ObservableObject {
                 at: 0
             )
             await removeReplacedCapture(captureID, runtime: runtime, context: context)
-            Task { @MainActor [weak self] in
-                guard let self, self.isCurrent(context) else { return }
-                await runtime.captureSync.drain(profileID: user.id)
-                guard self.isCurrent(context) else { return }
-                await self.refreshAll()
-            }
+            refreshAfterCaptureWrite(runtime: runtime, user: user, context: context)
         } catch {
             guard isCurrent(context) else { return }
             bannerMessage = "That capture could not be organized again. Try once more."
@@ -1191,14 +1303,68 @@ final class AppModel: ObservableObject {
     }
 
     func becameActive() async {
+        // The scene is recorded before the session is checked, so an app brought forward while
+        // signed out still knows it is in front of the owner when they sign in.
+        isForeground = true
+        updateLiveRefresh()
         guard let runtime, let user = currentUser else { return }
         await runtime.captureSync.activate(profileID: user.id)
         await refreshAll()
     }
 
     func becameInactive() async {
+        isForeground = false
+        updateLiveRefresh()
         guard let runtime, let user = currentUser else { return }
         await runtime.captureSync.deactivate(profileID: user.id)
+    }
+
+    /// Starts or stops the live refresh loop so that it is running exactly when it should be.
+    /// Every path that changes the session or the scene ends here rather than starting and
+    /// stopping the loop itself, so it can never be left running for a signed-out owner or for an
+    /// app the owner has put away.
+    private func updateLiveRefresh() {
+        guard LiveRefreshCadence.isLive(
+            isForeground: isForeground,
+            isSignedIn: currentUser != nil
+        ) else {
+            liveRefresh.stop()
+            return
+        }
+        liveRefresh.start(
+            interval: { [weak self] in
+                LiveRefreshCadence.interval(for: self?.receipts ?? [])
+            },
+            refresh: { [weak self] in
+                await self?.refreshAll(reason: .live)
+            }
+        )
+    }
+
+    /// Times the next live refresh from now instead of from whenever the current wait began, so a
+    /// capture the owner just wrote is followed by the organizing cadence rather than by the
+    /// remainder of an idle countdown that started before the capture existed.
+    private func restartLiveRefresh() {
+        liveRefresh.stop()
+        updateLiveRefresh()
+    }
+
+    /// Sends what the owner just wrote and shows what came of it without waiting for a tick: the
+    /// outbox drains, the model refreshes at once, and the live loop times its next wait from
+    /// here, so the new row appears immediately and then keeps the organizing cadence until the
+    /// capture is filed.
+    private func refreshAfterCaptureWrite(
+        runtime: Runtime,
+        user: AuthUser,
+        context: AccountContext
+    ) {
+        restartLiveRefresh()
+        Task { @MainActor [weak self] in
+            guard let self, self.isCurrent(context) else { return }
+            await runtime.captureSync.drain(profileID: user.id)
+            guard self.isCurrent(context) else { return }
+            await self.refreshAll()
+        }
     }
 
     func openNote(_ noteID: String) {
@@ -1278,6 +1444,20 @@ final class AppModel: ObservableObject {
     /// Tests seed the review queue directly; the app only fills it from the server.
     func seedReviewItemsForTesting(_ items: [ReviewPresentation]) {
         reviewItems = items
+    }
+
+    /// Whether the live refresh loop is running. Tests read it; the app decides it from the
+    /// session and the scene.
+    var isLiveRefreshRunningForTesting: Bool { liveRefresh.isRunning }
+
+    /// Tests put a session in place, or take one away, exactly as accepting a session and signing
+    /// out do — without the server round trip both real paths need.
+    func setSessionForTesting(_ user: AuthUser?) {
+        if let user {
+            activate(user)
+        } else {
+            clearAuthenticatedState()
+        }
     }
     #endif
 
@@ -4728,6 +4908,10 @@ final class AppModel: ObservableObject {
         currentUser = user
         hasPendingAccountDeletionReplay = hasProtectedDeletionRecovery
         phase = .signedIn
+        // clearAuthenticatedState above stops the loop, so accepting a session has to start it
+        // again. Without this the app polled for nobody and went live only once the owner
+        // backgrounded and reopened it -- which is the "nothing changes until I restart" report.
+        updateLiveRefresh()
     }
 
     private func discardNoteContextIfChanged(
@@ -4855,6 +5039,7 @@ final class AppModel: ObservableObject {
         interactionErrors = [:]
         requestedReviewFocusID = nil
         phase = .signedOut
+        updateLiveRefresh()
     }
 
     private func currentAccountContext(for user: AuthUser) -> AccountContext {

@@ -803,7 +803,7 @@
           "manifest": "public",
           "mockOutput": "append_list",
           "policy": "medium_list",
-          "expect": "list_review"
+          "expect": "list_auto"
         },
       "workout_auto":
         {
@@ -950,14 +950,14 @@
           "manifest": "public",
           "mockOutput": "append_generic",
           "policy": "warmup_first",
-          "expect": "warmup_review"
+          "expect": "generic_auto"
         },
       "warmup_last_capture":
         {
           "manifest": "public",
           "mockOutput": "append_generic",
           "policy": "warmup_last",
-          "expect": "warmup_review"
+          "expect": "generic_auto"
         },
       "warmup_owner_chose_automatic":
         {

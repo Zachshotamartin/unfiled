@@ -9,6 +9,7 @@ import { OPENAI_PROVIDER_ADAPTER } from "../src/openai-planner.js";
 import type { PlannerInput } from "../src/planner.js";
 import { createOrganizerProviderCredentialAccess } from "../src/provider-credential.js";
 import { createOrganizerProviderPlanner } from "../src/provider-multiplexer.js";
+import { ORGANIZER_PROMPT_VERSION } from "../src/prompt.js";
 
 type Fixture = Readonly<Record<string, unknown>>;
 
@@ -48,7 +49,7 @@ function plannerInput(): PlannerInput {
     ],
     captureId: "cap_01ARZ3NDEKTSV4RRFFQ69G5FAV",
     controls,
-    promptVersion: "routing-v1",
+    promptVersion: ORGANIZER_PROMPT_VERSION,
     schemaVersion: 1,
     signal: new AbortController().signal
   };

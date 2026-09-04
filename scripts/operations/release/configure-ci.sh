@@ -9,8 +9,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 cd "$ROOT"
 
-auth_file="$HOME/Library/Application Support/com.vercel.cli/auth.json"
-[ -f "$auth_file" ] || { echo "Vercel CLI is not logged in on this machine (run: vercel login)." >&2; exit 1; }
+# The CLI login is a session, not an API token: the API answers 403 to it. Only a token created
+# at https://vercel.com/account/tokens can deploy or read what is deployed.
+[ -n "${VERCEL_TOKEN:-}" ] || {
+  echo "VERCEL_TOKEN is not set. Create one at https://vercel.com/account/tokens, then run:" >&2
+  echo "  VERCEL_TOKEN=... scripts/operations/release/configure-ci.sh" >&2
+  exit 1
+}
 command -v gh >/dev/null || { echo "The GitHub CLI is required (run: brew install gh && gh auth login)." >&2; exit 1; }
 if [ -f "$ROOT/.env.live-gate" ]; then set -a; . "$ROOT/.env.live-gate"; set +a; fi
 keychain() { security find-generic-password -s "$1" -a "$2" -w 2>/dev/null || true; }
@@ -19,12 +24,12 @@ staging="$(mktemp -d)"
 trap 'rm -rf "$staging"' EXIT
 chmod 700 "$staging"
 
-node - "$auth_file" "$staging" <<'NODE'
+node - "$staging" <<'NODE'
 const fs = require("node:fs");
-const [, , authPath, staging] = process.argv;
-const token = JSON.parse(fs.readFileSync(authPath, "utf8")).token;
+const [, , staging] = process.argv;
+const token = process.env.VERCEL_TOKEN;
 if (typeof token !== "string" || token.length < 20) {
-  console.error("The Vercel CLI login does not carry a usable token.");
+  console.error("VERCEL_TOKEN is not a usable token.");
   process.exit(1);
 }
 const names = {
@@ -59,15 +64,46 @@ const write = (name, value) => fs.writeFileSync(`${staging}/${name}`, value, { m
 })();
 NODE
 
-gate_key="${UNFILED_GATE_OPENAI_API_KEY:-$(keychain unfiled-gate OPENAI_API_KEY)}"
-cron_secret="${UNFILED_GATE_CRON_SECRET:-$(keychain unfiled-beta-web-secret CRON_SECRET)}"
-[ -n "$gate_key" ] && printf '%s' "$gate_key" > "$staging/UNFILED_GATE_OPENAI_API_KEY"
-[ -n "$cron_secret" ] && printf '%s' "$cron_secret" > "$staging/UNFILED_GATE_CRON_SECRET"
-[ -n "${SUPABASE_DB_URL:-}" ] && printf '%s' "$SUPABASE_DB_URL" > "$staging/SUPABASE_DB_URL"
+# Each value comes from the environment first, then the login keychain. `set -e` is why these
+# are written as `if` blocks rather than `[ -n "$x" ] && ...`: a bare test that fails ends the
+# whole script, so a single absent value used to abort the run without a word about which one.
+stage() {
+  if [ -n "$2" ]; then
+    printf '%s' "$2" > "$staging/$1"
+  else
+    echo "  (absent: $1)" >&2
+  fi
+}
+
+stage UNFILED_GATE_OPENAI_API_KEY \
+  "${UNFILED_GATE_OPENAI_API_KEY:-$(keychain unfiled-gate OPENAI_API_KEY)}"
+stage UNFILED_GATE_CRON_SECRET \
+  "${UNFILED_GATE_CRON_SECRET:-$(keychain unfiled-beta-web-secret CRON_SECRET)}"
+# The live gate confirms its own synthetic account through Supabase's admin API, because a
+# deployment that confirms addresses will not let a new account sign in otherwise. Without these
+# two the gate stops at exit 2 -- and it runs after the five deploys, so a release that lacked
+# them put new code in front of every owner and only then discovered it could verify none of it.
+stage UNFILED_GATE_SUPABASE_URL \
+  "${UNFILED_GATE_SUPABASE_URL:-$(keychain unfiled-gate SUPABASE_URL)}"
+stage UNFILED_GATE_SUPABASE_SERVICE_ROLE_KEY \
+  "${UNFILED_GATE_SUPABASE_SERVICE_ROLE_KEY:-$(keychain unfiled-gate SUPABASE_SERVICE_ROLE_KEY)}"
+stage SUPABASE_DB_URL "${SUPABASE_DB_URL:-}"
 
 for path in "$staging"/*; do
   name="$(basename "$path")"
   gh secret set "$name" < "$path" && echo "set $name"
+done
+
+for required in UNFILED_GATE_SUPABASE_URL UNFILED_GATE_SUPABASE_SERVICE_ROLE_KEY; do
+  if [ ! -f "$staging/$required" ]; then
+    echo
+    echo "$required is not set, so the live gate cannot start and a release will refuse."
+    echo "Take it from the Supabase dashboard for the project the deployment uses"
+    echo "(Project settings, API keys) and store it in the login keychain:"
+    echo "  printf 'value: ' && read -rs V && echo && \\"
+    echo "    security add-generic-password -U -s unfiled-gate -a ${required#UNFILED_GATE_} -w \"\$V\" && unset V"
+    echo "then run this script again."
+  fi
 done
 
 if [ ! -f "$staging/SUPABASE_DB_URL" ]; then

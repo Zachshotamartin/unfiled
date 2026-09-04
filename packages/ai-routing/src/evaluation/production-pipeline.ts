@@ -415,7 +415,10 @@ export const PRODUCTION_PIPELINE_CASES: readonly ProductionPipelineCase[] = Obje
     liveEligible: true
   },
   {
-    id: "pipeline-principle-review",
+    // A method the owner wrote down, appended to the note they keep methods in, with the
+    // retriever putting it 0.78 clear of everything else and the index complete. This is the
+    // shape of capture the organizer exists to file, and it used to arrive in Review.
+    id: "pipeline-principle-auto",
     input: {
       captureId: captureId(3),
       captureText: "method: make commitments visible before motivation fades",
@@ -427,9 +430,9 @@ export const PRODUCTION_PIPELINE_CASES: readonly ProductionPipelineCase[] = Obje
       retrievalState: "complete"
     },
     expected: {
-      allowedBands: ["review"],
+      allowedBands: ["auto"],
       allowedDecisions: ["append_to_note"],
-      applied: false,
+      applied: true,
       destinationNoteId: NOTE_IDS.principles,
       planValid: true,
       retrievedMustInclude: [NOTE_IDS.principles]
@@ -437,7 +440,7 @@ export const PRODUCTION_PIPELINE_CASES: readonly ProductionPipelineCase[] = Obje
     liveEligible: true
   },
   {
-    id: "pipeline-project-review",
+    id: "pipeline-project-auto",
     input: {
       captureId: captureId(4),
       captureText: "project update: shipped offline capture. next step is sync tests",
@@ -449,9 +452,9 @@ export const PRODUCTION_PIPELINE_CASES: readonly ProductionPipelineCase[] = Obje
       retrievalState: "complete"
     },
     expected: {
-      allowedBands: ["review"],
+      allowedBands: ["auto"],
       allowedDecisions: ["append_to_note"],
-      applied: false,
+      applied: true,
       destinationNoteId: NOTE_IDS.project,
       planValid: true,
       retrievedMustInclude: [NOTE_IDS.project]

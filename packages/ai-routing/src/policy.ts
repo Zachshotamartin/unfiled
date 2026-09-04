@@ -5,9 +5,6 @@ import { noteTypeHoldsParagraphs } from "./application.js";
 
 const UnitIntervalSchema = z.number().min(0).max(1);
 
-/** How many of an account's first captures the warm-up override holds back. */
-const WARMUP_CAPTURE_ORDINALS = 5;
-
 export const RoutingBehaviorModeSchema = z.enum(["cautious", "balanced", "automatic"]);
 export type RoutingBehaviorMode = z.infer<typeof RoutingBehaviorModeSchema>;
 
@@ -76,7 +73,6 @@ export type RoutingPolicyReason =
   | "invalid_plan"
   | "invalid_policy_input"
   | "long_capture"
-  | "low_margin"
   | "low_score"
   | "model_deferred"
   | "principle_type_mismatch"
@@ -84,8 +80,7 @@ export type RoutingPolicyReason =
   | "provider_unavailable"
   | "retrieval_degraded"
   | "retrieval_unavailable"
-  | "revision_conflict"
-  | "warmup";
+  | "revision_conflict";
 
 export type RoutingPolicyResult = Readonly<{
   band: RoutingBand;
@@ -213,34 +208,52 @@ export function bandRoutingDecision(input: unknown): RoutingPolicyResult {
   if (policy.planDecision === "append_to_note" && policy.captureLength > 2_000) {
     hardOverrides.push("long_capture");
   }
-  // Warm-up holds a new account's first captures for review so the owner sees how the
-  // organizer files before it files unattended. An owner who has already chosen Automatic has
-  // answered that question, so the setting they were offered decides rather than the ordinal.
-  if (
-    policy.accountCaptureOrdinal <= WARMUP_CAPTURE_ORDINALS &&
-    policy.mode !== "automatic" &&
-    !policy.deterministicRuleMatch
-  ) {
-    hardOverrides.push("warmup");
-  }
-  if (!policy.retrievalAutoEligible && !policy.deterministicRuleMatch) {
+  // Starting a note has nothing to get wrong. There is no existing note to damage and nothing to
+  // choose between, and a title the owner dislikes is one tap to rename. Review is for placing a
+  // capture among notes that already exist, so a plan to give one a note of its own answers to the
+  // duplicate check above and to nothing else here: not the warm-up ordinal, not a degraded
+  // candidate scan, not a score assembled out of how well the candidates *failed* to fit.
+  // Each of those held a capture to ask the owner to approve the only available answer, and for an
+  // owner whose library was still empty that was every capture they had ever written.
+  const startsANote = policy.planDecision === "create_note";
+  // A degraded scan is the one case where the organizer genuinely cannot see the library it is
+  // filing into, so an append still waits: the note it chose may not be the note it would have
+  // chosen. That is ignorance of the destination, which is what Review is for.
+  if (!startsANote && !policy.retrievalAutoEligible && !policy.deterministicRuleMatch) {
     hardOverrides.push("retrieval_degraded");
   }
   if (policy.mode === "cautious") hardOverrides.push("cautious_mode");
 
-  const isCreate = policy.planDecision === "create_note";
-  const autoThreshold = isCreate ? 0.7 : policy.mode === "automatic" ? 0.7 : 0.8;
-  const marginThreshold = policy.mode === "automatic" ? 0.1 : 0.15;
-  const marginTooLow = !isCreate && policy.features.margin < marginThreshold;
-  if (hardOverrides.length === 0 && score >= autoThreshold && !marginTooLow) {
+  // Review is for a capture the organizer could not resolve, and every one of those is a hard
+  // override above: a note the owner may already have, a type the destination cannot hold, a
+  // photo with nowhere to sit, a scan that could not vouch for its candidates, a mode in which
+  // the owner asked to see everything. A score is not one of those. It says how confident the
+  // placement is, so it chooses between filing and leaving the capture in the Inbox -- it does
+  // not ask the owner to adjudicate a note the organizer understood.
+  //
+  // The bar is 0.45 because of what the weights can actually reach. `explicitDestinationMention`
+  // (0.25) and `reasonCodeConsistency` (0.05) are both zero for every candidate the retriever
+  // merely found -- they fire only for a destination the owner named or a rule matched -- so 0.55
+  // is the ceiling for a purely semantic append and a strong one lands near 0.48. The old bar of
+  // 0.8 sat above everything an ordinary capture could score, which is why filing the organizer
+  // had got right arrived in Review anyway.
+  //
+  // The margin gate went with it. Margin is the retriever's score gap between the top two
+  // candidates, and it is already weighted into the score. Gating on it a second time held a
+  // capture because the *retriever* could not separate two notes, when the model that chose
+  // between them had read both. Choosing among plausible places is the work, not a reason to ask.
+  if (hardOverrides.length > 0) {
+    // A blocker over a placement worth showing becomes a question, because there is something for
+    // the owner to accept or redirect. A blocker over a placement the organizer had no confidence
+    // in has nothing to approve, so it waits in the Inbox instead of arriving as a question whose
+    // proposed answer is a guess.
+    return startsANote || score >= 0.45
+      ? result("review", score, policy.features.margin, hardOverrides)
+      : result("inbox", score, policy.features.margin, [...hardOverrides, "low_score"]);
+  }
+  const autoThreshold = policy.mode === "automatic" ? 0.4 : 0.45;
+  if (startsANote || score >= autoThreshold) {
     return result("auto", score, policy.features.margin, ["automatic_threshold_met"]);
   }
-
-  if (score < 0.45) {
-    return result("inbox", score, policy.features.margin, [...hardOverrides, "low_score"]);
-  }
-  return result("review", score, policy.features.margin, [
-    ...hardOverrides,
-    ...(marginTooLow ? (["low_margin"] as const) : [])
-  ]);
+  return result("inbox", score, policy.features.margin, ["low_score"]);
 }

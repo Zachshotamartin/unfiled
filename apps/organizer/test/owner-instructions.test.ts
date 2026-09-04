@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { prepareProviderDisclosure } from "../src/planner-disclosure.js";
 import type { PlannerInput } from "../src/planner.js";
-import { ORGANIZER_ROUTING_PROMPT } from "../src/prompt.js";
+import { ORGANIZER_PROMPT_VERSION, ORGANIZER_ROUTING_PROMPT } from "../src/prompt.js";
 
 const candidateId = "note_01ARZ3NDEKTSV4RRFFQ69G5FAB" as const;
 const noteId = "note_01ARZ3NDEKTSV4RRFFQ69G5FAA" as const;
@@ -29,7 +29,7 @@ function plannerInput(capture: PlannerInput["capture"]): PlannerInput {
     ],
     captureId: "cap_01ARZ3NDEKTSV4RRFFQ69G5FAV",
     controls,
-    promptVersion: "routing-v1",
+    promptVersion: ORGANIZER_PROMPT_VERSION,
     schemaVersion: 1,
     signal: new AbortController().signal
   };

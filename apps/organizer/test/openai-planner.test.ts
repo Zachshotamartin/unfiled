@@ -5,6 +5,7 @@ import { createOpenAIOrganizerPlanner, OPENAI_ROUTING_PROFILE } from "../src/ope
 import { OPENAI_ORGANIZATION_PLAN_SCHEMA } from "../src/openai-schema.js";
 import type { PlannerInput } from "../src/planner.js";
 import { createOrganizerProviderCredentialAccess } from "../src/provider-credential.js";
+import { ORGANIZER_PROMPT_VERSION } from "../src/prompt.js";
 
 const API_KEY = "a".repeat(32);
 const candidateId = "note_01ARZ3NDEKTSV4RRFFQ69G5FAB" as const;
@@ -44,7 +45,7 @@ function plannerInput(overrides: Partial<PlannerInput> = {}): PlannerInput {
     ],
     captureId: "cap_01ARZ3NDEKTSV4RRFFQ69G5FAV",
     controls,
-    promptVersion: "routing-v1",
+    promptVersion: ORGANIZER_PROMPT_VERSION,
     schemaVersion: 1,
     signal: new AbortController().signal,
     ...overrides
@@ -711,12 +712,12 @@ describe("OpenAI Responses organizer planner", () => {
   it("rejects unknown durable profiles and bounded-input violations before fetch", async () => {
     const fetchImplementation = vi.fn<typeof fetch>();
     const service = createOpenAIOrganizerPlanner({ apiKey: API_KEY, fetchImplementation });
-    await expect(service.plan(plannerInput({ promptVersion: "routing-v2" }))).rejects.toMatchObject(
-      {
-        retryable: false,
-        safeCode: "validation_failed"
-      }
-    );
+    await expect(
+      service.plan(plannerInput({ promptVersion: `${ORGANIZER_PROMPT_VERSION}-unknown` }))
+    ).rejects.toMatchObject({
+      retryable: false,
+      safeCode: "validation_failed"
+    });
     await expect(
       service.plan(
         plannerInput({
