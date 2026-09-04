@@ -1,7 +1,7 @@
 import { PageHeading } from "@/components/product/page-heading";
-import { ResourceSkeleton } from "@/components/product/resource-states";
+import { CardSkeleton } from "@/components/product/resource-states";
 
-/** The Inbox's shape while it loads: its heading, the composer's card, then rows. */
+/** The Inbox's shape while it loads: heading, the composer, then "Needs you". */
 export default function AppLoading() {
   return (
     <main
@@ -12,16 +12,27 @@ export default function AppLoading() {
     >
       <div className="content-column">
         <PageHeading title="Inbox" />
-        <div className="capture-composer mt-10" aria-hidden="true">
-          <div>
-            <div className="skeleton-block h-8 w-56 max-w-full rounded-control" />
-            <div className="skeleton-block mt-3 h-4 w-64 max-w-full rounded-control" />
+        <section className="capture-composer mt-10" aria-hidden="true">
+          <div className="capture-composer-intro">
+            <div className="skeleton-block h-7 w-56 max-w-full rounded-control" />
+            <div className="skeleton-block h-4 w-52 max-w-full rounded-control" />
           </div>
-          <div className="skeleton-block h-56 w-full rounded-frame" />
-        </div>
-        <div className="mt-12">
-          <ResourceSkeleton rows={3} />
-        </div>
+          <div className="capture-form">
+            <div className="skeleton-block h-24 w-full rounded-control" />
+            <div className="capture-submit-row">
+              <div className="skeleton-block h-11 w-32 rounded-control" />
+              <div className="skeleton-block h-11 w-24 rounded-control" />
+            </div>
+          </div>
+        </section>
+        <section className="capture-activity mt-12" aria-hidden="true">
+          <div className="capture-section-heading">
+            <div className="skeleton-block h-3 w-20" />
+          </div>
+          <div className="mt-4">
+            <CardSkeleton cards={1} />
+          </div>
+        </section>
       </div>
     </main>
   );
