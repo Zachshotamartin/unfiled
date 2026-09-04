@@ -191,6 +191,8 @@ function privateCommand(): CreateEncryptedCaptureCommand {
       explicitDestinationNoteId: null,
       routingRuleMatch: null,
       expansionDisabled: false,
+      promptVersion: "routing-v2",
+      schemaVersion: 1,
       privateReceiptCipher: sealedCipher(
         "capture_receipt",
         CAPTURE,

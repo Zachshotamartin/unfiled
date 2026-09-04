@@ -21,7 +21,8 @@ import {
   MAX_CAPTURE_IMAGE_EDGE_PIXELS,
   MAX_CAPTURE_RECORDING_MS,
   type CaptureAttachmentKind,
-  type CaptureAttachmentMediaType
+  type CaptureAttachmentMediaType,
+  ORGANIZER_PROMPT_VERSION_PATTERN
 } from "@unfiled/contracts";
 import { parseContentEnvelope, serializeContentEnvelope } from "@unfiled/content-crypto";
 import { stickyKeyClass } from "@unfiled/encrypted-aggregate";
@@ -167,7 +168,9 @@ const CREATE_CAPTURE_KEYS = [
   "expansionDisabled",
   "privateReceiptCipher",
   "privateReceiptVerificationMac",
-  "attachmentIds"
+  "attachmentIds",
+  "promptVersion",
+  "schemaVersion"
 ] as const;
 
 export const encryptedCaptureRpcFunctions = Object.freeze([
@@ -379,6 +382,8 @@ export type CreateEncryptedCaptureCommand = Readonly<{
     /// The photos and recordings this capture claims. The RPC binds them to the capture in the
     /// same transaction, so a capture is never committed without the media it names.
     attachmentIds: readonly EntityId<"att">[];
+    promptVersion: string;
+    schemaVersion: number;
   }>;
 }>;
 
@@ -1218,6 +1223,11 @@ function parseCreateCommand(input: CreateEncryptedCaptureCommand): CreateEncrypt
     return inputFailure();
   }
   const attachmentIds = captureAttachmentIds(row.attachmentIds, inputFailure);
+  // The durable profile the organizer checks this job against. The SQL used to stamp a literal
+  // here, and bumping the organizer without a migration made every job fail closed.
+  const promptVersion = boundedString(row.promptVersion, 1, 100, inputFailure);
+  if (!ORGANIZER_PROMPT_VERSION_PATTERN.test(promptVersion)) return inputFailure();
+  const schemaVersion = positiveInteger(row.schemaVersion, 999, inputFailure);
   return Object.freeze({
     ownerId,
     capture: Object.freeze({
@@ -1237,7 +1247,9 @@ function parseCreateCommand(input: CreateEncryptedCaptureCommand): CreateEncrypt
       expansionDisabled: row.expansionDisabled,
       privateReceiptCipher: receiptCipher,
       privateReceiptVerificationMac: receiptMac,
-      attachmentIds
+      attachmentIds,
+      promptVersion,
+      schemaVersion
     })
   });
 }

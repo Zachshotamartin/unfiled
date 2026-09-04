@@ -634,7 +634,9 @@ select 'capture-command', jsonb_build_object(
   'expansionDisabled', false,
   'routingRuleMatch', null,
   'privateReceiptCipher', null,
-  'privateReceiptVerificationMac', null
+  'privateReceiptVerificationMac', null,
+  'promptVersion', 'routing-v2',
+  'schemaVersion', 1
 )
 from (
   select to_char(
@@ -658,6 +660,14 @@ select ok(
       where job.id = 'job_77000000000000000000000001'
     ),
   'fresh encrypted AI capture and its organizer job commit atomically'
+);
+-- The job carries the profile the caller sent, not a literal the SQL made up. A literal is what
+-- made every capture fail closed the first time the organizer's prompt version moved.
+select is(
+  (select prompt_version || '/' || schema_version::text from public.organization_jobs
+    where id = 'job_77000000000000000000000001'),
+  'routing-v2/1',
+  'the organizer job is stamped with the prompt and schema version the caller sent'
 );
 set local role service_role;
 select is(

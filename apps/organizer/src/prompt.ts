@@ -1,5 +1,6 @@
-export const ORGANIZER_PROMPT_VERSION = "routing-v2" as const;
-export const ORGANIZER_SCHEMA_VERSION = 1 as const;
+// The durable profile lives in @unfiled/contracts so the web stamps the same values on every
+// job it creates. Re-exported here so nothing in the organizer has to change where it looks.
+export { ORGANIZER_PROMPT_VERSION, ORGANIZER_SCHEMA_VERSION } from "@unfiled/contracts";
 
 export const ORGANIZER_ROUTING_PROMPT = `You are the routing component of a notes app. File one capture among the supplied candidate notes, create a note, or defer for review.
 

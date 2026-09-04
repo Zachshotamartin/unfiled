@@ -10,6 +10,7 @@ export * from "./ids.js";
 export * from "./idempotency.js";
 export * from "./mutations.js";
 export * from "./note-context.js";
+export * from "./organizer-profile.js";
 export * from "./notes.js";
 export * from "./openapi.js";
 export * from "./operations.js";

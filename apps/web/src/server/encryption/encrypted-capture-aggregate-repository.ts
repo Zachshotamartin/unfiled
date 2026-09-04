@@ -31,7 +31,9 @@ import {
   CAPTURE_ATTACHMENT_MAX_BYTES,
   CaptureAttachmentSchema,
   CaptureAttachmentUploadSchema,
-  type CaptureAttachment
+  type CaptureAttachment,
+  ORGANIZER_PROMPT_VERSION,
+  ORGANIZER_SCHEMA_VERSION
 } from "@unfiled/contracts";
 import {
   applyNoteOperations,
@@ -1295,7 +1297,11 @@ export class EncryptedCaptureAggregateRepository implements CaptureRepository {
               expansionDisabled: input.expansionDisabled,
               privateReceiptCipher,
               privateReceiptVerificationMac,
-              attachmentIds: input.attachmentIds ?? []
+              attachmentIds: input.attachmentIds ?? [],
+              // The durable profile the organizer will check this job against, from the one
+              // definition the organizer itself reads. The SQL used to stamp a literal.
+              promptVersion: ORGANIZER_PROMPT_VERSION,
+              schemaVersion: ORGANIZER_SCHEMA_VERSION
             }
           });
           break;
