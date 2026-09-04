@@ -1,5 +1,6 @@
 import {
   ApiErrorCode,
+  LOG_FIELD_VALUE_MAX_CHARACTERS,
   LogStructuredDataSchema,
   type LogFieldValue,
   type LogStructuredData
@@ -85,7 +86,7 @@ function parseFieldValue(source: string): LogFieldValue {
   if (source.startsWith('"') && source.endsWith('"')) {
     try {
       const parsed: unknown = JSON.parse(source);
-      if (typeof parsed !== "string" || parsed.length > 500) {
+      if (typeof parsed !== "string" || parsed.length > LOG_FIELD_VALUE_MAX_CHARACTERS) {
         return conflict("Quoted log values must decode to a bounded string");
       }
       return parsed;
@@ -99,7 +100,9 @@ function parseFieldValue(source: string): LogFieldValue {
     if (!Number.isFinite(parsed)) return conflict("Log numbers must be finite");
     return parsed;
   }
-  if (source.length > 500) return conflict("Log field values are limited to 500 characters");
+  if (source.length > LOG_FIELD_VALUE_MAX_CHARACTERS) {
+    return conflict(`Log field values are limited to ${LOG_FIELD_VALUE_MAX_CHARACTERS} characters`);
+  }
   return source;
 }
 

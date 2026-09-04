@@ -9,7 +9,7 @@
  * now sends these two values with every capture it creates, from this one definition, and the
  * SQL stores what it is given.
  */
-export const ORGANIZER_PROMPT_VERSION = "routing-v3" as const;
+export const ORGANIZER_PROMPT_VERSION = "routing-v4" as const;
 export const ORGANIZER_SCHEMA_VERSION = 1 as const;
 
 /** The shape a stored prompt version may take; the SQL and the organizer enforce the same rule. */

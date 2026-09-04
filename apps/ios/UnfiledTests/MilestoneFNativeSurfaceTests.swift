@@ -182,11 +182,12 @@ final class MilestoneFNativeSurfaceTests: XCTestCase {
         var text = LogFieldEditDraft(priorValue: .string("easy"))
         XCTAssertFalse(text.isNumeric)
         XCTAssertEqual(text.placeholder, "Previous: easy")
-        text.updateInput(String(repeating: "x", count: 500))
+        let limit = LogFieldEditDraft.maximumTextInputUTF16Units
+        text.updateInput(String(repeating: "x", count: limit))
         XCTAssertEqual(text.proposedValue, .string(text.input))
         text.updateInput(text.input + "🙂")
-        XCTAssertEqual(text.input.utf16.count, LogFieldEditDraft.maximumTextInputUTF16Units)
-        XCTAssertEqual(text.proposedValue, .string(String(repeating: "x", count: 500)))
+        XCTAssertEqual(text.input.utf16.count, limit)
+        XCTAssertEqual(text.proposedValue, .string(String(repeating: "x", count: limit)))
 
         var numeric = LogFieldEditDraft(priorValue: .number(1))
         numeric.updateInput(String(repeating: "9", count: 80))

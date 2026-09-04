@@ -185,7 +185,8 @@
     gap: 0.75rem;
   }
 
-  .log-field-editor > input {
+  .log-field-editor > input,
+  .log-field-editor > textarea {
     width: 100%;
     min-height: 2.75rem;
     border: 1px solid var(--color-border);
@@ -195,7 +196,15 @@
     outline: none;
   }
 
-  .log-field-editor > input:focus {
+  .log-field-editor > textarea {
+    grid-column: 1 / -1;
+    resize: vertical;
+    line-height: 1.5;
+    white-space: pre-wrap;
+  }
+
+  .log-field-editor > input:focus,
+  .log-field-editor > textarea:focus {
     border-color: var(--color-accent);
   }
 

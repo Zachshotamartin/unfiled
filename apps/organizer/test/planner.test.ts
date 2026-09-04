@@ -6,6 +6,7 @@ import {
   createDeterministicFirstOrganizerPlanner,
   inferOrganizerCaptureKind,
   proposedNoteIdForJob,
+  namedDestinationPhrases,
   resolveDeterministicDestination,
   unavailableProductionPlanner,
   type OrganizerPlanner
@@ -129,6 +130,72 @@ describe("app-specific planning wrappers", () => {
       candidateId: "note_01ARZ3NDEKTSV4RRFFQ69G5FAB",
       source: "exact_title_phrase"
     });
+  });
+
+  it("reads the destination from the owner's directions before the capture's words", () => {
+    const controls = { expansionDisabled: false, explicitDestinationNoteId: null, ruleMatch: null };
+    const workout = {
+      candidateId: "note_01ARZ3NDEKTSV4RRFFQ69G5FAB" as const,
+      isOpen: true,
+      noteId: "note_01ARZ3NDEKTSV4RRFFQ69G5FAA" as const,
+      title: "Workout log"
+    };
+    const groceries = {
+      candidateId: "note_01ARZ3NDEKTSV4RRFFQ69G5FAD" as const,
+      isOpen: true,
+      noteId: "note_01ARZ3NDEKTSV4RRFFQ69G5FAC" as const,
+      title: "Groceries"
+    };
+    // Directions phrase the note freely: a possessive, an article, "the note called".
+    for (const guidance of [
+      "put this in my workout log",
+      "add to Workout Log",
+      "file under the note called workout log",
+      "this belongs in the workout log note"
+    ]) {
+      expect(
+        resolveDeterministicDestination({
+          candidates: [workout, groceries],
+          capture: {
+            controls,
+            rawContent: "Bench 4x8 at 185, incline 3x10 at 70, dips to failure",
+            guidance
+          }
+        }),
+        guidance
+      ).toEqual({ candidateId: workout.candidateId, source: "exact_title_phrase" });
+    }
+    // Directions outrank a destination the capture's own words name.
+    expect(
+      resolveDeterministicDestination({
+        candidates: [workout, groceries],
+        capture: {
+          controls,
+          rawContent: "add eggs to groceries",
+          guidance: "put this in my workout log"
+        }
+      })
+    ).toEqual({ candidateId: workout.candidateId, source: "exact_title_phrase" });
+    // Directions that name no note leave the capture's own words to speak.
+    expect(
+      resolveDeterministicDestination({
+        candidates: [workout, groceries],
+        capture: { controls, rawContent: "add eggs to groceries", guidance: "keep it short" }
+      })
+    ).toEqual({ candidateId: groceries.candidateId, source: "exact_title_phrase" });
+    // A name is exact: "workout" alone is not the Workout log.
+    expect(
+      resolveDeterministicDestination({
+        candidates: [workout, groceries],
+        capture: { controls, rawContent: "Bench 4x8", guidance: "put this in workout" }
+      })
+    ).toBeNull();
+    expect(
+      namedDestinationPhrases({
+        rawContent: "add eggs to groceries",
+        guidance: "put this in my workout log"
+      })
+    ).toEqual(["my workout log", "workout log", "groceries"]);
   });
 
   it("reads past the owner's possessive to the note's title", () => {

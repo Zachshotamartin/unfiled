@@ -683,7 +683,7 @@ Versioned per note type; validated by Zod at the application boundary and by `ch
 }
 ```
 
-Each field value is a string of at most 500 characters, a finite JSON number that round-trips through the shared JavaScript-number subset, or `null`. Entry timestamps must be strict ISO datetimes with an explicit `Z` or numeric offset.
+Each field value is a string of at most 10,000 characters (`LOG_FIELD_VALUE_MAX_CHARACTERS`; raised from 500 on 2026-09-04 so a capture filed whole as one entry fits), a finite JSON number that round-trips through the shared JavaScript-number subset, or `null`. Entry timestamps must be strict ISO datetimes with an explicit `Z` or numeric offset.
 
 ### 5.3 Projection rules
 

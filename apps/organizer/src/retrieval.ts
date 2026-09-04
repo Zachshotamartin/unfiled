@@ -33,6 +33,7 @@ import type { OrganizerKeyAuthority } from "./key-management.js";
 import { organizerLocalDate } from "./local-date.js";
 import {
   inferOrganizerCaptureKind,
+  namedDestinationPhrases,
   resolveDeterministicDestination,
   routedOrganizerCapture,
   type DecryptedCapture,
@@ -129,6 +130,25 @@ function currentReading(
 
 function candidateLimit(job: ClaimedOrganizerJob): number {
   return job.routingEffort === "economical" ? ECONOMICAL_CANDIDATE_LIMIT : CANDIDATE_LIMIT;
+}
+
+/**
+ * The ranked open matches, best first up to the limit, with every note the owner named kept
+ * in: a named note the ranking left out takes the place of the weakest ranked one. Order among
+ * the ranked notes is preserved, so the policy's margin still reads the scan's own separation.
+ */
+export function discloseNamedNotes(
+  ranked: readonly PrivateRagMatch[],
+  named: readonly PrivateRagMatch[],
+  limit: number
+): readonly PrivateRagMatch[] {
+  const disclosed = ranked.slice(0, limit);
+  for (const match of named) {
+    if (disclosed.some(({ noteId }) => noteId === match.noteId)) continue;
+    if (disclosed.length >= limit) disclosed.pop();
+    disclosed.push(match);
+  }
+  return Object.freeze(disclosed);
 }
 
 function meaningfulTokens(value: string): ReadonlySet<string> {
@@ -587,23 +607,47 @@ export function createOrganizerCandidateRetrieval(
           payloads,
           signal: input.signal
         };
-        const result = await activeRetrieval.run(activeContext, async () => {
-          try {
-            return await (cacheable ? retriever : uncachedRetriever).retrieve({
+        const namedTitles = namedDestinationPhrases(input.capture);
+        const scan = await activeRetrieval.run(activeContext, async () => {
+          const active = cacheable ? retriever : uncachedRetriever;
+          const query = (text: string) =>
+            active.retrieve({
               ownerId: input.job.ownerId,
-              query: {
-                embedding: queryEmbedding,
-                modelId: probe.page.snapshot.modelId,
-                text: retrievalText
-              },
+              query: { embedding: queryEmbedding, modelId: probe.page.snapshot.modelId, text },
               signal: input.signal
             });
+          try {
+            const primary = await query(retrievalText);
+            if (primary.status !== "complete") return { primary, named: [] };
+            // A note the owner named -- in their directions or in the capture -- is disclosed
+            // whatever the ranking says, because a name is an instruction and the model can
+            // only follow it if it sees the note. The ranking is asked again with the name
+            // itself, which puts the note carrying exactly that title at the top of its answer.
+            const ranked = new Set(
+              primary.matches
+                .filter(({ isOpen }) => isOpen)
+                .slice(0, candidateLimit(input.job))
+                .map(({ title }) => normalizePrivateRagText(title))
+            );
+            const missing = namedTitles.filter((title) => !ranked.has(title)).slice(0, 3);
+            const named: PrivateRagMatch[] = [];
+            for (const title of missing) {
+              const byName = await query(title);
+              if (byName.status !== "complete") continue;
+              const match = byName.matches.find(
+                (candidate) =>
+                  candidate.isOpen && normalizePrivateRagText(candidate.title) === title
+              );
+              if (match !== undefined) named.push(match);
+            }
+            return { primary, named };
           } finally {
             activeContext.active = false;
             activeContext.first = undefined;
             activeContext.payloads = undefined;
           }
         });
+        const result = scan.primary;
         if (result.status !== "complete") {
           invalidateOwner(input.job.ownerId);
           return await fallback(input);
@@ -613,9 +657,11 @@ export function createOrganizerCandidateRetrieval(
         // feeds the policy; it does not decide what the model may see. A capture that shares no
         // word with the note it belongs in ("eggs for the weekend" beside Groceries) is the
         // ordinary case, and a model that never sees the note can only start another one.
-        const usableMatches = result.matches
-          .filter(({ isOpen }) => isOpen)
-          .slice(0, candidateLimit(input.job));
+        const usableMatches = discloseNamedNotes(
+          result.matches.filter(({ isOpen }) => isOpen),
+          scan.named,
+          candidateLimit(input.job)
+        );
         if (usableMatches.length === 0) {
           return await completeNoMatch(input, result.snapshot.generationId);
         }

@@ -41,7 +41,7 @@ recognise that eggs are groceries. The model can.
    rest is content, and the parser enforces it deterministically: the list's items exclude the name,
    the source-preservation check does not require the name in the body, and a new list note takes
    the name whatever the model proposed. The phone suggests the same title when the owner files a
-   review by hand. The organizer prompt version is `routing-v3`.
+   review by hand. The organizer prompt version is `routing-v3`; `routing-v4` (2026-09-04) adds the rule that a note the owner named -- in directions or in the capture -- is the destination, and the retriever discloses that note whatever its rank.
 5. **The owner's possessive is not part of a title.** "add w to my todo list" resolves to a note
    titled "Todo list"; a note titled "My list" still matches its own phrase.
 

@@ -23,7 +23,8 @@ enum LogFieldUpdateFailure: Error, Equatable, Sendable {
 
 struct LogFieldEditDraft: Equatable, Sendable {
     static let maximumNumericInputUTF16Units = 64
-    static let maximumTextInputUTF16Units = 500
+    /// Follows the contract's LOG_FIELD_VALUE_MAX_CHARACTERS: a capture filed whole as one entry.
+    static let maximumTextInputUTF16Units = 10_000
 
     let priorValue: LogFieldValue
     var input = ""
@@ -62,7 +63,7 @@ struct LogFieldEditDraft: Equatable, Sendable {
         // text branch used to propose an empty string, so opening the editor and saving without
         // typing wrote an empty value over whatever the field held.
         guard !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        guard input.utf16.count <= 500 else { return nil }
+        guard input.utf16.count <= Self.maximumTextInputUTF16Units else { return nil }
         return .string(input)
     }
 

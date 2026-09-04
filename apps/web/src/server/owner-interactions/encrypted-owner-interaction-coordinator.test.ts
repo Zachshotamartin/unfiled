@@ -2202,6 +2202,115 @@ describe("encrypted owner-interaction coordinator", () => {
     expect(JSON.stringify(sealedContent ?? {})).toContain(rawContent);
   });
 
+  it("creates a log note from Review for a capture longer than one old log field", async () => {
+    // "Let Unfiled decide" on a detailed workout log: the note is seeded with the whole capture
+    // as one entry. Under the 500-character field bound that write failed and the API answered
+    // 503, which the phone read as "The service is busy".
+    const crypto = cryptoHarness();
+    const base = privateReviewCreatePreparation();
+    if (base.completed || base.source.receipt === null || base.source.capture === null) {
+      throw new Error("Review create fixture requires a source capture and receipt");
+    }
+    const rawContent = Array.from(
+      { length: 12 },
+      (_, index) => `Set ${index + 1}: bench press 4x8 at 185 lb, last rep slow and clean.`
+    ).join("\n");
+    expect(rawContent.length).toBeGreaterThan(500);
+    const preparation: PrepareReviewResolutionResult = Object.freeze({
+      ...base,
+      source: Object.freeze({
+        ...base.source,
+        capture: Object.freeze({ ...base.source.capture, contentLength: rawContent.length }),
+        receipt: Object.freeze({
+          ...base.source.receipt,
+          reasonCodes: Object.freeze(["low_information"])
+        })
+      })
+    });
+    crypto.sourcePayloads.set(`capture:${CAPTURE}:1`, { schemaVersion: 1, rawContent });
+    crypto.sourcePayloads.set(
+      `capture_receipt:${CAPTURE}:1`,
+      CaptureReceiptPayloadSchema.parse({
+        schemaVersion: 2,
+        captureId: CAPTURE,
+        jobId: JOB,
+        decisionId: DECISION,
+        reviewItemId: REVIEW,
+        mutationId: null,
+        outcome: "needs_review",
+        headline: "Needs your review",
+        destination: null,
+        insertedContentReferences: [],
+        actions: [],
+        reasonCodes: ["low_information"],
+        createdAt: NOW,
+        undoTargets: []
+      })
+    );
+    crypto.sourcePayloads.set(`review_item:${REVIEW}:1`, {
+      schemaVersion: 2,
+      proposal: {
+        type: "route_capture",
+        plan: {
+          schemaVersion: 1,
+          captureKind: "log_entry",
+          decision: "needs_review",
+          destination: { candidateId: null, newNote: null },
+          operations: [],
+          generatedExpansion: null,
+          alternatives: [],
+          reasonCodes: ["low_information"]
+        }
+      },
+      state: "open",
+      resolution: null
+    });
+    const commit = vi.fn(
+      (input: Parameters<EncryptedOwnerInteractionRpcAdapter["commitReviewResolution"]>[0]) => {
+        expect(input.command).toMatchObject({
+          writes: [{ noteId: NOTE_B, noteState: { privacy: "private_manual" } }]
+        });
+        return Promise.resolve(
+          commitResult("encrypted_review_resolution", "resolved", crypto.responseCipher(), {
+            reviewItemId: REVIEW,
+            members: Object.freeze([
+              Object.freeze({
+                role: "destination_write" as const,
+                noteId: NOTE_B,
+                currentRevision: 1,
+                revisionId: DESTINATION_REVISION,
+                mutationId: DESTINATION_MUTATION
+              })
+            ]),
+            responseVerificationMac: mac("private_manual")
+          })
+        );
+      }
+    );
+    const adapter = adapterStub({
+      prepareReviewResolution: vi.fn(() => Promise.resolve(preparation)),
+      commitReviewResolution: commit
+    });
+
+    await expect(
+      coordinator(adapter, crypto).resolveReviewItem(
+        REVIEW,
+        ReviewResolveRequestSchema.parse({
+          idempotencyKey: IDEMPOTENCY,
+          resolution: { type: "create", title: "Workout log", noteType: "log", spaceId: null }
+        })
+      )
+    ).resolves.toMatchObject({
+      reviewItem: { id: REVIEW, noteId: NOTE_B, state: "resolved" },
+      replayed: false
+    });
+    expect(commit).toHaveBeenCalledOnce();
+    const sealedContent = vi.mocked(crypto.service.sealNoteContent).mock.calls[0]?.[1];
+    const sealed = JSON.stringify(sealedContent ?? {});
+    expect(sealed).toContain("Set 12: bench press");
+    expect(sealed).toContain('"entries"');
+  });
+
   it("keeps the photo when the owner files a photo capture from Review", async () => {
     const crypto = cryptoHarness();
     const base = privateReviewCreatePreparation();
