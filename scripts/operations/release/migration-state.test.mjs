@@ -60,6 +60,45 @@ describe("pendingMigrationsFromDryRun", () => {
       })
     ).toThrow(/without naming/u);
   });
+
+  it("reads a summary the CLI wrote to stderr instead of stdout", () => {
+    expect(
+      pendingMigrationsFromDryRun({ stdout: "", stderr: PENDING.stderr + PENDING.stdout })
+    ).toEqual(["20260904000000_capture_prompt_version_from_caller.sql"]);
+  });
+});
+
+describe("pendingMigrationsFromDryRun without a JSON summary", () => {
+  // The CLI prints no JSON summary in every mode. Its text is the same answer: these phrases
+  // are verbatim from supabase 2.116.0.
+  it("reads the up-to-date phrase as nothing pending", () => {
+    expect(
+      pendingMigrationsFromDryRun({
+        stdout: "",
+        stderr: "Connecting to remote database...\nRemote database is up to date.\n"
+      })
+    ).toEqual([]);
+  });
+
+  it("reads the bulleted list as the pending migrations", () => {
+    expect(
+      pendingMigrationsFromDryRun({
+        stdout: "",
+        stderr:
+          "Connecting to remote database...\nWould push these migrations:\n • 20260904000000_a.sql\n • 20260905000000_b.sql\n"
+      })
+    ).toEqual(["20260904000000_a.sql", "20260905000000_b.sql"]);
+  });
+
+  it("still refuses when neither phrase nor a summary is present", () => {
+    expect(() =>
+      pendingMigrationsFromDryRun({
+        stdout: "",
+        stderr:
+          "DRY RUN: migrations will *not* be pushed to the database.\nConnecting to remote database...\n"
+      })
+    ).toThrow(/Could not read/u);
+  });
 });
 
 describe("unappliedMigrationsFromList", () => {
@@ -76,6 +115,10 @@ describe("unappliedMigrationsFromList", () => {
         '{"migrations":[{"local":"20260904000000","remote":"20260904000000","time":"t"}]}\n'
       )
     ).toEqual([]);
+  });
+
+  it("reads a list the CLI wrote to stderr instead of stdout", () => {
+    expect(unappliedMigrationsFromList("", list)).toEqual(["20260904000000"]);
   });
 
   it("refuses a list it cannot read", () => {

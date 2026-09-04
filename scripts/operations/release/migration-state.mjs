@@ -22,6 +22,31 @@ function summaryLine(stdout) {
 }
 
 /**
+ * The CLI's text form of the same answer, for a mode that prints no JSON summary: "Remote
+ * database is up to date." or "Would push these migrations:" followed by one " • name" per line.
+ * Returns the same shape the JSON summary has, or null when neither phrase is present.
+ */
+function textSummary(stdout, stderr) {
+  const text = `${stdout ?? ""}\n${stderr ?? ""}`;
+  const listIndex = text.indexOf("Would push these migrations:");
+  if (listIndex >= 0) {
+    const migrations = text
+      .slice(listIndex)
+      .split("\n")
+      .slice(1)
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("•"))
+      .map((line) => line.replace(/^•\s*/u, "").trim())
+      .filter((name) => name.length > 0);
+    return { upToDate: false, dryRun: true, migrations };
+  }
+  if (/Remote database is up to date\./u.test(text)) {
+    return { upToDate: true, dryRun: true, migrations: [] };
+  }
+  return null;
+}
+
+/**
  * The migrations a dry run would push. Throws when the answer cannot be read: an unreadable
  * state is a reason to stop, never a reason to deploy.
  *
@@ -30,7 +55,9 @@ function summaryLine(stdout) {
  * a disagreement is also a stop.
  */
 export function pendingMigrationsFromDryRun({ stdout, stderr }) {
-  const summary = summaryLine(stdout);
+  // The summary is read from whichever stream carries it: the CLI prints it on stdout when
+  // connected through a project link, and the release connects with --db-url.
+  const summary = summaryLine(stdout) ?? summaryLine(stderr) ?? textSummary(stdout, stderr);
   if (summary === null || typeof summary.upToDate !== "boolean") {
     throw new Error("Could not read the production migration state from the dry run.");
   }
@@ -55,8 +82,8 @@ export function pendingMigrationsFromDryRun({ stdout, stderr }) {
  * whether code may deploy: the answer comes from the database's own migration table, not from a
  * prediction, so a push that silently did nothing cannot pass as done.
  */
-export function unappliedMigrationsFromList(stdout) {
-  const summary = summaryLine(stdout);
+export function unappliedMigrationsFromList(stdout, stderr = "") {
+  const summary = summaryLine(stdout) ?? summaryLine(stderr);
   if (summary === null || !Array.isArray(summary.migrations)) {
     throw new Error("Could not read the production migration list.");
   }

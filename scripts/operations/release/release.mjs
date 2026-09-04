@@ -215,9 +215,14 @@ async function applyMigrations() {
   }
   console.log("== applying database migrations before any code that needs them ships");
   const cli = supabaseCli();
-  const dryRun = await run("npx", [...cli, "db", "push", ...migrationTarget(), "--dry-run"], {
-    echo: false
-  });
+  // --output-format json asks for the summary the parser expects; the text form is read too.
+  const dryRun = await run(
+    "npx",
+    [...cli, "db", "push", ...migrationTarget(), "--dry-run", "--output-format", "json"],
+    {
+      echo: false
+    }
+  );
   if (dryRun.code !== 0) {
     fail(`Could not read the production migration state.\n${dryRun.err.slice(-2000)}`);
   }
@@ -228,7 +233,9 @@ async function applyMigrations() {
   try {
     pending = pendingMigrationsFromDryRun({ stdout: dryRun.out, stderr: dryRun.err });
   } catch (error) {
-    fail(`${error instanceof Error ? error.message : String(error)}\n${dryRun.err.slice(-2000)}`);
+    fail(
+      `${error instanceof Error ? error.message : String(error)}\n--- stdout:\n${dryRun.out.slice(-2000)}\n--- stderr:\n${dryRun.err.slice(-2000)}`
+    );
   }
   if (pending.length > 0) {
     console.log(`pending: ${pending.join(", ")}`);
@@ -240,15 +247,19 @@ async function applyMigrations() {
   }
   // Whatever the dry run said, the database's own migration table decides. No code deploys while
   // a local migration has no remote entry.
-  const listed = await run("npx", [...cli, "migration", "list", ...migrationTarget()], {
-    echo: false
-  });
+  const listed = await run(
+    "npx",
+    [...cli, "migration", "list", ...migrationTarget(), "--output-format", "json"],
+    {
+      echo: false
+    }
+  );
   if (listed.code !== 0) {
     fail(`Could not read the production migration list.\n${listed.err.slice(-2000)}`);
   }
   let unapplied;
   try {
-    unapplied = unappliedMigrationsFromList(listed.out);
+    unapplied = unappliedMigrationsFromList(listed.out, listed.err);
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }
