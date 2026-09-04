@@ -4,9 +4,9 @@ export default function AppLoading() {
       id="main-content"
       aria-busy="true"
       aria-label="Loading your Inbox"
-      className="min-h-[100dvh] bg-page px-4 py-10 sm:px-8 lg:px-12"
+      className="product-page"
     >
-      <div className="mx-auto max-w-[760px]">
+      <div className="content-column">
         <div className="skeleton-block h-14 w-44 rounded-control" />
         <div className="skeleton-block mt-4 h-5 w-48 rounded-control" />
         <div className="skeleton-block mt-10 h-16 w-full rounded-frame" />

@@ -117,52 +117,6 @@
     background: var(--color-accent-pressed);
   }
 
-  .desk-card {
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-card);
-    background: var(--color-surface);
-    padding: var(--space-card-padding);
-  }
-
-  .desk-card + .desk-card {
-    margin-top: var(--space-control-gap);
-  }
-
-  /* An empty state is a sentence and, at most, one action. Never an illustration or a logo. */
-  .desk-empty {
-    padding: 1.75rem 0.15rem;
-  }
-
-  .desk-empty h2 {
-    font-family: var(--font-paper-serif);
-    font-size: 1.35rem;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-  }
-
-  .desk-empty p {
-    max-width: 34rem;
-    margin-top: 0.5rem;
-    color: var(--color-text-secondary);
-    font-size: 0.9rem;
-    line-height: 1.6;
-  }
-
-  .desk-attention-summary {
-    margin-top: 0.75rem;
-    color: var(--color-text-secondary);
-    font-size: 0.9rem;
-  }
-
-  .status-dot {
-    display: inline-block;
-    width: 7px;
-    height: 7px;
-    flex: none;
-    border-radius: var(--radius-circular);
-    background: var(--color-accent);
-  }
-
   .library-search {
     display: flex;
     align-items: center;

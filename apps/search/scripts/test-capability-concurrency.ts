@@ -102,7 +102,7 @@ try {
        generation_attestation_digest, created_at, claim_expires_at
      ) values (
        $1, $2, $3, $4, $5, $6, 1, 'text-embedding-3-small',
-       1536, 1, $7, clock_timestamp(), clock_timestamp() + interval '30 seconds'
+       1536, 1, $7, now(), now() + interval '30 seconds'
      )`,
     [
       SEARCH_ID,

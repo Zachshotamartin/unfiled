@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowClockwiseIcon, WarningCircleIcon } from "@phosphor-icons/react";
+import { UnfiledGlyph } from "@/components/product/unfiled-glyph";
 
 interface ErrorPageProps {
   error: Error & { digest?: string };
@@ -17,7 +17,7 @@ export default function ErrorPage({ error, reset }: ErrorPageProps) {
         aria-labelledby="error-title"
         className="w-full max-w-lg border-t border-outline pt-8"
       >
-        <WarningCircleIcon size={32} weight="regular" className="text-action" aria-hidden="true" />
+        <UnfiledGlyph glyph="warning" size={29} weight={1.9} className="text-action" />
         <h1 id="error-title" className="mt-6 text-4xl font-semibold tracking-[-0.045em]">
           This page did not load.
         </h1>
@@ -29,7 +29,7 @@ export default function ErrorPage({ error, reset }: ErrorPageProps) {
         )}
         <button type="button" onClick={reset} className="button-primary mt-7">
           Try again
-          <ArrowClockwiseIcon size={17} weight="bold" aria-hidden="true" />
+          <UnfiledGlyph glyph="undo" size={17} weight={1.9} />
         </button>
       </section>
     </main>

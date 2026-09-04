@@ -1,18 +1,16 @@
 @media (min-width: 40rem) {
   .product-page {
-    padding: 3.5rem 2.25rem 6rem;
+    padding: 3.5rem var(--space-desk-gutter) 6rem;
+  }
+  .capture-detail-page {
+    padding-right: var(--space-desk-gutter);
+    padding-left: var(--space-desk-gutter);
   }
   .settings-row {
     flex-direction: row;
   }
   .editor-meta-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    padding-right: 2rem;
-    padding-left: 2rem;
-  }
-  .editor-toolbar {
-    padding-right: 2rem;
-    padding-left: 2rem;
   }
   .space-create-form {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;

@@ -1,4 +1,4 @@
-import { ArrowRightIcon, ListIcon } from "@phosphor-icons/react/ssr";
+import { UnfiledGlyph } from "@/components/product/unfiled-glyph";
 import Link from "next/link";
 
 import { BrandLogo } from "@/components/brand-logo";
@@ -34,18 +34,18 @@ export function SiteHeader() {
           </Link>
           <a href={signInHref} className="button-primary text-sm">
             Sign in
-            <ArrowRightIcon size={17} weight="bold" aria-hidden="true" />
+            <UnfiledGlyph glyph="arrow" size={16} weight={1.9} />
           </a>
         </nav>
 
         <details className="relative md:hidden">
           <summary className="flex size-11 cursor-pointer items-center justify-center rounded-control border border-outline text-content">
-            <ListIcon size={23} aria-hidden="true" />
+            <UnfiledGlyph glyph="bullets" size={21} weight={1.9} />
             <span className="sr-only">Open navigation</span>
           </summary>
           <nav
             aria-label="Mobile navigation"
-            className="absolute top-13 right-0 grid min-w-56 gap-1 rounded-frame border border-outline bg-panel p-2 shadow-[0_24px_70px_rgba(11,12,14,0.55)]"
+            className="absolute top-13 right-0 grid min-w-56 gap-1 rounded-frame border border-outline bg-panel p-2 shadow-[0_24px_60px_rgba(20,23,27,0.12)]"
           >
             {navigation.map((item) => (
               <a

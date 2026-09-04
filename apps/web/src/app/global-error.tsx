@@ -10,19 +10,25 @@ export default function GlobalError({ reset }: GlobalErrorProps) {
       <body
         style={{
           margin: 0,
-          background: "#0B0C0E",
-          color: "#F2EFE8",
+          background: "#f3f4f6",
+          color: "#14171b",
           fontFamily: "system-ui, sans-serif"
         }}
       >
         <main style={{ display: "grid", minHeight: "100dvh", placeItems: "center", padding: 24 }}>
-          <section
-            style={{ maxWidth: 520, borderTop: "1px solid rgba(242,239,232,.14)", paddingTop: 32 }}
-          >
-            <h1 style={{ margin: 0, fontSize: 42, letterSpacing: "-0.04em" }}>
+          <section style={{ maxWidth: 520, borderTop: "1px solid #dde1e6", paddingTop: 32 }}>
+            <h1
+              style={{
+                margin: 0,
+                fontFamily: 'ui-serif, "New York", Georgia, serif',
+                fontSize: 42,
+                fontWeight: 600,
+                letterSpacing: "-0.02em"
+              }}
+            >
               Unfiled could not open.
             </h1>
-            <p style={{ color: "#9DA3A6", lineHeight: 1.6 }}>
+            <p style={{ color: "#626b76", lineHeight: 1.6 }}>
               Your notes were not changed. Reload the application to try again.
             </p>
             <button
@@ -31,11 +37,11 @@ export default function GlobalError({ reset }: GlobalErrorProps) {
               style={{
                 minHeight: 44,
                 border: 0,
-                borderRadius: 10,
-                background: "#EE6F55",
-                color: "#0B0C0E",
+                borderRadius: 13,
+                background: "#1e6b57",
+                color: "#f3f4f6",
                 padding: "12px 18px",
-                fontWeight: 700
+                fontWeight: 600
               }}
             >
               Reload
