@@ -25,6 +25,14 @@ struct AppRootView: View {
                 .padding(.top, 8)
                 .transition(.move(edge: .top).combined(with: .opacity))
                 .zIndex(10)
+                // A notice the owner has read should not need dismissing. It leaves on its own,
+                // and a new message restarts the wait rather than inheriting the old one, because
+                // the task is keyed on the message itself.
+                .task(id: message) {
+                    try? await Task.sleep(for: .seconds(5))
+                    guard !Task.isCancelled, model.bannerMessage == message else { return }
+                    model.bannerMessage = nil
+                }
             }
 
             if scenePhase != .active {

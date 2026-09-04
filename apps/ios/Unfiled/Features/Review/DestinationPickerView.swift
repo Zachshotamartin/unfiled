@@ -288,11 +288,12 @@ struct DestinationPickerView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             EditorialEyebrow(text: label)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: UnfiledTheme.controlGap) {
-                    content()
-                }
+            // Wrapping rather than scrolling sideways: a note type or a space the owner cannot
+            // see is one they do not know they can choose.
+            FlowLayout {
+                content()
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(identifier)
