@@ -6,6 +6,7 @@ import {
   DuplicateReviewProposal,
   reviewCopy,
   reviewDecisionAttempt,
+  reviewItemIsDismissable,
   reviewLabel
 } from "./review-view";
 
@@ -69,5 +70,41 @@ describe("review proposal presentation", () => {
       idempotencyKey: "web_second",
       resolution: { type: "dismiss" }
     });
+  });
+});
+
+describe("clearing a review item", () => {
+  // The organizer creates low_confidence items from planner_ambiguity more than any other type,
+  // and the web offered them no control whatsoever: not dismiss, not route, not keep in Inbox.
+  // They could not be resolved from a browser, so they returned on every poll for good, and the
+  // Inbox's "Nothing waiting." never appeared again for that owner.
+  const item = (over: Partial<ReviewItemDto>): ReviewItemDto => ({
+    ...duplicate,
+    ...over
+  });
+
+  it("offers a way out of every item the contract lets the owner dismiss", () => {
+    const conflict = { type: "conflict", reason: "candidate_eligibility" } as const;
+    for (const type of [
+      "low_confidence",
+      "failed_job",
+      "revision_conflict",
+      "structure_conflict"
+    ] as const) {
+      expect(reviewItemIsDismissable(item({ type, proposal: conflict }))).toBe(true);
+    }
+    expect(reviewItemIsDismissable(duplicate)).toBe(true);
+  });
+
+  it("leaves a generated block to its own accept or reject decision", () => {
+    expect(
+      reviewItemIsDismissable(
+        item({
+          type: "pending_expansion",
+          noteId: "note_01J6M9Q7G4BMKB33GSG3NJ6D1X",
+          proposal: { type: "generated_block", blockId: "blk_01J6M9Q7G4BMKB33GSG3NJ6D1X" }
+        })
+      )
+    ).toBe(false);
   });
 });

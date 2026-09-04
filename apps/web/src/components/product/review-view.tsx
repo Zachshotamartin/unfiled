@@ -46,6 +46,20 @@ export function reviewDecisionAttempt(
     : { idempotencyKey: createKey(), resolution };
 }
 
+/**
+ * Whether the owner is offered a way to clear this item themselves.
+ *
+ * Every review item may be dismissed except a generated-block expansion, which carries its own
+ * accept/reject decision instead (`reviewResolutionMatchesSemantics`, packages/contracts/src/
+ * review.ts). The controls used to render only for duplicate suggestions and one legacy consent
+ * hold, so a `low_confidence` item -- the type the organizer creates most, from planner_ambiguity
+ * -- arrived with no control at all. It could not be resolved from the web, so it came back on
+ * every four-second poll for good and the Inbox could never say "Nothing waiting."
+ */
+export function reviewItemIsDismissable(item: ReviewItemDto): boolean {
+  return item.proposal.type !== "generated_block";
+}
+
 function reviewKey(item: ReviewItemDto): string {
   return item.id;
 }
@@ -359,10 +373,7 @@ export function ReviewView({
         {items.map((item) => {
           const duplicate = item.proposal.type === "duplicate_notes";
           const generatedProposal = item.proposal.type === "generated_block" ? item.proposal : null;
-          const legacyExpansion =
-            item.type === "pending_expansion" &&
-            item.proposal.type === "conflict" &&
-            item.proposal.reason === "consent_controls";
+          const dismissable = reviewItemIsDismissable(item);
           const itemPending = pending?.reviewItemId === item.id ? pending.resolution : null;
           return (
             <article key={item.id} className="review-row">
@@ -390,7 +401,7 @@ export function ReviewView({
                 {generatedProposal !== null && item.noteId === null ? (
                   <MissingGeneratedBlockBinding />
                 ) : null}
-                {duplicate || legacyExpansion ? (
+                {dismissable ? (
                   <div className="review-actions" aria-label="Review decision">
                     {duplicate ? (
                       <button

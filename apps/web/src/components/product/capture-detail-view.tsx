@@ -470,8 +470,27 @@ export function CaptureDetailView({ captureId }: Readonly<{ captureId: EntityId<
       </section>
       {receipt === null ? (
         <section className="capture-receipt" aria-live="polite">
-          <h2>{capture.status === "processing" ? "Finding its place." : "Waiting to begin."}</h2>
-          <p className="mt-4 text-muted-content">This page updates every 4 seconds.</p>
+          {/*
+            A failed capture legitimately carries no receipt (CaptureDetail marks the receipt
+            optional for exactly that status), so without a branch of its own it fell into the
+            placeholder below and told the owner it was waiting and would update itself. It never
+            would: the run is over, and organizing it again is the only thing that moves it.
+          */}
+          {capture.status === "failed" ? (
+            <>
+              <h2>Organizing did not finish.</h2>
+              <p className="mt-4 text-muted-content">
+                Your words are safe here. Organize this capture again to try once more.
+              </p>
+            </>
+          ) : (
+            <>
+              <h2>
+                {capture.status === "processing" ? "Finding its place." : "Waiting to begin."}
+              </h2>
+              <p className="mt-4 text-muted-content">This page updates every 4 seconds.</p>
+            </>
+          )}
         </section>
       ) : (
         <section className="capture-receipt" aria-labelledby="receipt-heading">
