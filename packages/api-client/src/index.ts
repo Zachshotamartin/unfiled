@@ -7,9 +7,13 @@ import {
   AuthPasswordSignInRequestSchema,
   AuthPasswordSignUpRequestSchema,
   AuthRefreshRequestSchema,
+  AuthResendRequestSchema,
+  AuthResendResponseSchema,
   AuthSessionResponseSchema,
   AuthSessionSchema,
   AuthSignOutResponseSchema,
+  AuthSignUpResponseSchema,
+  AuthVerifyRequestSchema,
   CAPTURE_ATTACHMENT_MAX_BYTES,
   CaptureAttachmentMediaTypeSchema,
   CaptureAttachmentSchema,
@@ -106,6 +110,9 @@ import {
   type AuthPasswordSignInRequest,
   type AuthPasswordSignUpRequest,
   type AuthRefreshRequest,
+  type AuthResendRequest,
+  type AuthSignUpResponse,
+  type AuthVerifyRequest,
   type CaptureAttachment,
   type CaptureAttachmentMediaType,
   type CaptureAttachmentUpload,
@@ -210,6 +217,17 @@ export class ApiClientMalformedResponseError extends Error {
     super("The service returned malformed data.");
     this.name = "ApiClientMalformedResponseError";
   }
+}
+
+/**
+ * Creating an account answers with a session or with a request for the code just emailed to the
+ * owner, depending on whether the deployment confirms addresses. Every caller must branch on this
+ * rather than assume a session, because the same build talks to both kinds of deployment.
+ */
+export function authVerificationRequired(
+  response: AuthSignUpResponse
+): response is Extract<AuthSignUpResponse, { verificationRequired: true }> {
+  return "verificationRequired" in response;
 }
 
 export type ApiClientOptions = Readonly<{
@@ -531,7 +549,30 @@ export function createApiClient(options: ApiClientOptions) {
       return request(
         "/auth/sign-up",
         { authenticated: false, body, method: "POST" },
+        AuthSignUpResponseSchema
+      );
+    },
+
+    /** Exchanges the emailed code for a session. */
+    verifyEmail(input: AuthVerifyRequest) {
+      const body = AuthVerifyRequestSchema.parse(input);
+      return request(
+        "/auth/verify",
+        { authenticated: false, body, method: "POST" },
         AuthSessionSchema
+      );
+    },
+
+    /**
+     * Asks for another code. The reply is the same whether or not the address has an account
+     * awaiting confirmation, so nothing here discloses who has one.
+     */
+    resendVerification(input: AuthResendRequest) {
+      const body = AuthResendRequestSchema.parse(input);
+      return request(
+        "/auth/resend",
+        { authenticated: false, body, method: "POST" },
+        AuthResendResponseSchema
       );
     },
 

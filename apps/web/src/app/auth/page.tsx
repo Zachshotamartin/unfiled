@@ -28,13 +28,9 @@ export default function AuthPage() {
           </p>
         </div>
       </section>
-      <section className="auth-panel" aria-label="Sign in form">
+      {/* The panel names itself: its heading changes when a new account has a code to confirm. */}
+      <section className="auth-panel" aria-labelledby="auth-panel-title">
         <div className="w-full max-w-sm">
-          <p className="eyebrow">Sign in</p>
-          <h2 className="mt-4 text-3xl font-semibold tracking-[-0.04em]">Continue to your notes</h2>
-          <p className="mt-3 leading-7 text-muted-content">
-            Use your email address and password. New here? Create an account in a few seconds.
-          </p>
           <AuthForm />
           <p className="mt-8 border-t border-outline pt-5 text-sm leading-6 text-muted-content">
             By continuing, you agree to keep your password private.{" "}

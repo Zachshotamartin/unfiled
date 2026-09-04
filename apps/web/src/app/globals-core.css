@@ -390,10 +390,55 @@
     padding: 4rem 1.5rem;
   }
 
+  .auth-panel-title {
+    margin-top: 0.9rem;
+    font-family: var(--font-paper-serif);
+    font-size: 1.95rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.15;
+  }
+
+  .auth-panel-lede {
+    margin-top: 0.75rem;
+    color: var(--color-text-secondary);
+    line-height: 1.7;
+  }
+
+  /* The mark's open tray with a stroke dropping into it: something has been sent to the owner. */
+  .auth-code-glyph {
+    display: flex;
+    width: var(--size-touch-target);
+    height: var(--size-touch-target);
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-card);
+    background: var(--color-surface);
+    color: var(--color-accent);
+  }
+
   .auth-code {
     font-family: var(--font-geist-mono), monospace;
     font-size: 1.5rem;
     letter-spacing: 0.32em;
+    text-align: center;
+    /* Tracking leaves a gap after the last digit, which pulls centered text left without this. */
+    text-indent: 0.32em;
+  }
+
+  .auth-note {
+    margin-top: var(--space-control-gap);
+    color: var(--color-text-secondary);
+    font-size: 0.85rem;
+    line-height: 1.6;
+  }
+
+  .auth-notice {
+    padding-top: 0.75rem;
+    color: var(--color-accent);
+    font-size: 0.875rem;
+    line-height: 1.5;
   }
 
   .editor-page {
