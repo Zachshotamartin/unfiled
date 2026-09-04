@@ -16,6 +16,40 @@ export function ResourceSkeleton({ rows = 4 }: Readonly<{ rows?: number }>) {
   );
 }
 
+/** A card's shape while its content loads: an eyebrow, a title, two lines, a control. */
+export function CardSkeleton({ cards = 1 }: Readonly<{ cards?: number }>) {
+  return (
+    <div aria-busy="true" aria-label="Loading" className="review-card-list">
+      {Array.from({ length: cards }, (_, index) => (
+        <div key={index} className="review-card" aria-hidden="true">
+          <div className="skeleton-block h-3 w-28" />
+          <div className="skeleton-block mt-4 h-5 w-64 max-w-[70%]" />
+          <div className="skeleton-block mt-3 h-4 w-full max-w-[90%]" />
+          <div className="skeleton-block mt-2 h-4 w-3/4" />
+          <div className="skeleton-block mt-5 h-11 w-44 rounded-control" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** An activity row's shape: its state glyph, a label and time, then the capture's words. */
+export function ActivityRowSkeleton({ rows = 2 }: Readonly<{ rows?: number }>) {
+  return (
+    <div aria-busy="true" aria-label="Loading" className="capture-activity-list">
+      {Array.from({ length: rows }, (_, index) => (
+        <div key={index} className="capture-activity-row" aria-hidden="true">
+          <div className="skeleton-block h-8 w-8 rounded-control" />
+          <div className="min-w-0 flex-1">
+            <div className="skeleton-block h-3 w-32" />
+            <div className="skeleton-block mt-3 h-5 w-full max-w-[85%]" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function EmptyState({
   action,
   body,

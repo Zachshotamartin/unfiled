@@ -136,9 +136,14 @@ describe("CaptureComposer", () => {
     // The picker keeps the file it was given, so a cleared value is what lets the same photo be
     // chosen twice.
     expect(target.value).toBe("");
-    expect(renderToStaticMarkup(<CaptureComposer {...props()} />)).toContain(
-      "They are not kept on this device"
+    // The caption about where photos live appears once a photo is on the capture, not before:
+    // the bottom bar is the photo control and Save, nothing else.
+    expect(renderToStaticMarkup(<CaptureComposer {...props()} />)).not.toContain(
+      "not kept on this device"
     );
+    expect(
+      renderToStaticMarkup(<CaptureComposer {...props({ photos: [photo("1X")] })} />)
+    ).toContain("not kept on this device");
   });
 
   it("saves a photo with no words at all", () => {

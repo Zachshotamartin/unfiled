@@ -17,26 +17,32 @@
     margin-bottom: 1.25rem;
   }
 
+  /* One column: the invitation, then the card. The card is the capture; nothing sits beside it. */
   .capture-composer {
     display: grid;
-    gap: 1.5rem;
+    gap: 1rem;
     border-top: 1px solid var(--color-border);
     padding-top: 1.5rem;
   }
 
+  .capture-composer-intro {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.35rem 0.9rem;
+  }
+
   .capture-composer-intro h2 {
     font-family: var(--font-paper-serif);
-    font-size: clamp(1.5rem, 3.5vw, 1.9rem);
+    font-size: 1.5rem;
     font-weight: 600;
     letter-spacing: -0.015em;
     line-height: 1.15;
   }
 
   .capture-composer-intro p {
-    max-width: 25rem;
-    margin-top: 0.7rem;
     color: var(--color-text-secondary);
-    font-size: 0.88rem;
+    font-size: 0.875rem;
     line-height: 1.55;
   }
 
@@ -51,11 +57,10 @@
   .capture-input {
     display: block;
     width: 100%;
-    min-height: 8.5rem;
+    min-height: 6rem;
     resize: vertical;
     border: 0;
     background: transparent;
-    margin-top: 0.6rem;
     color: var(--color-text-primary);
     font-family: var(--font-paper-serif);
     font-size: 1.15rem;
@@ -67,13 +72,14 @@
     color: var(--color-text-disabled);
   }
 
-  .capture-form-meta {
-    display: flex;
-    min-height: 1.4rem;
-    justify-content: space-between;
-    gap: 1rem;
+  .capture-count {
+    display: block;
     color: var(--color-text-secondary);
-    font-size: 0.68rem;
+    font-size: 0.7rem;
+  }
+
+  .capture-count:empty {
+    display: none;
   }
 
   .capture-options {
@@ -138,19 +144,26 @@
     font-size: 0.8rem;
   }
 
+  /* The bottom bar: the photo control on the left, Save on the right, one rule above them. */
   .capture-submit-row {
     display: flex;
-    min-height: 3.5rem;
-    align-items: flex-end;
+    align-items: center;
     justify-content: space-between;
     gap: 1rem;
+    margin-top: 0.75rem;
     border-top: 1px solid var(--color-border);
-    padding-top: 0.8rem;
+    padding-top: 0.75rem;
   }
 
   .capture-feedback {
     min-width: 0;
+    color: var(--color-text-secondary);
     font-size: 0.75rem;
+    line-height: 1.5;
+  }
+
+  .capture-feedback p:empty {
+    display: none;
   }
 
   .capture-feedback [role="alert"] {
@@ -398,11 +411,6 @@
 }
 
 @media (min-width: 48rem) {
-  .capture-composer {
-    grid-template-columns: minmax(0, 22rem) minmax(0, 1fr);
-    gap: 2rem;
-  }
-
   .capture-options-grid {
     grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
   }

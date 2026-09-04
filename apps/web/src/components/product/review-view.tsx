@@ -30,7 +30,7 @@ import {
   generatedResolutionAttempt,
   type GeneratedResolutionAttempt
 } from "./generated-blocks-surface";
-import { EmptyState, ResourceError, ResourceSkeleton } from "./resource-states";
+import { CardSkeleton, EmptyState, ResourceError } from "./resource-states";
 import {
   letUnfiledDecide,
   noteTypeForCaptureKind,
@@ -379,7 +379,7 @@ export function ReviewView({
   // page did not load" while every request behind it had answered 200.
   useEffect(() => onEmptyChange?.(items.length === 0), [items.length, onEmptyChange]);
 
-  if (resource.loading && resource.data === null) return <ResourceSkeleton rows={4} />;
+  if (resource.loading && resource.data === null) return <CardSkeleton cards={2} />;
   if (resource.error !== null && resource.data === null) {
     return (
       <ResourceError

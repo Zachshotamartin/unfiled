@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 
 import type { CaptureActivityItem, CaptureActivityStatus } from "@/lib/capture/capture-queue";
 
+import { ActivityRowSkeleton } from "./resource-states";
 import { UnfiledGlyph, type UnfiledGlyphName } from "./unfiled-glyph";
 
 export function captureStatusLabel(status: CaptureActivityStatus): string {
@@ -116,16 +117,7 @@ export function CaptureActivity({
         </div>
       )}
       {reviewDecisions}
-      {loading && nothingWaiting ? (
-        <div
-          className="capture-activity-loading"
-          aria-label="Loading capture activity"
-          aria-busy="true"
-        >
-          <div className="skeleton-block h-4 w-32" />
-          <div className="skeleton-block mt-4 h-12 w-full" />
-        </div>
-      ) : null}
+      {loading && nothingWaiting ? <ActivityRowSkeleton rows={2} /> : null}
       {!loading && nothingWaiting ? (
         <p className="capture-activity-empty">
           Nothing waiting. Everything you wrote is filed in your Library.

@@ -86,19 +86,17 @@ export function CaptureComposer({
           disabled={disabled}
           maxLength={MAX_CAPTURE_CHARACTERS}
           placeholder="What’s on your mind?"
-          rows={4}
+          rows={3}
           value={value.rawContent}
           aria-describedby="capture-count capture-error"
           aria-invalid={error === null ? undefined : true}
           onChange={(event) => onChange({ ...value, rawContent: event.target.value })}
         />
-        <div className="capture-form-meta">
-          <span id="capture-count" aria-live="polite">
-            {length >= 9_000
-              ? `${length.toLocaleString()} / ${MAX_CAPTURE_CHARACTERS.toLocaleString()}`
-              : ""}
-          </span>
-        </div>
+        <span id="capture-count" className="capture-count" aria-live="polite">
+          {length >= 9_000
+            ? `${length.toLocaleString()} / ${MAX_CAPTURE_CHARACTERS.toLocaleString()}`
+            : ""}
+        </span>
 
         {photos.length === 0 ? null : (
           <div className="attachment-grid" aria-label="Photos on this capture">
@@ -128,7 +126,30 @@ export function CaptureComposer({
           </div>
         )}
 
-        <div className="capture-form-meta items-center">
+        <div className="capture-feedback" aria-live="polite">
+          <p id="capture-photo-help">
+            {remainingPhotos === 0
+              ? `A capture carries up to ${MAX_CAPTURE_PHOTOS} photos.`
+              : photos.length === 0
+                ? ""
+                : "Photos upload when you save, and are not kept on this device."}
+          </p>
+          <p id="capture-photo-error" role="alert">
+            {photoError}
+          </p>
+          <p id="capture-error" role="alert">
+            {error}
+          </p>
+          <p role="status">
+            {acknowledgement === null ? null : (
+              <>
+                <UnfiledGlyph glyph="check" size={15} weight={2.2} /> {acknowledgement}
+              </>
+            )}
+          </p>
+        </div>
+
+        <div className="capture-submit-row">
           <label
             className={
               disabled || preparingPhotos || remainingPhotos === 0
@@ -152,31 +173,6 @@ export function CaptureComposer({
               onChange={selectPhotos}
             />
           </label>
-          <p id="capture-photo-help">
-            {remainingPhotos === 0
-              ? `A capture carries up to ${MAX_CAPTURE_PHOTOS} photos.`
-              : "Photos are uploaded when you save. They are not kept on this device, so saving one needs a connection."}
-          </p>
-        </div>
-        <div className="capture-feedback">
-          <p id="capture-photo-error" role="alert">
-            {photoError}
-          </p>
-        </div>
-
-        <div className="capture-submit-row">
-          <div className="capture-feedback">
-            <p id="capture-error" role="alert">
-              {error}
-            </p>
-            <p role="status" aria-live="polite">
-              {acknowledgement === null ? null : (
-                <>
-                  <UnfiledGlyph glyph="check" size={15} weight={2.2} /> {acknowledgement}
-                </>
-              )}
-            </p>
-          </div>
           <button type="submit" className="button-primary" disabled={disabled || !sendable}>
             <UnfiledGlyph glyph="send" size={17} weight={2.2} /> Save
           </button>
