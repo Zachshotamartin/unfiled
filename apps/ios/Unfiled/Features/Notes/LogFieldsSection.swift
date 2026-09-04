@@ -58,6 +58,10 @@ struct LogFieldEditDraft: Equatable, Sendable {
                   value.isFinite else { return nil }
             return .number(value)
         }
+        // Nothing typed is not a value. The numeric branch already refuses an empty input; the
+        // text branch used to propose an empty string, so opening the editor and saving without
+        // typing wrote an empty value over whatever the field held.
+        guard !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         guard input.utf16.count <= 500 else { return nil }
         return .string(input)
     }
