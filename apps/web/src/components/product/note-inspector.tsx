@@ -7,6 +7,7 @@ import { browserApi, isStaleRevision, productErrorMessage } from "@/lib/product/
 import { announceProductChange, createIdempotencyKey } from "@/lib/product/client";
 import { usePagedResource } from "@/lib/product/use-paged-resource";
 
+import { SettingsChoice } from "./ai-settings-controls";
 import { MarkdownPreview } from "./markdown-preview";
 import { UnfiledGlyph } from "./unfiled-glyph";
 
@@ -77,23 +78,32 @@ export function NoteInspector({ note, onConflict, onMutation }: InspectorProps) 
   return (
     <aside className="note-inspector" aria-label="Note details and history">
       <section className="inspector-section">
-        <label htmlFor="note-space" className="field-label">
+        <p id="note-space-label" className="field-label">
           Space
-        </label>
-        <select
-          id="note-space"
-          className="editor-select mt-2"
-          value={note.spaceId ?? ""}
-          disabled={pending !== null || spaces.loading}
-          onChange={(event) => void move(event.target.value)}
-        >
-          <option value="">No space</option>
+        </p>
+        <div className="ai-choice-grid" role="radiogroup" aria-labelledby="note-space-label">
+          <SettingsChoice
+            group="note-space"
+            value=""
+            label="No space"
+            detail="The note stays outside every space."
+            checked={note.spaceId === null}
+            disabled={pending !== null || spaces.loading}
+            onChange={(value) => void move(value)}
+          />
           {spaces.data?.items.map((space) => (
-            <option key={space.id} value={space.id}>
-              {space.name}
-            </option>
+            <SettingsChoice
+              key={space.id}
+              group="note-space"
+              value={space.id}
+              label={space.name}
+              detail={`Move the note into ${space.name}.`}
+              checked={note.spaceId === space.id}
+              disabled={pending !== null || spaces.loading}
+              onChange={(value) => void move(value)}
+            />
           ))}
-        </select>
+        </div>
         {spaces.data?.pageInfo.hasMore ? (
           <button
             type="button"
