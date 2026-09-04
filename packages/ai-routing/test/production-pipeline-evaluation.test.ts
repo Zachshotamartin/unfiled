@@ -26,10 +26,10 @@ describe("production-component-seam deterministic routing evaluation", () => {
     const report = await evaluateProductionRoutingPipeline();
 
     expect(report).toMatchObject({
-      cases: 18,
+      cases: 20,
       evidenceKind: "production-component-seam deterministic evaluation",
       liveProviderEvidence: false,
-      modelAdapter: "deterministic-semantic-fixture.v2",
+      modelAdapter: "deterministic-semantic-fixture.v3",
       passed: true,
       versions: PRODUCTION_PIPELINE_VERSIONS
     });
@@ -55,9 +55,12 @@ describe("production-component-seam deterministic routing evaluation", () => {
     const incomplete = report.results.find(
       ({ id }) => id === "pipeline-incomplete-index-downgrades"
     );
+    // The organizer could not see the library it was filing into, so the placement is a question
+    // for the owner rather than a filing, whatever the note it chose could hold.
+    expect(incomplete?.policy.reasons).toContain("retrieval_degraded");
     expect(incomplete).toMatchObject({
       applied: false,
-      policy: { score: 0 },
+      policy: { autoApply: false, band: "review" },
       ragGenerationId: null,
       retrievalPath: "bounded_current_fallback",
       retrievalReason: "coverage_incomplete",
@@ -274,13 +277,13 @@ describe("production-component-seam deterministic routing evaluation", () => {
       }
     });
 
-    // Same-day evidence is worth exactly its weight, 0.2, and that is what this pins. Losing it
+    // Same-day evidence is worth exactly its weight, 0.1, and that is what this pins. Losing it
     // no longer changes the band: what is left still describes a capture the organizer placed
     // against a note it could see, so it files rather than asking the owner about the same list
     // they wrote in yesterday.
     expect(sameDay.policy.band).toBe("auto");
     expect(priorLocalDay.policy.band).toBe("auto");
-    expect(sameDay.policy.score - priorLocalDay.policy.score).toBeCloseTo(0.2, 4);
+    expect(sameDay.policy.score - priorLocalDay.policy.score).toBeCloseTo(0.1, 4);
   });
 
   it("does not treat an exact title found only through degraded fallback as retrieval evidence", async () => {

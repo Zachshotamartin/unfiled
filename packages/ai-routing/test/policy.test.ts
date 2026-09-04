@@ -41,14 +41,13 @@ function policy(overrides: Partial<RoutingPolicyInput> = {}): RoutingPolicyInput
 
 describe("routing scoring policy", () => {
   it("uses the documented weighted score and clamps it", () => {
-    expect(scoreRoutingSignals(HIGH_FEATURES)).toBe(0.945);
-    expect(
-      scoreRoutingSignals(
-        Object.fromEntries(
-          Object.keys(HIGH_FEATURES).map((key) => [key, 1])
-        ) as RoutingSignalFeatures
-      )
-    ).toBe(1);
+    expect(scoreRoutingSignals(HIGH_FEATURES)).toBe(0.875);
+    const everySignal = Object.fromEntries(
+      Object.keys(HIGH_FEATURES).map((key) => [key, 1])
+    ) as RoutingSignalFeatures;
+    // The positive weights sum to exactly one; a duplicate title takes its 0.15 off the top.
+    expect(scoreRoutingSignals({ ...everySignal, duplicateTitleSuspicion: 0 })).toBe(1);
+    expect(scoreRoutingSignals(everySignal)).toBe(0.85);
     expect(scoreCreateRoutingSignals({ noCandidateFitStrength: 0.5, titleValidity: 1 })).toBe(0.65);
     expect(() => scoreRoutingSignals({ ...HIGH_FEATURES, margin: 2 })).toThrow();
   });
@@ -115,6 +114,49 @@ describe("routing scoring policy", () => {
         })
       )
     ).toMatchObject({ band: "inbox", reasons: ["low_score"] });
+  });
+
+  it("files an append into the note that holds this kind of thing, whatever the words", () => {
+    // "Eggs for the weekend" into Groceries shares no word with the note and no lexical signal
+    // will ever vouch for it. The list holds items and the model chose this list: that files.
+    const noEvidence = {
+      ...HIGH_FEATURES,
+      ruleOrAliasNearMatch: 0,
+      explicitDestinationMention: 0,
+      openSameDayTypeMatch: 0,
+      semanticSimilarity: 0,
+      destinationRecency: 0,
+      margin: 0,
+      reasonCodeConsistency: 0
+    };
+    expect(
+      bandRoutingDecision(
+        policy({
+          captureKind: "list_items",
+          destinationNoteType: "list",
+          features: { ...noEvidence, typeCompatibility: 1 }
+        })
+      )
+    ).toMatchObject({ band: "auto", autoApply: true, score: 0.3 });
+    // A shapeless thought into a note built for something else is a loose fit, and with nothing
+    // else to vouch for it the capture waits in the Inbox.
+    expect(
+      bandRoutingDecision(policy({ features: { ...noEvidence, typeCompatibility: 0.25 } }))
+    ).toMatchObject({ band: "inbox", reasons: ["low_score"], score: 0.075 });
+    // With corroboration -- the title named in the capture -- the loose fit files too.
+    expect(
+      bandRoutingDecision(
+        policy({
+          features: {
+            ...noEvidence,
+            typeCompatibility: 0.25,
+            ruleOrAliasNearMatch: 1,
+            openSameDayTypeMatch: 1,
+            semanticSimilarity: 0.8
+          }
+        })
+      )
+    ).toMatchObject({ band: "auto" });
   });
 
   it.each([
@@ -226,7 +268,7 @@ describe("routing scoring policy", () => {
   it("bands an append by what a retrieved candidate can actually score", () => {
     // In production a candidate the retriever merely found has explicitDestinationMention and
     // reasonCodeConsistency of zero -- they fire only for a destination the owner named or a rule
-    // matched -- so 0.55 is the ceiling for a purely semantic append. The old 0.8 bar sat above
+    // matched -- so 0.6 is the ceiling for a purely semantic append. The old 0.8 bar sat above
     // every score this case can reach, which is the whole reason ordinary filing went to Review.
     const found = {
       ...HIGH_FEATURES,
@@ -235,14 +277,21 @@ describe("routing scoring policy", () => {
       reasonCodeConsistency: 0
     };
     const ceiling = { ...found, semanticSimilarity: 1, margin: 1 };
-    expect(scoreRoutingSignals(ceiling)).toBe(0.55);
+    expect(scoreRoutingSignals(ceiling)).toBe(0.6);
 
     const strong = { ...found, semanticSimilarity: 0.9, margin: 0.4 };
-    expect(scoreRoutingSignals(strong)).toBe(0.48);
+    expect(scoreRoutingSignals(strong)).toBe(0.56);
     expect(bandRoutingDecision(policy({ features: strong }))).toMatchObject({ band: "auto" });
 
-    const weak = { ...found, openSameDayTypeMatch: 0, semanticSimilarity: 0.8, margin: 0.3 };
-    expect(scoreRoutingSignals(weak)).toBe(0.26);
+    // A loose fit -- the note is not made of this kind of thing -- is where the score decides.
+    const weak = {
+      ...found,
+      typeCompatibility: 0.25,
+      openSameDayTypeMatch: 0,
+      semanticSimilarity: 0.8,
+      margin: 0.3
+    };
+    expect(scoreRoutingSignals(weak)).toBe(0.22);
     expect(bandRoutingDecision(policy({ features: weak }))).toMatchObject({
       band: "inbox",
       reasons: ["low_score"]

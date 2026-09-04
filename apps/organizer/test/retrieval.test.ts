@@ -318,7 +318,11 @@ describe("organizer encrypted RAG retrieval", () => {
     retrieval.close();
   });
 
-  it("distinguishes a verified no-match scan from degraded retrieval", async () => {
+  it("discloses an open note the capture shares no word with, and says so in the features", async () => {
+    // "Eggs for the weekend" beside a Groceries list is the ordinary case: the model is the one
+    // that can tell they belong together, and it can only do that if it sees the note. The scan
+    // still says what it found -- nothing -- so the policy judges the model's choice on the
+    // note's type, not on evidence that was never going to exist.
     const repo = repository();
     const vector = new Float32Array([0, 1]);
     const opener = payloads();
@@ -333,19 +337,20 @@ describe("organizer encrypted RAG retrieval", () => {
       repository: repo
     }).retrieve({ authority, capture: unrelatedCapture, job, signal });
 
-    expect(result.candidates).toEqual([]);
+    expect(result.candidates).toEqual([candidate]);
     expect(result.ragGenerationId).toBe(GENERATION_ID);
     expect(result.routingPolicyContext).toMatchObject({
       deterministicRuleMatch: false,
       retrievalAutoEligible: true
     });
-    expect(repo.candidates).toHaveBeenCalledTimes(1);
-    expect(repo.selectCandidates).not.toHaveBeenCalled();
+    expect(result.routingPolicyContext.candidateFeatures?.[0]?.features).toMatchObject({
+      ruleOrAliasNearMatch: 0,
+      explicitDestinationMention: 0
+    });
+    expect(repo.selectCandidates).toHaveBeenCalledTimes(1);
+    expect(repo.candidates).not.toHaveBeenCalled();
     expect(opener.openPayload).toHaveBeenCalledTimes(1);
     expect([...vector]).toEqual([0, 0]);
-    // Nothing here is a usable destination, so nothing is disclosed. The repository still
-    // recorded the page it listed to read the current controls, and the revalidation manifest
-    // has to mirror that page or the heartbeat rejects it and the capture fails permanently.
     expect(result.revalidationCandidates).toEqual([candidate]);
   });
 
@@ -683,7 +688,20 @@ describe("drain over the real retrieval port", () => {
     return {
       openCapture: vi.fn().mockResolvedValue({ controls, rawContent: "zxqv unrelated thought" }),
       openCaptureAttachments: vi.fn().mockResolvedValue([]),
-      openCandidate: vi.fn().mockRejectedValue(new Error("no candidate is disclosed here")),
+      openCandidate: vi
+        .fn()
+        .mockImplementation(({ candidate: disclosed }: { candidate: EncryptedCandidate }) =>
+          Promise.resolve({
+            bodyMarkdown: "- [ ] milk",
+            candidateId: disclosed.candidateId,
+            isOpen: disclosed.isOpen,
+            noteId: disclosed.noteId,
+            noteType: disclosed.noteType,
+            revision: disclosed.revision,
+            structuredData: { items: [], schemaVersion: 1 },
+            title: "Groceries"
+          })
+        ),
       sealCommand: vi
         .fn()
         .mockImplementation(
@@ -703,11 +721,11 @@ describe("drain over the real retrieval port", () => {
   }
 
   it("keeps the revalidation manifest on the page the repository recorded", async () => {
-    // A verified complete scan that finds no usable destination discloses nothing, while the
-    // repository still holds the page it listed to read the current controls. Reporting that
-    // empty disclosure as the recorded page made the heartbeat reject the manifest, and an
-    // owner writing a thought unrelated to all their notes lost the capture to a permanent
-    // validation_failed.
+    // A verified complete scan discloses the open note even when the capture shares no word
+    // with it, and the revalidation manifest has to mirror exactly the page the repository
+    // recorded for that disclosure. A manifest that drifted from the page made the heartbeat
+    // reject it, and an owner writing a thought unrelated to all their notes lost the capture to
+    // a permanent validation_failed.
     const repo = invariantRepository();
     const retrieval = createOrganizerCandidateRetrieval({
       embeddingProvider: embeddingProvider(new Float32Array([0, 1])),

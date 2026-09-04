@@ -1,7 +1,8 @@
 import {
   OrganizationPlanSchema,
   type ModelOperation,
-  type OrganizationPlan
+  type OrganizationPlan,
+  ORGANIZER_PROMPT_VERSION
 } from "@unfiled/contracts";
 
 import { ownerCaptureText, type RoutedCaptureContent } from "../capture-text.js";
@@ -28,7 +29,7 @@ import {
 } from "./corpus.js";
 
 export const ROUTING_EVALUATION_BASELINE = Object.freeze({
-  promptVersion: "routing-v2",
+  promptVersion: ORGANIZER_PROMPT_VERSION,
   schemaVersion: 1,
   candidateAlgorithm: "encrypted-exact-scan.v1",
   modelId: "deterministic-mock",

@@ -45,6 +45,26 @@ describe("source preservation", () => {
     ).toMatchObject({ preserved: true, novelOperationTokenCount: 0 });
   });
 
+  it("treats the name the owner gave a list as its title rather than as source words", () => {
+    const captureText = "todo list, buy milk, call mom";
+    const filed = inspectSourcePreservation(captureText, [
+      { type: "append_list_items", section: null, items: ["buy milk", "call mom"] }
+    ]);
+    expect(filed.preserved).toBe(true);
+    expect(filed.method).toBe("ordered_extraction");
+    expect(filed.captureTokenCount).toBe(4);
+    // Writing the name in again as an item duplicates it; the words are not required twice.
+    const duplicated = inspectSourcePreservation(captureText, [
+      { type: "append_list_items", section: null, items: ["todo list", "buy milk", "call mom"] }
+    ]);
+    expect(duplicated.preserved).toBe(false);
+    // A raw copy still has to carry every word, the name included.
+    expect(
+      inspectSourcePreservation(captureText, [{ type: "append_raw", content: captureText }])
+        .preserved
+    ).toBe(true);
+  });
+
   it("rejects rewrites, reordering, invented values, duplicated body content, and omissions", () => {
     const cases: readonly Readonly<{ capture: string; operations: readonly ModelOperation[] }>[] = [
       {

@@ -1385,17 +1385,54 @@ describe("organizer drain", () => {
     expect(vi.mocked(repo.commit).mock.calls[0]?.[0].command.outcome).toBe("review");
   });
 
+  it("leaves a loose fit the scan cannot vouch for in the Inbox before preparation", async () => {
+    // A shapeless sentence into a list is a loose fit (typeCompatibility 0.25), and with no
+    // other evidence its score is 0.075: the capture waits in the Inbox, and nothing is prepared.
+    // An item into a list would file -- the note holds items -- which is the point of the change.
+    const crypto = cipher();
+    vi.mocked(crypto.openCapture).mockResolvedValueOnce({
+      controls,
+      rawContent: "Keep this exact private sentence"
+    });
+    const listCandidate = candidateAt(2, { noteType: "list" });
+    const planner: OrganizerPlanner = {
+      describe: unusedDescribe(),
+      plan: vi.fn().mockResolvedValue({
+        ...appendPlan,
+        captureKind: "freeform",
+        destination: { candidateId: listCandidate.candidateId, newNote: null },
+        operations: [{ type: "append_raw", content: "Keep this exact private sentence" }]
+      })
+    };
+    const repo = repository({
+      candidates: vi.fn().mockResolvedValue({ candidates: [listCandidate], controls }),
+      commit: vi.fn().mockResolvedValue({
+        jobId: job.jobId,
+        noteId: null,
+        outcome: "review",
+        replayed: false,
+        revision: null,
+        replanCount: 0
+      })
+    });
+    const result = await drain(repo, planner, crypto, {
+      ...automaticPolicyContext,
+      deterministicRuleMatch: false,
+      features: zeroPolicyFeatures
+    }).drain({ authority, requestId: "r", signal, trigger: "schedule" });
+    expect(result.completed).toBe(1);
+    expect(repo.prepareAppend).not.toHaveBeenCalled();
+    expect(vi.mocked(repo.commit).mock.calls[0]?.[0].command.outcome).toBe("review");
+    const routingDecision = vi.mocked(crypto.sealCommand).mock.calls.at(-1)?.[0].routingDecision;
+    expect(routingDecision?.autoApply).toBe(false);
+    expect(routingDecision?.band).toBe("inbox");
+    expect(routingDecision?.score).toBe(0.075);
+  });
+
   it.each([
     [
       "retrieval degradation",
       { ...automaticPolicyContext, deterministicRuleMatch: false, retrievalAutoEligible: false }
-    ],
-    [
-      "score below threshold",
-      {
-        ...automaticPolicyContext,
-        features: zeroPolicyFeatures
-      }
     ]
   ] as const)("routes %s to Review before preparation", async (_label, policyContext) => {
     const crypto = cipher();
@@ -1427,7 +1464,7 @@ describe("organizer drain", () => {
     expect(reviewed.validatedPlan.alternatives).toEqual([candidate.candidateId]);
     expect(reviewed.validatedPlan.captureKind).toBe("list_items");
     expect(routingDecision?.autoApply).toBe(false);
-    expect(routingDecision?.band).toBe(_label === "score below threshold" ? "inbox" : "review");
+    expect(routingDecision?.band).toBe("review");
   });
 
   it("auto-applies a high-confidence aphorism after principle syntax inference", async () => {

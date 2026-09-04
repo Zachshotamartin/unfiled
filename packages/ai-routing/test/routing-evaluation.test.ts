@@ -1,3 +1,4 @@
+import { ORGANIZER_PROMPT_VERSION } from "@unfiled/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -50,7 +51,7 @@ describe("versioned deterministic routing corpus", () => {
       expectedHostileReplays: 11,
       unsupportedCategories: ["multilingual"],
       baseline: {
-        promptVersion: "routing-v2",
+        promptVersion: ORGANIZER_PROMPT_VERSION,
         modelId: "deterministic-mock",
         scope: "deterministic_policy_and_safety"
       },
