@@ -43,6 +43,8 @@ merge_base="$(git merge-base "${BASE_SHA}" "${HEAD_SHA}" 2>/dev/null)" ||
   run_everything "no merge base between ${BASE_SHA} and ${HEAD_SHA}"
 files="$(git diff --name-only "${merge_base}" "${HEAD_SHA}" 2>/dev/null)" ||
   run_everything "could not diff ${merge_base}..${HEAD_SHA}"
+[[ -n "${files}" ]] ||
+  run_everything "no files differ between ${merge_base:0:7} and ${HEAD_SHA:0:7}"
 
 web=false
 ios=false
