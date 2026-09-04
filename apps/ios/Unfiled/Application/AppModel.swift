@@ -210,6 +210,18 @@ final class AppModel: ObservableObject {
     @Published private(set) var routingRules: [RoutingRule] = []
     @Published private(set) var aiSettings: UserSettings?
     @Published private(set) var providerKeyMetadataByProvider: [AIProvider: ProviderKeyMetadata] = [:]
+    /// Whether the account's key status has actually been read. An empty record is not evidence
+    /// that the owner has no key; on a cold launch with no connection it means nothing is known.
+    @Published private(set) var hasLoadedProviderKeyMetadata = false
+
+    /// True only when the app knows the account's keys and none of them can organize a capture.
+    /// Presence was the wrong question in both directions: a failed status read nagged an owner
+    /// who already had a key, and a key the provider rejected or that was revoked hid the card
+    /// that would let them fix it.
+    var needsProviderKey: Bool {
+        guard hasLoadedProviderKeyMetadata else { return false }
+        return !providerKeyMetadataByProvider.values.contains { $0.status == .active }
+    }
     @Published private(set) var isLoadingAISettings = false
     @Published private(set) var hasLoadedAISettings = false
     @Published private(set) var isSavingAISettings = false
@@ -1265,6 +1277,7 @@ final class AppModel: ObservableObject {
             switch result {
             case let .value(response):
                 providerKeyMetadataByProvider[provider] = response.providerKey
+                hasLoadedProviderKeyMetadata = true
                 if hasPendingProviderKeyRetry, providerKeyPutAttempt?.provider == provider {
                     providerKeyErrors[provider] = "The storage result is unknown. Paste the exact same key to retry this request, or start over."
                 } else {
@@ -4682,6 +4695,7 @@ final class AppModel: ObservableObject {
         searchTask?.cancel()
         searchTask = nil
         currentUser = nil
+        hasLoadedProviderKeyMetadata = false
         attachmentBytesCache = [:]
         notes = []
         spaces = []

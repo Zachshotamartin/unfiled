@@ -101,7 +101,7 @@ struct AppShellView: View {
                 receipts: model.receipts,
                 reviewItems: model.reviewItems,
                 isLoading: model.isLoadingLibrary || model.isLoadingReview,
-                needsProviderKey: model.providerKeyMetadataByProvider.isEmpty,
+                needsProviderKey: model.needsProviderKey,
                 submittingInteractionIDs: model.submittingInteractionIDs,
                 interactionErrors: model.interactionErrors,
                 onRefresh: model.refreshAll,
