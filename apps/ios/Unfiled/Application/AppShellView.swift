@@ -537,8 +537,8 @@ private struct RevisionHistoryDestinationView: View {
                     noteTitle: note.title,
                     currentRevision: note.currentRevision,
                     revisions: model.revisions[noteID] ?? [],
-                    isLoading: model.revisions[noteID] == nil,
-                    errorMessage: nil,
+                    isLoading: model.revisions[noteID] == nil && model.revisionsError[noteID] == nil,
+                    errorMessage: model.revisionsError[noteID],
                     onRefresh: { await model.loadRevisions(noteID: noteID) },
                     onPreviewRevision: { revisionID in
                         model.navigationPath.append(

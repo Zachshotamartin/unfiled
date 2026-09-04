@@ -209,6 +209,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var noteContextByNoteID: [String: NoteContextViewState] = [:]
     @Published private(set) var routingRules: [RoutingRule] = []
     @Published private(set) var aiSettings: UserSettings?
+    /// Why a note's revision history could not be read, so the screen can say so and offer a
+    /// retry instead of showing its loading state until the app is relaunched.
+    @Published private(set) var revisionsError: [String: String] = [:]
     @Published private(set) var providerKeyMetadataByProvider: [AIProvider: ProviderKeyMetadata] = [:]
     /// Whether the account's key status has actually been read. An empty record is not evidence
     /// that the owner has no key; on a cold launch with no connection it means nothing is known.
@@ -3137,6 +3140,7 @@ final class AppModel: ObservableObject {
         do {
             let items = try await Self.fetchAllRevisions(id: id, api: runtime.authenticatedAPI)
             guard isCurrent(context) else { return }
+            revisionsError.removeValue(forKey: noteID)
             revisions[noteID] = items.map { PresentationMapping.revision($0) }
             let rawSpaces = Array(spacesByID.values)
             for revision in items {
@@ -3147,7 +3151,9 @@ final class AppModel: ObservableObject {
             }
         } catch {
             guard isCurrent(context) else { return }
-            bannerMessage = "Revision history could not be loaded."
+            // A request the app abandoned leaves the screen as it is.
+            if error is CancellationError || (error as? APIClientError) == .cancelled { return }
+            revisionsError[noteID] = "Revision history could not be loaded. Pull to try again."
         }
     }
 
@@ -4695,6 +4701,7 @@ final class AppModel: ObservableObject {
         searchTask?.cancel()
         searchTask = nil
         currentUser = nil
+        revisionsError = [:]
         hasLoadedProviderKeyMetadata = false
         attachmentBytesCache = [:]
         notes = []
