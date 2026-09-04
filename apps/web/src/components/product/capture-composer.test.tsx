@@ -7,7 +7,6 @@ import { CaptureComposer, type CaptureComposerValue } from "./capture-composer";
 const emptyValue: CaptureComposerValue = {
   expansionDisabled: false,
   explicitDestinationNoteId: null,
-  privacy: "ai_assisted",
   rawContent: ""
 };
 
@@ -47,7 +46,7 @@ describe("CaptureComposer", () => {
     expect(html).not.toContain(" / 10,000");
   });
 
-  it("shows the late counter and makes AI expansion unavailable for private captures", () => {
+  it("offers no capture mode, because every capture is filed by the organizer", () => {
     const html = renderToStaticMarkup(
       <CaptureComposer
         acknowledgement="Saved. Waiting to sync."
@@ -56,23 +55,21 @@ describe("CaptureComposer", () => {
         notes={[]}
         onChange={vi.fn()}
         onSubmit={vi.fn()}
-        value={{
-          ...emptyValue,
-          expansionDisabled: true,
-          privacy: "private_manual",
-          rawContent: "x".repeat(9_000)
-        }}
+        value={{ ...emptyValue, rawContent: "x".repeat(9_000) }}
       />
     );
 
     expect(html).toContain("9,000 / 10,000");
-    expect(html).toContain("Never send this capture to an AI provider.");
     expect(html).toContain("Saved. Waiting to sync.");
-    expect(html.match(/disabled=""/gu)).toHaveLength(1);
+    // ADR-0021, decision 1. A "Keep private" capture is sealed under a key class the drain's
+    // claim filter rejects, so the job it mints can never be claimed and it is never filed.
+    expect(html).not.toContain("Keep private");
+    expect(html).not.toContain("Never send this capture to an AI provider.");
+    expect(html).not.toContain("private_manual");
   });
 
   it("maps each control to the canonical capture value", () => {
-    const onChange = vi.fn();
+    const onChange = vi.fn<(value: CaptureComposerValue) => void>();
     const tree = CaptureComposer({
       acknowledgement: null,
       disabled: false,
@@ -91,9 +88,10 @@ describe("CaptureComposer", () => {
     destination?.props.onChange?.({
       target: { checked: false, value: "note_01J6M9Q7G4BMKB33GSG3NJ6D1X" }
     });
-    toggles[0]?.props.onChange?.({ target: { checked: true, value: "on" } });
-    toggles[1]?.props.onChange?.({ target: { checked: false, value: "on" } });
+    toggles[0]?.props.onChange?.({ target: { checked: false, value: "on" } });
 
+    // Expansion is the only remaining toggle: there is no mode control left to map.
+    expect(toggles).toHaveLength(1);
     expect(onChange).toHaveBeenNthCalledWith(1, {
       ...emptyValue,
       rawContent: "remember this"
@@ -104,12 +102,10 @@ describe("CaptureComposer", () => {
     });
     expect(onChange).toHaveBeenNthCalledWith(3, {
       ...emptyValue,
-      expansionDisabled: true,
-      privacy: "private_manual"
-    });
-    expect(onChange).toHaveBeenNthCalledWith(4, {
-      ...emptyValue,
       expansionDisabled: true
     });
+    const emitted: CaptureComposerValue | undefined = onChange.mock.calls[0]?.[0];
+    expect(emitted).toBeDefined();
+    expect(Object.keys(emitted ?? emptyValue)).not.toContain("privacy");
   });
 });

@@ -58,7 +58,6 @@
     border-radius: var(--radius-button);
     padding: 0.35rem 0.5rem;
     color: var(--color-text-secondary);
-    font-family: var(--font-geist-mono), monospace;
     font-size: 0.62rem;
     font-weight: 650;
     letter-spacing: 0.08em;
@@ -91,8 +90,7 @@
     flex-wrap: wrap;
     gap: 0.45rem 0.9rem;
     margin-top: 0.85rem;
-    color: var(--color-text-disabled);
-    font-family: var(--font-geist-mono), monospace;
+    color: var(--color-text-secondary);
     font-size: 0.65rem;
     letter-spacing: 0.04em;
     text-transform: uppercase;
@@ -236,7 +234,7 @@
     background: color-mix(in srgb, var(--color-warning) 7%, transparent);
     margin-top: 1rem;
     padding: 0.85rem 0.95rem;
-    color: #e7bb82;
+    color: var(--color-warning);
     font-size: 0.8rem;
     line-height: 1.5;
   }
@@ -361,7 +359,6 @@
   .routing-rule-preview-privacy {
     flex: none;
     color: var(--color-accent);
-    font-family: var(--font-geist-mono), monospace;
     font-size: 0.66rem;
     letter-spacing: 0.04em;
     line-height: 1.4;
@@ -388,8 +385,7 @@
   .routing-rule-preview-count {
     flex: none;
     margin-top: 0.45rem;
-    color: var(--color-text-disabled);
-    font-family: var(--font-geist-mono), monospace;
+    color: var(--color-text-secondary);
     font-size: 0.68rem;
     line-height: 1.5;
   }
@@ -433,7 +429,6 @@
 
   .routing-rule-preview-match-line > span {
     color: var(--color-accent);
-    font-family: var(--font-geist-mono), monospace;
     font-size: 0.64rem;
     letter-spacing: 0.05em;
     text-transform: uppercase;
@@ -448,8 +443,7 @@
   }
 
   .routing-rules-tools > p {
-    color: var(--color-text-disabled);
-    font-family: var(--font-geist-mono), monospace;
+    color: var(--color-text-secondary);
     font-size: 0.68rem;
   }
 

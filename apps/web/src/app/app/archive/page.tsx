@@ -19,7 +19,7 @@ export default function ArchivePage() {
             />
           </div>
         </section>
-        <section className="mt-16" aria-labelledby="deleted-heading">
+        <section className="mt-16" aria-labelledby="deleted-heading" id="recently-deleted">
           <h2 id="deleted-heading" className="section-label">
             Recently deleted
           </h2>

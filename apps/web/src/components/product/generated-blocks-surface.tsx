@@ -1,6 +1,5 @@
 "use client";
 
-import { CheckIcon, SparkleIcon, XIcon } from "@phosphor-icons/react";
 import {
   entityIdSchema,
   type EntityId,
@@ -17,6 +16,8 @@ import {
 } from "@/lib/product/browser-api";
 import { announceProductChange, createIdempotencyKey } from "@/lib/product/client";
 import { usePagedResource, type PagedResourceLoader } from "@/lib/product/use-paged-resource";
+
+import { UnfiledGlyph } from "./unfiled-glyph";
 
 type Resolution = GeneratedBlockResolveRequest["resolution"];
 export type GeneratedResolutionAttempt = Readonly<{
@@ -64,7 +65,7 @@ export function GeneratedBlockCard({
   return (
     <article className="generated-block-card" aria-label={`AI-generated ${block.kind}`}>
       <div className="generated-block-label">
-        <SparkleIcon size={15} weight="fill" aria-hidden="true" />
+        <UnfiledGlyph glyph="card" size={15} weight={1.9} />
         <span>AI-generated</span>
         <span aria-hidden="true">·</span>
         <span>{proposed ? "Proposed" : "Accepted"}</span>
@@ -81,7 +82,7 @@ export function GeneratedBlockCard({
             disabled={pending !== null}
             onClick={() => onResolve("accept")}
           >
-            <CheckIcon size={16} weight="bold" aria-hidden="true" />
+            <UnfiledGlyph glyph="check" size={16} weight={2.2} />
             {pending === "accept" ? "Accepting…" : "Accept"}
           </button>
           <button
@@ -90,13 +91,13 @@ export function GeneratedBlockCard({
             disabled={pending !== null}
             onClick={() => onResolve("reject")}
           >
-            <XIcon size={16} weight="bold" aria-hidden="true" />
+            <UnfiledGlyph glyph="close" size={16} weight={2.2} />
             {pending === "reject" ? "Rejecting…" : "Reject"}
           </button>
         </div>
       ) : (
         <p className="generated-block-terminal">
-          <CheckIcon size={15} weight="bold" aria-hidden="true" /> Accepted as a separate, read-only
+          <UnfiledGlyph glyph="check" size={15} weight={2.2} /> Accepted as a separate, read-only
           block
         </p>
       )}

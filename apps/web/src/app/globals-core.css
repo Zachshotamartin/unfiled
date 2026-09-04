@@ -9,7 +9,9 @@
   --color-action-contrast: var(--color-accent-contrast);
   --color-outline: var(--color-border);
   --color-critical: var(--color-danger);
+  --color-generated: var(--color-generated-surface);
   --font-sans: var(--font-geist-sans);
+  --font-serif: var(--font-paper-serif);
   --font-mono: var(--font-geist-mono);
   --radius-control: var(--radius-button);
   --radius-frame: var(--radius-container);
@@ -105,8 +107,8 @@
   }
 
   .button-primary:hover {
-    background: #f0836c;
-    border-color: #f0836c;
+    background: var(--color-accent-pressed);
+    border-color: var(--color-accent-pressed);
   }
 
   .button-primary:active {
@@ -121,7 +123,7 @@
     gap: 0.5rem;
     border-radius: var(--radius-button);
     border: 1px solid var(--color-border);
-    background: transparent;
+    background: var(--color-surface);
     padding: 0.75rem 1.125rem;
     color: var(--color-text-primary);
     font-weight: 600;
@@ -134,8 +136,8 @@
   }
 
   .button-secondary:hover {
-    border-color: rgb(242 239 232 / 34%);
-    background: var(--color-surface);
+    border-color: var(--color-accent);
+    background: var(--color-surface-raised);
   }
 
   .button-secondary:active {
@@ -147,7 +149,6 @@
     border: 1px solid var(--color-border);
     border-radius: var(--radius-container);
     background: var(--color-surface);
-    box-shadow: inset 0 1px 0 rgb(242 239 232 / 4%);
   }
 
   .balanced {
@@ -256,7 +257,6 @@
   .section-label,
   .field-label {
     color: var(--color-text-secondary);
-    font-family: var(--font-geist-mono), monospace;
     font-size: 0.7rem;
     font-weight: 600;
     letter-spacing: 0.12em;
@@ -275,75 +275,6 @@
   .product-shell {
     min-height: 100dvh;
     background: var(--color-canvas);
-  }
-
-  .desktop-nav {
-    position: sticky;
-    top: 0;
-    display: none;
-    height: 100dvh;
-    flex-direction: column;
-    border-right: 1px solid var(--color-border);
-    background: var(--color-canvas);
-    padding: 1.25rem 0.75rem;
-  }
-
-  .app-nav-item {
-    position: relative;
-    display: flex;
-    min-height: 3rem;
-    width: 100%;
-    align-items: center;
-    gap: 0.75rem;
-    border: 0;
-    border-radius: var(--radius-button);
-    background: transparent;
-    padding: 0 0.75rem;
-    color: var(--color-text-secondary);
-    font-size: 0.875rem;
-    text-align: left;
-    transition:
-      color 160ms var(--motion-standard),
-      background-color 160ms var(--motion-standard);
-  }
-
-  .app-nav-item:hover,
-  .app-nav-item-active {
-    background: var(--color-surface);
-    color: var(--color-text-primary);
-  }
-
-  .app-nav-marker {
-    position: absolute;
-    top: 0.65rem;
-    bottom: 0.65rem;
-    left: -0.75rem;
-    width: 3px;
-    background: var(--color-accent);
-  }
-
-  .mobile-nav {
-    position: fixed;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    z-index: var(--z-sticky);
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    border-top: 1px solid var(--color-border);
-    background: rgb(11 12 14 / 96%);
-    padding: 0 0.25rem env(safe-area-inset-bottom);
-    backdrop-filter: blur(14px);
-  }
-
-  .mobile-nav-item {
-    display: flex;
-    min-height: 4rem;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.25rem;
-    font-size: 0.68rem;
   }
 
   .product-page {
@@ -365,10 +296,11 @@
   }
 
   .page-heading h1 {
-    font-size: clamp(3.2rem, 8vw, 5.8rem);
-    font-weight: 620;
-    letter-spacing: -0.065em;
-    line-height: 0.88;
+    font-family: var(--font-paper-serif);
+    font-size: clamp(2.1rem, 5.5vw, 2.9rem);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.05;
   }
 
   .note-row {
@@ -387,7 +319,16 @@
 
   .empty-state {
     border-top: 1px solid var(--color-border);
-    padding: 3rem 0.15rem;
+    padding: 2.25rem 0.15rem;
+  }
+
+  /* An empty state is a sentence and, at most, one action, in the reading face. */
+  .empty-state h1,
+  .empty-state h2 {
+    font-family: var(--font-paper-serif);
+    font-size: 1.4rem;
+    font-weight: 600;
+    letter-spacing: -0.015em;
   }
 
   .offline-strip {
@@ -396,8 +337,7 @@
     border-left: 0;
     padding: 0.65rem 0;
     color: var(--color-warning);
-    font-family: var(--font-geist-mono), monospace;
-    font-size: 0.72rem;
+    font-size: 0.75rem;
   }
 
   .state-page {
@@ -418,11 +358,16 @@
     outline: none;
   }
 
+  .editor-control,
+  .editor-select {
+    background: var(--color-surface);
+  }
+
   .editor-control:hover,
   .editor-select:hover,
   .editor-control:focus,
   .editor-select:focus {
-    border-color: rgb(242 239 232 / 34%);
+    border-color: var(--color-accent);
   }
 
   .auth-page {
@@ -514,9 +459,8 @@
   }
 
   .generated-block-loading {
-    color: var(--color-text-disabled);
-    font-family: var(--font-geist-mono), monospace;
-    font-size: 0.72rem;
+    color: var(--color-text-secondary);
+    font-size: 0.75rem;
   }
 
   .generated-blocks-section {
@@ -534,15 +478,15 @@
 
   .generated-blocks-heading h2 {
     margin-top: 0.3rem;
-    font-size: 1.35rem;
-    font-weight: 610;
-    letter-spacing: -0.025em;
+    font-family: var(--font-paper-serif);
+    font-size: 1.3rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
   }
 
   .generated-blocks-heading > p {
-    color: var(--color-text-disabled);
-    font-family: var(--font-geist-mono), monospace;
-    font-size: 0.68rem;
+    color: var(--color-text-secondary);
+    font-size: 0.72rem;
   }
 
   .generated-block-list {
@@ -567,7 +511,6 @@
 
   .generated-block-label {
     color: var(--color-accent);
-    font-family: var(--font-geist-mono), monospace;
     font-size: 0.68rem;
     font-weight: 650;
     letter-spacing: 0.04em;
@@ -585,9 +528,8 @@
   .generated-block-provenance {
     margin-top: 0.75rem;
     overflow-wrap: anywhere;
-    color: var(--color-text-disabled);
-    font-family: var(--font-geist-mono), monospace;
-    font-size: 0.66rem;
+    color: var(--color-text-secondary);
+    font-size: 0.7rem;
   }
 
   .generated-block-actions {
@@ -622,10 +564,11 @@
     width: 100%;
     border: 0;
     background: transparent;
-    font-size: clamp(2.4rem, 7vw, 4.75rem);
-    font-weight: 610;
-    letter-spacing: -0.06em;
-    line-height: 0.95;
+    font-family: var(--font-paper-serif);
+    font-size: clamp(2rem, 5.5vw, 2.9rem);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
     outline: none;
   }
 
@@ -641,10 +584,10 @@
     resize: vertical;
     border: 0;
     background: transparent;
-    margin-top: 2.5rem;
-    font-family: var(--font-geist-mono), monospace;
-    font-size: 1rem;
-    line-height: 1.85;
+    margin-top: 2rem;
+    font-family: var(--font-paper-serif);
+    font-size: 1.05rem;
+    line-height: 1.8;
     outline: none;
   }
 
@@ -659,23 +602,14 @@
     gap: 0.65rem;
     border-top: 1px solid var(--color-border);
     padding: 0.65rem 1rem;
-    font-family: var(--font-geist-mono), monospace;
-    font-size: 0.72rem;
+    font-size: 0.78rem;
     color: var(--color-text-secondary);
-  }
-
-  .privacy-select {
-    min-height: 2rem;
-    border: 0;
-    background: transparent;
-    margin-left: auto;
-    color: var(--color-text-secondary);
-    font-size: 0.75rem;
   }
 
   .markdown-preview {
     color: var(--color-text-primary);
-    font-size: 1rem;
+    font-family: var(--font-paper-serif);
+    font-size: 1.05rem;
     line-height: 1.8;
   }
 
@@ -686,29 +620,31 @@
   .markdown-preview h2,
   .markdown-preview h3,
   .markdown-preview h4 {
-    margin-top: 2.3rem;
-    font-weight: 620;
-    letter-spacing: -0.04em;
-    line-height: 1.1;
+    margin-top: 2rem;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    line-height: 1.2;
   }
 
   .markdown-preview h2 {
-    font-size: 2.4rem;
+    font-size: 1.6rem;
   }
   .markdown-preview h3 {
-    font-size: 1.75rem;
+    font-size: 1.3rem;
   }
   .markdown-preview h4 {
-    font-size: 1.25rem;
+    font-size: 1.1rem;
   }
   .markdown-preview a {
     color: var(--color-accent);
     text-decoration: underline;
     text-underline-offset: 3px;
   }
+  /* Literal code is the one thing still set in the monospace face. */
   .markdown-preview code {
     border: 1px solid var(--color-border);
-    border-radius: 4px;
+    border-radius: 5px;
+    background: var(--color-surface);
     padding: 0.1em 0.3em;
     font-family: var(--font-geist-mono), monospace;
     font-size: 0.9em;
@@ -716,6 +652,8 @@
   .markdown-preview pre {
     overflow-x: auto;
     border: 1px solid var(--color-border);
+    border-radius: var(--radius-card);
+    background: var(--color-surface);
     padding: 1rem;
   }
   .markdown-preview pre code {
@@ -763,7 +701,7 @@
   }
 
   .markdown-tag {
-    font-family: var(--font-geist-mono), monospace;
+    font-family: var(--font-geist-sans), sans-serif;
     font-size: 0.9em;
   }
 
@@ -795,9 +733,8 @@
 
   .inspector-summary span:last-child {
     margin-left: auto;
-    color: var(--color-text-disabled);
-    font-family: var(--font-geist-mono), monospace;
-    font-size: 0.68rem;
+    color: var(--color-text-secondary);
+    font-size: 0.72rem;
   }
 
   .tag-option,
@@ -823,9 +760,8 @@
   }
 
   .revision-row time {
-    color: var(--color-text-disabled);
-    font-family: var(--font-geist-mono), monospace;
-    font-size: 0.65rem;
+    color: var(--color-text-secondary);
+    font-size: 0.7rem;
   }
 
   .icon-button {
@@ -837,13 +773,13 @@
     justify-content: center;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-button);
-    background: transparent;
+    background: var(--color-surface);
     color: var(--color-text-secondary);
   }
 
   .icon-button:hover {
     color: var(--color-text-primary);
-    border-color: rgb(242 239 232 / 34%);
+    border-color: var(--color-accent);
   }
 
   .destructive-row {
@@ -894,8 +830,8 @@
     height: 1.25rem;
     align-items: center;
     justify-content: center;
-    border: 1px solid rgb(242 239 232 / 32%);
-    border-radius: 4px;
+    border: 1px solid var(--color-border);
+    border-radius: 5px;
   }
 
   .check-box-checked {
@@ -933,82 +869,7 @@
 
   .search-form {
     display: grid;
-    gap: 1rem;
-    border-top: 1px solid var(--color-border);
-    border-bottom: 1px solid var(--color-border);
-    padding: 1rem 0;
-  }
-
-  .search-query-row {
-    display: flex;
-    align-items: center;
     gap: 0.75rem;
-  }
-
-  .search-query-row input[type="search"] {
-    min-width: 0;
-    flex: 1;
-    border: 0;
-    background: transparent;
-    font-size: 1.05rem;
-    outline: none;
-  }
-
-  .search-scope-controls {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: stretch;
-    gap: 0.65rem;
-    min-width: 0;
-    margin: 0;
-    border: 0;
-    padding: 0;
-  }
-
-  .search-scope-controls legend {
-    width: 100%;
-    margin-bottom: 0.1rem;
-    color: var(--color-text-disabled);
-    font-family: var(--font-geist-mono), monospace;
-    font-size: 0.66rem;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-  }
-
-  .search-scope-option {
-    display: grid;
-    min-height: 3.25rem;
-    flex: 1 1 12rem;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: center;
-    gap: 0.65rem;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-button);
-    padding: 0.55rem 0.7rem;
-    cursor: pointer;
-  }
-
-  .search-scope-option:has(input:checked) {
-    border-color: color-mix(in srgb, var(--color-accent) 68%, var(--color-border));
-    background: color-mix(in srgb, var(--color-accent) 7%, transparent);
-  }
-
-  .search-scope-option span {
-    display: grid;
-    gap: 0.15rem;
-    min-width: 0;
-  }
-
-  .search-scope-option strong {
-    color: var(--color-text-primary);
-    font-size: 0.78rem;
-    font-weight: 600;
-  }
-
-  .search-scope-option small {
-    color: var(--color-text-disabled);
-    font-size: 0.68rem;
-    line-height: 1.35;
   }
 
   .search-archive-toggle {

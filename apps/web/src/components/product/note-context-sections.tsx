@@ -1,18 +1,13 @@
 "use client";
 
-import {
-  ArrowClockwiseIcon,
-  ArrowRightIcon,
-  CloudSlashIcon,
-  LinkSimpleIcon,
-  TrayIcon
-} from "@phosphor-icons/react";
 import type { EntityId, NoteBacklinkDto, NoteSourceDto } from "@unfiled/contracts";
 import Link from "next/link";
 import { useCallback, useState } from "react";
 
 import { browserApi } from "@/lib/product/browser-api";
 import { usePagedResource } from "@/lib/product/use-paged-resource";
+
+import { UnfiledGlyph } from "./unfiled-glyph";
 
 type ContextListProps<Item> = Readonly<{
   error: string | null;
@@ -63,10 +58,9 @@ function ContextError({
   offline,
   onRetry
 }: Readonly<{ message: string; offline: boolean; onRetry: () => void }>) {
-  const Icon = offline ? CloudSlashIcon : ArrowClockwiseIcon;
   return (
     <div className="note-context-state" role="alert">
-      <Icon size={18} aria-hidden="true" />
+      <UnfiledGlyph glyph={offline ? "warning" : "undo"} size={18} weight={1.9} />
       <div>
         <strong>{offline ? "You’re offline." : "This section didn’t load."}</strong>
         <p>{message}</p>
@@ -177,7 +171,7 @@ export function NoteBacklinksList(props: ContextListProps<NoteBacklinkDto>) {
                 </time>
               </small>
             </span>
-            <ArrowRightIcon size={16} aria-hidden="true" />
+            <UnfiledGlyph glyph="arrow" size={16} weight={1.9} />
           </Link>
         ))}
       </div>
@@ -243,7 +237,7 @@ export function NoteContextSections({ noteId }: Readonly<{ noteId: EntityId<"not
         onToggle={(event) => setBacklinksOpen(event.currentTarget.open)}
       >
         <summary className="inspector-summary">
-          <LinkSimpleIcon size={16} aria-hidden="true" /> Backlinks <span>View</span>
+          <UnfiledGlyph glyph="link" size={16} weight={1.9} /> Backlinks <span>View</span>
         </summary>
         {backlinksOpen ? <BacklinksResource noteId={noteId} /> : null}
       </details>
@@ -252,7 +246,7 @@ export function NoteContextSections({ noteId }: Readonly<{ noteId: EntityId<"not
         onToggle={(event) => setSourcesOpen(event.currentTarget.open)}
       >
         <summary className="inspector-summary">
-          <TrayIcon size={16} aria-hidden="true" /> Sources <span>View</span>
+          <UnfiledGlyph glyph="tray" size={16} weight={1.9} /> Sources <span>View</span>
         </summary>
         {sourcesOpen ? <SourcesResource noteId={noteId} /> : null}
       </details>

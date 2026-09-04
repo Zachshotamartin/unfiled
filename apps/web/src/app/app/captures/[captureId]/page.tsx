@@ -1,10 +1,10 @@
-import { ArrowLeftIcon } from "@phosphor-icons/react/ssr";
 import { entityIdSchema } from "@unfiled/contracts";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { CaptureDetailView } from "@/components/product/capture-detail-view";
+import { UnfiledGlyph } from "@/components/product/unfiled-glyph";
 
 export const metadata: Metadata = { title: "Capture receipt" };
 
@@ -17,7 +17,7 @@ export default async function CapturePage({
     <main id="main-content" className="capture-detail-page">
       <div className="capture-detail-column">
         <Link href="/app" className="capture-detail-back">
-          <ArrowLeftIcon size={15} aria-hidden="true" /> Today
+          <UnfiledGlyph glyph="back" size={15} weight={1.9} /> Inbox
         </Link>
         <CaptureDetailView captureId={parsed.data} />
       </div>

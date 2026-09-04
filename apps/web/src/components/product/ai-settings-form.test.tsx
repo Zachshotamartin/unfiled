@@ -170,6 +170,16 @@ describe("AiSettingsForm provider keys and managed fallback", () => {
     ).toContain("Add an active OpenAI key");
   });
 
+  it("states the outcome a missing key actually produces instead of promising a queue", () => {
+    const html = render({ draft: { ...byokDraft, byokProvider: "anthropic" } });
+
+    // With no usable key the beta funds no provider request: the capture is saved and readable
+    // but marked failed with provider_unavailable, and the owner retries after saving a key.
+    expect(html).toContain("marked failed with provider_unavailable");
+    expect(html).toContain("retry it once a key is saved");
+    expect(html).not.toContain("safely queued");
+  });
+
   it("hides managed fallback unless the deployment provides app-funded access", () => {
     const withoutFallback = render();
     expect(withoutFallback).not.toContain("Allow managed fallback");

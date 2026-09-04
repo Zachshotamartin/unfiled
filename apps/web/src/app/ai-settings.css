@@ -38,7 +38,6 @@
     border-radius: var(--radius-button);
     padding: 0.4rem 0.55rem;
     color: var(--color-text-secondary);
-    font-family: var(--font-geist-mono), monospace;
     font-size: 0.66rem;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -113,7 +112,7 @@
   }
 
   .ai-choice:hover {
-    border-color: rgb(242 239 232 / 30%);
+    border-color: var(--color-accent);
   }
 
   .ai-choice[data-selected="true"] {
@@ -168,8 +167,7 @@
     border: 1px solid color-mix(in srgb, var(--color-warning) 55%, transparent);
     border-radius: var(--radius-button);
     padding: 0.12rem 0.4rem;
-    color: #e7bb82;
-    font-family: var(--font-geist-mono), monospace;
+    color: var(--color-warning);
     font-size: 0.6rem;
     font-style: normal;
     font-weight: 600;
@@ -180,7 +178,6 @@
   .ai-settings-inline-note {
     margin-top: 0.65rem;
     color: var(--color-text-secondary);
-    font-family: var(--font-geist-mono), monospace;
     font-size: 0.68rem;
     line-height: 1.55;
   }
@@ -220,7 +217,7 @@
     background: color-mix(in srgb, var(--color-warning) 7%, transparent);
     margin-top: 1rem;
     padding: 0.9rem 1rem;
-    color: #e7bb82;
+    color: var(--color-warning);
     font-size: 0.8rem;
     line-height: 1.5;
   }
@@ -254,7 +251,6 @@
 
   .ai-settings-actions > p {
     color: var(--color-text-secondary);
-    font-family: var(--font-geist-mono), monospace;
     font-size: 0.68rem;
   }
 
@@ -303,7 +299,7 @@
   }
 
   .provider-key-tabs button:hover:not(:disabled) {
-    border-color: rgb(242 239 232 / 30%);
+    border-color: var(--color-accent);
     color: var(--color-text-primary);
   }
 
@@ -325,7 +321,6 @@
 
   .provider-key-tabs small {
     color: var(--color-text-secondary);
-    font-family: var(--font-geist-mono), monospace;
     font-size: 0.66rem;
   }
 
@@ -384,7 +379,6 @@
 
   .provider-key-status dt {
     color: var(--color-text-secondary);
-    font-family: var(--font-geist-mono), monospace;
     font-size: 0.64rem;
     letter-spacing: 0.06em;
     text-transform: uppercase;

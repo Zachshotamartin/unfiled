@@ -1,8 +1,9 @@
 "use client";
 
-import { CheckIcon } from "@phosphor-icons/react";
 import type { EntityId, NoteDto } from "@unfiled/contracts";
 import { useState } from "react";
+
+import { UnfiledGlyph } from "./unfiled-glyph";
 
 type Item = Readonly<{ checked: boolean; id: EntityId<"itm">; text: string }>;
 
@@ -61,7 +62,7 @@ export function ChecklistSurface({
           onChange={(event) => toggle(item, event.target.checked)}
         />
         <span className={`check-box ${item.checked ? "check-box-checked" : ""}`} aria-hidden="true">
-          {item.checked ? <CheckIcon size={13} weight="bold" /> : null}
+          {item.checked ? <UnfiledGlyph glyph="check" size={13} weight={2.2} /> : null}
         </span>
         <span className={item.checked ? "text-muted-content line-through" : "text-content"}>
           {item.text}

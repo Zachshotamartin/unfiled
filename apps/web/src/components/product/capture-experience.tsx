@@ -7,7 +7,15 @@ import {
   type EntityId,
   type NoteSummary
 } from "@unfiled/contracts";
-import { useCallback, useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type SyntheticEvent
+} from "react";
 
 import { browserApi, productErrorMessage } from "@/lib/product/browser-api";
 import { createIdempotencyKey } from "@/lib/product/client";
@@ -25,10 +33,16 @@ import type { CaptureOutboxStatus } from "@/lib/capture/capture-store";
 import { CaptureActivity } from "./capture-activity";
 import { CaptureComposer, type CaptureComposerValue } from "./capture-composer";
 
+/**
+ * Every capture is filed by the organizer (ADR-0021, decision 1). The key class is fixed here
+ * rather than chosen per capture, because `claim_organization_jobs` only ever claims a job whose
+ * capture is `ai_assisted`.
+ */
+const CAPTURE_PRIVACY = "ai_assisted" as const;
+
 const EMPTY_COMPOSER: CaptureComposerValue = Object.freeze({
   expansionDisabled: false,
   explicitDestinationNoteId: null,
-  privacy: "ai_assisted",
   rawContent: ""
 });
 
@@ -40,12 +54,19 @@ function hasDraft(value: CaptureComposerValue): boolean {
   return (
     value.rawContent.length > 0 ||
     value.explicitDestinationNoteId !== null ||
-    value.privacy !== "ai_assisted" ||
     value.expansionDisabled
   );
 }
 
-export function CaptureExperience() {
+/**
+ * The Inbox in order (ADR-0019, decision 6): the capture card first, then everything that needs
+ * the owner. `reviewDecisions` is the review list the Inbox now carries, since Review is no
+ * longer a destination of its own.
+ */
+export function CaptureExperience({
+  reviewDecisions,
+  reviewDecisionsEmpty = true
+}: Readonly<{ reviewDecisions?: ReactNode; reviewDecisionsEmpty?: boolean }> = {}) {
   const activeProfile = useRef<string | null>(null);
   const flushPromise = useRef<Promise<void> | null>(null);
   const [profileId, setProfileId] = useState<string | null>(null);
@@ -153,10 +174,11 @@ export function CaptureExperience() {
         const draft = await browserCaptureStore.loadDraft(profile);
         if (activeProfile.current !== profile) return;
         if (draft !== null) {
+          // A draft saved before ADR-0021 can carry the retired private mode. Its words are
+          // restored; the mode is not, so an old draft cannot mint a job nothing will claim.
           setComposer({
             expansionDisabled: draft.expansionDisabled,
             explicitDestinationNoteId: draft.explicitDestinationNoteId,
-            privacy: draft.privacy,
             rawContent: draft.rawContent
           });
         }
@@ -190,6 +212,7 @@ export function CaptureExperience() {
       const operation = hasDraft(composer)
         ? browserCaptureStore.saveDraft(profileId, {
             ...composer,
+            privacy: CAPTURE_PRIVACY,
             updatedAt: new Date().toISOString()
           })
         : browserCaptureStore.deleteDraft(profileId);
@@ -273,8 +296,8 @@ export function CaptureExperience() {
       source: "web",
       clientCreatedAt: new Date(now).toISOString(),
       clientTimezone: clientTimezone(),
-      privacy: composer.privacy,
-      expansionDisabled: composer.privacy === "private_manual" || composer.expansionDisabled,
+      privacy: CAPTURE_PRIVACY,
+      expansionDisabled: composer.expansionDisabled,
       ...(composer.explicitDestinationNoteId === null
         ? {}
         : { explicitDestinationNoteId: composer.explicitDestinationNoteId })
@@ -365,6 +388,8 @@ export function CaptureExperience() {
         loading={initializing}
         onRetryLocal={(captureId) => void retryLocal(captureId)}
         onRetryRemote={(captureId) => void retryRemote(captureId)}
+        reviewDecisions={reviewDecisions}
+        reviewDecisionsEmpty={reviewDecisionsEmpty}
       />
     </>
   );

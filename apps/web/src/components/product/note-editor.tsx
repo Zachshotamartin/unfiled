@@ -1,22 +1,11 @@
 "use client";
 
-import {
-  ArrowLeftIcon,
-  ArrowClockwiseIcon,
-  ArrowCounterClockwiseIcon,
-  CheckCircleIcon,
-  CopyIcon,
-  FloppyDiskIcon,
-  WarningCircleIcon,
-  XIcon
-} from "@phosphor-icons/react";
 import type {
   EntityId,
   MutationResult,
   NoteDetailResponse,
   NoteDto,
-  LogFieldValue,
-  PrivacyMode
+  LogFieldValue
 } from "@unfiled/contracts";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -38,20 +27,38 @@ import { LogSurface, noteWithUpdatedLogField } from "./log-surface";
 import { MarkdownPreview } from "./markdown-preview";
 import { NoteInspector } from "./note-inspector";
 import { ResourceError, ResourceSkeleton } from "./resource-states";
+import { UnfiledGlyph } from "./unfiled-glyph";
 
 type DraftSnapshot = Readonly<{
   body: string;
-  privacy: PrivacyMode;
   title: string;
 }>;
 
 function differsFromNote(draft: DraftSnapshot, note: NoteDto | null): boolean {
-  return (
-    note !== null &&
-    (draft.title !== note.title ||
-      draft.body !== note.bodyMarkdown ||
-      draft.privacy !== note.privacy)
-  );
+  return note !== null && (draft.title !== note.title || draft.body !== note.bodyMarkdown);
+}
+
+/**
+ * What a save sends. The editor no longer carries a key class: ADR-0021 removed the mode from
+ * the product, and a note sealed `private_manual` is one only this surface can see and only this
+ * surface can undo — it is never indexed and the organizer can never read it as a destination.
+ */
+export function noteUpdatePayload(
+  draft: DraftSnapshot,
+  expectedRevision: number,
+  idempotencyKey: string
+): Readonly<{
+  bodyMarkdown: string;
+  expectedRevision: number;
+  idempotencyKey: string;
+  title: string;
+}> {
+  return {
+    bodyMarkdown: draft.body,
+    expectedRevision,
+    idempotencyKey,
+    title: draft.title.trim().length === 0 ? "Untitled note" : draft.title.trim()
+  };
 }
 
 function replaceItem(note: NoteDto, itemId: EntityId<"itm">, checked: boolean): NoteDto {
@@ -76,7 +83,6 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
   const note = resource.data?.note ?? null;
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
-  const [privacy, setPrivacy] = useState<PrivacyMode>("ai_assisted");
   const [draftRevision, setDraftRevision] = useState(0);
   const [dirty, setDirty] = useState(false);
   const [preview, setPreview] = useState(false);
@@ -95,7 +101,6 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
     if (draftRevision === 0 || (!dirty && draftRevision !== note.currentRevision)) {
       setTitle(note.title);
       setBody(note.bodyMarkdown);
-      setPrivacy(note.privacy);
       setDraftRevision(note.currentRevision);
       setDirty(false);
       setConflict(null);
@@ -106,7 +111,7 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
       return;
     }
     if (dirty && draftRevision !== note.currentRevision) {
-      if (title === note.title && body === note.bodyMarkdown && privacy === note.privacy) {
+      if (title === note.title && body === note.bodyMarkdown) {
         setDraftRevision(note.currentRevision);
         setDirty(false);
         setConflict(null);
@@ -118,13 +123,11 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
         setConflict("This note changed in another window or device.");
       }
     }
-  }, [body, dirty, draftRevision, note, privacy, title]);
+  }, [body, dirty, draftRevision, note, title]);
 
   const changed = useMemo(
-    () =>
-      note !== null &&
-      (title !== note.title || body !== note.bodyMarkdown || privacy !== note.privacy),
-    [body, note, privacy, title]
+    () => note !== null && (title !== note.title || body !== note.bodyMarkdown),
+    [body, note, title]
   );
 
   const acceptMutation = useCallback(
@@ -132,7 +135,6 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
       resource.setData({ note: result.note });
       setTitle(result.note.title);
       setBody(result.note.bodyMarkdown);
-      setPrivacy(result.note.privacy);
       setDraftRevision(result.note.currentRevision);
       setDirty(false);
       setConflict(null);
@@ -153,77 +155,60 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
 
   const updateDraft = useCallback(
     (next: DraftSnapshot): void => {
-      const current = { title, body, privacy };
-      if (
-        next.title === current.title &&
-        next.body === current.body &&
-        next.privacy === current.privacy
-      ) {
-        return;
-      }
+      const current = { title, body };
+      if (next.title === current.title && next.body === current.body) return;
       setPastDrafts((history) => [...history, current].slice(-100));
       setFutureDrafts([]);
       setTitle(next.title);
       setBody(next.body);
-      setPrivacy(next.privacy);
       setDirty(differsFromNote(next, note));
       setMessage(null);
       saveAttempt.current = null;
       logSaveAttempt.current = null;
     },
-    [body, note, privacy, title]
+    [body, note, title]
   );
 
   const undoDraft = useCallback((): void => {
     const previous = pastDrafts.at(-1);
     if (previous === undefined || pending) return;
-    const current = { title, body, privacy };
+    const current = { title, body };
     setPastDrafts((history) => history.slice(0, -1));
     setFutureDrafts((history) => [...history, current].slice(-100));
     setTitle(previous.title);
     setBody(previous.body);
-    setPrivacy(previous.privacy);
     setDirty(differsFromNote(previous, note));
     setMessage("Draft edit undone");
     saveAttempt.current = null;
     logSaveAttempt.current = null;
-  }, [body, note, pastDrafts, pending, privacy, title]);
+  }, [body, note, pastDrafts, pending, title]);
 
   const redoDraft = useCallback((): void => {
     const next = futureDrafts.at(-1);
     if (next === undefined || pending) return;
-    const current = { title, body, privacy };
+    const current = { title, body };
     setFutureDrafts((history) => history.slice(0, -1));
     setPastDrafts((history) => [...history, current].slice(-100));
     setTitle(next.title);
     setBody(next.body);
-    setPrivacy(next.privacy);
     setDirty(differsFromNote(next, note));
     setMessage("Draft edit redone");
     saveAttempt.current = null;
-  }, [body, futureDrafts, note, pending, privacy, title]);
+  }, [body, futureDrafts, note, pending, title]);
 
   const save = useCallback(async (): Promise<void> => {
     if (note === null || !changed || pending || conflict !== null) return;
     setPending(true);
     setError(null);
     setMessage(null);
-    const fingerprint = JSON.stringify({
-      body,
-      draftRevision,
-      privacy,
-      title: title.trim().length === 0 ? "Untitled note" : title.trim()
-    });
+    const fingerprint = JSON.stringify({ body, draftRevision, title: title.trim() });
     const attempt = draftSaveAttempt(saveAttempt.current, fingerprint, createIdempotencyKey);
     saveAttempt.current = attempt;
     try {
-      const result = await browserApi.updateNote(note.id, {
-        idempotencyKey: attempt.idempotencyKey,
-        expectedRevision: draftRevision,
-        title: title.trim().length === 0 ? "Untitled note" : title.trim(),
-        bodyMarkdown: body,
-        privacy
-      });
+      const result = await browserApi.updateNote(
+        note.id,
+        noteUpdatePayload({ body, title }, draftRevision, attempt.idempotencyKey)
+      );
       acceptMutation(result, "Saved");
       announceProductChange(`note:${note.id}`);
     } catch (reason) {
@@ -233,7 +218,7 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
     } finally {
       setPending(false);
     }
-  }, [acceptMutation, body, changed, conflict, draftRevision, note, pending, privacy, title]);
+  }, [acceptMutation, body, changed, conflict, draftRevision, note, pending, title]);
 
   useEffect(() => {
     const keyboardSave = (event: KeyboardEvent): void => {
@@ -385,10 +370,10 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
       <div className="note-editor-main">
         <div className="editor-toolbar sticky top-0 z-10 bg-page/95 backdrop-blur-sm">
           <Link
-            href={note.deletedAt === null ? "/app/notes" : "/app/archive"}
+            href={note.deletedAt === null ? "/app/library" : "/app/archive"}
             className="toolbar-button"
           >
-            <ArrowLeftIcon size={17} aria-hidden="true" /> Library
+            <UnfiledGlyph glyph="back" size={17} weight={1.9} /> Library
           </Link>
           <div className="ml-auto flex items-center gap-2">
             <button
@@ -399,7 +384,7 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
               title="Undo (⌘Z)"
               onClick={undoDraft}
             >
-              <ArrowCounterClockwiseIcon size={17} />
+              <UnfiledGlyph glyph="undo" size={17} weight={1.9} />
             </button>
             <button
               type="button"
@@ -409,7 +394,7 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
               title="Redo (⇧⌘Z)"
               onClick={redoDraft}
             >
-              <ArrowClockwiseIcon size={17} />
+              <UnfiledGlyph glyph="undo" size={17} weight={1.9} />
             </button>
             <button
               type="button"
@@ -425,8 +410,7 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
               disabled={!changed || pending || conflict !== null || note.deletedAt !== null}
               onClick={() => void save()}
             >
-              <FloppyDiskIcon size={17} weight="bold" aria-hidden="true" />{" "}
-              {pending ? "Saving…" : "Save"}
+              <UnfiledGlyph glyph="check" size={17} weight={2.2} /> {pending ? "Saving…" : "Save"}
             </button>
           </div>
         </div>
@@ -438,7 +422,7 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
         ) : null}
         {conflict === null ? null : (
           <section className="conflict-banner" role="alert" aria-labelledby="conflict-title">
-            <WarningCircleIcon size={22} aria-hidden="true" />
+            <UnfiledGlyph glyph="warning" size={22} weight={1.9} />
             <div className="min-w-0 flex-1">
               <h2 id="conflict-title" className="font-semibold">
                 Review before replacing anything
@@ -452,7 +436,7 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
               className="quiet-button"
               onClick={() => void navigator.clipboard.writeText(`${title}\n\n${body}`)}
             >
-              <CopyIcon size={15} /> Copy draft
+              <UnfiledGlyph glyph="library" size={15} weight={1.9} /> Copy draft
             </button>
             <button type="button" className="button-secondary" onClick={() => void loadLatest()}>
               Load latest
@@ -463,20 +447,7 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
         <div className="editor-document">
           <div className="mb-8 flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-outline pb-4">
             <span className="eyebrow">{note.type}</span>
-            <span className="font-mono text-[11px] text-disabled-content">
-              revision {note.currentRevision}
-            </span>
-            <select
-              aria-label="AI access"
-              className="privacy-select"
-              value={privacy}
-              onChange={(event) =>
-                updateDraft({ title, body, privacy: event.target.value as PrivacyMode })
-              }
-            >
-              <option value="ai_assisted">AI allowed</option>
-              <option value="private_manual">Private manual</option>
-            </select>
+            <span className="text-[11px] text-muted-content">revision {note.currentRevision}</span>
           </div>
           {preview ? (
             <section aria-label="Markdown preview" className="editor-preview">
@@ -492,7 +463,7 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
                 className="editor-title"
                 value={title}
                 maxLength={200}
-                onChange={(event) => updateDraft({ title: event.target.value, body, privacy })}
+                onChange={(event) => updateDraft({ title: event.target.value, body })}
               />
               {note.type === "log" ? (
                 <p className="log-editor-guidance">
@@ -509,7 +480,7 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
                     className="editor-body"
                     value={body}
                     maxLength={200_000}
-                    onChange={(event) => updateDraft({ title, body: event.target.value, privacy })}
+                    onChange={(event) => updateDraft({ title, body: event.target.value })}
                   />
                 </>
               )}
@@ -541,11 +512,11 @@ export function NoteEditor({ noteId }: Readonly<{ noteId: EntityId<"note"> }>) {
               onClick={() => void undoLast()}
               className="ml-auto inline-flex min-h-10 items-center gap-2 text-sm text-content"
             >
-              <XIcon size={14} aria-hidden="true" /> Undo last change
+              <UnfiledGlyph glyph="close" size={14} weight={1.9} /> Undo last change
             </button>
           )}
           {message === null || error !== null ? null : (
-            <CheckCircleIcon size={16} className="text-action" aria-hidden="true" />
+            <UnfiledGlyph glyph="checkCircle" size={16} weight={1.9} className="text-action" />
           )}
         </div>
       </div>

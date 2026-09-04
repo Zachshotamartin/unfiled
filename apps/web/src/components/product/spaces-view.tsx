@@ -1,207 +1,128 @@
 "use client";
 
-import {
-  ArchiveTrayIcon,
-  ArrowDownIcon,
-  ArrowUpIcon,
-  CheckIcon,
-  PencilSimpleIcon,
-  PlusIcon,
-  XIcon
-} from "@phosphor-icons/react";
 import type { Space } from "@unfiled/contracts";
+import Link from "next/link";
 import { type SyntheticEvent, useMemo, useState } from "react";
 
 import { browserApi, productErrorMessage } from "@/lib/product/browser-api";
 import { announceProductChange, createIdempotencyKey } from "@/lib/product/client";
 import { usePagedResource } from "@/lib/product/use-paged-resource";
 
-import { EmptyState, ResourceError, ResourceSkeleton } from "./resource-states";
+import { ResourceError, ResourceSkeleton } from "./resource-states";
+import { UnfiledGlyph } from "./unfiled-glyph";
+
+/**
+ * Every space the account has, archived ones included. The list is loaded with
+ * `includeArchived=true` because archiving is otherwise a one-way door: the archive endpoint
+ * accepts `archived: false`, but nothing in the web could reach a space to send it.
+ */
+export const SPACES_QUERY = "/api/v1/spaces?limit=100&includeArchived=true";
 
 function spaceKey(space: Space): string {
   return space.id;
 }
 
-function SpaceRow({
-  canMoveDown,
-  canMoveUp,
-  onReorder,
+export function isArchivedSpace(space: Space): boolean {
+  return space.archivedAt !== null;
+}
+
+function byRank(left: Space, right: Space): number {
+  return left.sortKey.localeCompare(right.sortKey) || left.name.localeCompare(right.name);
+}
+
+/** Roots first, each followed by its children: the one parent, one child hierarchy. */
+export function orderSpaces(spaces: readonly Space[]): readonly Space[] {
+  const roots = spaces.filter((space) => space.parentId === null).sort(byRank);
+  const nestedIds = new Set<string>();
+  const ordered = roots.flatMap((root) => {
+    const children = spaces.filter((space) => space.parentId === root.id).sort(byRank);
+    for (const child of children) nestedIds.add(child.id);
+    return [root, ...children];
+  });
+  return [
+    ...ordered,
+    ...spaces.filter((space) => space.parentId !== null && !nestedIds.has(space.id))
+  ];
+}
+
+export function SpaceCard({
   parentName,
+  space
+}: Readonly<{ parentName: string | null; space: Space }>) {
+  return (
+    <Link className="space-card" href={`/app/spaces/${space.id}`}>
+      <UnfiledGlyph glyph="card" size={20} weight={1.8} />
+      <span className="grid gap-1">
+        <strong>{space.name}</strong>
+        <span>{parentName === null ? `/${space.slug}` : `${parentName} / ${space.name}`}</span>
+      </span>
+    </Link>
+  );
+}
+
+function ArchivedSpaceRow({
   refresh,
   space
-}: Readonly<{
-  canMoveDown: boolean;
-  canMoveUp: boolean;
-  onReorder: (direction: -1 | 1) => Promise<void>;
-  parentName: string | null;
-  refresh: () => Promise<void>;
-  space: Space;
-}>) {
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(space.name);
+}: Readonly<{ refresh: () => Promise<void>; space: Space }>) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function rename(event: SyntheticEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    if (name.trim() === space.name) {
-      setEditing(false);
-      return;
-    }
+  async function restore(): Promise<void> {
     setPending(true);
-    try {
-      await browserApi.updateSpace(space.id, {
-        expectedRevision: space.currentRevision,
-        idempotencyKey: createIdempotencyKey(),
-        name
-      });
-      setEditing(false);
-      announceProductChange(`space:${space.id}`);
-      await refresh();
-    } catch (reason) {
-      setError(productErrorMessage(reason, "The space could not be renamed."));
-    } finally {
-      setPending(false);
-    }
-  }
-
-  async function archive(): Promise<void> {
-    setPending(true);
+    setError(null);
     try {
       await browserApi.archiveSpace(space.id, {
         expectedRevision: space.currentRevision,
         idempotencyKey: createIdempotencyKey(),
-        archived: true
+        archived: false
       });
       announceProductChange(`space:${space.id}`);
       await refresh();
     } catch (reason) {
-      setError(productErrorMessage(reason, "The space could not be archived."));
-    } finally {
-      setPending(false);
-    }
-  }
-
-  async function reorder(direction: -1 | 1): Promise<void> {
-    setPending(true);
-    setError(null);
-    try {
-      await onReorder(direction);
-    } catch (reason) {
-      setError(productErrorMessage(reason, "The space order could not be saved."));
+      setError(productErrorMessage(reason, "The space could not be restored."));
     } finally {
       setPending(false);
     }
   }
 
   return (
-    <div className={`space-row ${parentName === null ? "" : "space-row-child"}`}>
-      <div className="min-w-0 flex-1">
-        {editing ? (
-          <form onSubmit={(event) => void rename(event)} className="flex max-w-md gap-2">
-            <label htmlFor={`space-${space.id}`} className="sr-only">
-              Space name
-            </label>
-            <input
-              id={`space-${space.id}`}
-              className="editor-control"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              maxLength={60}
-              autoFocus
-            />
-            <button className="icon-button" type="submit" aria-label="Save name">
-              <CheckIcon size={17} />
-            </button>
-            <button
-              className="icon-button"
-              type="button"
-              aria-label="Cancel rename"
-              onClick={() => {
-                setEditing(false);
-                setName(space.name);
-              }}
-            >
-              <XIcon size={17} />
-            </button>
-          </form>
-        ) : (
-          <>
-            <h2 className="text-lg font-medium">{space.name}</h2>
-            <p className="mt-1 font-mono text-[11px] text-disabled-content">
-              {parentName === null ? `/${space.slug}` : `${parentName} / ${space.name}`}
-            </p>
-          </>
-        )}
-        <p className="mt-2 min-h-5 text-xs text-critical" aria-live="polite">
+    <div className="mini-row">
+      <div className="min-w-0">
+        <p className="truncate">{space.name}</p>
+        <p className="mt-1 min-h-4 text-xs text-critical" aria-live="polite">
           {error}
         </p>
       </div>
-      {editing ? null : (
-        <div className="flex gap-1">
-          <button
-            type="button"
-            className="icon-button"
-            disabled={pending || !canMoveUp}
-            aria-label={`Move ${space.name} up`}
-            onClick={() => void reorder(-1)}
-          >
-            <ArrowUpIcon size={17} />
-          </button>
-          <button
-            type="button"
-            className="icon-button"
-            disabled={pending || !canMoveDown}
-            aria-label={`Move ${space.name} down`}
-            onClick={() => void reorder(1)}
-          >
-            <ArrowDownIcon size={17} />
-          </button>
-          <button
-            type="button"
-            className="icon-button"
-            aria-label={`Rename ${space.name}`}
-            onClick={() => setEditing(true)}
-          >
-            <PencilSimpleIcon size={17} />
-          </button>
-          <button
-            type="button"
-            className="icon-button"
-            disabled={pending}
-            aria-label={`Archive ${space.name}`}
-            onClick={() => void archive()}
-          >
-            <ArchiveTrayIcon size={17} />
-          </button>
-        </div>
-      )}
+      <button
+        type="button"
+        className="quiet-button"
+        disabled={pending}
+        onClick={() => void restore()}
+      >
+        <UnfiledGlyph glyph="undo" size={15} weight={2} /> {pending ? "Restoring…" : "Restore"}
+      </button>
     </div>
   );
 }
 
+/**
+ * The Library's spaces: a grid of cards when any exist, each pushing that space's own page
+ * (ADR-0019, decision 6). Notes without a space are simply listed under the grid; nothing is
+ * labelled "Unfiled" after the app itself.
+ */
 export function SpacesView() {
-  const resource = usePagedResource<Space>("/api/v1/spaces?limit=100", spaceKey);
+  const resource = usePagedResource<Space>(SPACES_QUERY, spaceKey);
   const [name, setName] = useState("");
   const [parentId, setParentId] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const orderedSpaces = useMemo(() => {
-    const items = resource.data?.items ?? [];
-    const byRank = (left: Space, right: Space) =>
-      left.sortKey.localeCompare(right.sortKey) || left.name.localeCompare(right.name);
-    const roots = items.filter((space) => space.parentId === null).sort(byRank);
-    const nestedIds = new Set<string>();
-    const ordered = roots.flatMap((root) => {
-      const children = items.filter((space) => space.parentId === root.id).sort(byRank);
-      for (const child of children) nestedIds.add(child.id);
-      return [root, ...children];
-    });
-    return [
-      ...ordered,
-      ...items.filter((space) => space.parentId !== null && !nestedIds.has(space.id))
-    ];
-  }, [resource.data?.items]);
+
+  const spaces = useMemo(() => resource.data?.items ?? [], [resource.data?.items]);
+  const active = useMemo(
+    () => orderSpaces(spaces.filter((space) => !isArchivedSpace(space))),
+    [spaces]
+  );
+  const archived = useMemo(() => spaces.filter(isArchivedSpace), [spaces]);
 
   async function create(event: SyntheticEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -224,140 +145,100 @@ export function SpacesView() {
     }
   }
 
-  async function reorder(space: Space, direction: -1 | 1): Promise<void> {
-    const siblings = (resource.data?.items ?? [])
-      .filter((candidate) => candidate.parentId === space.parentId)
-      .sort(
-        (left, right) =>
-          left.sortKey.localeCompare(right.sortKey) || left.name.localeCompare(right.name)
-      );
-    const index = siblings.findIndex((candidate) => candidate.id === space.id);
-    const destination = index + direction;
-    if (index < 0 || destination < 0 || destination >= siblings.length) return;
-    const next = [...siblings];
-    const moving = next[index];
-    const displaced = next[destination];
-    if (moving === undefined || displaced === undefined) return;
-    next[index] = displaced;
-    next[destination] = moving;
-    await Promise.all(
-      next.map((candidate, rank) =>
-        browserApi.updateSpace(candidate.id, {
-          expectedRevision: candidate.currentRevision,
-          idempotencyKey: createIdempotencyKey(),
-          sortKey: `r${String(rank).padStart(6, "0")}`
-        })
-      )
+  if (resource.loading && resource.data === null) return <ResourceSkeleton rows={2} />;
+  if (resource.error !== null && resource.data === null) {
+    return (
+      <ResourceError
+        message={resource.error}
+        offline={resource.offline}
+        retry={() => void resource.refresh()}
+      />
     );
-    announceProductChange(`space-order:${space.parentId ?? "root"}`);
-    await resource.refresh();
   }
 
   return (
     <div>
-      <form onSubmit={(event) => void create(event)} className="space-create-form">
-        <div className="min-w-0 flex-1">
-          <label htmlFor="space-name" className="field-label">
-            New space
-          </label>
-          <input
-            id="space-name"
-            className="editor-control mt-2"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="e.g. Life"
-            maxLength={60}
-            required
-          />
-        </div>
-        <div className="min-w-0 flex-1">
-          <label htmlFor="space-parent" className="field-label">
-            Inside (optional)
-          </label>
-          <select
-            id="space-parent"
-            className="editor-select mt-2"
-            value={parentId}
-            onChange={(event) => setParentId(event.target.value)}
-          >
-            <option value="">Top level</option>
-            {resource.data?.items
-              .filter((space) => space.parentId === null)
-              .map((space) => (
-                <option key={space.id} value={space.id}>
-                  {space.name}
-                </option>
-              ))}
-          </select>
-        </div>
-        <button
-          type="submit"
-          className="button-primary self-end"
-          disabled={pending || name.trim().length === 0}
-        >
-          <PlusIcon size={17} /> {pending ? "Creating…" : "Create"}
-        </button>
-      </form>
-      <p className="min-h-10 py-2 text-sm text-critical" role="alert">
-        {error}
-      </p>
-      {resource.loading && resource.data === null ? (
-        <ResourceSkeleton />
-      ) : resource.error !== null && resource.data === null ? (
-        <ResourceError
-          message={resource.error}
-          offline={resource.offline}
-          retry={() => void resource.refresh()}
-        />
-      ) : resource.data?.items.length === 0 ? (
-        <EmptyState
-          title="No spaces yet."
-          body="Spaces are optional. Add one when a group of notes starts to feel familiar."
-        />
-      ) : (
-        <div className="border-t border-outline">
-          {orderedSpaces.map((space) => {
-            const siblings = (resource.data?.items ?? [])
-              .filter((candidate) => candidate.parentId === space.parentId)
-              .sort(
-                (left, right) =>
-                  left.sortKey.localeCompare(right.sortKey) || left.name.localeCompare(right.name)
-              );
-            const index = siblings.findIndex((candidate) => candidate.id === space.id);
-            const parent =
-              space.parentId === null
-                ? null
-                : (resource.data?.items.find((candidate) => candidate.id === space.parentId) ??
-                  null);
-            return (
-              <SpaceRow
-                key={space.id}
-                space={space}
-                parentName={parent?.name ?? null}
-                canMoveUp={index > 0}
-                canMoveDown={index >= 0 && index < siblings.length - 1}
-                refresh={resource.refresh}
-                onReorder={(direction) => reorder(space, direction)}
-              />
-            );
-          })}
+      {/* Spaces are a grid of cards when any exist; with none there is nothing to label. */}
+      {active.length === 0 ? null : <h2 className="section-label mb-3.5">Spaces</h2>}
+      {active.length === 0 ? null : (
+        <div className="space-grid">
+          {active.map((space) => (
+            <SpaceCard
+              key={space.id}
+              space={space}
+              parentName={
+                space.parentId === null
+                  ? null
+                  : (spaces.find((candidate) => candidate.id === space.parentId)?.name ?? null)
+              }
+            />
+          ))}
         </div>
       )}
-      {resource.data?.pageInfo.hasMore ? (
-        <div className="pagination-row">
+      <details className="mt-4">
+        <summary className="quiet-button">
+          <UnfiledGlyph glyph="plus" size={15} weight={2.2} /> New space
+        </summary>
+        <form onSubmit={(event) => void create(event)} className="space-create-form">
+          <div className="min-w-0 flex-1">
+            <label htmlFor="space-name" className="field-label">
+              Name
+            </label>
+            <input
+              id="space-name"
+              className="editor-control mt-2"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="e.g. Life"
+              maxLength={60}
+              required
+            />
+          </div>
+          <div className="min-w-0 flex-1">
+            <label htmlFor="space-parent" className="field-label">
+              Inside (optional)
+            </label>
+            <select
+              id="space-parent"
+              className="editor-select mt-2"
+              value={parentId}
+              onChange={(event) => setParentId(event.target.value)}
+            >
+              <option value="">Top level</option>
+              {active
+                .filter((space) => space.parentId === null)
+                .map((space) => (
+                  <option key={space.id} value={space.id}>
+                    {space.name}
+                  </option>
+                ))}
+            </select>
+          </div>
           <button
-            type="button"
-            className="button-secondary"
-            disabled={resource.loadingMore}
-            onClick={() => void resource.loadMore()}
+            type="submit"
+            className="button-primary self-end"
+            disabled={pending || name.trim().length === 0}
           >
-            {resource.loadingMore ? "Loading…" : "Load more spaces"}
+            {pending ? "Creating…" : "Create"}
           </button>
-        </div>
-      ) : null}
-      <p className="min-h-6 py-2 text-xs text-critical" role="alert">
-        {resource.pageError}
-      </p>
+        </form>
+        <p className="min-h-8 py-1 text-sm text-critical" role="alert">
+          {error}
+        </p>
+      </details>
+      {archived.length === 0 ? null : (
+        <details className="mt-2">
+          <summary className="quiet-button">
+            <UnfiledGlyph glyph="archive" size={15} weight={2} /> Archived spaces ({archived.length}
+            )
+          </summary>
+          <div className="mt-2">
+            {archived.map((space) => (
+              <ArchivedSpaceRow key={space.id} space={space} refresh={resource.refresh} />
+            ))}
+          </div>
+        </details>
+      )}
     </div>
   );
 }

@@ -1,20 +1,62 @@
 "use client";
 
-import { SignOutIcon } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
 
 import type { SessionUser } from "@/lib/product/types";
 import { useLiveResource } from "@/lib/product/use-live-resource";
 
-import { ResourceError, ResourceSkeleton } from "./resource-states";
-import { AiSettings } from "./ai-settings";
 import { AccountDataControls } from "./account-data-controls";
+import { AiSettings } from "./ai-settings";
+import { ResourceError, ResourceSkeleton } from "./resource-states";
 import { RoutingRulesSettings } from "./routing-rules-settings";
+import { UnfiledGlyph } from "./unfiled-glyph";
 
 export type SettingsViewProps = Readonly<{
   /** True only when this deployment provides an app-funded provider credential. */
   managedFallbackAvailable?: boolean;
 }>;
+
+/**
+ * The settings body, separated from the session fetch so what the owner reads can be rendered
+ * and asserted directly. There is no "Private manual notes" section: ADR-0021 removed the mode
+ * from the product, so teaching a workflow around it would describe something that no longer
+ * exists.
+ */
+export function SettingsSections({
+  email,
+  managedFallbackAvailable,
+  onSignOut
+}: Readonly<{
+  email: string | null;
+  managedFallbackAvailable: boolean;
+  onSignOut: () => void;
+}>) {
+  return (
+    <div className="border-t border-outline">
+      <section className="settings-row">
+        <div>
+          <h2 className="text-lg font-medium">Account</h2>
+          <p className="mt-2 text-sm text-muted-content">{email}</p>
+        </div>
+        <button type="button" className="button-secondary" onClick={onSignOut}>
+          <UnfiledGlyph glyph="arrow" size={17} weight={2} /> Sign out
+        </button>
+      </section>
+      <AiSettings managedFallbackAvailable={managedFallbackAvailable} />
+      <RoutingRulesSettings />
+      <AccountDataControls />
+      <section className="settings-row">
+        <div>
+          <h2 className="text-lg font-medium">Sync</h2>
+          <p className="mt-2 max-w-xl text-sm leading-6 text-muted-content">
+            This web app and the iPhone app use the same account and backend. Open views refresh
+            when another device changes your library.
+          </p>
+        </div>
+      </section>
+    </div>
+  );
+}
 
 export function SettingsView({ managedFallbackAvailable = false }: SettingsViewProps = {}) {
   const router = useRouter();
@@ -34,37 +76,10 @@ export function SettingsView({ managedFallbackAvailable = false }: SettingsViewP
       />
     );
   return (
-    <div className="border-t border-outline">
-      <section className="settings-row">
-        <div>
-          <h2 className="text-lg font-medium">Account</h2>
-          <p className="mt-2 text-sm text-muted-content">{session.data?.user.email}</p>
-        </div>
-        <button type="button" className="button-secondary" onClick={() => void signOut()}>
-          <SignOutIcon size={17} /> Sign out
-        </button>
-      </section>
-      <AiSettings managedFallbackAvailable={managedFallbackAvailable} />
-      <RoutingRulesSettings />
-      <AccountDataControls />
-      <section className="settings-row">
-        <div>
-          <h2 className="text-lg font-medium">Private manual notes</h2>
-          <p className="mt-2 max-w-xl text-sm leading-6 text-muted-content">
-            Choose “Private manual” in an editor to keep that note outside AI-assisted organization.
-            Manual edits and revision history still work.
-          </p>
-        </div>
-      </section>
-      <section className="settings-row">
-        <div>
-          <h2 className="text-lg font-medium">Sync</h2>
-          <p className="mt-2 max-w-xl text-sm leading-6 text-muted-content">
-            This web app and the iPhone app use the same account and backend. Open views refresh
-            when another device changes your library.
-          </p>
-        </div>
-      </section>
-    </div>
+    <SettingsSections
+      email={session.data?.user.email ?? null}
+      managedFallbackAvailable={managedFallbackAvailable}
+      onSignOut={() => void signOut()}
+    />
   );
 }

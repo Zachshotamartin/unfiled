@@ -1,11 +1,5 @@
 "use client";
 
-import {
-  ArrowRightIcon,
-  CheckCircleIcon,
-  TrashIcon,
-  WarningCircleIcon
-} from "@phosphor-icons/react";
 import type {
   CaptureDeleteRequest,
   CaptureDeleteResponse,
@@ -24,37 +18,43 @@ import { browserCaptureStore } from "@/lib/capture/browser-capture-store";
 import { CAPTURE_POLL_INTERVAL_MS } from "@/lib/capture/capture-queue";
 
 import { captureStatusLabel } from "./capture-activity";
+import { CaptureAttachments } from "./capture-attachment";
+import { ReceiptCorrection, type CorrectionOutcome } from "./receipt-correction";
+import { UnfiledGlyph } from "./unfiled-glyph";
 
-function receiptMoveUrl(captureId: EntityId<"cap">, decisionId: EntityId<"dec">): string {
-  const query = new URLSearchParams({ captureId, decisionId });
-  return `/app/review?${query.toString()}`;
-}
-
-function ReceiptAction({
+export function ReceiptAction({
   action,
-  captureId,
+  correcting,
   disabled,
+  onCorrect,
   onUndo,
   undoIntent
 }: Readonly<{
   action: CaptureReceiptAction;
-  captureId: EntityId<"cap">;
+  correcting: boolean;
   disabled: boolean;
+  onCorrect: (action: Extract<CaptureReceiptAction, { type: "move" }>) => void;
   onUndo: (action: Extract<CaptureReceiptAction, { type: "undo" }>) => void;
   undoIntent: UndoMutationIntent | null;
 }>) {
   if (action.type === "open") {
     return (
       <Link className="button-secondary" href={`/app/notes/${action.noteId}`}>
-        Open <ArrowRightIcon size={15} aria-hidden="true" />
+        Open <UnfiledGlyph glyph="arrow" size={15} weight={2} />
       </Link>
     );
   }
   if (action.type === "move") {
     return (
-      <Link className="button-secondary" href={receiptMoveUrl(captureId, action.decisionId)}>
-        Move <ArrowRightIcon size={15} aria-hidden="true" />
-      </Link>
+      <button
+        type="button"
+        className="button-secondary"
+        aria-expanded={correcting}
+        disabled={disabled}
+        onClick={() => onCorrect(action)}
+      >
+        <UnfiledGlyph glyph="move" size={15} weight={2} /> {correcting ? "Cancel move" : "Move"}
+      </button>
     );
   }
   const consumed = undoIntent?.state === "consumed";
@@ -79,6 +79,10 @@ export function CaptureDetailView({ captureId }: Readonly<{ captureId: EntityId<
   const [profileId, setProfileId] = useState<string | null>(null);
   const [actions, setActions] = useState<readonly CaptureLocalAction[]>([]);
   const [removeInsertedContent, setRemoveInsertedContent] = useState(false);
+  const [correction, setCorrection] = useState<Extract<
+    CaptureReceiptAction,
+    { type: "move" }
+  > | null>(null);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -348,11 +352,13 @@ export function CaptureDetailView({ captureId }: Readonly<{ captureId: EntityId<
     const removedContent = deleted?.removedInsertedContent === true || deletionUndos.length > 0;
     return (
       <div className="capture-deleted-state">
-        {pendingDeletion ? (
-          <WarningCircleIcon size={30} className="text-action" aria-hidden="true" />
-        ) : (
-          <CheckCircleIcon size={30} className="text-action" aria-hidden="true" />
-        )}
+        <span className="text-action">
+          <UnfiledGlyph
+            glyph={pendingDeletion ? "warning" : "checkCircle"}
+            size={30}
+            weight={1.8}
+          />
+        </span>
         <h1>{pendingDeletion ? "Deleting capture." : "Capture deleted."}</h1>
         <p>
           {pendingDeletion
@@ -394,7 +400,7 @@ export function CaptureDetailView({ captureId }: Readonly<{ captureId: EntityId<
             );
           })}
           <Link href="/app" className="button-primary">
-            Back to Today
+            Back to the Inbox
           </Link>
         </div>
         <p role="status" aria-live="polite" className="mt-4 text-action">
@@ -421,11 +427,13 @@ export function CaptureDetailView({ captureId }: Readonly<{ captureId: EntityId<
   if (capture === null) {
     return (
       <div className="capture-deleted-state" role="alert">
-        <WarningCircleIcon size={30} className="text-action" aria-hidden="true" />
+        <span className="text-action">
+          <UnfiledGlyph glyph="warning" size={30} weight={1.8} />
+        </span>
         <h1>Capture unavailable.</h1>
         <p>{error ?? "This capture may have been removed."}</p>
         <Link href="/app" className="button-secondary mt-6">
-          Back to Today
+          Back to the Inbox
         </Link>
       </div>
     );
@@ -454,6 +462,11 @@ export function CaptureDetailView({ captureId }: Readonly<{ captureId: EntityId<
           Original capture
         </span>
         <p>{capture.rawContent}</p>
+        {/*
+          The photos and recordings this capture carries. The server serves the decrypted bytes
+          with their real media type, so the web is the surface that can actually show them.
+        */}
+        <CaptureAttachments attachments={capture.attachments} />
       </section>
       {receipt === null ? (
         <section className="capture-receipt" aria-live="polite">
@@ -484,13 +497,32 @@ export function CaptureDetailView({ captureId }: Readonly<{ captureId: EntityId<
               <ReceiptAction
                 key={action.type}
                 action={action}
-                captureId={captureId}
+                correcting={correction !== null && action.type === "move"}
                 disabled={working}
+                onCorrect={(moveAction) =>
+                  setCorrection((current) => (current === null ? moveAction : null))
+                }
                 onUndo={(undoAction) => void undoReceipt(undoAction)}
                 undoIntent={action.type === "undo" ? (receiptUndoIntent ?? null) : null}
               />
             ))}
+            {receipt.reviewItemId === null ? null : (
+              <Link className="button-secondary" href={`/app/review/${receipt.reviewItemId}`}>
+                Open Review <UnfiledGlyph glyph="arrow" size={15} weight={2} />
+              </Link>
+            )}
           </div>
+          {correction === null ? null : (
+            <ReceiptCorrection
+              decisionId={correction.decisionId}
+              sourceNoteId={correction.noteId}
+              onCorrected={(outcome: CorrectionOutcome) => {
+                setCorrection(null);
+                setActionMessage(outcome.message);
+                void refresh();
+              }}
+            />
+          )}
           <p role="status" aria-live="polite" className="mt-4 text-sm text-action">
             {actionMessage}
           </p>
@@ -498,7 +530,7 @@ export function CaptureDetailView({ captureId }: Readonly<{ captureId: EntityId<
       )}
       {error === null ? null : (
         <p className="capture-inline-error" role="alert">
-          <WarningCircleIcon size={17} aria-hidden="true" /> {error}
+          <UnfiledGlyph glyph="warning" size={17} weight={1.9} /> {error}
         </p>
       )}
       <details className="capture-delete-panel">
@@ -526,7 +558,7 @@ export function CaptureDetailView({ captureId }: Readonly<{ captureId: EntityId<
             disabled={working}
             onClick={() => void deleteCapture()}
           >
-            <TrashIcon size={16} aria-hidden="true" /> Delete capture
+            <UnfiledGlyph glyph="trash" size={16} weight={2} /> Delete capture
           </button>
         </div>
       </details>

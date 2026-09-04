@@ -1,12 +1,13 @@
 "use client";
 
-import { ArrowRightIcon } from "@phosphor-icons/react";
 import type { NoteSummary } from "@unfiled/contracts";
 import Link from "next/link";
 
 import { usePagedResource } from "@/lib/product/use-paged-resource";
 
+import { groupNotesByDay } from "./note-grouping";
 import { EmptyState, ResourceError, ResourceSkeleton } from "./resource-states";
+import { UnfiledGlyph } from "./unfiled-glyph";
 
 function formatRelative(value: string): string {
   const timestamp = new Date(value);
@@ -15,29 +16,27 @@ function formatRelative(value: string): string {
   return `${day} · ${time}`;
 }
 
-function NoteRow({ note }: Readonly<{ note: NoteSummary }>) {
+export function NoteRow({ note }: Readonly<{ note: NoteSummary }>) {
   return (
     <Link href={`/app/notes/${note.id}`} className="note-row group">
       <div className="flex items-center justify-between gap-5">
         <span className="eyebrow">{note.type}</span>
-        <time dateTime={note.updatedAt} className="font-mono text-[11px] text-disabled-content">
+        <time dateTime={note.updatedAt} className="text-[11px] text-muted-content">
           {formatRelative(note.updatedAt)}
         </time>
       </div>
       <div className="mt-3 flex items-start justify-between gap-5">
         <div className="min-w-0">
-          <h2 className="truncate text-xl font-medium tracking-[-0.025em]">{note.title}</h2>
+          <h3 className="note-row-title truncate">{note.title}</h3>
           <p className="mt-2 text-sm text-muted-content">
             Revision {note.currentRevision}
             {note.archivedAt === null ? "" : " · Archived"}
             {note.deletedAt === null ? "" : " · Recently deleted"}
           </p>
         </div>
-        <ArrowRightIcon
-          size={18}
-          className="mt-1 shrink-0 text-disabled-content transition-transform group-hover:translate-x-1 group-hover:text-action"
-          aria-hidden="true"
-        />
+        <span className="mt-1 shrink-0 text-muted-content transition-transform group-hover:translate-x-1 group-hover:text-action">
+          <UnfiledGlyph glyph="arrow" size={18} weight={1.9} />
+        </span>
       </div>
     </Link>
   );
@@ -50,8 +49,15 @@ function noteKey(note: NoteSummary): string {
 export function NoteLibrary({
   emptyBody = "Write the first line. You can decide where it belongs later.",
   emptyTitle = "Nothing here yet.",
+  grouped = false,
   query = "/api/v1/notes?limit=50"
-}: Readonly<{ emptyBody?: string; emptyTitle?: string; query?: string }>) {
+}: Readonly<{
+  emptyBody?: string;
+  emptyTitle?: string;
+  /** The Library groups by day; the archive and the recovery window read as one flat list. */
+  grouped?: boolean;
+  query?: string;
+}>) {
   const resource = usePagedResource<NoteSummary>(query, noteKey);
 
   if (resource.loading && resource.data === null) return <ResourceSkeleton />;
@@ -71,12 +77,16 @@ export function NoteLibrary({
         body={emptyBody}
         action={
           <Link href="/app" className="button-primary">
-            Capture something <ArrowRightIcon size={17} weight="bold" aria-hidden="true" />
+            Capture something <UnfiledGlyph glyph="arrow" size={17} weight={2.2} />
           </Link>
         }
       />
     );
   }
+
+  const groups = grouped
+    ? groupNotesByDay(resource.data.items)
+    : [{ notes: resource.data.items, title: "" }];
 
   return (
     <div>
@@ -85,11 +95,18 @@ export function NoteLibrary({
           Offline · showing the last loaded library
         </p>
       ) : null}
-      <div className="border-t border-outline">
-        {resource.data.items.map((note) => (
-          <NoteRow key={note.id} note={note} />
-        ))}
-      </div>
+      {groups.map((group) => (
+        <section key={group.title || "all"} aria-label={group.title || undefined}>
+          {group.title === "" ? null : (
+            <h2 className="section-label mt-8 mb-3.5 first:mt-0">{group.title}</h2>
+          )}
+          <div className="border-t border-outline">
+            {group.notes.map((note) => (
+              <NoteRow key={note.id} note={note} />
+            ))}
+          </div>
+        </section>
+      ))}
       {resource.data.pageInfo.hasMore ? (
         <div className="pagination-row">
           <button

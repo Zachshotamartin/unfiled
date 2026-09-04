@@ -1,6 +1,5 @@
 "use client";
 
-import { CheckCircleIcon, KeyIcon, TrashIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import type {
   ProviderKeyDeleteRequest,
   ProviderKeyMetadata,
@@ -18,6 +17,7 @@ import {
 
 import { AiSettingsSkeleton, SettingsNotice } from "./ai-settings-controls";
 import { ResourceError } from "./resource-states";
+import { UnfiledGlyph } from "./unfiled-glyph";
 
 export const PROVIDER_KEY_MIN_LENGTH = 20;
 export const PROVIDER_KEY_MAX_LENGTH = 500;
@@ -119,9 +119,9 @@ function ProviderKeyStatus({
     <div className="provider-key-status" data-status={providerKeyDisplayState(providerKey)}>
       <div className="provider-key-state-line">
         {usable ? (
-          <CheckCircleIcon size={19} weight="fill" aria-hidden="true" />
+          <UnfiledGlyph glyph="checkCircle" size={19} weight={1.9} />
         ) : (
-          <KeyIcon size={19} aria-hidden="true" />
+          <UnfiledGlyph glyph="lock" size={19} weight={1.9} />
         )}
         <strong>{keyHeadline(provider, providerKey)}</strong>
       </div>
@@ -192,7 +192,7 @@ function ProviderKeyForm(props: ProviderKeyPanelProps) {
           className="button-primary"
           disabled={pending || apiKey.length < PROVIDER_KEY_MIN_LENGTH}
         >
-          <KeyIcon size={17} weight="bold" aria-hidden="true" />
+          <UnfiledGlyph glyph="lock" size={17} weight={2.2} />
           {submitLabel(props)}
         </button>
         {attempt === null ? null : (
@@ -228,7 +228,7 @@ function ProviderKeyDeleteZone(props: ProviderKeyPanelProps) {
               disabled={pending}
               onClick={props.onConfirmDelete}
             >
-              <TrashIcon size={17} aria-hidden="true" />
+              <UnfiledGlyph glyph="trash" size={17} weight={1.9} />
               {pending
                 ? "Removing…"
                 : deleteAttempt === null
@@ -252,7 +252,7 @@ function ProviderKeyDeleteZone(props: ProviderKeyPanelProps) {
           disabled={pending}
           onClick={props.onRequestDelete}
         >
-          <TrashIcon size={16} aria-hidden="true" /> Remove stored key
+          <UnfiledGlyph glyph="trash" size={16} weight={1.9} /> Remove stored key
         </button>
       )}
     </div>
@@ -282,7 +282,7 @@ export function ProviderKeyPanel(props: ProviderKeyPanelProps) {
         <>
           {providerKey?.status === "invalid" ? (
             <div className="provider-key-invalid" role="alert">
-              <WarningCircleIcon size={19} aria-hidden="true" />
+              <UnfiledGlyph glyph="warning" size={19} weight={1.9} />
               <div>
                 <strong>{name} rejected this key.</strong>
                 <p>
