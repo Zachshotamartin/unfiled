@@ -146,8 +146,25 @@ async function vercelApi(path, init = {}) {
 }
 
 /** The deployment currently serving production, so a red gate has something to go back to. */
+// The deployment production is serving right now: the one the project's production target
+// points at. This used to be the newest READY deployment made for production, which is not the
+// same thing after a rollback -- the newest one is then the build that was just un-promoted.
+// Release 33850771049 rolled back on a red gate and "restored" the broken organizer from the
+// release before it, so production stayed broken until a human promoted the last good build.
 async function currentProductionDeployment(app) {
   const projectId = projectIdFor(app);
+  const teamQuery = new URLSearchParams({ teamId: process.env.VERCEL_ORG_ID });
+  const project = await vercelApi(`/v9/projects/${projectId}?${teamQuery.toString()}`);
+  const serving = project.status === 200 ? project.body?.targets?.production : undefined;
+  if (serving && typeof (serving.uid ?? serving.id) === "string") {
+    return {
+      id: serving.uid ?? serving.id,
+      url: serving.url ?? null,
+      commit: serving.meta?.githubCommitSha ?? null
+    };
+  }
+  // Without a production target to read, the newest ready production deployment is the best
+  // available guess, and the log says so, because a guess is what a rollback would then restore.
   const query = new URLSearchParams({
     projectId,
     target: "production",
@@ -158,7 +175,15 @@ async function currentProductionDeployment(app) {
   const { status, body } = await vercelApi(`/v6/deployments?${query.toString()}`);
   if (status !== 200 || !Array.isArray(body?.deployments)) return null;
   const deployment = body.deployments[0];
-  return deployment ? { id: deployment.uid ?? deployment.id, url: deployment.url } : null;
+  if (!deployment) return null;
+  console.warn(
+    `${app}: production target unavailable; recording the newest ready deployment as previous`
+  );
+  return {
+    id: deployment.uid ?? deployment.id,
+    url: deployment.url,
+    commit: deployment.meta?.githubCommitSha ?? null
+  };
 }
 
 async function promote(app, deployment) {
@@ -318,6 +343,10 @@ async function main() {
       );
     }
     previous[app] = deployment;
+    console.log(
+      `== ${app}: a rollback would restore ${deployment.url ?? deployment.id}` +
+        (deployment.commit ? ` (${String(deployment.commit).slice(0, 7)})` : "")
+    );
   }
 
   await applyMigrations();
