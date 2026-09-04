@@ -136,7 +136,34 @@ export function createSupabaseAdmin({
     return Object.freeze({ ok: confirmed, found: true, status: updated.status });
   }
 
-  return Object.freeze({ confirmAddress, deploymentConfirmsAddresses });
+  /**
+   * Creates the gate's synthetic account already confirmed, without any mail being sent.
+   *
+   * The gate used to create it through the product's own sign-up endpoint. On a deployment that
+   * confirms addresses that makes the account depend on email delivery, and the gate's addresses
+   * are at example.com, a domain reserved by RFC 2606 with no MX record: the send can never
+   * succeed, Supabase answers 500 "Error sending confirmation email", and the product turns that
+   * into 503 provider_unavailable. The gate failed on its first step for a reason that says
+   * nothing about the deployment under test.
+   *
+   * Admin creation with email_confirm sends nothing, so the gate no longer needs a mailbox to
+   * exist in order to test anything else.
+   */
+  async function provisionAccount(email, password) {
+    const created = await send("POST", "/auth/v1/admin/users", {
+      email,
+      password,
+      email_confirm: true
+    });
+    const id = created.json?.id;
+    return Object.freeze({
+      ok: created.status === 200 || created.status === 201,
+      status: created.status,
+      id: typeof id === "string" ? id : null
+    });
+  }
+
+  return Object.freeze({ confirmAddress, deploymentConfirmsAddresses, provisionAccount });
 }
 
 /** Which of the two answers sign-up gave, read without touching what the answer carries. */
