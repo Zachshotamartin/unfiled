@@ -3699,7 +3699,7 @@ final class AppModel: ObservableObject {
         guard let user = currentUser else { return }
         let context = currentAccountContext(for: user)
         let loaded = await loadNoteSubset(archive: .only, deleted: .exclude)
-        guard isCurrent(context) else { return }
+        guard isCurrent(context), let loaded else { return }
         archiveNotes = loaded
     }
 
@@ -3707,7 +3707,7 @@ final class AppModel: ObservableObject {
         guard let user = currentUser else { return }
         let context = currentAccountContext(for: user)
         let loaded = await loadNoteSubset(archive: .include, deleted: .only)
-        guard isCurrent(context) else { return }
+        guard isCurrent(context), let loaded else { return }
         deletedNotes = loaded
     }
 
@@ -4489,11 +4489,13 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Returns nil when the subset could not be read, so a screen keeps what it is showing.
+    /// Publishing an empty list on failure told the owner their archive was empty.
     private func loadNoteSubset(
         archive: ArchiveFilter,
         deleted: DeletedFilter
-    ) async -> [NotePresentation] {
-        guard let runtime, let user = currentUser else { return [] }
+    ) async -> [NotePresentation]? {
+        guard let runtime, let user = currentUser else { return nil }
         let context = currentAccountContext(for: user)
         do {
             let summaries = try await Self.fetchAllNotes(
@@ -4502,7 +4504,7 @@ final class AppModel: ObservableObject {
                 deleted: deleted
             )
             let details = await Self.fetchNoteDetails(summaries, api: runtime.authenticatedAPI)
-            guard isCurrent(context) else { return [] }
+            guard isCurrent(context) else { return nil }
             for note in details {
                 discardNoteContextIfChanged(
                     noteID: note.id.rawValue,
@@ -4517,9 +4519,12 @@ final class AppModel: ObservableObject {
                     ?? PresentationMapping.note(summary)
             }
         } catch {
-            guard isCurrent(context) else { return [] }
-            bannerMessage = "This part of the library could not be loaded."
-            return []
+            guard isCurrent(context) else { return nil }
+            // A refresh the app abandoned is not a failure the owner needs to hear about.
+            if !(error is CancellationError || (error as? APIClientError) == .cancelled) {
+                bannerMessage = "This part of the library could not be loaded."
+            }
+            return nil
         }
     }
 

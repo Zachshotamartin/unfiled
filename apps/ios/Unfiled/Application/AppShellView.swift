@@ -508,7 +508,16 @@ private struct NoteDestinationView: View {
                 LoadingDestinationView(label: "Loading note")
             }
         }
-        .task(id: "\(noteID):\(model.noteDetail(noteID)?.currentRevision ?? 0)") {
+        // The identity is the note, not the revision the load was supposed to produce. Keying on
+        // the result meant a failed load left the id at revision zero, so the task never ran
+        // again and the screen showed its loading state until the app was relaunched.
+        .task(id: noteID) {
+            _ = await model.loadNote(noteID)
+            async let generatedBlocks: Void = model.loadGeneratedBlocks(noteID: noteID)
+            async let noteContext: Void = model.loadNoteContext(noteID: noteID)
+            _ = await (generatedBlocks, noteContext)
+        }
+        .refreshable {
             _ = await model.loadNote(noteID)
             async let generatedBlocks: Void = model.loadGeneratedBlocks(noteID: noteID)
             async let noteContext: Void = model.loadNoteContext(noteID: noteID)
