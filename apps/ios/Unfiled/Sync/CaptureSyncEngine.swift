@@ -101,7 +101,8 @@ actor CaptureSyncEngine {
         source: LocalCaptureSource,
         privacy: LocalPrivacyMode,
         deviceID: String,
-        guidance: String?
+        guidance: String?,
+        attachments: [CaptureAttachmentDraft] = []
     ) async throws -> String {
         guard await profileAuthorizer.authorizesCaptureProfile(profileID) else {
             throw CaptureSyncEngineError.invalidProfile
@@ -121,7 +122,7 @@ actor CaptureSyncEngine {
             expansionDisabled: false,
             guidance: CaptureCreateRequest.normalizedGuidance(guidance)
         )
-        try await database.enqueue(draft, now: encodedNow)
+        try await database.enqueue(draft, attachments: attachments, now: encodedNow)
         return captureID
     }
 

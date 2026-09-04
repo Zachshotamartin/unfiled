@@ -713,11 +713,88 @@ actor LocalDatabase {
         }
     }
 
+    /// The bytes of one photo or recording the owner has already seen, if this phone still holds
+    /// them. Reading marks the copy as recently used, so the bound below evicts what the owner
+    /// has not looked at rather than what they opened a moment ago.
+    func storedAttachmentBytes(profileID: String, attachmentID: String, now: String) throws -> Data? {
+        try Self.validateProfile(profileID)
+        return try database.write { database in
+            let bytes = try Data.fetchOne(
+                database,
+                sql: "SELECT bytes FROM attachment_store WHERE profile_id = ? AND attachment_id = ?",
+                arguments: [profileID, attachmentID]
+            )
+            if bytes != nil {
+                try database.execute(
+                    sql: "UPDATE attachment_store SET last_used_at = ? WHERE profile_id = ? AND attachment_id = ?",
+                    arguments: [now, profileID, attachmentID]
+                )
+            }
+            return bytes
+        }
+    }
+
+    /// Keeps a photo the owner has seen, evicting the least recently used copies once the store
+    /// passes its budget so a long-lived account cannot fill the phone.
+    func storeAttachmentBytes(
+        profileID: String,
+        attachmentID: String,
+        kind: LocalAttachmentKind,
+        mediaType: String,
+        bytes: Data,
+        now: String,
+        budgetBytes: Int = LocalDatabase.attachmentStoreBudgetBytes
+    ) throws {
+        try Self.validateProfile(profileID)
+        guard !bytes.isEmpty, bytes.count <= 700_000 else { return }
+        try database.write { database in
+            try database.execute(
+                sql: """
+                INSERT INTO attachment_store
+                  (profile_id, attachment_id, kind, media_type, bytes, stored_at, last_used_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(profile_id, attachment_id) DO UPDATE SET
+                  bytes = excluded.bytes, last_used_at = excluded.last_used_at
+                """,
+                arguments: [profileID, attachmentID, kind.rawValue, mediaType, bytes, now, now]
+            )
+            let total = try Int.fetchOne(
+                database,
+                sql: "SELECT COALESCE(SUM(length(bytes)), 0) FROM attachment_store WHERE profile_id = ?",
+                arguments: [profileID]
+            ) ?? 0
+            guard total > budgetBytes else { return }
+            try database.execute(
+                sql: """
+                DELETE FROM attachment_store
+                WHERE profile_id = ? AND attachment_id IN (
+                  SELECT attachment_id FROM (
+                    SELECT attachment_id,
+                           SUM(length(bytes)) OVER (
+                             PARTITION BY profile_id ORDER BY last_used_at DESC
+                             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                           ) AS running
+                    FROM attachment_store WHERE profile_id = ?
+                  ) WHERE running > ?
+                )
+                """,
+                arguments: [profileID, profileID, budgetBytes]
+            )
+        }
+    }
+
+    /// How much of the phone the photo store may use before it evicts the oldest copies.
+    static let attachmentStoreBudgetBytes = 120 * 1024 * 1024
+
     func removeProfile(profileID: String) throws {
         try Self.validateProfile(profileID)
         try database.write { database in
             try database.execute(
                 sql: "DELETE FROM capture_attachments WHERE profile_id = ?",
+                arguments: [profileID]
+            )
+            try database.execute(
+                sql: "DELETE FROM attachment_store WHERE profile_id = ?",
                 arguments: [profileID]
             )
             try database.execute(
@@ -1146,6 +1223,30 @@ actor LocalDatabase {
                 index: "capture_attachments_capture",
                 on: "capture_attachments",
                 columns: ["profile_id", "capture_id", "position"]
+            )
+        }
+        // Photos the owner has seen belong to the owner, not to the capture row that happened to
+        // carry them. capture_attachments cascades away with its outbox row, so a photo vanished
+        // from the phone once its capture synced and the outbox was pruned. This store keeps a
+        // bounded copy that survives that, and answers before the network does.
+        migrator.registerMigration("native-v5-attachment-store") { database in
+            try database.create(table: "attachment_store", options: .strict) { table in
+                table.column("profile_id", .text).notNull()
+                table.column("attachment_id", .text).notNull()
+                table.column("kind", .text).notNull()
+                table.column("media_type", .text).notNull()
+                table.column("bytes", .blob).notNull()
+                table.column("stored_at", .text).notNull()
+                table.column("last_used_at", .text).notNull()
+                table.primaryKey(["profile_id", "attachment_id"])
+                table.check(sql: "kind IN ('image', 'audio')")
+                table.check(sql: "media_type IN ('image/jpeg', 'audio/mp4')")
+                table.check(sql: "length(bytes) BETWEEN 1 AND 700000")
+            }
+            try database.create(
+                index: "attachment_store_recency",
+                on: "attachment_store",
+                columns: ["profile_id", "last_used_at"]
             )
         }
         migrator.registerMigration("native-v2-composer-generations") { database in

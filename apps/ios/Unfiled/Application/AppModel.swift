@@ -902,13 +902,19 @@ final class AppModel: ObservableObject {
         let context = currentAccountContext(for: user)
         let directions = CaptureCreateRequest.normalizedGuidance(guidance)
         do {
+            // A capture is sealed, so organizing again makes a new one. Its photos have to come
+            // with it: an attachment belongs to exactly one capture, so the bytes are carried
+            // over as fresh uploads rather than rebound. Without this the owner's photo was
+            // destroyed by the act of asking for a better filing.
+            let carried = await carriedAttachments(for: captureID)
             let newID = try await runtime.captureSync.enqueueAgain(
                 profileID: user.id,
                 rawContent: receipt.original,
                 source: .mobile,
                 privacy: .aiAssisted,
                 deviceID: deviceIdentifier(),
-                guidance: directions
+                guidance: directions,
+                attachments: carried
             )
             guard isCurrent(context) else { return }
             receipts.insert(
@@ -950,14 +956,68 @@ final class AppModel: ObservableObject {
         await removeReplacedCapture(captureID, runtime: runtime, context: context)
     }
 
+    /// Mints the identifiers a replacement capture's photos need.
+    private let attachmentIDGenerator = PrefixedULIDGenerator()
+
+    /// The photos of a capture the owner is replacing, as drafts for the capture that replaces it.
+    ///
+    /// Each one takes a new identifier because the server binds an attachment to exactly one
+    /// capture and refuses to rebind it, and each keeps the measurements the server already
+    /// recorded. A photo whose bytes this phone can no longer produce is left behind rather than
+    /// sent as something the owner never attached.
+    private func carriedAttachments(for captureID: String) async -> [CaptureAttachmentDraft] {
+        guard let attachments = capturesByID[captureID]?.attachments else { return [] }
+        var drafts: [CaptureAttachmentDraft] = []
+        for attachment in attachments {
+            guard let bytes = await attachmentBytes(id: attachment.id),
+                  let identifier = try? await attachmentIDGenerator.next(.attachment)
+            else { continue }
+            drafts.append(
+                CaptureAttachmentDraft(
+                    id: identifier,
+                    kind: attachment.kind == .image ? .image : .audio,
+                    mediaType: attachment.mediaType,
+                    bytes: bytes,
+                    width: attachment.width,
+                    height: attachment.height,
+                    durationMs: attachment.durationMs
+                )
+            )
+        }
+        return drafts
+    }
+
     private var attachmentBytesCache: [String: Data] = [:]
 
-    /// The decrypted bytes of one of the owner's photos or recordings, fetched once per launch.
+    /// The decrypted bytes of one of the owner's photos or recordings.
+    ///
+    /// The phone answers before the network does: a photo the owner just took is already in the
+    /// encrypted store beside its capture, and anything fetched is kept there too, so a photo
+    /// the owner has seen keeps showing after a relaunch and with no connection. Only a photo
+    /// this phone has never held costs a request.
     func attachmentBytes(id: String) async -> Data? {
         if let cached = attachmentBytesCache[id] { return cached }
-        guard let runtime, currentUser != nil else { return nil }
+        guard let runtime, let user = currentUser else { return nil }
+        let profileID = user.id.uuidString.lowercased()
+        let now = APIJSON.dateString(Date())
+        if let stored = try? await runtime.database.storedAttachmentBytes(
+            profileID: profileID,
+            attachmentID: id,
+            now: now
+        ) {
+            attachmentBytesCache[id] = stored
+            return stored
+        }
         guard let read = try? await runtime.authenticatedAPI.captureAttachment(id: id) else { return nil }
         attachmentBytesCache[id] = read.bytes
+        try? await runtime.database.storeAttachmentBytes(
+            profileID: profileID,
+            attachmentID: id,
+            kind: read.mediaType == "image/jpeg" ? .image : .audio,
+            mediaType: read.mediaType,
+            bytes: read.bytes,
+            now: now
+        )
         return read.bytes
     }
 
@@ -4617,6 +4677,7 @@ final class AppModel: ObservableObject {
         searchTask?.cancel()
         searchTask = nil
         currentUser = nil
+        attachmentBytesCache = [:]
         notes = []
         spaces = []
         receipts = []
