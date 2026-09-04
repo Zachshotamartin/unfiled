@@ -125,7 +125,7 @@ jobs:
         run: pnpm test:coverage
 
       - name: Release probe and live-gate checks
-        run: pnpm check:release-probe && pnpm test:live-gate-checks
+        run: pnpm check:release-probe && pnpm test:live-gate-checks && pnpm test:release
 
   capacity:
     name: Capacity gates
