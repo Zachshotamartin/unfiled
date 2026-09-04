@@ -15,6 +15,13 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 
+import {
+  captureBindsAttachments,
+  filedNoteId,
+  noteKeepsTextWithoutDirections,
+  noteReferencesAttachment
+} from "./gate-checks.mjs";
+
 const WEB = (process.env.UNFILED_GATE_WEB_ORIGIN ?? "https://unfiled-web.vercel.app").replace(
   /\/$/u,
   ""
@@ -741,6 +748,45 @@ async function undoReceipt(captureId, receipt, label) {
   });
 }
 
+/**
+ * Files a capture the organizer stopped on, the way the owner would. A review files nothing by
+ * itself, so a step named for a filed note has nothing to read until someone resolves it; driving
+ * the review here is what lets that step fail honestly instead of passing on the review outcome.
+ * Returns the receipt as it reads afterwards.
+ */
+async function fileThroughReview(captureId, receipt, label, title, noteType) {
+  const reviewItemId = receipt?.reviewItemId ?? null;
+  if (receipt?.outcome !== "needs_review" || reviewItemId === null) {
+    record(`${label}.review_filed`, false, {
+      reason: receipt === null ? "no_receipt" : "no_open_review",
+      outcome: receipt?.outcome ?? null
+    });
+    return receipt;
+  }
+  const resolved = await write("POST", `/review-items/${reviewItemId}/resolve`, token, {
+    idempotencyKey: key(),
+    resolution: { type: "create", title, noteType, spaceId: null }
+  });
+  const after = (await receiptOf(captureId)) ?? receipt;
+  record(`${label}.review_filed`, resolved.status === 200 && filedNoteId(after) !== null, {
+    status: resolved.status,
+    code: code(resolved),
+    outcome: after?.outcome ?? null
+  });
+  return after;
+}
+
+/** The note a capture reached, filing it out of review first when that is where it stopped. */
+async function filedNote(captureId, receipt, label, title, noteType) {
+  const settled =
+    filedNoteId(receipt) === null
+      ? await fileThroughReview(captureId, receipt, label, title, noteType)
+      : receipt;
+  const noteId = filedNoteId(settled);
+  if (noteId === null) return { noteId: null, note: null };
+  return { noteId, note: await api("GET", `/notes/${noteId}`, { token }) };
+}
+
 let organizedCaptureId = null;
 let receipt = null;
 {
@@ -959,22 +1005,26 @@ if (OPENAI_KEY && secondNoteId) {
       lastErrorCode: outcome.lastErrorCode
     }
   );
-  const destinationId = outcome.receipt?.destination?.noteId ?? null;
-  if (destinationId) {
-    const note = await api("GET", `/notes/${destinationId}`, { token });
-    const body = String(note.json?.note?.bodyMarkdown ?? "");
-    record(
-      "capture_c.directions_never_enter_the_note",
-      note.status === 200 && !body.includes(directions) && body.includes("plumber comes Thursday"),
-      { status: note.status, destinationIsSecond: destinationId === secondNoteId }
-    );
-  } else {
-    record(
-      "capture_c.directions_never_enter_the_note",
-      outcome.receipt?.outcome === "needs_review",
-      { reason: "no_destination", outcome: outcome.receipt?.outcome ?? null }
-    );
-  }
+  const { noteId, note } = await filedNote(
+    captureId,
+    outcome.receipt,
+    "capture_c",
+    "Gate directions",
+    "generic"
+  );
+  record(
+    "capture_c.directions_never_enter_the_note",
+    noteId !== null &&
+      noteKeepsTextWithoutDirections(note, {
+        captureText: "plumber comes Thursday",
+        directions
+      }),
+    {
+      status: note?.status ?? null,
+      filed: noteId !== null,
+      destinationIsSecond: noteId === secondNoteId
+    }
+  );
 }
 
 // ---------------------------------------------------------------- photos (capture D)
@@ -1053,23 +1103,25 @@ async function uploadPhoto(captureId, attachmentId, bytes, extra = {}) {
     }
   });
   const boundDetail = await api("GET", `/captures/${captureId}`, { token });
-  const boundIds = (boundDetail.json?.capture?.attachments ?? []).map((item) => item.id);
   record(
     "photo.capture_binds_the_upload",
     (created.status === 201 || created.status === 202) &&
-      boundIds.length === 1 &&
-      boundIds[0] === attachmentId,
+      captureBindsAttachments(boundDetail, [attachmentId]),
     {
       status: created.status,
       code: code(created),
-      boundAttachments: boundIds.length
+      boundAttachments: (boundDetail.json?.capture?.attachments ?? []).length
     }
   );
+  // The idempotency key has to match the client capture id or the request is refused for that
+  // alone, before any attachment is looked at; the refusal this step is named for is the binding
+  // one, so the create must be allowed to reach it.
+  const strangerCaptureId = `cap_${ulid()}`;
   const strangerBind = await api("POST", "/captures", {
     token,
-    idempotencyKey: `cap_${ulid()}`,
+    idempotencyKey: strangerCaptureId,
     body: {
-      clientCaptureId: `cap_${ulid()}`,
+      clientCaptureId: strangerCaptureId,
       rawContent: "Not my photo",
       source: "web",
       privacy: "ai_assisted",
@@ -1080,7 +1132,7 @@ async function uploadPhoto(captureId, attachmentId, bytes, extra = {}) {
   });
   record(
     "photo.another_capture_cannot_bind_a_bound_photo",
-    strangerBind.status === 403 || strangerBind.status === 404 || strangerBind.status === 409,
+    strangerBind.status === 403 && code(strangerBind) === "forbidden",
     { status: strangerBind.status, code: code(strangerBind) }
   );
   const read = await fetch(`${API}/captures/attachments/${attachmentId}`, {
@@ -1117,7 +1169,11 @@ async function uploadPhoto(captureId, attachmentId, bytes, extra = {}) {
   if (OPENAI_KEY) {
     record(
       "photo.organized_with_key",
-      !outcome.timedOut && ["done", "needs_review"].includes(outcome.captureStatus),
+      !outcome.timedOut &&
+        ["done", "needs_review"].includes(outcome.captureStatus) &&
+        ["created_note", "added_to_note", "kept_in_inbox", "needs_review"].includes(
+          outcome.receipt?.outcome
+        ),
       {
         captureStatus: outcome.captureStatus,
         lastErrorCode: outcome.lastErrorCode,
@@ -1125,22 +1181,18 @@ async function uploadPhoto(captureId, attachmentId, bytes, extra = {}) {
         receiptOutcome: outcome.receipt?.outcome ?? null
       }
     );
-    const noteId = outcome.receipt?.destination?.noteId ?? null;
-    if (noteId) {
-      const note = await api("GET", `/notes/${noteId}`, { token });
-      const body = note.json?.note?.bodyMarkdown ?? "";
-      record(
-        "photo.filed_note_references_the_photo",
-        note.status === 200 && body.includes(`unfiled-attachment:${attachmentId}`),
-        { status: note.status, referenced: body.includes(`unfiled-attachment:${attachmentId}`) }
-      );
-    } else {
-      record("photo.filed_note_references_the_photo", outcome.captureStatus === "needs_review", {
-        reason: "no_destination",
-        captureStatus: outcome.captureStatus,
-        note: "a review outcome carries no note yet"
-      });
-    }
+    const { noteId, note } = await filedNote(
+      captureId,
+      outcome.receipt,
+      "photo",
+      "Gate photo",
+      "generic"
+    );
+    record(
+      "photo.filed_note_references_the_photo",
+      noteId !== null && noteReferencesAttachment(note, attachmentId),
+      { status: note?.status ?? null, filed: noteId !== null }
+    );
   } else {
     record(
       "photo.keyless_fails_with_provider_unavailable",

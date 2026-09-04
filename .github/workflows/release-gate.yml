@@ -15,6 +15,12 @@ concurrency:
   group: release-gate
   cancel-in-progress: false
 
+# The gate reads a running origin and writes nothing back to the repository. Naming that here keeps
+# the workflow that runs against production with real secrets on the same narrow token as the two
+# workflows around it, instead of whatever the repository default happens to be.
+permissions:
+  contents: read
+
 jobs:
   api-gate:
     name: Live API gate (real operations, synthetic account)
@@ -24,7 +30,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.18.0
       - name: Run the live API gate
         env:
           UNFILED_GATE_WEB_ORIGIN: ${{ github.event.inputs.origin || 'https://unfiled-web.vercel.app' }}

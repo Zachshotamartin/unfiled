@@ -15,7 +15,7 @@
 //   UNFILED_GATE_CRON_SECRET             lets the gate drain the queues instead of waiting
 //   UNFILED_RELEASE_SKIP_MIGRATIONS=1    only when the schema is already known to be current
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -66,6 +66,24 @@ function linkedProject() {
 function migrationTarget() {
   return process.env.SUPABASE_DB_URL ? ["--db-url", process.env.SUPABASE_DB_URL] : ["--linked"];
 }
+
+/**
+ * The Supabase CLI that pushes the schema to production is the one the repository pins, because
+ * that is the one CI reset, linted and tested the schema with. Reading it from package.json keeps a
+ * single version in the repository instead of a second one hidden in a command line here.
+ */
+function supabaseCli() {
+  const manifest = JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url)));
+  const pinned = manifest.devDependencies?.supabase;
+  if (typeof pinned !== "string" || !/^\d+\.\d+\.\d+$/u.test(pinned)) {
+    fail(
+      "Could not read the pinned Supabase CLI version from package.json; the schema is not pushed " +
+        "with an unknown CLI."
+    );
+  }
+  return ["--yes", `supabase@${pinned}`];
+}
+
 function run(command, args, options = {}) {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
@@ -143,11 +161,10 @@ async function applyMigrations() {
     return;
   }
   console.log("== applying database migrations before any code that needs them ships");
-  const dryRun = await run(
-    "npx",
-    ["--yes", "supabase@latest", "db", "push", ...migrationTarget(), "--dry-run"],
-    { echo: false }
-  );
+  const cli = supabaseCli();
+  const dryRun = await run("npx", [...cli, "db", "push", ...migrationTarget(), "--dry-run"], {
+    echo: false
+  });
   if (dryRun.code !== 0) {
     fail(`Could not read the production migration state.\n${dryRun.err.slice(-2000)}`);
   }
@@ -167,14 +184,7 @@ async function applyMigrations() {
     return;
   }
   console.log(`pending: ${pending.join(", ")}`);
-  const push = await run("npx", [
-    "--yes",
-    "supabase@latest",
-    "db",
-    "push",
-    ...migrationTarget(),
-    "--yes"
-  ]);
+  const push = await run("npx", [...cli, "db", "push", ...migrationTarget(), "--yes"]);
   if (push.code !== 0) fail("Applying migrations failed; nothing was deployed.");
   console.log(`applied ${pending.length} migration(s)`);
 }

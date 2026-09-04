@@ -11,6 +11,10 @@ readonly PROJECT_MANIFEST="${IOS_DIRECTORY}/project.yml"
 readonly XCODE_PROJECT="${IOS_DIRECTORY}/Unfiled.xcodeproj"
 readonly XCODE_SCHEME="Unfiled Development"
 readonly REQUIRED_XCODEGEN_VERSION="2.46.0"
+# The iPhone the tests run on, named rather than "whichever iPhone this image happens to list
+# first": a refreshed runner image must change a value in this file, not the device under test.
+# It is the same model the live phone gate pins (scripts/operations/live-gate/run.sh).
+readonly DEFAULT_TEST_SIMULATOR="iPhone 17 Pro"
 readonly IOS_BUILD_ROOT="${UNFILED_IOS_BUILD_ROOT:-${TMPDIR:-/tmp}/unfiled-ios-${UID}-${REPOSITORY_ROOT##*/}}"
 readonly DERIVED_DATA_PATH="${UNFILED_IOS_DERIVED_DATA_PATH:-${IOS_BUILD_ROOT}/derived-data}"
 readonly PACKAGE_CACHE_PATH="${UNFILED_IOS_PACKAGE_CACHE_PATH:-${IOS_BUILD_ROOT}/source-packages}"
@@ -179,6 +183,27 @@ build_for_simulator() {
     build
 }
 
+simulator_identifier_for() {
+  local simulator_name="$1"
+
+  xcrun simctl list devices available |
+    sed -n "s/^[[:space:]]*${simulator_name} (\([0-9A-F-]\{36\}\)) (.*/\1/p" |
+    head -n 1
+}
+
+simulator_runtime_for() {
+  local simulator_identifier="$1"
+
+  # simctl groups devices under a `-- iOS 26.0 --` heading, and the heading above a device is the
+  # runtime it boots. Naming it means a refreshed runner image changes a value this script prints
+  # rather than changing what the tests ran against without saying so.
+  xcrun simctl list devices available |
+    sed -n "1,/${simulator_identifier}/p" |
+    grep -E '^-- .* --$' |
+    tail -n 1 |
+    sed -E 's/^-- (.*) --$/\1/'
+}
+
 test_destination() {
   if [[ -n "${UNFILED_IOS_TEST_DESTINATION:-}" ]]; then
     printf '%s\n' "${UNFILED_IOS_TEST_DESTINATION}"
@@ -187,17 +212,22 @@ test_destination() {
 
   require_command xcrun
 
+  local simulator_name="${UNFILED_IOS_TEST_SIMULATOR:-${DEFAULT_TEST_SIMULATOR}}"
   local simulator_identifier
-  simulator_identifier="$(
-    xcrun simctl list devices available |
-      awk -F '[()]' '/^[[:space:]]+iPhone/ && !found { print $2; found = 1 }'
-  )"
+  simulator_identifier="$(simulator_identifier_for "${simulator_name}")"
 
   if [[ -z "${simulator_identifier}" ]]; then
+    printf 'The pinned iPhone simulator is unavailable: %s\n' "${simulator_name}" >&2
+    printf 'Available simulators:\n' >&2
+    xcrun simctl list devices available >&2
     printf '%s\n' \
-      'No available iPhone simulator was found. Set UNFILED_IOS_TEST_DESTINATION explicitly.' >&2
+      'Set UNFILED_IOS_TEST_SIMULATOR to one of the above, or UNFILED_IOS_TEST_DESTINATION to a full xcodebuild destination.' >&2
     exit 1
   fi
+
+  printf 'iOS tests will run on %s (%s), runtime %s.\n' \
+    "${simulator_name}" "${simulator_identifier}" \
+    "$(simulator_runtime_for "${simulator_identifier}")" >&2
 
   printf 'platform=iOS Simulator,id=%s\n' "${simulator_identifier}"
 }
@@ -244,10 +274,12 @@ main() {
       test_in_simulator
       ;;
     ci)
+      # No separate build step: `test` compiles the application and the test bundle for the
+      # simulator it runs on, so building the same sources again for the generic destination cost
+      # a second full compile and covered nothing the test build does not.
       generate_project
       inspect_project
       resolve_packages
-      build_for_simulator
       test_in_simulator
       ;;
     *)

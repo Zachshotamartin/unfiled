@@ -510,6 +510,14 @@ for _ in $(seq 1 30); do
 done
 curl --fail --silent --show-error --output /dev/null "http://127.0.0.1:3101/health"
 
+# A stale listener on the application port would answer the readiness probe below while the
+# freshly launched server was dying of EADDRINUSE, and the whole run would then exercise a
+# foreign process; refuse to start on top of one, exactly as the mock port does.
+if curl --silent --output /dev/null "$e2e_app_url/api/health"; then
+  echo "Port 3100 is already in use; stop the other listener before running the HTTP E2E." >&2
+  exit 1
+fi
+
 env -u VERCEL -u VERCEL_ENV -u VERCEL_PROJECT_ID -u VERCEL_URL \
 NEXT_PUBLIC_SUPABASE_URL="$e2e_supabase_url" \
 NEXT_PUBLIC_SUPABASE_ANON_KEY="$ANON_KEY" \
@@ -537,13 +545,15 @@ PORT="3100" \
   >"$e2e_tmp_dir/web.log" 2>&1 &
 e2e_app_pid="$!"
 
+# Liveness is checked before the probe, not after it: a server that has already exited cannot be
+# the thing that answered, and asking in that order is what tells the two apart.
 for _ in $(seq 1 60); do
-  if curl --fail --silent --output /dev/null "$e2e_app_url/api/health"; then
-    break
-  fi
   if ! kill -0 "$e2e_app_pid" 2>/dev/null; then
     echo "The built web server exited before becoming ready." >&2
     exit 1
+  fi
+  if curl --fail --silent --output /dev/null "$e2e_app_url/api/health"; then
+    break
   fi
   sleep 1
 done
@@ -1030,7 +1040,6 @@ correct_e1_fixture_decision() {
   local destination_note_id="$4"
   local source_expected_revision="${5:-1}"
   local destination_expected_revision="${6:-1}"
-  local expected_replayed="${7:-false}"
   local idempotency_key="milestone-e1-$label-correction-$e2e_run_id"
   local body
   local status
@@ -1089,8 +1098,7 @@ correct_e1_fixture_decision() {
   E2E_DECISION_ID="$decision_id" E2E_SOURCE_NOTE_ID="$source_note_id" \
     E2E_DESTINATION_NOTE_ID="$destination_note_id" \
     E2E_SOURCE_REVISION="$source_expected_revision" \
-    E2E_DESTINATION_REVISION="$destination_expected_revision" \
-    E2E_EXPECTED_REPLAYED="$expected_replayed" node -e '
+    E2E_DESTINATION_REVISION="$destination_expected_revision" node -e '
       const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
       if (value.outcome !== "applied" || value.decisionId !== process.env.E2E_DECISION_ID) {
         process.exit(1);
@@ -1103,7 +1111,9 @@ correct_e1_fixture_decision() {
           value.destination?.currentRevision !== Number(process.env.E2E_DESTINATION_REVISION) + 1) {
         process.exit(1);
       }
-      if (value.replayed !== (process.env.E2E_EXPECTED_REPLAYED === "true")) process.exit(1);
+      // Every caller applies a correction for the first time, so a reply that says it replayed an
+      // earlier one means the fixture and the server disagree about what just happened.
+      if (value.replayed !== false) process.exit(1);
       process.stdout.write(value.source.mutationId + " " + value.destination.mutationId + "\n");
     ' "$e2e_tmp_dir/e1-$label-correction.json"
 }
@@ -1125,28 +1135,20 @@ e2e_correction_observation_count() {
 SQL
 }
 
-ensure_e2_correction_observed() {
+# The correction endpoint does not acknowledge until its feedback-bound observation is durable:
+# a failed observation returns provider_unavailable, which correct_e1_fixture_decision already
+# refuses. So after one applied correction the observation exists exactly once, and asking again is
+# the whole assertion. This used to replay the correction up to three times and accept a count of
+# one afterwards, which reported success for a product that recorded nothing on the first apply.
+assert_e2_correction_observed() {
   local label="$1"
-  local decision_id="$2"
-  local source_note_id="$3"
-  local destination_note_id="$4"
-  local source_expected_revision="${5:-1}"
-  local destination_expected_revision="${6:-1}"
   local observation_count
-  local replay_attempt
-  for replay_attempt in 1 2 3; do
-    : "$replay_attempt"
-    observation_count="$(e2e_correction_observation_count "$label")"
-    if [[ "$observation_count" == "1" ]]; then
-      return 0
-    fi
-    [[ "$observation_count" == "0" ]]
-    correct_e1_fixture_decision \
-      "$label" "$decision_id" "$source_note_id" "$destination_note_id" \
-      "$source_expected_revision" "$destination_expected_revision" true >/dev/null
-  done
   observation_count="$(e2e_correction_observation_count "$label")"
-  [[ "$observation_count" == "1" ]]
+  if [[ "$observation_count" != "1" ]]; then
+    printf 'The E2 correction %s recorded %s observations on its first apply; expected 1.\n' \
+      "$label" "$observation_count" >&2
+    return 1
+  fi
 }
 
 assert_e1_post_only() {
@@ -3131,9 +3133,7 @@ read -r e2e_e2_accept_source_mutation_a e2e_e2_accept_destination_mutation_a < <
 )
 [[ "$e2e_e2_accept_source_mutation_a" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
 [[ "$e2e_e2_accept_destination_mutation_a" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
-ensure_e2_correction_observed \
-  e2-accept-1 "$e2e_e2_accept_decision_a" \
-  "$e2e_e2_accept_source_a" "$e2e_e2_accept_destination"
+assert_e2_correction_observed e2-accept-1
 
 e2e_e2_accept_first_list_status="$(e2e_routing_http accept-first-list GET /routing-rules)"
 [[ "$e2e_e2_accept_first_list_status" == "200" ]]
@@ -3162,9 +3162,7 @@ read -r e2e_e2_accept_source_mutation_b e2e_e2_accept_destination_mutation_b < <
 )
 [[ "$e2e_e2_accept_source_mutation_b" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
 [[ "$e2e_e2_accept_destination_mutation_b" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
-ensure_e2_correction_observed \
-  e2-accept-2 "$e2e_e2_accept_decision_b" \
-  "$e2e_e2_accept_source_b" "$e2e_e2_accept_destination" 1 2
+assert_e2_correction_observed e2-accept-2
 
 e2e_e2_accept_offer_list_status="$(e2e_routing_http accept-offer-list GET /routing-rules)"
 [[ "$e2e_e2_accept_offer_list_status" == "200" ]]
@@ -3243,9 +3241,7 @@ read -r e2e_e2_decline_source_mutation_a e2e_e2_decline_destination_mutation_a <
 )
 [[ "$e2e_e2_decline_source_mutation_a" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
 [[ "$e2e_e2_decline_destination_mutation_a" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
-ensure_e2_correction_observed \
-  e2-decline-1 "$e2e_e2_decline_decision_a" \
-  "$e2e_e2_decline_source_a" "$e2e_e2_decline_destination"
+assert_e2_correction_observed e2-decline-1
 
 e2e_stage="e2-learned-decline-second-correction"
 read -r e2e_e2_decline_source_b e2e_e2_decline_seed_mutation_b \
@@ -3266,9 +3262,7 @@ read -r e2e_e2_decline_source_mutation_b e2e_e2_decline_destination_mutation_b <
 )
 [[ "$e2e_e2_decline_source_mutation_b" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
 [[ "$e2e_e2_decline_destination_mutation_b" =~ ^mut_[0-9A-HJKMNP-TV-Z]{26}$ ]]
-ensure_e2_correction_observed \
-  e2-decline-2 "$e2e_e2_decline_decision_b" \
-  "$e2e_e2_decline_source_b" "$e2e_e2_decline_destination" 1 2
+assert_e2_correction_observed e2-decline-2
 
 e2e_e2_decline_offer_list_status="$(e2e_routing_http decline-offer-list GET /routing-rules)"
 [[ "$e2e_e2_decline_offer_list_status" == "200" ]]

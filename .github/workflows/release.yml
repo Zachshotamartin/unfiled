@@ -1,11 +1,17 @@
 # The only path production changes by. It applies the database migrations this commit needs,
-# deploys the five services, waits for production to serve the commit, runs the live gate
-# against it, and promotes the previous deployments back if the gate is red. Vercel's own git
-# integration is turned off for main (apps/*/vercel.json), so nothing else can deploy.
+# deploys the five services, waits for production to serve the commit, runs the live gate against
+# it, and promotes the previous deployments back if the gate is red. Vercel's own git integration is
+# turned off for main (apps/*/vercel.json), so nothing else can deploy.
+#
+# A release starts from a finished CI run, never from the push itself: the schema is migrated and
+# the services are deployed only after the tests for that exact commit have passed. A manual run
+# goes through the same requirement, so there is no way to ship an unverified commit from here.
 name: Release
 
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -15,15 +21,52 @@ concurrency:
 
 permissions:
   contents: read
+  # Reading which CI runs exist for the commit under release, and how they concluded.
+  actions: read
 
 jobs:
+  verified:
+    name: Require green CI for this commit
+    # A CI run that was cancelled, failed, or belongs to a pull request is not a release trigger.
+    # The commit's own CI result is checked again in the job itself, against the API.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - name: Check out the commit under release
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Name the commit under release
+        id: commit
+        run: |
+          UNFILED_RELEASE_SHA="$(git rev-parse HEAD)"
+          printf 'sha=%s\n' "${UNFILED_RELEASE_SHA}" >> "${GITHUB_OUTPUT}"
+          printf 'Releasing %s\n' "${UNFILED_RELEASE_SHA}"
+
+      - name: Require a green CI run for this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ steps.commit.outputs.sha }}
+        run: bash .github/workflows/scripts/require-green-ci.sh
+
   release:
     name: Migrate, deploy, and gate production
+    needs: verified
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Check out repository
+      - name: Check out the verified commit
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verified.outputs.sha }}
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -34,7 +77,7 @@ jobs:
       - name: Use Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.18.0
           cache: pnpm
 
       - name: Release production

@@ -1,3 +1,8 @@
+# Every check a commit has to pass. The lanes are separate jobs on purpose: they have no
+# dependencies on one another, so they run at the same time and a red lane names what broke without
+# a reader having to find the failing step inside a half-hour log. The `ci` job at the bottom is the
+# single required check, and .github/workflows/release.yml refuses to release a commit whose CI run
+# is not green, so this file is what stands between a merge and production.
 name: CI
 
 on:
@@ -7,48 +12,55 @@ on:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A superseded pull-request run is wasted work, but a superseded main run is the only evidence
+  # that its commit is releasable, so main runs are never cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
   pull-requests: read
 
+env:
+  NODE_VERSION: "22.18.0"
+  PNPM_VERSION: "10.14.0"
+  SUPABASE_CLI_VERSION: "2.116.0"
+  # Turbo's filesystem cache, restored per lane so lint, typecheck, coverage and build stop
+  # rebuilding the same package graph from zero on every run. `.turbo` is already gitignored.
+  TURBO_CACHE_DIR: .turbo/cache
+  TURBO_TELEMETRY_DISABLED: "1"
+
 jobs:
-  quality:
-    name: Quality and database
+  static:
+    name: Format, lint, boundaries, and types
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10.14.0
+          version: ${{ env.PNPM_VERSION }}
           run_install: false
 
       - name: Use Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+
+      - name: Restore the turbo cache
+        uses: actions/cache@v4
+        with:
+          path: .turbo/cache
+          key: turbo-static-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: |
+            turbo-static-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
+            turbo-static-${{ runner.os }}-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
-      - name: Verify PostgreSQL client for local HTTP E2E
-        run: psql --version
-
-      - name: Audit production dependency graph
-        run: bash scripts/ci/audit-production-dependencies.sh
-
-      - name: Scan committed content for secrets
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check formatting
         run: pnpm format:check
@@ -62,8 +74,90 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+  secrets:
+    name: Committed secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan committed content for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  unit:
+    name: Unit, contract, and operations coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Restore the turbo cache
+        uses: actions/cache@v4
+        with:
+          path: .turbo/cache
+          key: turbo-unit-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: |
+            turbo-unit-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
+            turbo-unit-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
       - name: Unit and contract coverage
         run: pnpm test:coverage
+
+      - name: Release probe and live-gate checks
+        run: pnpm check:release-probe && pnpm test:live-gate-checks
+
+  capacity:
+    name: Capacity gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Restore the turbo cache
+        uses: actions/cache@v4
+        with:
+          path: .turbo/cache
+          key: turbo-capacity-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: |
+            turbo-capacity-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
+            turbo-capacity-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Verifier production capacity gate
         run: pnpm --filter @unfiled/verifier test:capacity
@@ -74,23 +168,83 @@ jobs:
       - name: Isolated search encrypted exact-scan capacity gate
         run: pnpm test:search-capacity
 
+  evaluations:
+    name: Deterministic routing evaluations
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Restore the turbo cache
+        uses: actions/cache@v4
+        with:
+          path: .turbo/cache
+          key: turbo-evaluations-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: |
+            turbo-evaluations-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
+            turbo-evaluations-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
       - name: Deterministic routing evaluation
         run: pnpm eval:routing
 
       - name: Production-pipeline deterministic routing evaluation
         run: pnpm eval:routing:pipeline
 
-      - name: Build web, worker, verifier, organizer, search, and shared packages
-        run: pnpm build
+  database:
+    name: Schema, pgTAP, and trust domain
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-      - name: Smoke built isolated servers
-        run: pnpm --filter @unfiled/worker --filter @unfiled/verifier --filter @unfiled/organizer --filter @unfiled/search-service test:built-server
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Restore the turbo cache
+        uses: actions/cache@v4
+        with:
+          path: .turbo/cache
+          key: turbo-database-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: |
+            turbo-database-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
+            turbo-database-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify PostgreSQL client
+        run: psql --version
 
       - name: Install Supabase CLI
-        id: supabase-cli
         uses: supabase/setup-cli@v1
         with:
-          version: 2.116.0
+          version: ${{ env.SUPABASE_CLI_VERSION }}
 
       - name: Start local Supabase
         run: supabase start
@@ -110,12 +264,69 @@ jobs:
       - name: Run Milestone F semantic trust-domain integration
         run: pnpm test:search-trust-domain
 
+  e2e:
+    name: Built servers and HTTP end to end
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Restore the turbo cache
+        uses: actions/cache@v4
+        with:
+          path: .turbo/cache
+          key: turbo-e2e-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: |
+            turbo-e2e-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
+            turbo-e2e-${{ runner.os }}-
+
+      - name: Restore the Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: apps/web/.next/cache
+          key: next-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: |
+            next-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
+            next-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify PostgreSQL client for local HTTP E2E
+        run: psql --version
+
+      - name: Build web, worker, verifier, organizer, search, and shared packages
+        run: pnpm build
+
+      - name: Smoke built isolated servers
+        run: pnpm --filter @unfiled/worker --filter @unfiled/verifier --filter @unfiled/organizer --filter @unfiled/search-service test:built-server
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Start local Supabase
+        run: supabase start
+
+      - name: Rebuild database from zero
+        run: supabase db reset --local
+
       - name: Run Milestones B–F local HTTP E2E
         run: pnpm test:http:e2e
-
-      - name: Stop local Supabase
-        if: ${{ always() && steps.supabase-cli.outcome == 'success' }}
-        run: supabase stop --no-backup
 
   native-ios:
     name: iOS app and widget (unsigned simulator)
@@ -128,13 +339,13 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10.14.0
+          version: ${{ env.PNPM_VERSION }}
           run_install: false
 
       - name: Use Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22.18.0
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Install XcodeGen
         env:
@@ -160,7 +371,7 @@ jobs:
         run: >-
           echo "::notice::This lane validates an unsigned iOS Simulator build only.
           It does not use Apple credentials, validate provisioning or App Groups on-device,
-          create an archive, or deploy to TestFlight or the App Store."
+          create a signed archive, or deploy to TestFlight or the App Store."
 
       - name: Generate the Xcode project twice from the canonical manifest
         run: |
@@ -181,11 +392,20 @@ jobs:
             exit 1
           fi
 
-      - name: Build the SwiftUI app
-        run: pnpm ios:build
-
-      - name: Run iOS unit tests in a simulator
+      # `ios:test` compiles the app and the test bundle for the simulator it runs on, so building
+      # the same sources again for the generic destination first bought a second compile and no
+      # coverage. The named simulator is pinned inside ios-xcode.sh.
+      - name: Build and run iOS unit tests in a simulator
         run: pnpm ios:test
+
+      # Packaging evidence for the commit a release can ship: the Release configuration archives,
+      # names the production origin, carries its privacy manifest, and stays iPhone-only with no
+      # embedded extension. It is unsigned, so per ADR-0010 it is packaging evidence only and no
+      # release statement may infer signing or device correctness from it. Pull requests skip it;
+      # only a commit on main can be released.
+      - name: Verify the Release archive packaging
+        if: ${{ github.event_name == 'push' }}
+        run: pnpm ios:archive-preflight
 
   infrastructure:
     name: KMS and workload policy
@@ -219,15 +439,33 @@ jobs:
   ci:
     name: CI
     if: always()
-    needs: [quality, native-ios, infrastructure]
+    needs: [static, secrets, unit, capacity, evaluations, database, e2e, native-ios, infrastructure]
     runs-on: ubuntu-latest
     steps:
+      # Every lane, by name. A lane that was cancelled or skipped is not a lane that passed, so
+      # only `success` is accepted and the failing names are printed before the job exits.
       - name: Require every CI lane
         env:
-          INFRASTRUCTURE_RESULT: ${{ needs.infrastructure.result }}
-          QUALITY_RESULT: ${{ needs.quality.result }}
-          NATIVE_RESULT: ${{ needs.native-ios.result }}
-        run: >-
-          test "$QUALITY_RESULT" = success &&
-          test "$NATIVE_RESULT" = success &&
-          test "$INFRASTRUCTURE_RESULT" = success
+          LANE_RESULTS: >-
+            static=${{ needs.static.result }}
+            secrets=${{ needs.secrets.result }}
+            unit=${{ needs.unit.result }}
+            capacity=${{ needs.capacity.result }}
+            evaluations=${{ needs.evaluations.result }}
+            database=${{ needs.database.result }}
+            e2e=${{ needs.e2e.result }}
+            native-ios=${{ needs.native-ios.result }}
+            infrastructure=${{ needs.infrastructure.result }}
+        run: |
+          failed=""
+          for lane in ${LANE_RESULTS}; do
+            printf '%s\n' "${lane}"
+            case "${lane}" in
+              *=success) ;;
+              *) failed="${failed} ${lane%%=*}" ;;
+            esac
+          done
+          if [[ -n "${failed}" ]]; then
+            printf 'CI is red. Lanes that did not pass:%s\n' "${failed}" >&2
+            exit 1
+          fi
