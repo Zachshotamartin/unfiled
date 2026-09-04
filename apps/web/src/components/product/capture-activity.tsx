@@ -67,6 +67,8 @@ type CaptureActivityProps = Readonly<{
   reviewDecisions?: ReactNode;
   /** False while a review decision is listed above, so "nothing waiting" stays true. */
   reviewDecisionsEmpty?: boolean;
+  /** True until a provider key exists: the key card leads "Needs you" and counts as waiting. */
+  providerKeyMissing?: boolean;
 }>;
 
 export function CaptureActivity({
@@ -75,18 +77,32 @@ export function CaptureActivity({
   loading,
   onRetryLocal,
   onRetryRemote,
+  providerKeyMissing = false,
   reviewDecisions,
   reviewDecisionsEmpty = true
 }: CaptureActivityProps) {
   const waiting = items.filter((item) => captureNeedsOwner(item.status));
-  const nothingWaiting = waiting.length === 0 && reviewDecisionsEmpty;
-  const providerUnavailable = waiting.some((item) => item.errorCode === "provider_unavailable");
+  const nothingWaiting = waiting.length === 0 && reviewDecisionsEmpty && !providerKeyMissing;
+  const providerUnavailable =
+    !providerKeyMissing && waiting.some((item) => item.errorCode === "provider_unavailable");
 
   return (
     <section className="capture-activity" aria-labelledby="capture-activity-heading">
       <div className="capture-section-heading">
         <h2 id="capture-activity-heading">Needs you</h2>
       </div>
+      {providerKeyMissing ? (
+        <article className="key-card" aria-labelledby="key-card-title">
+          <h3 id="key-card-title">Add your AI key</h3>
+          <p>
+            Organizing needs your own OpenAI or Claude key. Add one in Settings and new captures
+            file themselves.
+          </p>
+          <Link href="/app/settings" className="button-primary">
+            Open Settings <UnfiledGlyph glyph="arrow" size={16} weight={2.2} />
+          </Link>
+        </article>
+      ) : null}
       {providerUnavailable ? (
         <p className="capture-outage-banner" role="status">
           The AI provider is unavailable. Encrypted captures remain queued or safe in Inbox. If you
