@@ -1190,12 +1190,12 @@ if (OPENAI_KEY && secondNoteId) {
       destinationIsSecond: noteId === secondNoteId
     }
   );
-  // The directions name a note that exists, and the organizer is meant to file there without a
-  // review. On 2026-09-05 (5a6d2a5) it still deferred, while the same input files deterministically
-  // in the drain's own tests, so this step records what the review proposed -- the reasons the
-  // receipt carries and the destination and alternatives the plan named -- instead of failing the
-  // release on it. It becomes a hard requirement once that evidence has shown why production
-  // differs from the test bench.
+  // The directions name a note that exists, and the organizer files there without a review: the
+  // named note is the destination. Reaching any note used to pass this section, so a release in
+  // which directions were disclosed but never honored looked healthy; then 5a6d2a5 deferred every
+  // directed capture on a fresh account (the scan could not vouch for the library) and 6530fc5
+  // lifted that hold. When the step fails, the reasons the receipt carries and what the review
+  // proposed say why.
   const reviewItemId = outcome.receipt?.reviewItemId ?? null;
   // Review items are listed, not read one by one: the open queue carries each item's proposal.
   const review =
@@ -1203,8 +1203,9 @@ if (OPENAI_KEY && secondNoteId) {
   const reviewItem = (review?.json?.items ?? []).find((item) => item.id === reviewItemId) ?? null;
   const proposal = reviewItem?.proposal ?? null;
   const plan = proposal?.plan ?? null;
-  record("capture_c.directions_reach_the_named_note", true, {
-    reached: outcome.captureStatus === "done" && noteId === secondNoteId,
+  const reached = outcome.captureStatus === "done" && noteId === secondNoteId;
+  record("capture_c.directions_reach_the_named_note", reached, {
+    reached,
     captureStatus: outcome.captureStatus,
     destinationIsSecond: noteId === secondNoteId,
     reasonCodes: outcome.receipt?.reasonCodes ?? null,
@@ -1473,10 +1474,45 @@ async function uploadPhoto(captureId, attachmentId, bytes, extra = {}) {
     status: created.status,
     code: code(created)
   });
-  const removed = await write("DELETE", `/captures/${captureId}`, token, { idempotencyKey: key() });
+  let removed = await write("DELETE", `/captures/${captureId}`, token, { idempotencyKey: key() });
+  let retried = false;
+  if (removed.status === 409 && code(removed) === "stale_revision") {
+    // The organizer filed this capture between its creation and the delete -- since 6530fc5 a
+    // capture files in about a second -- and a filed capture is deleted against the current
+    // revision of the note it wrote into, so a stale delete cannot undo a write the owner has
+    // not seen. The client's move is to wait for the receipt, read that note, and send the
+    // revision; a bare replay would only be refused again.
+    const settled = await pollUntil(
+      "captures.delete_settles",
+      async () => {
+        const detail = await api("GET", `/captures/${captureId}`, { token });
+        const capture = detail.json?.capture ?? {};
+        return {
+          done: ["done", "needs_review", "failed", "inbox"].includes(capture.status),
+          receipt: capture.receipt ?? null
+        };
+      },
+      { timeoutMs: 90_000, everyMs: 3_000 }
+    );
+    const destinationNoteId = settled.receipt?.destination?.noteId ?? null;
+    const note =
+      destinationNoteId === null
+        ? null
+        : await api("GET", `/notes/${destinationNoteId}`, { token });
+    const expectedNoteRevisions =
+      destinationNoteId === null || note?.json?.note?.currentRevision === undefined
+        ? []
+        : [{ noteId: destinationNoteId, expectedRevision: note.json.note.currentRevision }];
+    removed = await write("DELETE", `/captures/${captureId}`, token, {
+      idempotencyKey: key(),
+      expectedNoteRevisions
+    });
+    retried = true;
+  }
   record("captures.delete", removed.status === 200 || removed.status === 204, {
     status: removed.status,
-    code: code(removed)
+    code: code(removed),
+    retried
   });
   if (OPENAI_KEY) {
     const stored = await api("GET", "/me/provider-key?provider=openai", { token });
