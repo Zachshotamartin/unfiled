@@ -1190,12 +1190,12 @@ if (OPENAI_KEY && secondNoteId) {
       destinationIsSecond: noteId === secondNoteId
     }
   );
-  // The directions name a note that exists, and the organizer is meant to file there without a
-  // review. On 2026-09-05 (5a6d2a5) it still deferred, while the same input files deterministically
-  // in the drain's own tests, so this step records what the review proposed -- the reasons the
-  // receipt carries and the destination and alternatives the plan named -- instead of failing the
-  // release on it. It becomes a hard requirement once that evidence has shown why production
-  // differs from the test bench.
+  // The directions name a note that exists, and the organizer files there without a review: the
+  // named note is the destination. Reaching any note used to pass this section, so a release in
+  // which directions were disclosed but never honored looked healthy; then 5a6d2a5 deferred every
+  // directed capture on a fresh account (the scan could not vouch for the library) and 6530fc5
+  // lifted that hold. When the step fails, the reasons the receipt carries and what the review
+  // proposed say why.
   const reviewItemId = outcome.receipt?.reviewItemId ?? null;
   // Review items are listed, not read one by one: the open queue carries each item's proposal.
   const review =
@@ -1203,8 +1203,9 @@ if (OPENAI_KEY && secondNoteId) {
   const reviewItem = (review?.json?.items ?? []).find((item) => item.id === reviewItemId) ?? null;
   const proposal = reviewItem?.proposal ?? null;
   const plan = proposal?.plan ?? null;
-  record("capture_c.directions_reach_the_named_note", true, {
-    reached: outcome.captureStatus === "done" && noteId === secondNoteId,
+  const reached = outcome.captureStatus === "done" && noteId === secondNoteId;
+  record("capture_c.directions_reach_the_named_note", reached, {
+    reached,
     captureStatus: outcome.captureStatus,
     destinationIsSecond: noteId === secondNoteId,
     reasonCodes: outcome.receipt?.reasonCodes ?? null,
