@@ -657,34 +657,31 @@ function assertDecryptedCandidateBinding(
 }
 
 /**
- * The reasons a Review carries, in the order the owner reads them. The first one has to be true
- * of this capture: "it could belong in more than one place" is right when the plan named
- * alternatives, the model deferred, or no plan was made at all, and wrong for a plan the
- * organizer understood that a duplicate check or a failure held: a suspected duplicate says so
- * instead, and a failure leaves the plan's own reasons to speak beside the review reason.
+ * The reasons a Review carries, in the order the owner reads them. A suspected duplicate leads
+ * when that is what held the capture, because "it looks like something you already have" is
+ * the sentence the owner needs first.
+ *
+ * `ambiguous_intent` is always present. The commit function projects that one content-free code
+ * onto every deferred receipt's row, and the web refuses to open a receipt whose sealed reasons
+ * do not carry the code its row projects (encrypted-receipt-projection.ts,
+ * reviewReceiptProjectionMatches). A Review sealed without it is a capture the owner can never
+ * read again: the release of 2026-09-04 (47a3bb8) answered 503 to every read of such a capture.
  */
 export function reviewReasonCodes(
   sourcePlan: OrganizationPlan | null,
   ruleMatched: boolean
 ): readonly OrganizationPlan["reasonCodes"][number][] {
-  const ambiguous =
-    sourcePlan === null ||
-    sourcePlan.decision === "needs_review" ||
-    sourcePlan.alternatives.length > 0;
   const planReasons = (sourcePlan?.reasonCodes ?? []).filter(
     (reasonCode) => reasonCode !== "ambiguous_intent"
   );
   const duplicate = planReasons.includes("duplicate_suspected");
-  // A concrete plan that a failure blocked -- a rule target that changed under it, a note that
-  // refused the write -- claims nothing extra here: its own reasons stay, and the review
-  // reason beside them says what stopped it.
-  const leading: OrganizationPlan["reasonCodes"][number][] = duplicate
-    ? ["duplicate_suspected"]
-    : ambiguous
-      ? ["ambiguous_intent"]
-      : [];
   return Array.from(
-    new Set([...leading, ...(ruleMatched ? (["routing_rule_match"] as const) : []), ...planReasons])
+    new Set([
+      ...(duplicate ? (["duplicate_suspected"] as const) : []),
+      "ambiguous_intent" as const,
+      ...(ruleMatched ? (["routing_rule_match"] as const) : []),
+      ...planReasons
+    ])
   ).slice(0, 5);
 }
 

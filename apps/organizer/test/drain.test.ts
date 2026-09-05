@@ -335,28 +335,33 @@ describe("the reasons a Review carries", () => {
     ...overrides
   });
 
-  it("claims ambiguity only when the plan named alternatives, deferred, or was never made", () => {
-    expect(reviewReasonCodes(null, false)).toEqual(["ambiguous_intent"]);
-    expect(reviewReasonCodes(null, true)).toEqual(["ambiguous_intent", "routing_rule_match"]);
-    expect(
+  it("always carries ambiguous_intent, the code the receipt row projects for a deferral", () => {
+    // encrypted-receipt-projection.ts refuses to open a deferred receipt whose sealed reasons
+    // lack the code its row projects; a Review sealed without it can never be read again.
+    for (const codes of [
+      reviewReasonCodes(null, false),
+      reviewReasonCodes(null, true),
       reviewReasonCodes(
         plan({ decision: "needs_review", reasonCodes: ["ambiguous_intent"] }),
         false
-      )
-    ).toEqual(["ambiguous_intent"]);
-    expect(
-      reviewReasonCodes(plan({ alternatives: ["note_01ARZ3NDEKTSV4RRFFQ69G5FAB"] }), false)
-    ).toEqual(["ambiguous_intent", "no_candidate_fit"]);
+      ),
+      reviewReasonCodes(plan({ alternatives: ["note_01ARZ3NDEKTSV4RRFFQ69G5FAB"] }), false),
+      reviewReasonCodes(plan({ reasonCodes: ["no_candidate_fit", "duplicate_suspected"] }), false),
+      reviewReasonCodes(plan({}), false),
+      reviewReasonCodes(plan({ reasonCodes: ["type_match"] }), true)
+    ]) {
+      expect(codes).toContain("ambiguous_intent");
+    }
+    expect(reviewReasonCodes(null, true)).toEqual(["ambiguous_intent", "routing_rule_match"]);
+    expect(reviewReasonCodes(plan({}), false)).toEqual(["ambiguous_intent", "no_candidate_fit"]);
   });
 
-  it("leads with a suspected duplicate, and lets a blocked concrete plan keep its own reasons", () => {
+  it("leads with a suspected duplicate when that is what held the capture", () => {
     expect(
       reviewReasonCodes(plan({ reasonCodes: ["no_candidate_fit", "duplicate_suspected"] }), false)
-    ).toEqual(["duplicate_suspected", "no_candidate_fit"]);
-    // A detailed capture the organizer understood, held by something other than ambiguity:
-    // "it could belong in more than one place" would be untrue, so it is not said.
-    expect(reviewReasonCodes(plan({}), false)).toEqual(["no_candidate_fit"]);
+    ).toEqual(["duplicate_suspected", "ambiguous_intent", "no_candidate_fit"]);
     expect(reviewReasonCodes(plan({ reasonCodes: ["type_match"] }), true)).toEqual([
+      "ambiguous_intent",
       "routing_rule_match",
       "type_match"
     ]);
@@ -656,9 +661,7 @@ describe("organizer drain", () => {
       plan: {
         kind: "review",
         validatedPlan: {
-          // The rule's own append plan was understood; its target changed under it. That is
-          // not ambiguity, so the receipt no longer claims it.
-          reasonCodes: ["routing_rule_match"]
+          reasonCodes: ["ambiguous_intent", "routing_rule_match"]
         }
       },
       preparation: { replanCount: 1 },
