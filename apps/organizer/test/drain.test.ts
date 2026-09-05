@@ -959,6 +959,41 @@ describe("organizer drain", () => {
     });
   });
 
+  it("files into the note the directions name even when the scan could not vouch for the library", async () => {
+    // A fresh account has no search index yet, so retrieval falls back and the policy would hold
+    // any append as retrieval_degraded. The owner named the note; that is not the scan's call.
+    const genericCandidate = candidateAt(2, { noteType: "generic" });
+    const repo = repository({
+      candidates: vi.fn().mockResolvedValue({ candidates: [genericCandidate], controls })
+    });
+    const crypto = cipher();
+    vi.mocked(crypto.openCapture).mockResolvedValue({
+      controls,
+      rawContent: "the plumber comes Thursday at nine",
+      guidance: "put this in my shopping"
+    });
+    const model: OrganizerPlanner = {
+      describe: unusedDescribe(),
+      plan: vi.fn().mockResolvedValue(reviewPlan)
+    };
+
+    await expect(
+      drain(repo, createDeterministicFirstOrganizerPlanner(model), crypto, {
+        ...automaticPolicyContext,
+        deterministicRuleMatch: false,
+        retrievalAutoEligible: false
+      }).drain({ authority, requestId: "directions-degraded", signal, trigger: "manual" })
+    ).resolves.toEqual({ claimed: 1, completed: 1, failed: 0, retryScheduled: 0 });
+
+    expect(model.plan).not.toHaveBeenCalled();
+    const sealed = vi.mocked(crypto.sealCommand).mock.calls.at(-1)?.[0];
+    expect(sealed).toMatchObject({
+      plan: { kind: "append", noteId: genericCandidate.noteId },
+      routingDecision: { autoApply: true, band: "auto" }
+    });
+    expect(sealed?.routingDecision?.reasons).not.toContain("retrieval_degraded");
+  });
+
   it("routes Inbox disposition to encrypted Review until the later routing milestone", async () => {
     const repo = repository({
       commit: vi.fn().mockResolvedValue({

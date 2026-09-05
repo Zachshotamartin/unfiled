@@ -47,8 +47,10 @@ import {
   type OrganizerCaptureControls,
   type OrganizerPlanner,
   buildDeterministicRoutingRulePlan,
+  expectedOrganizerNoteType,
   inferOrganizerCaptureKind,
   proposedNoteIdForJob,
+  resolveDeterministicDestination,
   routedOrganizerCapture,
   sameOrganizerCaptureControls
 } from "./planner.js";
@@ -562,6 +564,34 @@ const FAIL_CLOSED_ROUTING_CONTEXT: OrganizerRoutingPolicyContext = Object.freeze
   mode: "balanced",
   retrievalAutoEligible: false
 });
+
+/**
+ * Whether the plan files into the note the owner named -- in their directions or in the capture
+ * itself -- and that note is made of this kind of thing. A name is knowledge the scan cannot add
+ * to or take away: the policy holds an append when the scan could not vouch for the library it
+ * was filing into, and a fresh account with no search index yet is exactly that scan, so without
+ * this the first captures an owner directs to a note all came back as Review.
+ */
+function ownerNamedDestination(
+  plan: ReturnType<typeof parseAuthorizedOrganizationPlan>["plan"],
+  candidates: readonly DecryptedCandidate[],
+  capture: DecryptedCapture,
+  captureKind: CaptureKind
+): boolean {
+  if (plan.decision !== "append_to_note" || plan.destination.candidateId === null) return false;
+  const named = resolveDeterministicDestination({
+    candidates: candidates.map(({ candidateId, isOpen, noteId, title }) => ({
+      candidateId,
+      isOpen,
+      noteId,
+      title
+    })),
+    capture
+  });
+  if (named?.candidateId !== plan.destination.candidateId) return false;
+  const destination = candidates.find(({ candidateId }) => candidateId === named.candidateId);
+  return destination?.noteType === expectedOrganizerNoteType(captureKind);
+}
 
 function routingPolicyForPlan(
   plan: ReturnType<typeof parseAuthorizedOrganizationPlan>["plan"],
@@ -1191,7 +1221,8 @@ export function createOrganizerDrain(
           currentCapture,
           captureKind,
           routingPolicyContext,
-          isRoutingRulePath
+          isRoutingRulePath ||
+            ownerNamedDestination(authorized.plan, candidates, currentCapture, captureKind)
         );
         if (authorized.plan.reasonCodes.includes("duplicate_suspected")) {
           pendingReviewPlan = authorized.plan;
