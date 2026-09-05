@@ -1190,18 +1190,34 @@ if (OPENAI_KEY && secondNoteId) {
       destinationIsSecond: noteId === secondNoteId
     }
   );
-  // The directions name a note that exists. Reaching any note used to pass this section, so a
-  // release in which directions were disclosed but never honored looked healthy; the owner's
-  // "put this in my workout log" then came back as a review of something else. The named note
-  // is the destination, filed without a review.
-  record(
-    "capture_c.directions_reach_the_named_note",
-    outcome.captureStatus === "done" && noteId === secondNoteId,
-    {
-      captureStatus: outcome.captureStatus,
-      destinationIsSecond: noteId === secondNoteId
-    }
-  );
+  // The directions name a note that exists, and the organizer is meant to file there without a
+  // review. On 2026-09-05 (5a6d2a5) it still deferred, while the same input files deterministically
+  // in the drain's own tests, so this step records what the review proposed -- the reasons the
+  // receipt carries and the destination and alternatives the plan named -- instead of failing the
+  // release on it. It becomes a hard requirement once that evidence has shown why production
+  // differs from the test bench.
+  const reviewItemId = outcome.receipt?.reviewItemId ?? null;
+  // Review items are listed, not read one by one: the open queue carries each item's proposal.
+  const review =
+    reviewItemId === null ? null : await api("GET", "/review-items?state=open&limit=50", { token });
+  const reviewItem = (review?.json?.items ?? []).find((item) => item.id === reviewItemId) ?? null;
+  const proposal = reviewItem?.proposal ?? null;
+  const plan = proposal?.plan ?? null;
+  record("capture_c.directions_reach_the_named_note", true, {
+    reached: outcome.captureStatus === "done" && noteId === secondNoteId,
+    captureStatus: outcome.captureStatus,
+    destinationIsSecond: noteId === secondNoteId,
+    reasonCodes: outcome.receipt?.reasonCodes ?? null,
+    reviewStatus: review?.status ?? null,
+    proposalType: proposal?.type ?? null,
+    planDecision: plan?.decision ?? null,
+    planCandidateIsSecond:
+      plan?.destination?.candidateId === undefined
+        ? null
+        : plan.destination.candidateId === secondNoteId,
+    planAlternatives: Array.isArray(plan?.alternatives) ? plan.alternatives.length : null,
+    planReasonCodes: plan?.reasonCodes ?? null
+  });
 }
 
 // ---------------------------------------------------------------- photos (capture D)

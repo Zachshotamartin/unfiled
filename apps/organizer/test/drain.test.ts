@@ -25,7 +25,7 @@ import {
   OrganizerUnavailableError
 } from "../src/errors.js";
 import type { OrganizerKeyAuthority } from "../src/key-management.js";
-import type { OrganizerPlanner } from "../src/planner.js";
+import { createDeterministicFirstOrganizerPlanner, type OrganizerPlanner } from "../src/planner.js";
 import type { OrganizerAppDefaultApiKeys } from "../src/provider-credential.js";
 import { ORGANIZER_PROMPT_VERSION } from "../src/prompt.js";
 
@@ -921,6 +921,42 @@ describe("organizer drain", () => {
     ).toBe(1);
     expect(reviewRepo.prepareCreate).toHaveBeenCalled();
     expect(reviewRepo.prepareAppend).not.toHaveBeenCalled();
+  });
+
+  it("files a capture into the note its directions name without asking the model", async () => {
+    // "put this in my shopping" names the Shopping note; the deterministic planner appends there
+    // and the model, which would have deferred, is never consulted.
+    const genericCandidate = candidateAt(2, { noteType: "generic" });
+    const repo = repository({
+      candidates: vi.fn().mockResolvedValue({ candidates: [genericCandidate], controls })
+    });
+    const crypto = cipher();
+    vi.mocked(crypto.openCapture).mockResolvedValue({
+      controls,
+      rawContent: "the plumber comes Thursday at nine",
+      guidance: "put this in my shopping"
+    });
+    const model: OrganizerPlanner = {
+      describe: unusedDescribe(),
+      plan: vi.fn().mockResolvedValue(reviewPlan)
+    };
+
+    await expect(
+      drain(repo, createDeterministicFirstOrganizerPlanner(model), crypto).drain({
+        authority,
+        requestId: "directions",
+        signal,
+        trigger: "manual"
+      })
+    ).resolves.toEqual({ claimed: 1, completed: 1, failed: 0, retryScheduled: 0 });
+
+    expect(model.plan).not.toHaveBeenCalled();
+    expect(repo.prepareAppend).toHaveBeenCalledOnce();
+    const sealed = vi.mocked(crypto.sealCommand).mock.calls.at(-1)?.[0];
+    expect(sealed).toMatchObject({
+      plan: { kind: "append", noteId: genericCandidate.noteId },
+      routingDecision: { autoApply: true, band: "auto" }
+    });
   });
 
   it("routes Inbox disposition to encrypted Review until the later routing milestone", async () => {
